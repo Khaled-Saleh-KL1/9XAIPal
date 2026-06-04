@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>9XAIPal — Technical Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:         oklch(0.985 0.006 80);
+    --bg-2:       oklch(0.965 0.008 80);
+    --bg-3:       oklch(0.945 0.010 80);
+    --fg:         oklch(0.20  0.012 70);
+    --fg-2:       oklch(0.36  0.012 70);
+    --muted:      oklch(0.55  0.012 70);
+    --faint:      oklch(0.78  0.008 70);
+    --border:     oklch(0.90  0.008 70);
+    --border-strong: oklch(0.82 0.010 70);
+    --accent:     oklch(0.58  0.14  38);
+    --accent-soft:oklch(0.94  0.04  38);
+    --ok:         oklch(0.62  0.13 145);
+    --info:       oklch(0.62  0.13 240);
+    --warn:       oklch(0.74  0.14  75);
+    --shadow:     0 20px 60px -20px rgba(0,0,0,0.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:         oklch(0.16  0.008 70);
+      --bg-2:       oklch(0.19  0.009 70);
+      --bg-3:       oklch(0.22  0.010 70);
+      --fg:         oklch(0.96  0.006 80);
+      --fg-2:       oklch(0.82  0.008 80);
+      --muted:      oklch(0.62  0.010 80);
+      --faint:      oklch(0.40  0.010 80);
+      --border:     oklch(0.28  0.010 70);
+      --border-strong: oklch(0.36 0.012 70);
+      --accent:     oklch(0.72  0.13  50);
+      --accent-soft:oklch(0.28  0.05  50);
+      --shadow:     0 24px 70px -22px rgba(0,0,0,0.55);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.6;
+  }
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 64px 32px 96px;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  header.hero {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 40px;
+    margin-bottom: 56px;
+  }
+  .hero .eyebrow {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+  }
+  .hero h1 {
+    font-family: 'Newsreader', ui-serif, Georgia, serif;
+    font-weight: 500;
+    font-size: 56px;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 12px 0 16px;
+  }
+  .hero p.lede {
+    font-family: 'Newsreader', ui-serif, Georgia, serif;
+    font-size: 20px;
+    line-height: 1.55;
+    color: var(--fg-2);
+    max-width: 760px;
+    margin: 0;
+  }
+  .hero-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 28px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11.5px;
+    color: var(--fg-2);
+  }
+  .chip .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .chip.ok .dot   { background: var(--ok); }
+  .chip.info .dot { background: var(--info); }
+  .chip.warn .dot { background: var(--warn); }
+
+  /* ── Section base ───────────────────────────────────────── */
+  section {
+    margin-bottom: 80px;
+  }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+    margin-bottom: 28px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sec-num {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .sec-head h2 {
+    font-family: 'Newsreader', ui-serif, Georgia, serif;
+    font-weight: 500;
+    font-size: 34px;
+    letter-spacing: -0.015em;
+    margin: 0;
+  }
+  .sec-blurb {
+    font-family: 'Newsreader', ui-serif, Georgia, serif;
+    font-size: 18px;
+    color: var(--fg-2);
+    margin: 0 0 28px;
+    max-width: 820px;
+  }
+
+  /* ── Card grid ──────────────────────────────────────────── */
+  .grid {
+    display: grid;
+    gap: 18px;
+  }
+  .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 900px) {
+    .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 22px 20px;
+    position: relative;
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow);
+  }
+  .card .card-eyebrow {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .card h3 {
+    font-family: 'Newsreader', ui-serif, Georgia, serif;
+    font-size: 22px;
+    font-weight: 500;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  .card p {
+    margin: 0;
+    font-size: 14.5px;
+    color: var(--fg-2);
+  }
+  .card ul {
+    margin: 10px 0 0;
+    padding-left: 18px;
+    font-size: 14px;
+    color: var(--fg-2);
+  }
+  .card ul li { margin: 4px 0; }
+  .card code, code.inline {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.86em;
+    padding: 1px 6px;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--fg);
+  }
+
+  .card.accent { border-left: 3px solid var(--accent); }
+  .card.ok     { border-left: 3px solid var(--ok); }
+  .card.info   { border-left: 3px solid var(--info); }
+  .card.warn   { border-left: 3px solid var(--warn); }
+
+  /* ── Component stack ───────────────────────────────────── */
+  .stack {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .stack-row {
+    display: contents;
+  }
+  .stack-label {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .stack-label .indicator {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+  }
+  .stack-content {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 14.5px;
+    color: var(--fg);
+  }
+  .stack-content b { font-weight: 600; }
+  .stack-content .sub {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  @media (max-width: 760px) {
+    .stack { grid-template-columns: 1fr; }
+    .stack-label { font-size: 11.5px; padding: 10px 14px; }
+  }
+
+  /* ── Schema (DB tables) ────────────────────────────────── */
+  .schema-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 18px;
+  }
+  .table-card {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .table-card header {
+    background: var(--bg-3);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .table-card header::before {
+    content: '⚙';
+    color: var(--accent);
+    font-size: 14px;
+  }
+  .table-card .table-desc {
+    padding: 10px 16px 6px;
+    font-size: 13px;
+    color: var(--muted);
+    font-style: italic;
+    border-bottom: 1px solid var(--border);
+  }
+  .table-card ul.fields {
+    list-style: none;
+    margin: 0;
+    padding: 6px 0;
+  }
+  .table-card ul.fields li {
+    padding: 7px 16px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12.5px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    border-top: 1px solid transparent;
+  }
+  .table-card ul.fields li:not(:first-child) {
+    border-top: 1px solid var(--border);
+  }
+  .field-name { color: var(--fg); font-weight: 500; }
+  .field-type { color: var(--accent); }
+  .field-desc {
+    color: var(--muted);
+    flex-basis: 100%;
+    font-family: 'Inter', sans-serif;
+    font-size: 12.5px;
+    font-style: italic;
+  }
+
+  /* ── Pipeline flow ─────────────────────────────────────── */
+  .pipeline {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+    position: relative;
+  }
+  .pipe-step {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    position: relative;
+    margin-bottom: 28px;
+  }
+  .pipe-step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    bottom: -22px;
+    left: 36px;
+    width: 2px;
+    height: 18px;
+    background: var(--border-strong);
+  }
+  .pipe-step:not(:last-child)::before {
+    content: '▼';
+    position: absolute;
+    bottom: -28px;
+    left: 28px;
+    color: var(--accent);
+    font-size: 14px;
+    z-index: 1;
+  }
+  .pipe-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 8px;
+  }
+  .pipe-num {
+    display: inline-flex;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg);
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  .pipe-step h3 {
+    font-family: 'Newsreader', serif;
+    font-size: 22px;
+    font-weight: 500;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .pipe-step .pipe-tag {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    padding: 3px 9px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .pipe-step ul {
+    margin: 8px 0 0 44px;
+    padding-left: 18px;
+    font-size: 14.5px;
+    color: var(--fg-2);
+  }
+  .pipe-step ul li { margin: 4px 0; }
+
+  /* ── Router routes ─────────────────────────────────────── */
+  .routes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+  }
+  .route {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .route::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 4px;
+    background: var(--accent);
+  }
+  .route.r2::before { background: var(--info); }
+  .route.r3::before { background: var(--ok); }
+  .route.r4::before { background: var(--warn); }
+  .route-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: var(--fg);
+    margin-bottom: 6px;
+  }
+  .route-name {
+    font-family: 'Newsreader', serif;
+    font-size: 20px;
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+  .route-desc {
+    font-size: 13.5px;
+    color: var(--fg-2);
+    line-height: 1.5;
+  }
+
+  /* ── Research loop ─────────────────────────────────────── */
+  .loop {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin: 18px 0 24px;
+  }
+  .loop-node {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 12px;
+    text-align: center;
+    position: relative;
+  }
+  .loop-node .stepnum {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+  }
+  .loop-node .label {
+    font-family: 'Newsreader', serif;
+    font-size: 18px;
+    font-weight: 500;
+  }
+  .loop-node:not(:last-child)::after {
+    content: '→';
+    position: absolute;
+    right: -14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-size: 18px;
+    z-index: 1;
+  }
+  @media (max-width: 700px) {
+    .loop { grid-template-columns: 1fr 1fr; }
+    .loop-node:nth-child(2)::after { display: none; }
+  }
+
+  /* ── Frontend views ────────────────────────────────────── */
+  .view-card {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+  }
+  .view-card h3 {
+    font-family: 'Newsreader', serif;
+    font-size: 22px;
+    font-weight: 500;
+    margin: 0 0 10px;
+    letter-spacing: -0.01em;
+  }
+  .view-card .feature {
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+  }
+  .view-card .feature:first-of-type { border-top: 0; padding-top: 0; }
+  .view-card .feature b {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .view-card .feature span {
+    display: block;
+    font-size: 13.5px;
+    color: var(--fg-2);
+    margin-top: 3px;
+  }
+
+  /* ── Infra storage tree ────────────────────────────────── */
+  .tree {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13.5px;
+    line-height: 1.9;
+    color: var(--fg-2);
+  }
+  .tree .root { color: var(--accent); font-weight: 600; }
+  .tree .folder { color: var(--fg); }
+  .tree .comment { color: var(--muted); font-style: italic; font-family: 'Inter', sans-serif; }
+
+  /* ── Future list ───────────────────────────────────────── */
+  .future {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 14px;
+  }
+  .future-item {
+    background: var(--bg-2);
+    border: 1px dashed var(--border-strong);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .future-item h4 {
+    font-family: 'Newsreader', serif;
+    font-size: 18px;
+    font-weight: 500;
+    margin: 0 0 6px;
+  }
+  .future-item p {
+    margin: 0;
+    font-size: 13.5px;
+    color: var(--fg-2);
+  }
+  .future-item .pill {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 2px 8px;
+    border-radius: 999px;
+    margin-bottom: 8px;
+  }
+
+  /* ── TOC ───────────────────────────────────────────────── */
+  .toc {
+    position: sticky;
+    top: 20px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 48px;
+  }
+  .toc h4 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  .toc ol {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 14px;
+  }
+  .toc ol li { margin: 4px 0; }
+  .toc a {
+    color: var(--fg-2);
+    text-decoration: none;
+    transition: color 120ms ease;
+  }
+  .toc a:hover { color: var(--accent); }
+
+  /* ── Footer ───────────────────────────────────────────── */
+  footer {
+    margin-top: 80px;
+    padding-top: 28px;
+    border-top: 1px solid var(--border);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ── HERO ──────────────────────────────────────────────── -->
+  <header class="hero">
+    <div class="eyebrow">Technical Reference · v1.0</div>
+    <h1>9XAIPal</h1>
+    <p class="lede">A comprehensive technical reference for the 9XAIPal system — covering the data model, ingestion pipeline, chat orchestration, and frontend implementation of a single-tenant, local-first research-paper companion.</p>
+    <div class="hero-meta">
+      <span class="chip ok"><span class="dot"></span>local-first</span>
+      <span class="chip"><span class="dot"></span>FastAPI + Postgres + pgvector</span>
+      <span class="chip info"><span class="dot"></span>Ollama (gemma4:26b) · MinerU · SearXNG</span>
+      <span class="chip warn"><span class="dot"></span>Celery + Redis</span>
+      <span class="chip"><span class="dot"></span>React + Vite + Tailwind</span>
+    </div>
+  </header>
+
+  <!-- ── TOC ───────────────────────────────────────────────── -->
+  <nav class="toc">
+    <h4>Contents</h4>
+    <ol>
+      <li><a href="#topology">System Topology</a></li>
+      <li><a href="#data">Data Architecture</a></li>
+      <li><a href="#pipeline">Ingestion Pipeline</a></li>
+      <li><a href="#chat">Chat &amp; Research Orchestration</a></li>
+      <li><a href="#frontend">Frontend Architecture</a></li>
+      <li><a href="#infra">Infrastructure &amp; Deployment</a></li>
+      <li><a href="#future">Future Extensibility</a></li>
+    </ol>
+  </nav>
+
+  <!-- ── 1. TOPOLOGY ───────────────────────────────────────── -->
+  <section id="topology">
+    <div class="sec-head">
+      <span class="sec-num">§1</span>
+      <h2>System Topology</h2>
+    </div>
+    <p class="sec-blurb">9XAIPal is a single-tenant, local-first application. All core components run on the user's local machine — ensuring privacy, low latency, and zero per-token costs.</p>
+
+    <div class="stack">
+      <div class="stack-row">
+        <div class="stack-label"><span class="indicator"></span>Frontend</div>
+        <div class="stack-content">
+          <b>Vite + React (TypeScript)</b>
+          <span class="sub">Tailwind CSS · Lucide Icons</span>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-label"><span class="indicator"></span>Backend</div>
+        <div class="stack-content">
+          <b>FastAPI (Python 3.11+)</b>
+          <span class="sub">SQLAlchemy (Async) · Pydantic v2</span>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-label"><span class="indicator"></span>Task Queue</div>
+        <div class="stack-content">
+          <b>Celery + Redis</b>
+          <span class="sub">Long-running ingestion and embedding tasks</span>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-label"><span class="indicator"></span>Database</div>
+        <div class="stack-content">
+          <b>PostgreSQL with <code class="inline">pgvector</code></b>
+          <span class="sub">Relational schema extended with vector-similarity search for RAG</span>
+        </div>
+      </div>
+      <div class="stack-row">
+        <div class="stack-label"><span class="indicator"></span>Inference</div>
+        <div class="stack-content">
+          <b>Ollama</b> — chat &amp; VLM both served by <code class="inline">gemma4:26b</code> (one vision-capable model for text + image reasoning) · Embeddings via <code class="inline">nomic-embed-text</code>
+          <span class="sub"><b>MinerU (Magic-PDF)</b> — high-fidelity PDF-to-Markdown with LaTeX equations &amp; tables · <b>SearXNG</b> — local metasearch for external context</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 2. DATA ───────────────────────────────────────────── -->
+  <section id="data">
+    <div class="sec-head">
+      <span class="sec-num">§2</span>
+      <h2>Data Architecture</h2>
+    </div>
+    <p class="sec-blurb">A relational schema in PostgreSQL extended by <code class="inline">pgvector</code> for retrieval-augmented generation.</p>
+
+    <div class="schema-grid">
+
+      <div class="table-card">
+        <header>documents</header>
+        <div class="table-desc">Root entity for every PDF.</div>
+        <ul class="fields">
+          <li><span class="field-name">id</span><span class="field-type">UUID</span><span class="field-desc">Primary key.</span></li>
+          <li><span class="field-name">status</span><span class="field-type">enum</span><span class="field-desc">queued · extracting · chunking · embedding · complete · failed</span></li>
+          <li><span class="field-name">reading_order</span><span class="field-type">JSONB</span><span class="field-desc">LLM-corrected sequence of chunk IDs for multi-column layouts.</span></li>
+          <li><span class="field-name">extractor</span><span class="field-type">text</span><span class="field-desc">Which engine produced the data (mineru vs pymupdf_fallback).</span></li>
+        </ul>
+      </div>
+
+      <div class="table-card">
+        <header>chunks</header>
+        <div class="table-desc">The atomic unit of information.</div>
+        <ul class="fields">
+          <li><span class="field-name">sequence_id</span><span class="field-type">INT</span><span class="field-desc">Physical order in the document.</span></li>
+          <li><span class="field-name">chunk_type</span><span class="field-type">enum</span><span class="field-desc">text · heading · table · figure · math · footnote</span></li>
+          <li><span class="field-name">heading_path</span><span class="field-type">TEXT[]</span><span class="field-desc">Hierarchical path (e.g. ["Introduction", "Related Work"]).</span></li>
+          <li><span class="field-name">markdown / plain_text</span><span class="field-type">text</span><span class="field-desc">Extracted content.</span></li>
+          <li><span class="field-name">table_json</span><span class="field-type">JSONB</span><span class="field-desc">Structured data for tables — LLMs reason about cells.</span></li>
+          <li><span class="field-name">image_refs</span><span class="field-type">TEXT[]</span><span class="field-desc">Links to images stored on disk.</span></li>
+        </ul>
+      </div>
+
+      <div class="table-card">
+        <header>chunk_embeddings</header>
+        <div class="table-desc">Vectorized representations for similarity search.</div>
+        <ul class="fields">
+          <li><span class="field-name">embedding</span><span class="field-type">vector(768)</span><span class="field-desc">768-dim vector from nomic-embed-text.</span></li>
+          <li><span class="field-name">embedding_model</span><span class="field-type">text</span><span class="field-desc">Model identifier — supports future migration.</span></li>
+        </ul>
+      </div>
+
+      <div class="table-card">
+        <header>section_summaries</header>
+        <div class="table-desc">Pre-computed hierarchical overviews.</div>
+        <ul class="fields">
+          <li><span class="field-name">level</span><span class="field-type">INT</span><span class="field-desc">0 = Executive Summary · 1 = H1 · 2 = H2</span></li>
+          <li><span class="field-name">summary_markdown</span><span class="field-type">text</span><span class="field-desc">LLM-generated section summary.</span></li>
+          <li><span class="field-name">source_chunk_ids</span><span class="field-type">UUID[]</span><span class="field-desc">Chunks used to generate the summary (for citations).</span></li>
+        </ul>
+      </div>
+
+      <div class="table-card">
+        <header>figure_descriptions</header>
+        <div class="table-desc">VLM-generated technical descriptions of diagrams.</div>
+        <ul class="fields">
+          <li><span class="field-name">description_markdown</span><span class="field-type">text</span><span class="field-desc">Detailed technical analysis of the image.</span></li>
+          <li><span class="field-name">model</span><span class="field-type">text</span><span class="field-desc">VLM used (e.g., gemma4:26b).</span></li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── 3. PIPELINE ───────────────────────────────────────── -->
+  <section id="pipeline">
+    <div class="sec-head">
+      <span class="sec-num">§3</span>
+      <h2>The Ingestion Pipeline</h2>
+    </div>
+    <p class="sec-blurb">Quality-first orchestration — accepts higher ingestion time in exchange for superior retrieval and reading experiences. Driven by <code class="inline">app/extraction/pipeline.py</code>.</p>
+
+    <div class="pipeline">
+
+      <div class="pipe-step">
+        <div class="pipe-head">
+          <span class="pipe-num">1</span>
+          <h3>Extraction (MinerU)</h3>
+          <span class="pipe-tag">subprocess</span>
+        </div>
+        <ul>
+          <li>Invokes <code class="inline">magic-pdf</code> via subprocess.</li>
+          <li>Performs layout analysis, OCR (if needed), and formula recognition (LaTeX).</li>
+        </ul>
+      </div>
+
+      <div class="pipe-step">
+        <div class="pipe-head">
+          <span class="pipe-num">2</span>
+          <h3>Structural Chunking</h3>
+          <span class="pipe-tag">parse</span>
+        </div>
+        <ul>
+          <li>Parses <code class="inline">content_list.json</code> from MinerU.</li>
+          <li>Falls back to regex-based markdown chunking if MinerU fails.</li>
+          <li>Chunks are split by headings (H1, H2, H3).</li>
+        </ul>
+      </div>
+
+      <div class="pipe-step">
+        <div class="pipe-head">
+          <span class="pipe-num">3</span>
+          <h3>Asset Management</h3>
+          <span class="pipe-tag">filesystem</span>
+        </div>
+        <ul>
+          <li>Extracted images move to <code class="inline">app/storage/images/</code>.</li>
+          <li>Filenames are hashed and linked back to the chunks table via <code class="inline">image_refs</code>.</li>
+        </ul>
+      </div>
+
+      <div class="pipe-step">
+        <div class="pipe-head">
+          <span class="pipe-num">4</span>
+          <h3>Embedding (Async)</h3>
+          <span class="pipe-tag">celery</span>
+        </div>
+        <ul>
+          <li>Dispatches a Celery task to batch-process chunks.</li>
+          <li>Calls Ollama's <code class="inline">/api/embeddings</code> endpoint.</li>
+          <li>Results land in <code class="inline">chunk_embeddings</code>.</li>
+        </ul>
+      </div>
+
+      <div class="pipe-step">
+        <div class="pipe-head">
+          <span class="pipe-num">5</span>
+          <h3>Summarization &amp; VLM Analysis</h3>
+          <span class="pipe-tag">optional</span>
+        </div>
+        <ul>
+          <li>Triggers <code class="inline">section_summarizer</code> to build the OVERVIEW context.</li>
+          <li>Triggers <code class="inline">figure_describer</code> for every chunk of type <code class="inline">figure</code>.</li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── 4. CHAT ───────────────────────────────────────────── -->
+  <section id="chat">
+    <div class="sec-head">
+      <span class="sec-num">§4</span>
+      <h2>Chat &amp; Research Orchestration</h2>
+    </div>
+    <p class="sec-blurb">The <code class="inline">/ask</code> endpoint — driven by <code class="inline">app/chat/orchestrator.py</code> — is the most complex part of the system. Every query first passes through intent-based routing.</p>
+
+    <h3 style="font-family:'Newsreader',serif;font-weight:500;font-size:22px;margin:8px 0 16px;">Intent-Based Routing <code class="inline">router.py</code></h3>
+    <div class="routes">
+      <div class="route">
+        <div class="route-title">ROUTE · 01</div>
+        <div class="route-name">LOCAL</div>
+        <div class="route-desc">Specific to the chunk currently on the user's screen. Includes multimodal support — sends visible images to the VLM.</div>
+      </div>
+      <div class="route r2">
+        <div class="route-title">ROUTE · 02</div>
+        <div class="route-name">GLOBAL</div>
+        <div class="route-desc">Uses <code class="inline">pgvector</code> cosine-similarity search across the entire document.</div>
+      </div>
+      <div class="route r3">
+        <div class="route-title">ROUTE · 03</div>
+        <div class="route-name">OVERVIEW</div>
+        <div class="route-desc">Bypasses vector search; uses pre-computed <code class="inline">section_summaries</code> for high-level questions ("What is the main contribution?").</div>
+      </div>
+      <div class="route r4">
+        <div class="route-title">ROUTE · 04</div>
+        <div class="route-name">EXTERNAL</div>
+        <div class="route-desc">Triggers SearXNG to fetch web results for out-of-document knowledge.</div>
+      </div>
+    </div>
+
+    <h3 style="font-family:'Newsreader',serif;font-weight:500;font-size:22px;margin:40px 0 16px;">Research Agent <code class="inline">research_agent.py</code></h3>
+    <p class="sec-blurb" style="margin-bottom:18px;">For complex queries, a "Research Agent" loop is triggered.</p>
+
+    <div class="loop">
+      <div class="loop-node"><span class="stepnum">01</span><span class="label">Observe</span></div>
+      <div class="loop-node"><span class="stepnum">02</span><span class="label">Reason</span></div>
+      <div class="loop-node"><span class="stepnum">03</span><span class="label">Act</span></div>
+      <div class="loop-node"><span class="stepnum">04</span><span class="label">Interpret</span></div>
+    </div>
+
+    <div class="grid cols-3">
+      <div class="card accent">
+        <div class="card-eyebrow">tool</div>
+        <h3>web_search</h3>
+        <p>Targeted SearXNG queries to surface external evidence.</p>
+      </div>
+      <div class="card info">
+        <div class="card-eyebrow">tool</div>
+        <h3>read_paper_section</h3>
+        <p>Fetches specific chunks by sequence number or heading path.</p>
+      </div>
+      <div class="card ok">
+        <div class="card-eyebrow">tool</div>
+        <h3>describe_figure</h3>
+        <p>Uses the VLM to analyze a diagram on the fly.</p>
+      </div>
+    </div>
+    <p style="margin-top:18px;color:var(--muted);font-size:14px;"><b style="color:var(--fg-2);">State:</b> Maintains a temporary research log and synthesizes a final response.</p>
+  </section>
+
+  <!-- ── 5. FRONTEND ───────────────────────────────────────── -->
+  <section id="frontend">
+    <div class="sec-head">
+      <span class="sec-num">§5</span>
+      <h2>Frontend Architecture</h2>
+    </div>
+    <p class="sec-blurb">A React application optimized for "Deep Reading."</p>
+
+    <div class="grid cols-3">
+
+      <div class="view-card">
+        <h3>LibraryView</h3>
+        <div class="feature">
+          <b>Polling</b>
+          <span>Real-time updates of ingestion status across the grid/list views.</span>
+        </div>
+      </div>
+
+      <div class="view-card">
+        <h3>ReadingView</h3>
+        <div class="feature">
+          <b>Granular Reveal</b>
+          <span>Renders units (paragraphs, tables, math) one by one or in small batches — reducing cognitive load.</span>
+        </div>
+        <div class="feature">
+          <b>KaTeX Integration</b>
+          <span>Native rendering of LaTeX math blocks.</span>
+        </div>
+        <div class="feature">
+          <b>Contextual Awareness</b>
+          <span>Tracks which chunk is currently in the viewport to provide "Local" context to the ChatPane.</span>
+        </div>
+      </div>
+
+      <div class="view-card">
+        <h3>ChatPane</h3>
+        <div class="feature">
+          <b>Citation System</b>
+          <span>Citations render as interactive badges — clicking jumps the ReadingView to the source chunk.</span>
+        </div>
+        <div class="feature">
+          <b>SafeWebImage</b>
+          <span>Wrapper that handles hotlink protection by offering "Open in New Tab" fallbacks for web images.</span>
+        </div>
+      </div>
+
+    </div>
+
+    <h3 style="font-family:'Newsreader',serif;font-weight:500;font-size:22px;margin:40px 0 16px;">State Management</h3>
+    <div class="grid cols-2">
+      <div class="card">
+        <div class="card-eyebrow">local view</div>
+        <h3>React Hooks</h3>
+        <p>Standard <code class="inline">useState</code> and <code class="inline">useCallback</code> for local view state — no global store.</p>
+      </div>
+      <div class="card">
+        <div class="card-eyebrow">routing</div>
+        <h3>URL Hash Routes</h3>
+        <p><code class="inline">#/paper/{id}</code> enables deep linking and refresh persistence.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 6. INFRA ──────────────────────────────────────────── -->
+  <section id="infra">
+    <div class="sec-head">
+      <span class="sec-num">§6</span>
+      <h2>Infrastructure &amp; Deployment</h2>
+    </div>
+    <p class="sec-blurb">Docker Compose orchestrates the four core services: <code class="inline">db</code>, <code class="inline">redis</code>, <code class="inline">celery_worker</code>, and <code class="inline">backend</code>.</p>
+
+    <div class="grid cols-4" style="margin-bottom:32px;">
+      <div class="card accent">
+        <div class="card-eyebrow">service · 01</div>
+        <h3>db</h3>
+        <p>PostgreSQL with pgvector extension.</p>
+      </div>
+      <div class="card info">
+        <div class="card-eyebrow">service · 02</div>
+        <h3>redis</h3>
+        <p>Celery broker + result backend.</p>
+      </div>
+      <div class="card warn">
+        <div class="card-eyebrow">service · 03</div>
+        <h3>celery_worker</h3>
+        <p>Long-running ingestion / embedding tasks.</p>
+      </div>
+      <div class="card ok">
+        <div class="card-eyebrow">service · 04</div>
+        <h3>backend</h3>
+        <p>FastAPI HTTP application.</p>
+      </div>
+    </div>
+
+    <h3 style="font-family:'Newsreader',serif;font-weight:500;font-size:22px;margin:8px 0 16px;">Storage Layout</h3>
+    <div class="tree">
+<span class="root">backend/app/storage/</span>
+├── <span class="folder">documents/</span>   <span class="comment">— Original PDFs uploaded by the user</span>
+├── <span class="folder">extracted/</span>   <span class="comment">— MinerU intermediate output (content_list.json, images, etc.)</span>
+├── <span class="folder">images/</span>      <span class="comment">— Final optimized assets referenced by chunks.image_refs</span>
+└── <span class="folder">assets/</span>      <span class="comment">— Static UI assets</span>
+    </div>
+  </section>
+
+  <!-- ── 7. FUTURE ─────────────────────────────────────────── -->
+  <section id="future">
+    <div class="sec-head">
+      <span class="sec-num">§7</span>
+      <h2>Future Extensibility Points</h2>
+    </div>
+    <p class="sec-blurb">Planned and exploratory directions for evolving the system beyond v1.</p>
+
+    <div class="future">
+      <div class="future-item">
+        <span class="pill">retrieval</span>
+        <h4>Cross-Paper Search</h4>
+        <p>Extending GLOBAL search to query across the entire library — federated retrieval across documents.</p>
+      </div>
+      <div class="future-item">
+        <span class="pill">integrations</span>
+        <h4>External Knowledge Graphs</h4>
+        <p>Integrating with Zotero or Semantic Scholar APIs to enrich citation and metadata layers.</p>
+      </div>
+      <div class="future-item">
+        <span class="pill">extraction</span>
+        <h4>Alternative Extractors</h4>
+        <p>Adding support for <b>Docling</b> or <b>Marker</b> as drop-in extraction backends alongside MinerU.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>9XAIPal · Technical Architecture · generated from <code style="font-family:inherit;">Architecture_Technical.md</code></span>
+    <span>local-first · privacy-preserving · zero per-token cost</span>
+  </footer>
+
+</div>
+</body>
+</html>

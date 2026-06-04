@@ -1,0 +1,18 @@
+# Runtime dependencies. Kept in sync with pyproject.toml.
+# Install via `pip install -r requirements.txt` (or `pip install -e .` in dev).
+
+fastapi[standard]
+uvicorn[standard]
+pydantic>=2.0
+pydantic-settings
+httpx
+sqlalchemy[asyncio]>=2.0
+asyncpg
+pgvector
+python-multipart
+aiofiles
+pypdf
+
+# Background processing
+celery>=5.3
+redis>=5.0

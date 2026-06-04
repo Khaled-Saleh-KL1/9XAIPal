@@ -1,0 +1,13 @@
+app/storage/documents/*
+app/storage/extracted/*
+app/storage/images/*
+app/storage/logs/*
+app/storage/assets/*
+app/storage/*.sqlite3
+app/storage/*.sqlite3-*
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+
+

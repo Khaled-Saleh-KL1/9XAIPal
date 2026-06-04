@@ -1,0 +1,212 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,400&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'katex/dist/katex.min.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens ─────────────────────────────────────────── */
+:root {
+  --bg:            oklch(0.985 0.006 80);
+  --bg-2:          oklch(0.965 0.008 80);
+  --bg-3:          oklch(0.945 0.010 80);
+  --fg:            oklch(0.20  0.012 70);
+  --fg-2:          oklch(0.36  0.012 70);
+  --muted:         oklch(0.55  0.012 70);
+  --faint:         oklch(0.78  0.008 70);
+  --border:        oklch(0.90  0.008 70);
+  --border-strong: oklch(0.82  0.010 70);
+  --accent:        oklch(0.58  0.14  38);
+  --accent-fg:     oklch(0.99  0.005 80);
+  --accent-soft:   oklch(0.94  0.04  38);
+  --ok:            oklch(0.62  0.13 145);
+}
+
+.dark {
+  --bg:            oklch(0.16  0.008 70);
+  --bg-2:          oklch(0.19  0.009 70);
+  --bg-3:          oklch(0.22  0.010 70);
+  --fg:            oklch(0.96  0.006 80);
+  --fg-2:          oklch(0.82  0.008 80);
+  --muted:         oklch(0.62  0.010 80);
+  --faint:         oklch(0.40  0.010 80);
+  --border:        oklch(0.28  0.010 70);
+  --border-strong: oklch(0.36  0.012 70);
+  --accent:        oklch(0.72  0.13  50);
+  --accent-fg:     oklch(0.18  0.010 70);
+  --accent-soft:   oklch(0.28  0.05  50);
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────────── */
+.thin-scroll::-webkit-scrollbar          { width: 10px; height: 10px; }
+.thin-scroll::-webkit-scrollbar-thumb    { background: var(--border-strong); border-radius: 999px; border: 3px solid var(--bg); }
+.thin-scroll::-webkit-scrollbar-track   { background: transparent; }
+
+/* ── Dropzone ───────────────────────────────────────────────── */
+.dropzone {
+  border: 1.5px dashed var(--border-strong);
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.dropzone.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft) !important;
+}
+
+/* ── Kbd ────────────────────────────────────────────────────── */
+.kbd {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+}
+
+/* ── Prose (reading pane) ───────────────────────────────────── */
+.prose-paper {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 19px;
+  line-height: 1.7;
+  color: var(--fg);
+  letter-spacing: -0.003em;
+  text-wrap: pretty;
+}
+
+/* ── Markdown body (chunk content) ──────────────────────────── */
+.md-body {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 19px;
+  line-height: 1.7;
+  color: var(--fg);
+  letter-spacing: -0.003em;
+  text-wrap: pretty;
+}
+.md-body p { margin: 0; }
+.md-body p + p { margin-top: 1.1em; }
+.md-body em, .md-body i { font-style: italic; color: var(--fg-2); }
+.md-body strong, .md-body b { font-weight: 600; color: var(--fg); }
+.md-body a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.md-body code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.88em;
+  padding: 1px 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.md-body ul, .md-body ol { padding-left: 1.4em; margin: 0.6em 0; }
+.md-body li { margin: 0.25em 0; }
+
+/* ── Markdown tables (rendered with proper borders, ChapterPal-style) ── */
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--border-strong);
+  font-size: 16px;
+  line-height: 1.55;
+  margin: 0;
+}
+.md-body th, .md-body td {
+  border: 1px solid var(--border-strong);
+  padding: 14px 18px;
+  text-align: left;
+  vertical-align: top;
+}
+.md-body th { font-weight: 600; background: var(--bg-2); }
+
+/* ── KaTeX size tweak so inline math sits naturally in serif body ── */
+.md-body .katex { font-size: 1.02em; }
+.md-body .katex-display { margin: 1em 0; overflow-x: auto; overflow-y: hidden; }
+
+/* ── Active-chunk trailing bullet (ChapterPal "live cursor") ──── */
+.chunk-cursor::after {
+  content: '\2009\2022';
+  color: var(--accent);
+  margin-left: 0.25em;
+  font-size: 1.05em;
+  vertical-align: 0;
+}
+
+/* ── Heading divider rule (thin line under chunk headings) ──── */
+.chunk-heading {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  color: var(--fg);
+  font-weight: 600;
+  padding-bottom: 0.6em;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Stripe placeholder (figure) ───────────────────────────── */
+.stripe-placeholder {
+  background-image: repeating-linear-gradient(
+    135deg,
+    var(--bg-2),
+    var(--bg-2) 8px,
+    var(--bg-3) 8px,
+    var(--bg-3) 16px
+  );
+}
+
+/* ── Animations ─────────────────────────────────────────────── */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+.pulse-soft { animation: pulse-soft 1.6s ease-in-out infinite; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.8s linear infinite; }
+
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+.spin-slow { animation: spin-slow 1.6s linear infinite; }
+
+/* Diagonal moving stripes — overlaid on the green progress fill while a paper
+   is still being processed in the background. The base color is whatever the
+   element's `background` is set to; the stripes layer on top via gradient. */
+@keyframes progress-stripes-slide {
+  from { background-position: 0 0; }
+  to   { background-position: 24px 0; }
+}
+.progress-stripes {
+  background-image: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.22) 25%,
+    transparent              25%,
+    transparent              50%,
+    rgba(255, 255, 255, 0.22) 50%,
+    rgba(255, 255, 255, 0.22) 75%,
+    transparent              75%,
+    transparent
+  );
+  background-size: 24px 24px;
+  animation: progress-stripes-slide 1.1s linear infinite;
+}
+
+/* ── Reveal bar ─────────────────────────────────────────────── */
+.reveal-bar {
+  backdrop-filter: blur(8px);
+  background: color-mix(in oklch, var(--bg), transparent 18%);
+  border: 1px solid var(--border);
+}
+
+/* ── Ring animation (progress ring) ────────────────────────── */
+.ring-anim circle {
+  transition: stroke-dashoffset 200ms ease;
+}

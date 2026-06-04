@@ -1,0 +1,197 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: 9xaipal-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
+      POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - 9xaipal_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-9xaipal} -d ${POSTGRES_DB:-9xaipal}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: 9xaipal-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - 9xaipal_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: 9xaipal-searxng
+    ports:
+      - "${SEARXNG_PORT:-8080}:8080"
+    volumes:
+      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      BASE_URL: http://localhost:${SEARXNG_PORT:-8080}/
+      INSTANCE_NAME: 9xaipal-searxng
+    restart: unless-stopped
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.mineru
+    container_name: 9xaipal-celery-worker
+    command: celery -A app.core.celery_app worker --loglevel=info
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
+      POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      # Ollama runs on the host network (or wherever you point it). Do NOT inherit
+      # OLLAMA_BASE_URL from the host .env here: a local-dev value like
+      # http://localhost:11434 resolves to *this container* and makes every model
+      # call fail with connection-refused.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      CHAT_MODEL: ${CHAT_MODEL:-gemma4:26b}
+      VLM_MODEL: ${VLM_MODEL:-gemma4:26b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      # Latency tuning (see app/core/config.py). Keep the model warm and let the
+      # router/guardrail use a small fast model if one is installed.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
+      CHAT_NUM_PREDICT: ${CHAT_NUM_PREDICT:-0}
+      # SearXNG runs as a compose service on the same network, so reach it by
+      # service name. Do NOT inherit SEARXNG_URL from the host .env here: a
+      # local-dev value like http://localhost:8080 resolves to *this container*
+      # and makes web search fail with connection-refused.
+      SEARXNG_URL: http://searxng:8080
+      MINERU_BINARY: ${MINERU_BINARY:-mineru}
+      # Set to "true" to allow PyMuPDF fallback when MinerU is not installed.
+      # This produces lower quality results (no OCR, weaker table/figure extraction, no math).
+      # For best quality on papers like "Attention Is All You Need", install MinerU properly.
+      ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-false}
+      STORAGE_ROOT: /data/storage
+    volumes:
+      - ./app/storage:/data/storage
+      - ./app:/app/app:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ------------------------------------------------------------------
+  # API service — the heart of the "your computer is the server" model.
+  # Runs the FastAPI backend (async) + serves the UI (when frontend dist
+  # is available). Exposes everything on a single port (8000 by default).
+  # Ollama stays on your host (or wherever you point OLLAMA_BASE_URL).
+  # Use with: docker compose --profile server up   (or just up for api+infra)
+  # ------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: 9xaipal-api
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --workers 2
+      --log-level info
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
+      POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
+      REDIS_URL: redis://redis:6379/0
+      # Ollama runs on the host network. Do NOT inherit OLLAMA_BASE_URL from the
+      # host .env here: a local-dev value like http://localhost:11434 resolves
+      # to *this container* and makes every model call fail with connection-refused.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Chat model — forwarded from host .env so the container uses the same model.
+      CHAT_MODEL: ${CHAT_MODEL:-gemma4:26b}
+      VLM_MODEL: ${VLM_MODEL:-gemma4:26b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      # Latency tuning (see app/core/config.py).
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+      CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
+      CHAT_NUM_PREDICT: ${CHAT_NUM_PREDICT:-0}
+      GUARDRAIL_SKIP_IN_PAPER: ${GUARDRAIL_SKIP_IN_PAPER:-true}
+      # Reach the SearXNG compose service by name (see celery_worker note above).
+      SEARXNG_URL: http://searxng:8080
+      STORAGE_ROOT: /data/storage
+      ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-false}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
+      SERVE_FRONTEND: ${SERVE_FRONTEND:-true}
+      DEBUG: ${DEBUG:-false}
+    volumes:
+      # Persistent user data (PDFs, chunks, images, research assets, logs)
+      - ./app/storage:/data/storage
+      # Built React SPA (populated by the one-shot frontend-build service).
+      # main.py will serve it at "/" when SERVE_FRONTEND=true.
+      - frontend-dist:/app/frontend/dist:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+    # Note: For a fully automatic "up", start the one-shot frontend-build first
+    # (or use a profile that brings it up before api). The SPA mount in main.py
+    # is guarded, so an empty volume is harmless.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # One-shot service that builds the React frontend once and leaves the artifacts
+  # in a named volume. The api service mounts the volume read-only at the
+  # container path expected by main.py when SERVE_FRONTEND=true.
+  # This gives a true "docker compose up" experience for the full server
+  # (UI + API on :8000) without requiring npm on the host.
+  frontend-build:
+    image: node:20-alpine
+    container_name: 9xaipal-frontend-build
+    working_dir: /src
+    volumes:
+      - ../frontend:/src
+      - frontend-dist:/dist
+    command: >
+      sh -c "
+        echo 'Building frontend for server deployment...' &&
+        npm ci --prefer-offline --no-audit --progress=false 2>&1 | tail -5 &&
+        npm run build 2>&1 | tail -10 &&
+        rm -rf /dist/* &&
+        cp -r dist/* /dist/ &&
+        echo 'Frontend dist ready in volume (index.html and assets).'
+      "
+    profiles:
+      - server
+      - full
+    # This service exits after build; api waits for it via depends_on condition.
+
+volumes:
+  9xaipal_postgres_data:
+  9xaipal_redis_data:
+  # Holds the production React build so the api container can serve the SPA
+  # at "/" (single port, no extra reverse proxy needed for "my machine = server").
+  frontend-dist:

@@ -1,0 +1,22 @@
+use_default_settings: true
+
+general:
+  instance_name: "9xaipal-searxng"
+
+server:
+  secret_key: "9xaipal-dev-secret-change-me"
+  limiter: false
+  # Enable SearXNG's built-in image proxy. This makes SearXNG fetch and re-serve
+  # images itself, which significantly reduces hotlinking / Referer blocking issues
+  # when the frontend tries to display web search / research images.
+  image_proxy: true
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+
+ui:
+  static_use_hash: true

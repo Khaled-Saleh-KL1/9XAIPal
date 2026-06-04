@@ -1,0 +1,60 @@
+# Environment
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv*/
+venv/
+.uv/
+**/__pycache__/**/*
+*.egg
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Runtime data (storage artifacts)
+backend/app/storage/documents/*
+backend/app/storage/extracted/*
+backend/app/storage/images/*
+backend/app/storage/logs/*
+backend/app/storage/assets/*
+
+# SQLite (fallback)
+*.sqlite3
+*.sqlite3-*
+
+# Testing
+.pytest_cache/
+.benchmarks/
+.deepeval/
+htmlcov/
+.coverage
+
+# Docker
+.docker/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# HuggingFace cache
+.cache/huggingface/

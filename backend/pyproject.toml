@@ -1,0 +1,65 @@
+[project]
+name = "9xaipal-backend"
+version = "0.1.0"
+description = "Local-first backend architecture for 9XAIPal."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi[standard]",
+  "uvicorn[standard]",
+  "pydantic>=2.0",
+  "pydantic-settings",
+  "python-multipart",
+  "sqlalchemy[asyncio]>=2.0",
+  "asyncpg",
+  "psycopg2-binary",
+  "pgvector",
+  "alembic",
+  "celery>=5.3",
+  "redis>=5.0",
+  "httpx",
+  "pypdf",
+  "aiofiles",
+  "pymupdf",
+  "mineru[pipeline]>=3.2.0",
+  "scipy>=1.17.1",
+  # Declared directly (though pulled transitively by mineru too) so the
+  # [tool.uv.sources] CPU-index override below binds — uv only applies sources
+  # to the project's direct dependencies.
+  "torch",
+  "torchvision",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "httpx",
+]
+
+# On Linux (i.e. inside the Docker images), pull torch/torchvision from the
+# PyTorch CPU index instead of PyPI. The default PyPI Linux wheels declare the
+# full NVIDIA CUDA stack (~2.5 GB: cublas, cudnn, nccl, cusparse, triton...) as
+# dependencies, none of which can run in CPU-only Docker on Apple Silicon. The
+# "+cpu" builds drop all of that (~2.5 GB -> ~200 MB), which is what makes the
+# image build fast and reliable. macOS (the dev host) is left untouched — its
+# torch wheel is already CPU-only and resolves from PyPI as before.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.409",
+]
