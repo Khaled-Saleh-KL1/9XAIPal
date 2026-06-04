@@ -20,6 +20,12 @@ frontend/dist/
 frontend/.vite/
 *.tsbuildinfo
 
+# Agent config dirs
+.grok/
+.claude/
+.cursor/
+.copilot/
+
 # IDE
 .idea/
 .vscode/
