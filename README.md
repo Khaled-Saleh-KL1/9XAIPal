@@ -111,6 +111,23 @@ cd backend
 docker compose up -d --build
 ```
 
+### LAN Server (Share Across Your Network)
+
+Run `backend/start-lan-server.sh` to turn your machine into a temporary server that any device on the **same local network** (same Wi-Fi or Ethernet) can reach. The script:
+
+- Brings up the full Docker stack (API, UI, Postgres, Redis, SearXNG, Celery worker)
+- Builds the React frontend inside a container (no Node.js needed on the host)
+- Removes the upload size limit for large PDFs
+- Prints the LAN URL (e.g. `http://192.168.1.42:8000`) to open from other devices
+- On Ctrl+C, shuts everything down while preserving your data
+
+```bash
+cd backend
+./start-lan-server.sh
+```
+
+> **Note:** This only works on the **same local network** — the script detects your private LAN IP (e.g. `192.168.x.x` or `10.x.x.x`), which is not reachable from the internet. To expose the app over the internet you would need port forwarding on your router, a public IP, or a tunnel service like ngrok.
+
 ---
 
 ## Documentation
