@@ -18,7 +18,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_HTTP_TIMEOUT=600 \
     UV_CONCURRENT_DOWNLOADS=4 \
     MINERU_MODEL_SOURCE=huggingface \
-    HF_HUB_DISABLE_TELEMETRY=1
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    # Signal to mineru_client.py that the pipeline models are pre-baked into
+    # this image (see the `mineru-models-download` step below). When this is
+    # set the orchestrator leaves HF_HUB_OFFLINE unset, which is required
+    # because MinerU's post-processing stage reuses the HF HTTP client and
+    # would otherwise surface as "All connection attempts failed" when it
+    # tries to reach the optional LLM-aided VLM endpoint.
+    MINERU_BAKED_INTO_IMAGE=1
 
 WORKDIR /app
 

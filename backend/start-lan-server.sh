@@ -105,6 +105,11 @@ services:
       # extractor's wall-clock timeout kill it.
       MINERU_TIMEOUT_SEC: "${MINERU_TIMEOUT_SEC:-14400}"
       MAX_UPLOAD_SIZE_MB: "${MAX_UPLOAD_MB}"
+      # Pipeline models are pre-baked into Dockerfile.mineru. This signal
+      # tells mineru_client.py to skip the HF_HUB_OFFLINE=1 toggle (which
+      # otherwise blocks MinerU's post-processing stage — manifests as
+      # "All connection attempts failed" on extraction).
+      MINERU_BAKED_INTO_IMAGE: "1"
 YAML
 
 echo "============================================================"

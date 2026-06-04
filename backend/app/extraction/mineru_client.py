@@ -101,13 +101,27 @@ def extract_pdf_sync(pdf_path: Path, document_id: str) -> tuple[Path, str]:
     # Behaviour: online only on a fresh install (cache absent) so models can
     # download the first time. Override with MINERU_FORCE_OFFLINE=1 (always
     # offline) or MINERU_FORCE_OFFLINE=0 (always allow network).
+    #
+    # EXCEPTION: when running inside the celery_worker Docker image the models
+    # are pre-baked at build time (Dockerfile.mineru runs
+    # `mineru-models-download`). In that environment setting HF_HUB_OFFLINE=1
+    # also blocks MinerU's post-processing stage (it reuses the HF HTTP client
+    # to reach the optional LLM-aided VLM endpoint), which surfaces as the same
+    # "All connection attempts failed" error we were trying to avoid. The
+    # container signals this with MINERU_BAKED_INTO_IMAGE=1; honour that by
+    # skipping the offline toggle and letting HF hub's lightweight metadata
+    # check run normally (the cache is already current, so the check is a
+    # no-op against the local snapshot).
     env = os.environ.copy()
     force_offline = os.getenv("MINERU_FORCE_OFFLINE")
+    baked_into_image = os.getenv("MINERU_BAKED_INTO_IMAGE") == "1"
     hf_home = Path(os.getenv("HF_HOME") or (Path.home() / ".cache" / "huggingface"))
-    if force_offline == "1" or (force_offline != "0" and hf_home.exists()):
+    if not baked_into_image and (force_offline == "1" or (force_offline != "0" and hf_home.exists())):
         env.setdefault("HF_HUB_OFFLINE", "1")
         env.setdefault("TRANSFORMERS_OFFLINE", "1")
         logger.info("MinerU running offline (model cache present); network disabled for extraction.")
+    elif baked_into_image:
+        logger.info("MinerU running with pre-baked models (Docker image); HF hub allowed to make metadata checks.")
 
     # Memory safety: MinerU processes pages in windows (default 64) and runs
     # formula recognition (MFR) on a whole window's equations at once. On a

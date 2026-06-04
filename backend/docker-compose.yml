@@ -74,6 +74,12 @@ services:
       # and makes web search fail with connection-refused.
       SEARXNG_URL: http://searxng:8080
       MINERU_BINARY: ${MINERU_BINARY:-mineru}
+      # Tells mineru_client.py that pipeline models are pre-baked into the
+      # image (Dockerfile.mineru runs `mineru-models-download` at build time).
+      # When set, the orchestrator skips the HF_HUB_OFFLINE=1 toggle that
+      # would otherwise break MinerU's post-processing stage by blocking the
+      # HF HTTP client used to reach the optional LLM-aided VLM endpoint.
+      MINERU_BAKED_INTO_IMAGE: "1"
       # Set to "true" to allow PyMuPDF fallback when MinerU is not installed.
       # This produces lower quality results (no OCR, weaker table/figure extraction, no math).
       # For best quality on papers like "Attention Is All You Need", install MinerU properly.
