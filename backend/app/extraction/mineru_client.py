@@ -26,6 +26,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -91,6 +93,29 @@ def extract_pdf_sync(pdf_path: Path, document_id: str) -> tuple[Path, str]:
         "-l", settings.mineru_lang,
     ]
     logger.info(f"Running MinerU: {' '.join(cmd)}")
+
+    # MinerU 2.x/3.x's CLI is a thin client over a local FastAPI server. By
+    # default it starts that server as a subprocess and tears it down when the
+    # CLI exits. Inside the celery_worker container that lifecycle is fragile:
+    # the server starts with a 1-concurrent-request semaphore (it detects the
+    # host as Mac) and routinely crashes mid-extraction on long books (500+
+    # pages), leaking semaphores and leaving the port in a half-closed state.
+    # The client then fails every subsequent poll with "All connection
+    # attempts failed" — the server is gone but the client doesn't know.
+    #
+    # We work around this by starting the FastAPI server ourselves as a
+    # long-lived background subprocess, pointing the CLI at it via
+    # `--api-url`, and tearing it down ourselves after the CLI finishes. The
+    # server stays up for the full extraction (no abrupt kill) and we get a
+    # real exit code to check. This is the only way the celery path can
+    # extract books reliably.
+    server_url: str | None = None
+    server_proc: subprocess.Popen | None = None
+    server_log_path: Path | None = None
+    if not os.getenv("MINERU_API_URL"):
+        server_url, server_proc, server_log_path = _start_mineru_api_server(env)
+        cmd += ["--api-url", server_url]
+        logger.info(f"MinerU CLI will use external API at {server_url}")
 
     # Local-first robustness: once MinerU's models are cached, the HuggingFace
     # hub still makes a network "is this up to date?" call on every run. A
@@ -162,10 +187,109 @@ def extract_pdf_sync(pdf_path: Path, document_id: str) -> tuple[Path, str]:
         if isinstance(e, MinerUError):
             raise
         raise MinerUError(f"mineru invocation failed: {e}") from e
+    finally:
+        if server_proc is not None:
+            _stop_mineru_api_server(server_proc, server_log_path)
 
 
 async def extract_pdf(pdf_path: Path, document_id: str) -> tuple[Path, str]:
     return extract_pdf_sync(pdf_path, document_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Long-lived MinerU FastAPI server
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# MinerU 2.x/3.x's CLI is a thin client that talks to a local FastAPI server
+# (mineru.cli.fast_api). The CLI normally starts that server as a short-lived
+# subprocess, runs the extraction, and kills the server. Inside the
+# celery_worker container that lifecycle breaks on long books (500+ pages):
+# the server crashes mid-extraction, leaks semaphores, and the client polls
+# fail with "All connection attempts failed".
+#
+# The fix is to start the server ourselves as a long-lived subprocess, point
+# the CLI at it via --api-url, and tear it down after the CLI exits. The
+# server stays up for the full extraction and we get a real exit code.
+
+def _start_mineru_api_server(env: dict) -> tuple[str, "subprocess.Popen", Path]:
+    """Start the MinerU FastAPI server as a background subprocess.
+
+    Returns ``(base_url, process, log_path)``. The caller MUST call
+    ``_stop_mineru_api_server`` in a ``finally`` block.
+    """
+    import socket
+    # Pick a free port deterministically (avoids races with other Celery
+    # workers trying to start their own server).
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = int(s.getsockname()[1])
+    host = "127.0.0.1"
+    base_url = f"http://{host}:{port}"
+
+    log_dir = Path(env.get("STORAGE_ROOT", "/data/storage")) / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "mineru-api.log"
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "mineru.cli.fast_api",
+        "--host", host,
+        "--port", str(port),
+    ]
+    logger.info(f"Starting MinerU API server: {' '.join(cmd)} (logs → {log_path})")
+    log_file = open(log_path, "ab", buffering=0)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        env=env,
+        # New process group so we can kill the whole tree on shutdown.
+        start_new_session=True,
+    )
+
+    # Wait for the server to be ready (poll the health endpoint).
+    import httpx
+    deadline = time.monotonic() + 300.0  # 5 min startup budget
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            log_file.close()
+            raise MinerUError(
+                f"MinerU API server exited prematurely (rc={proc.returncode}). "
+                f"Check logs: {log_path}"
+            )
+        try:
+            r = httpx.get(f"{base_url}/health", timeout=2.0)
+            if r.status_code == 200:
+                logger.info(f"MinerU API server ready at {base_url} (pid={proc.pid})")
+                return base_url, proc, log_path
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+    # Timed out waiting for the server to come up.
+    _stop_mineru_api_server(proc, log_path)
+    raise MinerUError(
+        f"MinerU API server did not become ready within 300s. Check logs: {log_path}"
+    )
+
+
+def _stop_mineru_api_server(proc: "subprocess.Popen", log_path: Path | None) -> None:
+    """Gracefully stop the MinerU API server subprocess."""
+    if proc.poll() is not None:
+        return  # already exited
+    logger.info(f"Stopping MinerU API server (pid={proc.pid})...")
+    try:
+        # Try a graceful SIGTERM first (gives the server a chance to flush).
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            logger.warning("MinerU API server did not exit on SIGTERM; sending SIGKILL")
+            proc.kill()
+            proc.wait(timeout=5)
+    except Exception as e:
+        logger.warning(f"Error stopping MinerU API server: {e}")
 
 
 def _wipe_dir_contents(d: Path) -> None:

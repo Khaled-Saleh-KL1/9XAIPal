@@ -60,6 +60,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Baked into the image layer — no volume to shadow it.
 RUN mineru-models-download -s huggingface -m pipeline
 
+# Patch MinerU's CLI HTTP timeout (default read=60s) so long-running
+# extractions (large books, 500+ pages) don't trip a 60s polling timeout
+# and surface as "All connection attempts failed". The CLI is a thin client
+# over a local FastAPI server; the server keeps working fine, but the
+# client's `read=60` kills each poll before the server can respond. Bumping
+# to 30 minutes makes polling patient enough for books. The `sed` is
+# idempotent and pinned to a specific source path so a MinerU upgrade that
+# changes the function signature will surface as a build failure rather
+# than a silent regression.
+RUN MINERU_API_CLIENT=$(python -c "import mineru.cli.api_client, os; print(os.path.abspath(mineru.cli.api_client.__file__))") && \
+    sed -i 's/return httpx.Timeout(connect=10, read=60, write=300, pool=30)/return httpx.Timeout(connect=10, read=1800, write=600, pool=60)/' "$MINERU_API_CLIENT" && \
+    echo "Patched MinerU HTTP timeout in $MINERU_API_CLIENT:" && \
+    grep -n "httpx.Timeout" "$MINERU_API_CLIENT" | head -3
+
 COPY app ./app
 
 # Compose overrides this, but default to the worker so the image is self-describing.
