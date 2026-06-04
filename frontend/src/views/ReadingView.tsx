@@ -916,6 +916,22 @@ function Md({ children }: { children: string }) {
   );
 }
 
+// Inline variant of `Md` for use inside table cells, list items, etc.
+// Overrides the default `<p>` wrapper to `<span>` so it doesn't add vertical
+// margins that would break table cell alignment. Runs the same remark-math +
+// rehype-katex pipeline so $...$ LaTeX renders inside table cells.
+function InlineMd({ children }: { children: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={MARKDOWN_REMARK}
+      rehypePlugins={MARKDOWN_REHYPE}
+      components={{ p: ({ children: c }) => <span>{c}</span> }}
+    >
+      {children}
+    </ReactMarkdown>
+  );
+}
+
 function ApiChunkBlock({
   chunk,
   active,
@@ -1077,7 +1093,7 @@ function GranularUnit({
                 <tr>
                   {json.headers.map((h: string, i: number) => (
                     <th key={i} className="px-4 py-2 text-left font-semibold border-b" style={{ borderColor: 'var(--border)', background: 'var(--bg-2)' }}>
-                      {h}
+                      <InlineMd>{h}</InlineMd>
                     </th>
                   ))}
                 </tr>
@@ -1087,7 +1103,7 @@ function GranularUnit({
                   <tr key={ri}>
                     {row.map((cell, ci) => (
                       <td key={ci} className="px-4 py-2 border-b align-top" style={{ borderColor: 'var(--border)' }}>
-                        {cell}
+                        <InlineMd>{cell}</InlineMd>
                       </td>
                     ))}
                   </tr>
@@ -1114,17 +1130,32 @@ function GranularUnit({
 
   if (unit.kind === 'figure') {
     const richDesc = figureDescriptions?.[unit.sourceChunkId];
+    // Fall back to the VLM description's image_path when chunk_assets didn't
+    // link the extracted image back to this chunk. image_path is stored
+    // relative to images/ (e.g. "<doc_id>/<uuid>.png") and served at
+    // /static/images/...
+    const resolvedImageUrl =
+      unit.imageUrl ||
+      (richDesc?.image_path ? `/static/images/${richDesc.image_path}` : undefined);
 
     return (
       <div className={`${baseClass} ${lastClass} my-6`}>
         <div className="flex flex-col items-center rounded-lg border p-4" style={{ borderColor: 'var(--border)' }}>
-          {unit.imageUrl && (
+          {resolvedImageUrl && (
             <img
-              src={unit.imageUrl}
+              src={resolvedImageUrl}
               alt={unit.caption || 'figure'}
               className="max-h-[480px] object-contain rounded"
               style={{ background: '#fff', padding: 12 }}
             />
+          )}
+          {!resolvedImageUrl && (
+            <div
+              className="w-full max-w-[420px] py-8 text-center text-[12px] font-mono rounded"
+              style={{ background: 'var(--bg-2)', color: 'var(--muted)', border: '1px dashed var(--border)' }}
+            >
+              Figure image unavailable
+            </div>
           )}
           {unit.filename && (
             <div className="mt-3 text-[11.5px] font-mono" style={{ color: 'var(--muted)' }}>
