@@ -157,7 +157,7 @@ export const PROCESSING_STEPS: ProcessingStep[] = [
     sub: 'Embedding chunks, persisting to ~/.9xaipal',
     detail: [
       '→ 354 structural chunks queued',
-      '→ embed-en-v4 · 768-dim · int8',
+      '→ qwen3-embedding · 4096-dim · fp32',
       '→ writing to ~/.9xaipal/index.duckdb',
     ],
   },

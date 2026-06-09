@@ -11,10 +11,11 @@ from app.embeddings.model import get_embeddings_batch_sync
 logger = get_logger(__name__)
 
 
-# nomic-embed-text has a 2048-token window and Ollama's /api/embed returns a hard
-# 400 ("input length exceeds the context length") rather than truncating — even
-# with truncate=true. Dense tables tokenize heavily (~3072 chars was the live
-# ceiling for a numeric table, 4096 failed), so cap conservatively at 3000 chars.
+# Embedding model token-window sizing: qwen3-embedding supports long contexts,
+# but Ollama's /api/embed returns a hard 400 ("input length exceeds the context length")
+# rather than truncating — even with truncate=true. Dense tables tokenize heavily
+# (~3072 chars was the live ceiling for a numeric table, 4096 failed), so cap
+# conservatively at 3000 chars.
 _MAX_EMBED_CHARS = 3000
 
 

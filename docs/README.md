@@ -234,7 +234,7 @@ The product has three "halves":
 | Vite dev       | `http://localhost:5173`    | Yes (dev)| Proxies `/api` and `/static` to `:8000`                       |
 | PostgreSQL     | `localhost:5432`           | Yes      | `pgvector/pgvector:pg16` image; `vector` + `uuid-ossp`        |
 | Redis          | `localhost:6379`           | Yes      | Celery broker + result backend                                |
-| Ollama         | `http://localhost:11434`   | Yes      | Hosts chat/VLM model + `nomic-embed-text`                     |
+| Ollama         | `http://localhost:11434`   | Yes      | Hosts chat/VLM model + `qwen3-embedding`                     |
 | MinerU CLI     | binary on `$PATH` (`mineru`)| Yes     | Optional PyMuPDF fallback if `ALLOW_PYMUPDF_FALLBACK=true`     |
 | SearXNG        | `http://localhost:8080`    | Optional | Only invoked for EXTERNAL / cross-field / empty-paper contexts |
 
@@ -257,7 +257,7 @@ The product has three "halves":
 
 ```bash
 ollama pull qwen3.5:cloud   # or your chosen chat/VLM model
-ollama pull nomic-embed-text # 768-dim embeddings
+ollama pull qwen3-embedding # 4096-dim embeddings
 ```
 
 ### MinerU

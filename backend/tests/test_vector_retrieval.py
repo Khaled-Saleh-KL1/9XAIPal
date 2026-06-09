@@ -28,12 +28,12 @@ async def test_search_similar_chunks_success(db_session):
     await db_session.commit()
 
     # 2. Insert fake embedding
-    fake_vector = [0.1] * 768
+    fake_vector = [0.1] * 4096
     await insert_embedding(
         db_session,
         chunk_id=chunk_id,
         embedding=fake_vector,
-        model_name="nomic-embed-text",
+        model_name="qwen3-embedding",
     )
     await db_session.commit()
 

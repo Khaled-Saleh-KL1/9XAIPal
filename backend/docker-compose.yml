@@ -62,7 +62,7 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:26b}
       VLM_MODEL: ${VLM_MODEL:-gemma4:26b}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding}
       # Latency tuning (see app/core/config.py). Keep the model warm and let the
       # router/guardrail use a small fast model if one is installed.
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
@@ -80,6 +80,12 @@ services:
       # would otherwise break MinerU's post-processing stage by blocking the
       # HF HTTP client used to reach the optional LLM-aided VLM endpoint.
       MINERU_BAKED_INTO_IMAGE: "1"
+      # Large-book memory safety: extract PDFs in page-range batches of this
+      # size and merge, so peak RAM stays bounded regardless of book length
+      # (a 656-page book otherwise OOM-kills the MinerU server). Set to 0 to
+      # disable batching. Lower it if the worker still OOMs; raise it (or raise
+      # Docker Desktop's memory) for faster extraction of long books.
+      MINERU_PAGE_BATCH_SIZE: ${MINERU_PAGE_BATCH_SIZE:-100}
       # Set to "true" to allow PyMuPDF fallback when MinerU is not installed.
       # This produces lower quality results (no OCR, weaker table/figure extraction, no math).
       # For best quality on papers like "Attention Is All You Need", install MinerU properly.
@@ -95,6 +101,21 @@ services:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Auto-recover the worker if MinerU OOMs on a large book (exit 137). Without
+    # this, an OOM-killed worker stays dead and uploads silently queue forever.
+    restart: unless-stopped
+    # Cap worker memory so an OOM kills *this container* cleanly (and it restarts)
+    # instead of pressuring the host. Tune to your machine; MinerU extraction is
+    # the memory-heavy phase (embeddings run on host Ollama, not here).
+    deploy:
+      resources:
+        limits:
+          # Headroom for MinerU extraction of large books. This MUST be lower
+          # than Docker Desktop's total VM memory (Settings → Resources →
+          # Memory) or the worker is OOM-killed mid-extraction. Default Docker
+          # VM is only ~8GB — raise it to 16-24GB for 500+ page books, then
+          # WORKER_MEM_LIMIT can go higher.
+          memory: ${WORKER_MEM_LIMIT:-12G}
 
   # ------------------------------------------------------------------
   # API service — the heart of the "your computer is the server" model.
@@ -129,7 +150,7 @@ services:
       # Chat model — forwarded from host .env so the container uses the same model.
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:26b}
       VLM_MODEL: ${VLM_MODEL:-gemma4:26b}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding}
       # Latency tuning (see app/core/config.py).
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
@@ -142,7 +163,7 @@ services:
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
       SERVE_FRONTEND: ${SERVE_FRONTEND:-true}
-      DEBUG: ${DEBUG:-false}
+      DEBUG: "false"
     volumes:
       # Persistent user data (PDFs, chunks, images, research assets, logs)
       - ./app/storage:/data/storage

@@ -30,6 +30,10 @@ MODEL_REGISTRY: dict[str, ModelEntry] = {
         name="nomic-embed-text",
         capabilities=ModelCapabilities(text=True, embedding=True),
     ),
+    "qwen3-embedding": ModelEntry(
+        name="qwen3-embedding",
+        capabilities=ModelCapabilities(text=True, embedding=True),
+    ),
 }
 
 

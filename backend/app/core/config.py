@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     chat_model: str = "gemma4:26b"
     vlm_model: str = "gemma4:26b"
-    embedding_model: str = "nomic-embed-text"
+    embedding_model: str = "qwen3-embedding"
 
     # ── Latency tuning ──────────────────────────────────────────────────────
     # Small, fast model used ONLY for cheap classification (router + guardrail).
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     local_context_window: int = 3   # Increased from 2 for better "see surrounding" experience
 
     # Vector
-    vector_dimension: int = 768
+    vector_dimension: int = 4096
 
     # SearXNG
     searxng_url: str = "http://localhost:8080"

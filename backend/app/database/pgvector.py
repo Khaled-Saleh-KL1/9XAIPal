@@ -88,11 +88,25 @@ async def create_vector_index(session: AsyncSession) -> None:
     one of ``lists`` partitions), which on small/medium corpora returns 0 hits
     for queries that clearly match. HNSW gives high recall out of the box with
     no per-query tuning and no dependency on row count.
+
+    pgvector's HNSW implementation has a hard 2000-dimension limit. For larger
+    dimensions (e.g. qwen3-embedding at 4096-dim) we skip the index and fall back
+    to brute-force exact search, which is perfectly fine for personal-scale
+    libraries and avoids silent dimension-truncation bugs.
     """
     # Remove the legacy IVFFlat index if a previous build created it, so the
     # HNSW index below actually takes effect (CREATE ... IF NOT EXISTS would
     # otherwise no-op on the shared index name).
     await session.execute(text("DROP INDEX IF EXISTS idx_chunk_embeddings_vector"))
+
+    if settings.vector_dimension > 2000:
+        logger.warning(
+            "Vector dimension %d exceeds pgvector HNSW limit (2000). "
+            "Skipping HNSW index — exact brute-force search will be used.",
+            settings.vector_dimension,
+        )
+        return
+
     await session.execute(
         text("""
             CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_hnsw

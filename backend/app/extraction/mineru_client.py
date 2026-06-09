@@ -84,89 +84,67 @@ def extract_pdf_sync(pdf_path: Path, document_id: str) -> tuple[Path, str]:
             "to use the degraded text-only extractor."
         )
 
-    cmd = [
-        binary,
-        "-p", str(pdf_path),
-        "-o", str(output_dir),
-        "-m", "auto",
-        "-b", "pipeline",
-        "-l", settings.mineru_lang,
-    ]
-    logger.info(f"Running MinerU: {' '.join(cmd)}")
+    env = _build_mineru_env()
+
+    # Memory safety for large books: a 656-page book extracted in one pass holds
+    # the whole document's layout/OCR/MFR state in RAM at once and OOM-kills the
+    # MinerU server inside Docker's memory-capped VM (the server child dies and
+    # every subsequent CLI poll fails with "All connection attempts failed").
+    # Bound peak RAM by extracting in page-range batches (MinerU's -s/-e flags,
+    # 0-based inclusive) and merging the per-batch outputs back into one
+    # document. Batching is skipped for small docs and can be disabled with
+    # MINERU_PAGE_BATCH_SIZE=0.
+    total_pages = get_page_count(pdf_path)
+    batch_size = _int_env("MINERU_PAGE_BATCH_SIZE", 100)
+    batches = _plan_page_batches(total_pages, batch_size)
 
     # MinerU 2.x/3.x's CLI is a thin client over a local FastAPI server. By
     # default it starts that server as a subprocess and tears it down when the
     # CLI exits. Inside the celery_worker container that lifecycle is fragile:
     # the server starts with a 1-concurrent-request semaphore (it detects the
-    # host as Mac) and routinely crashes mid-extraction on long books (500+
-    # pages), leaking semaphores and leaving the port in a half-closed state.
-    # The client then fails every subsequent poll with "All connection
-    # attempts failed" — the server is gone but the client doesn't know.
+    # host as Mac) and routinely crashes mid-extraction on long books, leaking
+    # semaphores and leaving the port in a half-closed state. The client then
+    # fails every poll with "All connection attempts failed".
     #
     # We work around this by starting the FastAPI server ourselves as a
-    # long-lived background subprocess, pointing the CLI at it via
-    # `--api-url`, and tearing it down ourselves after the CLI finishes. The
-    # server stays up for the full extraction (no abrupt kill) and we get a
-    # real exit code to check. This is the only way the celery path can
-    # extract books reliably.
+    # long-lived background subprocess, pointing the CLI at it via `--api-url`,
+    # and tearing it down ourselves after the CLI finishes. The single server is
+    # reused across all page-batches (no per-batch restart) and we get a real
+    # exit code to check after every batch.
     server_url: str | None = None
     server_proc: subprocess.Popen | None = None
     server_log_path: Path | None = None
     if not os.getenv("MINERU_API_URL"):
         server_url, server_proc, server_log_path = _start_mineru_api_server(env)
-        cmd += ["--api-url", server_url]
         logger.info(f"MinerU CLI will use external API at {server_url}")
 
-    # Local-first robustness: once MinerU's models are cached, the HuggingFace
-    # hub still makes a network "is this up to date?" call on every run. A
-    # transient network blip turns that into `All connection attempts failed`
-    # and aborts the whole extraction (this is exactly what killed a re-upload
-    # here). So we run MinerU fully offline whenever the model cache already
-    # exists — the cached weights are used directly and no network is touched.
-    # Behaviour: online only on a fresh install (cache absent) so models can
-    # download the first time. Override with MINERU_FORCE_OFFLINE=1 (always
-    # offline) or MINERU_FORCE_OFFLINE=0 (always allow network).
-    #
-    # EXCEPTION: when running inside the celery_worker Docker image the models
-    # are pre-baked at build time (Dockerfile.mineru runs
-    # `mineru-models-download`). In that environment setting HF_HUB_OFFLINE=1
-    # also blocks MinerU's post-processing stage (it reuses the HF HTTP client
-    # to reach the optional LLM-aided VLM endpoint), which surfaces as the same
-    # "All connection attempts failed" error we were trying to avoid. The
-    # container signals this with MINERU_BAKED_INTO_IMAGE=1; honour that by
-    # skipping the offline toggle and letting HF hub's lightweight metadata
-    # check run normally (the cache is already current, so the check is a
-    # no-op against the local snapshot).
-    env = os.environ.copy()
-    force_offline = os.getenv("MINERU_FORCE_OFFLINE")
-    baked_into_image = os.getenv("MINERU_BAKED_INTO_IMAGE") == "1"
-    hf_home = Path(os.getenv("HF_HOME") or (Path.home() / ".cache" / "huggingface"))
-    if not baked_into_image and (force_offline == "1" or (force_offline != "0" and hf_home.exists())):
-        env.setdefault("HF_HUB_OFFLINE", "1")
-        env.setdefault("TRANSFORMERS_OFFLINE", "1")
-        logger.info("MinerU running offline (model cache present); network disabled for extraction.")
-    elif baked_into_image:
-        logger.info("MinerU running with pre-baked models (Docker image); HF hub allowed to make metadata checks.")
-
-    # Memory safety: MinerU processes pages in windows (default 64) and runs
-    # formula recognition (MFR) on a whole window's equations at once. On a
-    # formula-dense book inside Docker's memory-capped VM that peak gets
-    # OOM-killed ("Server disconnected without sending a response" mid-MFR).
-    # A smaller window bounds peak RAM — slightly more model passes, far lower
-    # memory. Override with MINERU_PROCESSING_WINDOW_SIZE in the environment.
-    env.setdefault("MINERU_PROCESSING_WINDOW_SIZE", "16")
-
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=settings.mineru_timeout_sec,
-            env=env,
-        )
-        if proc.returncode != 0:
-            stderr_tail = (proc.stderr or "")[-1500:]
-            raise MinerUError(f"mineru failed (exit {proc.returncode}): {stderr_tail}")
+        if len(batches) <= 1:
+            # Single-shot path: small doc, unknown page count, or batching off.
+            _run_mineru_cli(binary, pdf_path, output_dir, server_url, env, batches[0])
+        else:
+            # Batched path: extract each page range into its own temp dir using
+            # the shared server, then merge into a single MinerU-style layout.
+            logger.info(
+                f"Large document ({total_pages} pages): extracting in "
+                f"{len(batches)} page-batches of {batch_size}"
+            )
+            batch_root = output_dir.parent / f".{document_id}_batches"
+            if batch_root.exists():
+                shutil.rmtree(batch_root, ignore_errors=True)
+            batch_root.mkdir(parents=True, exist_ok=True)
+            try:
+                batch_outputs: list[tuple[Path, int]] = []
+                for i, (start, end) in enumerate(batches):
+                    bdir = batch_root / f"batch_{i:04d}"
+                    bdir.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"MinerU batch {i + 1}/{len(batches)}: pages {start}-{end}")
+                    _run_mineru_cli(binary, pdf_path, bdir, server_url, env, (start, end))
+                    batch_outputs.append((bdir, start))
+                _merge_batch_outputs(batch_outputs, output_dir, pdf_path.stem)
+            finally:
+                shutil.rmtree(batch_root, ignore_errors=True)
+
         md = find_markdown_output(output_dir)
         if md is None:
             raise MinerUError(f"mineru finished but produced no markdown under {output_dir}")
@@ -194,6 +172,168 @@ def extract_pdf_sync(pdf_path: Path, document_id: str) -> tuple[Path, str]:
 
 async def extract_pdf(pdf_path: Path, document_id: str) -> tuple[Path, str]:
     return extract_pdf_sync(pdf_path, document_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extraction helpers: environment, page-batching, single CLI run, batch merge
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read an int env var, falling back to default on missing/garbage values."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_mineru_env() -> dict:
+    """Build the environment MinerU runs under (offline + memory-safety toggles)."""
+    # Local-first robustness: once MinerU's models are cached, the HuggingFace
+    # hub still makes a network "is this up to date?" call on every run. A
+    # transient network blip turns that into `All connection attempts failed`
+    # and aborts the whole extraction. So we run MinerU fully offline whenever
+    # the model cache already exists — cached weights are used directly and no
+    # network is touched. Online only on a fresh install (cache absent) so
+    # models can download the first time. Override with MINERU_FORCE_OFFLINE=1
+    # (always offline) or MINERU_FORCE_OFFLINE=0 (always allow network).
+    #
+    # EXCEPTION: inside the celery_worker Docker image the models are pre-baked
+    # at build time (Dockerfile.mineru runs `mineru-models-download`). There,
+    # HF_HUB_OFFLINE=1 also blocks MinerU's post-processing stage (it reuses the
+    # HF HTTP client to reach the optional LLM-aided VLM endpoint), surfacing as
+    # the same "All connection attempts failed" error. The container signals
+    # this with MINERU_BAKED_INTO_IMAGE=1; honour that by skipping the offline
+    # toggle and letting HF hub's lightweight metadata check run normally.
+    env = os.environ.copy()
+    force_offline = os.getenv("MINERU_FORCE_OFFLINE")
+    baked_into_image = os.getenv("MINERU_BAKED_INTO_IMAGE") == "1"
+    hf_home = Path(os.getenv("HF_HOME") or (Path.home() / ".cache" / "huggingface"))
+    if not baked_into_image and (force_offline == "1" or (force_offline != "0" and hf_home.exists())):
+        env.setdefault("HF_HUB_OFFLINE", "1")
+        env.setdefault("TRANSFORMERS_OFFLINE", "1")
+        logger.info("MinerU running offline (model cache present); network disabled for extraction.")
+    elif baked_into_image:
+        logger.info("MinerU running with pre-baked models (Docker image); HF hub allowed to make metadata checks.")
+
+    # Memory safety: MinerU processes pages in windows (default 64) and runs
+    # formula recognition (MFR) on a whole window's equations at once. A smaller
+    # window bounds peak RAM — slightly more model passes, far lower memory.
+    # Override with MINERU_PROCESSING_WINDOW_SIZE in the environment.
+    env.setdefault("MINERU_PROCESSING_WINDOW_SIZE", "16")
+    return env
+
+
+def _plan_page_batches(total_pages: Optional[int], batch_size: int) -> list:
+    """Plan 0-based inclusive (start, end) page ranges for batched extraction.
+
+    Returns ``[None]`` (a single whole-document pass) when the page count is
+    unknown, batching is disabled (batch_size <= 0), or the document already
+    fits in one batch. Otherwise returns consecutive ranges covering all pages.
+    """
+    if not total_pages or batch_size <= 0 or total_pages <= batch_size:
+        return [None]
+    batches = []
+    start = 0
+    while start < total_pages:
+        end = min(start + batch_size - 1, total_pages - 1)
+        batches.append((start, end))
+        start = end + 1
+    return batches
+
+
+def _run_mineru_cli(
+    binary: str,
+    pdf_path: Path,
+    out_dir: Path,
+    api_url: Optional[str],
+    env: dict,
+    page_range: Optional[tuple],
+) -> None:
+    """Run one MinerU CLI invocation into ``out_dir``; raise MinerUError on failure.
+
+    ``page_range`` is a 0-based inclusive ``(start, end)`` tuple, or ``None`` to
+    extract the whole document.
+    """
+    cmd = [
+        binary,
+        "-p", str(pdf_path),
+        "-o", str(out_dir),
+        "-m", "auto",
+        "-b", "pipeline",
+        "-l", settings.mineru_lang,
+    ]
+    if page_range is not None:
+        cmd += ["-s", str(page_range[0]), "-e", str(page_range[1])]
+    if api_url:
+        cmd += ["--api-url", api_url]
+    logger.info(f"Running MinerU: {' '.join(cmd)}")
+
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=settings.mineru_timeout_sec,
+        env=env,
+    )
+    if proc.returncode != 0:
+        stderr_tail = (proc.stderr or "")[-1500:]
+        raise MinerUError(f"mineru failed (exit {proc.returncode}): {stderr_tail}")
+
+
+def _merge_batch_outputs(batch_outputs: list, output_dir: Path, stem: str) -> None:
+    """Merge per-batch MinerU outputs into one MinerU-style layout under output_dir.
+
+    Produces ``output_dir/<stem>/auto/`` containing a single concatenated
+    ``<stem>_content_list.json``, ``<stem>.md``, and an ``images/`` dir — exactly
+    the shape the downstream ``find_*`` helpers and chunker expect.
+
+    - content_list: entries concatenated in page order; each batch reports
+      batch-relative ``page_idx`` (verified: -s 5 -e 7 → page_idx 0,1,2), so we
+      shift each by the batch's start page to restore absolute page numbers.
+    - markdown: concatenated in page order.
+    - images: copied into one ``images/`` dir. MinerU names images by content
+      hash, so names are unique across batches and collisions (if any) are
+      byte-identical files. Downstream links images by basename only, so the
+      relative ``images/`` prefix in content_list/markdown stays valid.
+    """
+    doc_dir = output_dir / stem
+    if doc_dir.exists():
+        shutil.rmtree(doc_dir, ignore_errors=True)
+    auto_dir = doc_dir / "auto"
+    images_dir = auto_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    merged_content: list = []
+    merged_md: list[str] = []
+
+    for bdir, start in batch_outputs:
+        cl = find_content_list(bdir)
+        if cl is not None:
+            entries = json.loads(cl.read_text(encoding="utf-8"))
+            for e in entries:
+                if isinstance(e.get("page_idx"), int):
+                    e["page_idx"] += start
+            merged_content.extend(entries)
+
+        md = find_markdown_output(bdir)
+        if md is not None:
+            merged_md.append(md.read_text(encoding="utf-8"))
+
+        for img in find_images(bdir):
+            try:
+                shutil.copy2(img, images_dir / img.name)
+            except Exception as ex:
+                logger.warning(f"Failed to copy batch image {img.name}: {ex}")
+
+    (auto_dir / f"{stem}_content_list.json").write_text(
+        json.dumps(merged_content, ensure_ascii=False), encoding="utf-8"
+    )
+    (auto_dir / f"{stem}.md").write_text("\n\n".join(merged_md), encoding="utf-8")
+    logger.info(
+        f"Merged {len(batch_outputs)} batches → {len(merged_content)} content blocks, "
+        f"{sum(1 for _ in images_dir.iterdir())} images"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

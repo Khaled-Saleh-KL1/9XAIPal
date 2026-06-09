@@ -58,7 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_document_sequence
 -- Chunk embeddings with pgvector
 CREATE TABLE IF NOT EXISTS chunk_embeddings (
     chunk_id UUID PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
-    embedding vector(768) NOT NULL,
+    embedding vector(4096) NOT NULL,
     embedding_model TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
