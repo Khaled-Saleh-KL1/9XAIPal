@@ -1,6 +1,6 @@
 # 9XAIPal (V1)
 
-> 🎬 **Video demo** — [Watch on YouTube](https://youtu.be/m-uIaNKOOrk)
+[![Video demo](https://img.youtube.com/vi/m-uIaNKOOrk/0.jpg)](https://youtu.be/m-uIaNKOOrk)
 
 ---
 
