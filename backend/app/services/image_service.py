@@ -23,10 +23,14 @@ Design principles:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
 import mimetypes
+import socket
 from pathlib import Path
 from typing import Optional, Union
+from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
@@ -71,6 +75,39 @@ def _guess_extension(content_type: str) -> str:
     return ext
 
 
+async def _resolves_to_private_address(url: str) -> bool:
+    """True when the URL's host resolves (only) to non-public address space.
+
+    Treats resolution failure as private/unsafe — a host we can't resolve is a
+    host we shouldn't fetch from. Uses the loop's async getaddrinfo so DNS
+    lookups never block the event loop.
+    """
+    host = urlparse(url).hostname
+    if not host:
+        return True
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, None, type=socket.SOCK_STREAM
+        )
+    except OSError:
+        return True
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return True
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return True
+    return False
+
+
 async def fetch_image_via_proxy(url: str) -> tuple[bytes, str, str]:
     """
     Fetch an image through the server.
@@ -83,6 +120,12 @@ async def fetch_image_via_proxy(url: str) -> tuple[bytes, str, str]:
     """
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"Refusing to fetch non-HTTP URL: {url}")
+
+    # SSRF guard: these URLs come from web search results, i.e. untrusted
+    # content. Refuse anything that resolves to loopback / private / link-local
+    # space so a crafted result can't make this server probe the LAN or itself.
+    if await _resolves_to_private_address(url):
+        raise ValueError(f"Refusing to fetch image from private/internal address: {url}")
 
     cache_key = _hash_url(url)
     cache_dir = _proxy_cache_dir()

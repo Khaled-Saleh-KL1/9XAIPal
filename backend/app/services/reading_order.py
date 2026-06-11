@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.core.logging import get_logger
-from app.llm import ollama_client
+from app.llm import client as llm_client
 
 logger = get_logger(__name__)
 
@@ -64,9 +64,6 @@ async def reconstruct_reading_order_for_document(
     Fetches all chunks, groups by page, calls the LLM (possibly multiple times),
     merges the results into one global logical order, and stores it on the document.
     """
-    from app.core.config import settings
-    model = model or settings.chat_model
-
     logger.info(f"[reading-order] Starting LLM reconstruction for document {document_id}")
 
     # Fetch all chunks with bbox info
@@ -131,7 +128,7 @@ async def reconstruct_reading_order_for_document(
         ]
 
         try:
-            resp = await ollama_client.chat(messages, model=model, temperature=0.1)
+            resp = await llm_client.chat(messages, model=model, temperature=0.1)
             content = resp["content"].strip()
 
             # Extract JSON

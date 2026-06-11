@@ -2,8 +2,9 @@
 
 import asyncio
 import time
+from dataclasses import dataclass, field
 from uuid import UUID, uuid4
-from typing import Optional
+from typing import Any, AsyncIterator, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -35,8 +36,9 @@ from app.chat.prompts import (
     detect_research_request,
 )
 from app.chat.research_agent import run_research_agent
-from app.llm import ollama_client
+from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
+from app.database.connection import async_session_factory
 from app.database.repositories import conversations as conv_repo
 from app.database.repositories.documents import get_document
 from app.schemas.chat import AskResponse, Citation
@@ -45,40 +47,61 @@ from app.database.repositories.conversations import get_conversation_history
 logger = get_logger(__name__)
 
 
-async def handle_ask(
+@dataclass
+class _AskPrep:
+    """Everything assembled before the answer-generation LLM call.
+
+    Shared by the blocking (handle_ask) and streaming (handle_ask_stream)
+    paths so routing, retrieval, prompt assembly, and persistence behave
+    identically regardless of transport.
+    """
+    prompt: str
+    document_id: Optional[UUID]
+    conversation_id: UUID
+    parent_turn_id: Optional[UUID]
+    thread_root_turn_id: Optional[UUID]
+    is_sub_thread: bool
+    start_time: float
+    blocked: bool = False
+    decision: Any = None
+    citations: list[Citation] = field(default_factory=list)
+    paper_block: str = ""
+    context_text: str = ""
+    messages: list[dict] = field(default_factory=list)
+    image_paths: list[str] = field(default_factory=list)
+    user_images_b64: Optional[list[str]] = None
+    paper_title: Optional[str] = None
+    use_research_aware: bool = False
+
+
+async def _prepare_ask(
     session: AsyncSession,
     *,
     prompt: str,
     document_id: Optional[UUID] = None,
     current_chunk_id: Optional[UUID] = None,
     conversation_id: Optional[UUID] = None,
-    # New rich visible context (for "let the model see what I'm looking at")
     visible_sequence_orders: Optional[list[int]] = None,
     focused_element: Optional[str] = None,
-    # Raw image bytes the user attached to THIS message (base64-encoded, no
-    # data: prefix). These go straight to the multimodal model alongside any
-    # paper-figure images attached by the LOCAL retriever.
     user_images_b64: Optional[list[str]] = None,
-    # === Sub-thread (nested tangent) support ===
-    # When the user is continuing a tangent inside a sub-thread view:
-    # - parent_turn_id: the turn this new user message is replying to (usually
-    #   the branching user turn for the first continuation, or previous turn for deeper).
-    # - thread_root_turn_id: the root of the current sub-thread (the original
-    #   branching user turn). Used for thread-scoped compaction and history.
     parent_turn_id: Optional[UUID] = None,
     thread_root_turn_id: Optional[UUID] = None,
-) -> AskResponse:
-    """Full /ask workflow: route, retrieve context, call model, return answer.
-
-    - LOCAL: current chunk + images (multimodal)
-    - GLOBAL: pgvector top-k similarity
-    - OVERVIEW: pre-computed high-quality hierarchical section summaries + paper overview
-               (bypasses vector search entirely — designed for "summarize the paper" questions)
-    - EXTERNAL: web search
-    """
+    document: Optional[dict] = None,
+) -> _AskPrep:
+    """Steps 0–3a of /ask: guardrail+routing, context retrieval, prompt build."""
     start_time = time.time()
     conversation_id = conversation_id or uuid4()
     is_sub_thread = bool(parent_turn_id or thread_root_turn_id)
+    prep = _AskPrep(
+        prompt=prompt,
+        document_id=document_id,
+        conversation_id=conversation_id,
+        parent_turn_id=parent_turn_id,
+        thread_root_turn_id=thread_root_turn_id,
+        is_sub_thread=is_sub_thread,
+        start_time=start_time,
+        user_images_b64=user_images_b64,
+    )
     logger.info(
         "ASK[step0] start prompt=%r doc_id=%s chunk_id=%s conv_id=%s sub_thread=%s",
         prompt[:80], document_id, current_chunk_id, conversation_id, is_sub_thread,
@@ -101,6 +124,7 @@ async def handle_ask(
     except Exception:
         logger.exception("ASK[classify] guardrail/route failed")
         raise
+    prep.decision = decision
     logger.info(
         "ASK[timing] classify (guardrail+route) %dms decision=%s",
         int((time.time() - t_classify) * 1000), decision.context_type,
@@ -108,45 +132,21 @@ async def handle_ask(
 
     if not allowed:
         logger.info("ASK[guardrail] OUT_OF_SCOPE — returning canned response")
-        canned = "This is out of scope."
-        await conv_repo.create_turn(
-            session, conversation_id=conversation_id, document_id=document_id,
-            role="user", content=prompt,
-        )
-        await conv_repo.create_turn(
-            session, conversation_id=conversation_id, document_id=document_id,
-            role="assistant", content=canned,
-            context_type="OUT_OF_SCOPE",
-            router_reason="Topic outside IT scope (guardrail)",
-            model="guardrail", citations=None,
-        )
-        await session.commit()
-        return AskResponse(
-            answer=canned,
-            context_type="OUT_OF_SCOPE",
-            router_reason="Topic outside IT scope (guardrail)",
-            citations=[],
-            model="guardrail",
-            conversation_id=conversation_id,
-        )
+        prep.blocked = True
+        return prep
     logger.info("ASK[step1] route decision=%s reason=%r", decision.context_type, decision.reason)
+
+    # Step 2: Context Retrieval — paper context per route + web prefetch (conditional)
+    t_retrieval = time.time()
+    citations = prep.citations
+    paper_block = ""
+    web_block = ""
+    image_paths = prep.image_paths
 
     # Sub-thread (tangent) mode: paper-free focus by design.
     # The model acts as a general expert on whatever the user is digging into.
     # Paper context (LOCAL/GLOBAL/OVERVIEW) is deliberately *not* injected.
     # The user can still explicitly ask to relate back to the paper if desired.
-    if is_sub_thread:
-        logger.info("ASK[sub-thread] paper-free focus mode active (no paper context injected)")
-        paper_block = ""
-        # Still allow EXTERNAL routing + research agent + guardrail if the model wants fresh info.
-
-    # Step 2: Context Retrieval — paper context per route + web prefetch (conditional)
-    t_retrieval = time.time()
-    citations: list[Citation] = []
-    paper_block = ""
-    web_block = ""
-    image_paths: list[str] = []
-
     if not is_sub_thread:
         try:
             if decision.context_type == "LOCAL" and current_chunk_id and document_id:
@@ -256,11 +256,12 @@ async def handle_ask(
     paper_title: Optional[str] = None
     if document_id:
         try:
-            doc = await get_document(session, document_id)
+            doc = document or await get_document(session, document_id)
             if doc:
                 paper_title = doc.get("original_filename") or doc.get("filename")
         except Exception:
             logger.exception("ASK[step2b] failed to fetch document for query bias (non-fatal)")
+    prep.paper_title = paper_title
 
     # Default = CS/ML technical interpretation only. We only enrich with web
     # context when (a) the router explicitly chose EXTERNAL, or (b) the user
@@ -362,9 +363,9 @@ async def handle_ask(
     if (not is_sub_thread) and _user_wants_figure(prompt):
         system_prompt = system_prompt + "\n\n" + FIGURE_INSTRUCTIONS
 
-    # Step 3: Inference - construct prompt and call Ollama (first pass)
+    # Step 3a: construct the multimodal messages for the answer model
     try:
-        messages = build_multimodal_messages(
+        prep.messages = build_multimodal_messages(
             prompt,
             system=system_prompt,
             context_text=context_text,
@@ -374,14 +375,246 @@ async def handle_ask(
         if user_images_b64:
             logger.info("ASK[step3a] user attached %d image(s)", len(user_images_b64))
         logger.info("ASK[step3a] built messages count=%d ctx_chars=%d research_aware=%s",
-                    len(messages), len(context_text), use_research_aware)
+                    len(prep.messages), len(context_text), use_research_aware)
     except Exception:
         logger.exception("ASK[step3a] build_multimodal_messages failed")
         raise
 
+    prep.paper_block = paper_block
+    prep.context_text = context_text
+    prep.use_research_aware = use_research_aware
+    return prep
+
+
+async def _handle_blocked(session: AsyncSession, prep: _AskPrep) -> AskResponse:
+    """Persist and answer the guardrail-blocked (out-of-scope) case."""
+    canned = "This is out of scope."
+    await conv_repo.create_turn(
+        session, conversation_id=prep.conversation_id, document_id=prep.document_id,
+        role="user", content=prep.prompt,
+    )
+    await conv_repo.create_turn(
+        session, conversation_id=prep.conversation_id, document_id=prep.document_id,
+        role="assistant", content=canned,
+        context_type="OUT_OF_SCOPE",
+        router_reason="Topic outside IT scope (guardrail)",
+        model="guardrail", citations=None,
+    )
+    await session.commit()
+    return AskResponse(
+        answer=canned,
+        context_type="OUT_OF_SCOPE",
+        router_reason="Topic outside IT scope (guardrail)",
+        citations=[],
+        model="guardrail",
+        conversation_id=prep.conversation_id,
+    )
+
+
+async def _run_research_safely(prep: _AskPrep) -> Optional[dict]:
+    """Run the iterative research agent; never raises."""
+    try:
+        return await run_research_agent(
+            prep.prompt,
+            paper_title=prep.paper_title,
+            paper_context_summary=prep.paper_block[:1500] if prep.paper_block else None,
+            max_iterations=3,
+            conversation_id=prep.conversation_id,   # agent persists best images under research/<conv_id>/
+        )
+    except Exception:
+        logger.exception("ASK[research] research agent failed — falling back to first answer")
+        return None
+
+
+def _research_synthesis_messages(prep: _AskPrep, research_result: dict) -> list[dict]:
+    """Build the second-pass (synthesis) messages with research findings."""
+    research_block = "\n\n### RESEARCH FINDINGS (iterative web research)\n" + research_result["findings_markdown"]
+    synthesis_context = prep.context_text + "\n\n" + research_block
+    return build_multimodal_messages(
+        prep.prompt,
+        system=SUB_THREAD_SYSTEM_PROMPT if prep.is_sub_thread else COMBINED_SYSTEM_PROMPT,
+        context_text=synthesis_context,
+        image_paths=prep.image_paths if prep.image_paths else None,
+        image_b64s=prep.user_images_b64 if prep.user_images_b64 else None,
+    )
+
+
+def _absorb_research(prep: _AskPrep, research_result: dict, answer: str) -> tuple[str, str]:
+    """Merge research sources into citations and localize persisted image URLs.
+
+    Returns the (possibly rewritten) answer and the research summary line.
+    """
+    for src in research_result.get("sources", []):
+        prep.citations.append(Citation(
+            url=src.get("url"),
+            text_snippet=(src.get("snippet") or "")[:200],
+            source=src.get("source_engine", "web_research"),
+        ))
+    iters = research_result.get("iterations", 1)
+    src_count = len(research_result.get("sources", []))
+    # --- Server-side URL rewriting for permanent local research images ---
+    # Replace any remote research image URLs that we successfully persisted
+    # with stable local URLs, so the stored conversation turn contains durable,
+    # offline references.
+    local_images = research_result.get("local_images", [])
+    if local_images:
+        answer = _rewrite_research_image_urls(answer, local_images)
+        logger.info(
+            "ASK[research] rewrote %d research image URLs to local paths for conversation %s",
+            len(local_images), prep.conversation_id,
+        )
+    return answer, f"Studied {src_count} sources across {iters} research iteration(s)"
+
+
+async def _finalize_ask(
+    session: AsyncSession,
+    prep: _AskPrep,
+    *,
+    answer: str,
+    model: str,
+    prompt_tokens: Optional[int],
+    completion_tokens: Optional[int],
+    research_performed: bool,
+    research_summary: Optional[str],
+) -> AskResponse:
+    """Steps 4–5 of /ask: citation hygiene, persistence, trace, compaction."""
+    # Drop web citations whose URL never appears in the final answer.
+    # This prevents off-domain SearXNG results (biology dictionaries, random
+    # tutorials, etc.) — which the model correctly ignored in the body — from
+    # being rendered as citation chips beneath the answer.
+    citations = _filter_unused_web_citations(prep.citations, answer)
+
+    # Store conversation turn
+    # In sub-thread mode the user turn gets the correct parent (the branching user turn
+    # or the previous turn in the sub-thread). The assistant turn then chains from it.
+    user_turn_parent = prep.parent_turn_id if prep.is_sub_thread else None
+    try:
+        user_turn = await conv_repo.create_turn(
+            session,
+            conversation_id=prep.conversation_id,
+            document_id=prep.document_id,
+            role="user",
+            content=prep.prompt,
+            parent_turn_id=user_turn_parent,
+        )
+        logger.info("ASK[step4a] user turn persisted (parent=%s)", user_turn_parent)
+    except Exception:
+        logger.exception("ASK[step4a] create user turn failed")
+        raise
+
+    # For sub-threads, the assistant reply must have the just-created user turn as parent
+    # so the whole exchange lives inside the correct subtree.
+    assistant_parent = user_turn["id"] if prep.is_sub_thread else None
+
+    citations_payload = [c.model_dump(mode="json") for c in citations] if citations else None
+
+    try:
+        assistant_turn = await conv_repo.create_turn(
+            session,
+            conversation_id=prep.conversation_id,
+            document_id=prep.document_id,
+            role="assistant",
+            content=answer,
+            context_type=prep.decision.context_type,
+            router_reason=prep.decision.reason,
+            model=model,
+            citations=citations_payload,
+            parent_turn_id=assistant_parent,
+        )
+        logger.info("ASK[step4b] assistant turn persisted id=%s (parent=%s)", assistant_turn.get("id"), assistant_parent)
+    except Exception:
+        logger.exception("ASK[step4b] create assistant turn failed")
+        raise
+
+    # Store trace for debugging
+    latency_ms = int((time.time() - prep.start_time) * 1000)
+    try:
+        await conv_repo.create_trace(
+            session,
+            conversation_turn_id=assistant_turn["id"],
+            context_type=prep.decision.context_type,
+            router_reason=prep.decision.reason,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=latency_ms,
+        )
+        logger.info("ASK[step5] trace persisted latency_ms=%d", latency_ms)
+    except Exception:
+        logger.exception("ASK[step5] create trace failed")
+        raise
+
+    await session.commit()
+
+    # --- Automatic chat compaction (every ~5 messages) to prevent long-context
+    # hallucination. Runs as a fire-and-forget background task with its OWN
+    # session: the compaction summary is an LLM call that can take many seconds,
+    # and it must never delay returning the answer to the user.
+    _schedule_compaction(prep.conversation_id, prep.document_id, prep.thread_root_turn_id)
+
+    logger.info("ASK[done] returning answer (latency_ms=%d)", latency_ms)
+
+    return AskResponse(
+        answer=answer,
+        context_type=prep.decision.context_type,
+        router_reason=prep.decision.reason,
+        citations=citations,
+        model=model,
+        conversation_id=prep.conversation_id,
+        research_performed=research_performed,
+        research_summary=research_summary,
+    )
+
+
+async def handle_ask(
+    session: AsyncSession,
+    *,
+    prompt: str,
+    document_id: Optional[UUID] = None,
+    current_chunk_id: Optional[UUID] = None,
+    conversation_id: Optional[UUID] = None,
+    # New rich visible context (for "let the model see what I'm looking at")
+    visible_sequence_orders: Optional[list[int]] = None,
+    focused_element: Optional[str] = None,
+    # Raw image bytes the user attached to THIS message (base64-encoded, no
+    # data: prefix). These go straight to the multimodal model alongside any
+    # paper-figure images attached by the LOCAL retriever.
+    user_images_b64: Optional[list[str]] = None,
+    # === Sub-thread (nested tangent) support ===
+    parent_turn_id: Optional[UUID] = None,
+    thread_root_turn_id: Optional[UUID] = None,
+    # The endpoint has already fetched the document row for its 404 check —
+    # pass it through so we don't pay a second identical DB roundtrip here.
+    document: Optional[dict] = None,
+) -> AskResponse:
+    """Full /ask workflow: route, retrieve context, call model, return answer.
+
+    - LOCAL: current chunk + images (multimodal)
+    - GLOBAL: pgvector top-k similarity
+    - OVERVIEW: pre-computed high-quality hierarchical section summaries + paper overview
+               (bypasses vector search entirely — designed for "summarize the paper" questions)
+    - EXTERNAL: web search
+    """
+    prep = await _prepare_ask(
+        session,
+        prompt=prompt,
+        document_id=document_id,
+        current_chunk_id=current_chunk_id,
+        conversation_id=conversation_id,
+        visible_sequence_orders=visible_sequence_orders,
+        focused_element=focused_element,
+        user_images_b64=user_images_b64,
+        parent_turn_id=parent_turn_id,
+        thread_root_turn_id=thread_root_turn_id,
+        document=document,
+    )
+    if prep.blocked:
+        return await _handle_blocked(session, prep)
+
+    # Step 3b: Inference — first pass
     try:
         t_llm = time.time()
-        llm_result = await ollama_client.chat(messages)
+        llm_result = await llm_client.chat(prep.messages)
         logger.info(
             "ASK[timing] LLM answer %dms model=%s answer_chars=%d prompt_tokens=%s completion_tokens=%s",
             int((time.time() - t_llm) * 1000),
@@ -397,168 +630,162 @@ async def handle_ask(
     # ─────────────────────────────────────────────────────────────────────
     # Hybrid Research Path (model-driven, iterative, feeds back to same model)
     # Only activates when the model explicitly signals it needs more research.
-    # This is the mechanism that fulfills the "brand new paper / external concept"
-    # use case without touching normal high-quality paper Q&A paths.
     # ─────────────────────────────────────────────────────────────────────
-    research_request = detect_research_request(answer) if use_research_aware else None
+    research_request = detect_research_request(answer) if prep.use_research_aware else None
     research_performed = False
     research_summary: Optional[str] = None
 
     if research_request:
         logger.info("ASK[research] model requested research: %s | queries=%s",
                     research_request["reason"], research_request.get("queries", [])[:2])
-
-        # TODO later: emit visible "researching" status to UI here
-        try:
-            research_result = await run_research_agent(
-                prompt,
-                paper_title=paper_title,
-                paper_context_summary=paper_block[:1500] if paper_block else None,
-                max_iterations=3,
-                conversation_id=conversation_id,   # UUID (or generated) → agent persists best images under research/<conv_id>/ (Option B)
-            )
-        except Exception:
-            logger.exception("ASK[research] research agent failed — falling back to first answer")
-            research_result = None
+        research_result = await _run_research_safely(prep)
 
         if research_result and research_result.get("findings_markdown"):
-            # Build richer context for the synthesis pass
-            research_block = "\n\n### RESEARCH FINDINGS (iterative web research)\n" + research_result["findings_markdown"]
-
-            synthesis_context = context_text + "\n\n" + research_block
-
             # Second thinking pass — feed research back to the *same* model
             try:
-                synth_messages = build_multimodal_messages(
-                    prompt,
-                    system=SUB_THREAD_SYSTEM_PROMPT if is_sub_thread else COMBINED_SYSTEM_PROMPT,
-                    context_text=synthesis_context,
-                    image_paths=image_paths if image_paths else None,
-                    image_b64s=user_images_b64 if user_images_b64 else None,
-                )
-                synth_result = await ollama_client.chat(synth_messages)
+                synth_result = await llm_client.chat(_research_synthesis_messages(prep, research_result))
                 answer = synth_result.get("content") or answer
                 model = synth_result.get("model", model)
-
-                # Merge research sources into citations
-                for src in research_result.get("sources", []):
-                    citations.append(Citation(
-                        url=src.get("url"),
-                        text_snippet=(src.get("snippet") or "")[:200],
-                        source=src.get("source_engine", "web_research"),
-                    ))
-
+                answer, research_summary = _absorb_research(prep, research_result, answer)
+                research_performed = True
                 logger.info("ASK[research] synthesis pass complete. final_answer_chars=%d sources_added=%d",
                             len(answer), len(research_result.get("sources", [])))
-
-                research_performed = True
-                iters = research_result.get("iterations", 1)
-                src_count = len(research_result.get("sources", []))
-                research_summary = f"Studied {src_count} sources across {iters} research iteration(s)"
-
-                # --- Server-side URL rewriting for permanent local research images (Option B) ---
-                # After the model has produced its final answer, we replace any remote research
-                # image URLs that we successfully persisted with stable local URLs.
-                # This makes the stored conversation turn contain durable, offline references.
-                local_images = research_result.get("local_images", [])
-                if local_images:
-                    answer = _rewrite_research_image_urls(answer, local_images)
-                    logger.info(
-                        "ASK[research] rewrote %d research image URLs to local paths for conversation %s",
-                        len(local_images), conversation_id
-                    )
             except Exception:
                 logger.exception("ASK[research] synthesis pass failed — using first-pass answer")
 
-    # Drop web citations whose URL never appears in the final answer.
-    # This prevents off-domain SearXNG results (biology dictionaries, random
-    # tutorials, etc.) — which the model correctly ignored in the body — from
-    # being rendered as citation chips beneath the answer.
-    citations = _filter_unused_web_citations(citations, answer)
-
-    # Store conversation turn
-    # In sub-thread mode the user turn gets the correct parent (the branching user turn
-    # or the previous turn in the sub-thread). The assistant turn then chains from it.
-    user_turn_parent = parent_turn_id if is_sub_thread else None
-    try:
-        user_turn = await conv_repo.create_turn(
-            session,
-            conversation_id=conversation_id,
-            document_id=document_id,
-            role="user",
-            content=prompt,
-            parent_turn_id=user_turn_parent,
-        )
-        logger.info("ASK[step4a] user turn persisted (parent=%s)", user_turn_parent)
-    except Exception:
-        logger.exception("ASK[step4a] create user turn failed")
-        raise
-
-    # For sub-threads, the assistant reply must have the just-created user turn as parent
-    # so the whole exchange lives inside the correct subtree.
-    assistant_parent = user_turn["id"] if is_sub_thread else None
-
-    citations_payload = [c.model_dump(mode="json") for c in citations] if citations else None
-
-    try:
-        assistant_turn = await conv_repo.create_turn(
-            session,
-            conversation_id=conversation_id,
-            document_id=document_id,
-            role="assistant",
-            content=answer,
-            context_type=decision.context_type,
-            router_reason=decision.reason,
-            model=model,
-            citations=citations_payload,
-            parent_turn_id=assistant_parent,
-        )
-        logger.info("ASK[step4b] assistant turn persisted id=%s (parent=%s)", assistant_turn.get("id"), assistant_parent)
-    except Exception:
-        logger.exception("ASK[step4b] create assistant turn failed")
-        raise
-
-    # --- Automatic chat compaction (every ~5 messages) to prevent long-context hallucination ---
-    # Now fully independent per main thread and every sub-thread (see maybe_compact_conversation).
-    try:
-        await maybe_compact_conversation(
-            session, conversation_id, document_id,
-            thread_root_turn_id=thread_root_turn_id,
-        )
-    except Exception:
-        logger.exception("ASK[compaction] failed (non-fatal)")
-
-    # Store trace for debugging
-    latency_ms = int((time.time() - start_time) * 1000)
-    try:
-        await conv_repo.create_trace(
-            session,
-            conversation_turn_id=assistant_turn["id"],
-            context_type=decision.context_type,
-            router_reason=decision.reason,
-            model=model,
-            prompt_tokens=llm_result.get("prompt_tokens"),
-            completion_tokens=llm_result.get("completion_tokens"),
-            latency_ms=latency_ms,
-        )
-        logger.info("ASK[step5] trace persisted latency_ms=%d", latency_ms)
-    except Exception:
-        logger.exception("ASK[step5] create trace failed")
-        raise
-
-    await session.commit()
-    logger.info("ASK[done] returning answer (latency_ms=%d)", latency_ms)
-
-    return AskResponse(
+    return await _finalize_ask(
+        session, prep,
         answer=answer,
-        context_type=decision.context_type,
-        router_reason=decision.reason,
-        citations=citations,
         model=model,
-        conversation_id=conversation_id,
+        prompt_tokens=llm_result.get("prompt_tokens"),
+        completion_tokens=llm_result.get("completion_tokens"),
         research_performed=research_performed,
         research_summary=research_summary,
     )
+
+
+def _ask_response_event(resp: AskResponse) -> dict:
+    """Serialize an AskResponse into the terminal SSE event payload."""
+    return {
+        "type": "done",
+        "answer": resp.answer,
+        "context_type": resp.context_type,
+        "router_reason": resp.router_reason,
+        "citations": [c.model_dump(mode="json") for c in resp.citations],
+        "model": resp.model,
+        "conversation_id": str(resp.conversation_id) if resp.conversation_id else None,
+        "research_performed": resp.research_performed,
+        "research_summary": resp.research_summary,
+    }
+
+
+async def handle_ask_stream(
+    *,
+    prompt: str,
+    document_id: Optional[UUID] = None,
+    current_chunk_id: Optional[UUID] = None,
+    conversation_id: Optional[UUID] = None,
+    visible_sequence_orders: Optional[list[int]] = None,
+    focused_element: Optional[str] = None,
+    user_images_b64: Optional[list[str]] = None,
+    parent_turn_id: Optional[UUID] = None,
+    thread_root_turn_id: Optional[UUID] = None,
+    document: Optional[dict] = None,
+) -> AsyncIterator[dict]:
+    """Streaming variant of handle_ask. Yields event dicts:
+
+    - {"type": "token", "text": ...}        append to the answer in progress
+    - {"type": "status", "message": ...}    transient status (e.g. researching)
+    - {"type": "replace"}                   discard the buffered answer (a
+                                            research synthesis pass restreams it)
+    - {"type": "done", ...}                 final AskResponse payload
+
+    Opens its OWN DB session: FastAPI (≥0.106) tears down `Depends` sessions
+    before a StreamingResponse body runs, so the request session can't be used
+    here. Persistence happens after the stream completes; an aborted stream
+    persists nothing (same semantics as an aborted blocking /ask).
+    """
+    async with async_session_factory() as session:
+        prep = await _prepare_ask(
+            session,
+            prompt=prompt,
+            document_id=document_id,
+            current_chunk_id=current_chunk_id,
+            conversation_id=conversation_id,
+            visible_sequence_orders=visible_sequence_orders,
+            focused_element=focused_element,
+            user_images_b64=user_images_b64,
+            parent_turn_id=parent_turn_id,
+            thread_root_turn_id=thread_root_turn_id,
+            document=document,
+        )
+        if prep.blocked:
+            resp = await _handle_blocked(session, prep)
+            yield {"type": "token", "text": resp.answer}
+            yield _ask_response_event(resp)
+            return
+
+        # Step 3b: first pass, streamed token by token
+        t_llm = time.time()
+        answer = ""
+        model = ""  # filled by the stream's final "done" event
+        prompt_tokens = completion_tokens = None
+        async for event in llm_client.stream_chat(prep.messages):
+            if event["type"] == "token":
+                yield {"type": "token", "text": event["text"]}
+            else:
+                answer = event["content"]
+                model = event["model"]
+                prompt_tokens = event.get("prompt_tokens")
+                completion_tokens = event.get("completion_tokens")
+        logger.info(
+            "ASK[timing] LLM stream %dms model=%s answer_chars=%d",
+            int((time.time() - t_llm) * 1000), model, len(answer),
+        )
+
+        # Research path: the first-pass marker has already been streamed, so we
+        # tell the client we're researching, then restream the synthesis answer
+        # from scratch (the "replace" event clears the client's buffer).
+        research_request = detect_research_request(answer) if prep.use_research_aware else None
+        research_performed = False
+        research_summary: Optional[str] = None
+
+        if research_request:
+            logger.info("ASK[research] model requested research: %s | queries=%s",
+                        research_request["reason"], research_request.get("queries", [])[:2])
+            yield {"type": "status", "message": "Researching the web…"}
+            research_result = await _run_research_safely(prep)
+
+            if research_result and research_result.get("findings_markdown"):
+                try:
+                    synth_messages = _research_synthesis_messages(prep, research_result)
+                    yield {"type": "replace"}
+                    synth_answer = ""
+                    async for event in llm_client.stream_chat(synth_messages):
+                        if event["type"] == "token":
+                            yield {"type": "token", "text": event["text"]}
+                        else:
+                            synth_answer = event["content"]
+                            model = event.get("model", model)
+                    if synth_answer:
+                        answer = synth_answer
+                    answer, research_summary = _absorb_research(prep, research_result, answer)
+                    research_performed = True
+                    logger.info("ASK[research] synthesis pass complete. final_answer_chars=%d sources_added=%d",
+                                len(answer), len(research_result.get("sources", [])))
+                except Exception:
+                    logger.exception("ASK[research] synthesis pass failed — using first-pass answer")
+
+        resp = await _finalize_ask(
+            session, prep,
+            answer=answer,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            research_performed=research_performed,
+            research_summary=research_summary,
+        )
+        yield _ask_response_event(resp)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -566,6 +793,33 @@ async def handle_ask(
 # ─────────────────────────────────────────────────────────────────────────────
 
 COMPACTION_THRESHOLD = 5  # Compact after every ~5 user messages (configurable)
+
+# Strong references to in-flight background compaction tasks. asyncio only
+# keeps weak refs to tasks, so without this set a compaction could be
+# garbage-collected mid-run.
+_background_tasks: set["asyncio.Task"] = set()
+
+
+def _schedule_compaction(
+    conversation_id: UUID,
+    document_id: Optional[UUID],
+    thread_root_turn_id: Optional[UUID],
+) -> None:
+    """Run maybe_compact_conversation in the background with its own session."""
+
+    async def _run() -> None:
+        try:
+            async with async_session_factory() as bg_session:
+                await maybe_compact_conversation(
+                    bg_session, conversation_id, document_id,
+                    thread_root_turn_id=thread_root_turn_id,
+                )
+        except Exception:
+            logger.exception("ASK[compaction] background compaction failed (non-fatal)")
+
+    task = asyncio.create_task(_run())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def maybe_compact_conversation(
@@ -610,10 +864,10 @@ async def maybe_compact_conversation(
                   AND role = 'user'
                   AND parent_turn_id IS NULL
                   AND created_at > COALESCE(
-                        (SELECT MAX(created_at) FROM conversation_turns 
-                         WHERE conversation_id = :cid 
+                        (SELECT MAX(created_at) FROM conversation_turns
+                         WHERE conversation_id = :cid
                            AND role = 'compaction'
-                           AND parent_turn_id IS NULL), 
+                           AND parent_turn_id IS NULL),
                         '1970-01-01'::timestamptz
                       )
             """),
@@ -642,7 +896,7 @@ async def maybe_compact_conversation(
     ]
 
     try:
-        llm_result = await ollama_client.chat(messages, temperature=0.2)
+        llm_result = await llm_client.chat(messages, temperature=0.2)
         summary = (llm_result.get("content") or "").strip()
     except Exception:
         logger.exception("Compaction LLM call failed")

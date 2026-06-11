@@ -5,9 +5,8 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.core.config import settings
 from app.database.repositories import embeddings as emb_repo
-from app.embeddings.model import get_embeddings_batch
+from app.embeddings.model import active_embedding_model, get_embeddings_batch
 
 logger = get_logger(__name__)
 
@@ -27,13 +26,14 @@ async def embed_document_chunks(
 
         texts = [c["plain_text"] for c in chunks]
         embeddings = await get_embeddings_batch(texts)
+        model_name = await active_embedding_model()
 
         for chunk, embedding in zip(chunks, embeddings):
             await emb_repo.store_embedding(
                 session,
                 chunk_id=chunk["id"],
                 embedding=embedding,
-                model_name=settings.embedding_model,
+                model_name=model_name,
             )
 
         total_embedded += len(chunks)

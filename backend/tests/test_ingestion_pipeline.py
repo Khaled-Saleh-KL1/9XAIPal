@@ -77,16 +77,20 @@ def test_run_pipeline_success(
         mock_move_asset.assert_called_once_with(img_path, document_id=str(doc_id))
         mock_embed_delay.assert_called_once_with(str(doc_id))
 
-    # 1. Verify job and document statuses
+    # 1. Verify job and document statuses. The pipeline deliberately does NOT
+    # mark the document "complete" here: completion is set at the true end of
+    # the chain (embeddings → summaries → figure descriptions) so the UI's
+    # "complete" is honest. After extraction+chunking the document stays
+    # "processing" and the job sits in the dispatched "embedding" stage.
     res = db_session_sync.execute(
         text("SELECT status FROM documents WHERE id = :id"), {"id": doc_id}
     )
-    assert res.scalar_one() == "complete"
+    assert res.scalar_one() == "processing"
 
     res = db_session_sync.execute(
         text("SELECT status FROM ingestion_jobs WHERE id = :id"), {"id": job_id}
     )
-    assert res.scalar_one() == "complete"
+    assert res.scalar_one() == "embedding"
 
     # 2. Verify chunks were persisted
     res = db_session_sync.execute(

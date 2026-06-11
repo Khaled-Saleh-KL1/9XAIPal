@@ -17,9 +17,10 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.llm.resolver import resolve_llm_sync
 from app.core.logging import get_logger
-from app.llm.ollama_client import chat_sync, hash_prompt
+from app.llm.client import chat_sync
+from app.llm.ollama_client import hash_prompt
 
 logger = get_logger(__name__)
 
@@ -312,7 +313,9 @@ def generate_and_store_section_summaries_sync(
 
     Returns stats for logging / status.
     """
-    model = model or settings.chat_model
+    # Resolved upfront because the model name keys the idempotency check and
+    # the stored summary rows.
+    model = model or resolve_llm_sync().chat_model
     prompt_hash = hash_prompt(SECTION_SUMMARY_PROMPT_V1 + PAPER_OVERVIEW_PROMPT_V1)
 
     logger.info(f"[summarizer] Starting high-quality section summarization for {document_id} using {model}")

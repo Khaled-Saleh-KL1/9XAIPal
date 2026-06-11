@@ -24,7 +24,7 @@
 12. [Ingestion pipeline (step by step)](#12-ingestion-pipeline-step-by-step)
 13. [Chat orchestration & /ask flow](#13-chat-orchestration--ask-flow)
 14. [Domain guardrail & cross-field policy](#14-domain-guardrail--cross-field-policy)
-15. [Models used (chat, VLM, embedding)](#15-models-used-chat-vlm-embedding)
+15. [AI backend & models (auto-detection, chat, VLM, embedding)](#15-ai-backend--models-auto-detection-chat-vlm-embedding)
 16. [Frontend application reference](#16-frontend-application-reference)
 17. [Background workers (Celery)](#17-background-workers-celery)
 18. [Logging & tracing](#18-logging--tracing)
@@ -67,7 +67,10 @@ The product has three "halves":
 9XAIPal/
 ├── backend/                    # FastAPI app + Celery workers
 │   ├── Dockerfile              # backend image (uvicorn or celery worker)
-│   ├── docker-compose.yml      # postgres (pgvector) + redis + searxng + celery_worker
+│   ├── Dockerfile.mineru       # worker image with MinerU models baked in
+│   ├── docker-compose.yml      # postgres + redis + searxng + celery_worker + api
+│   │                           #   + frontend-build (one-shot SPA) + autoheal watchdog
+│   ├── start-lan-server.sh     # temporary LAN server (full stack on one port; see §6.6)
 │   ├── docker/                 # service init configs
 │   │   ├── postgres/init       # initdb scripts (extensions, roles)
 │   │   └── searxng/settings.yml
@@ -75,7 +78,7 @@ The product has three "halves":
 │   ├── requirements.txt        # mirror of runtime deps for Docker build
 │   ├── uv.lock                 # uv-resolved lockfile
 │   ├── .env                    # local secrets (gitignored) — must be created
-│   ├── .env.example            # canonical template, safe to copy
+│   ├── .example.env            # canonical template, safe to copy
 │   ├── tests/                  # pytest suite (see §21)
 │   ├── docs/                   # internal architecture / migrations notes
 │   └── app/
@@ -122,7 +125,7 @@ The product has three "halves":
 │       │       ├── conversations.py    # turns + traces + history
 │       │       ├── figure_descriptions.py
 │       │       └── section_summaries.py
-│       ├── embeddings/                  # nomic-embed-text wrapper (sync + async services)
+│       ├── embeddings/                  # embedding services (Ollama or cloud via resolver; sync + async)
 │       ├── extraction/
 │       │   ├── mineru_client.py         # subprocess wrapper around `mineru` CLI
 │       │   ├── chunker.py               # markdown → structural chunks
@@ -132,10 +135,10 @@ The product has three "halves":
 │       │   ├── pipeline.py              # async pipeline (legacy / fast path)
 │       │   └── pipeline_sync.py         # sync pipeline used by Celery
 │       ├── llm/
-│       │   ├── ollama_client.py         # POST /api/chat + /api/tags (httpx)
-│       │   ├── vlm_client.py            # multimodal Ollama wrapper for figure VLM
-│       │   ├── multimodal.py            # build_multimodal_messages (text + base64 images)
-│       │   └── model_registry.py        # active chat/vlm/embedding ids
+│       │   ├── resolver.py              # AI backend auto-detection: Ollama → cloud keys → error (see §15)
+│       │   ├── client.py                # backend-agnostic chat/stream/sync entry points (role-based)
+│       │   ├── ollama_client.py         # Ollama-specific transport (POST /api/chat + /api/tags)
+│       │   └── multimodal.py            # build_multimodal_messages (text + base64 images)
 │       ├── schemas/                     # pydantic v2 request/response shapes
 │       │   ├── common.py                # HealthResponse, …
 │       │   ├── documents.py             # DocumentResponse, DocumentListResponse, upload
@@ -217,11 +220,14 @@ The product has three "halves":
                        └──┬───────────┬─────────┘
                           │           │
                           ▼           ▼
-                  ┌──────────────┐  ┌────────────────────┐
-│ MinerU CLI   │  │ Ollama (:11434)    │
-                   │ (subprocess) │  │  - chat model      │
-                   └──────────────┘  │  - nomic-embed-text │
-                                    └────────────────────┘
+                  ┌──────────────┐  ┌─────────────────────────┐
+                  │ MinerU CLI   │  │ Ollama (:11434)         │
+                  │ (subprocess) │  │  - chat/VLM model       │
+                  └──────────────┘  │  - embedding model      │
+                                    │ OR cloud API fallback   │
+                                    │ (OpenAI/Anthropic/      │
+                                    │  Gemini/xAI/DeepSeek)   │
+                                    └─────────────────────────┘
 
                   ┌──────────────────────┐
                   │ SearXNG (:8080)      │  (only when route=EXTERNAL or
@@ -234,9 +240,12 @@ The product has three "halves":
 | Vite dev       | `http://localhost:5173`    | Yes (dev)| Proxies `/api` and `/static` to `:8000`                       |
 | PostgreSQL     | `localhost:5432`           | Yes      | `pgvector/pgvector:pg16` image; `vector` + `uuid-ossp`        |
 | Redis          | `localhost:6379`           | Yes      | Celery broker + result backend                                |
-| Ollama         | `http://localhost:11434`   | Yes      | Hosts chat/VLM model + `qwen3-embedding`                     |
+| Ollama         | `http://localhost:11434`   | Optional*| Hosts chat/VLM + embedding models                             |
 | MinerU CLI     | binary on `$PATH` (`mineru`)| Yes     | Optional PyMuPDF fallback if `ALLOW_PYMUPDF_FALLBACK=true`     |
 | SearXNG        | `http://localhost:8080`    | Optional | Only invoked for EXTERNAL / cross-field / empty-paper contexts |
+
+\* One AI backend is required: either Ollama **or** a cloud API key — see §15
+for the `LLM_PROVIDER=auto` detection chain.
 
 ---
 
@@ -249,15 +258,15 @@ The product has three "halves":
 | Python      | 3.11+   | Backend                                      |
 | Node.js     | 18+     | Frontend (Vite 6, React 19)                  |
 | Docker + Compose | latest | Postgres / Redis / SearXNG / Celery worker |
-| Ollama      | latest  | Local LLM + embedding host                   |
+| Ollama      | latest  | Local LLM + embedding host (optional with a cloud API key) |
 | MinerU      | 3.2+    | `mineru` CLI; `magic-pdf` 0.x is **not** supported |
 | Postgres    | 15+ (16 in compose) | with `pgvector` and `uuid-ossp`     |
 
-### Ollama models (one-time pull)
+### Ollama models (one-time pull — skip if using a cloud API key)
 
 ```bash
-ollama pull qwen3.5:cloud   # or your chosen chat/VLM model
-ollama pull qwen3-embedding # 4096-dim embeddings
+ollama pull gemma4:31b-cloud  # or your chosen chat/VLM model (CHAT_MODEL)
+ollama pull qwen3-embedding   # embedding model (EMBEDDING_MODEL)
 ```
 
 ### MinerU
@@ -287,11 +296,21 @@ Loaded by `app/core/config.py` (pydantic-settings). Source is `backend/.env`
 | `MINERU_LANG`              | `en`                                 | No       | OCR language hint.                                                      |
 | `ALLOW_PYMUPDF_FALLBACK`   | `false`                              | No       | When `true`, falls back to text-only PyMuPDF if MinerU missing.         |
 | `OLLAMA_BASE_URL`          | `http://localhost:11434`             | Yes      | In Docker compose worker: `http://host.docker.internal:11434`           |
-| `CHAT_MODEL`               | `gemma4:26b`                         | Yes      | Multimodal chat model (also used as VLM).                                |
-| `VLM_MODEL`                | `gemma4:26b`                         | Yes      | Used by the figure describer pipeline.                                  |
-| `EMBEDDING_MODEL`          | `nomic-embed-text`                   | Yes      | Must produce 768-dim vectors (matches `vector(768)` schema).            |
+| `CHAT_MODEL`               | `gemma4:26b`                         | Yes      | Chat/answer model **for Ollama** (also used by `custom`). Cloud providers use their own `*_CHAT_MODEL`. |
+| `VLM_MODEL`                | (empty → reuses `CHAT_MODEL`)        | No       | Vision model for the figure describer / image questions (Ollama).       |
+| `EMBED_MAX_CHARS`          | `3000`                               | No       | Char cap per chunk sent to the embedder (raise for cloud embedders).    |
+| `EMBEDDING_MODEL`          | `qwen3-embedding`                    | Yes      | Embedding model **for Ollama** (also used by `custom`). Any dimension: outputs are truncated+renormalized (MRL) or zero-padded to `VECTOR_DIMENSION`. |
 | `LOCAL_CONTEXT_WINDOW`     | `3`                                  | No       | LOCAL: ± chunks around current.                                         |
-| `VECTOR_DIMENSION`         | `768`                                | Yes      | Must match the embedding model output.                                  |
+| `VECTOR_DIMENSION`         | `1024`                               | Yes      | Stored embedding size. Keep ≤ 2000 so the pgvector HNSW index applies. Changing it auto-migrates + re-embeds on next start. |
+| `LLM_PROVIDER`             | `auto`                               | No       | `auto` = Ollama if reachable, else first cloud key found (openai → anthropic → gemini → xai → deepseek), else a clear configure-me error. Pin with `ollama` \| `openai` \| `anthropic` \| `gemini` \| `xai` \| `deepseek` \| `custom`. |
+| `OPENAI_API_KEY` … `DEEPSEEK_API_KEY` | (none)                    | No       | Per-provider keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`. In `auto` mode the first one set (in that order) is used when Ollama is off. |
+| `OPENAI_CHAT_MODEL` …      | `gpt-4o`, `claude-sonnet-4-6`, `gemini-2.5-flash`, `grok-4`, `deepseek-chat` | No | Chat model per cloud provider. DeepSeek has no vision → figure images can't be described. |
+| `LLM_API_KEY`              | (none)                               | No       | Generic key for a pinned `LLM_PROVIDER` (per-provider keys also work).  |
+| `LLM_BASE_URL`             | (provider default)                   | `custom` only | Any OpenAI-compatible endpoint (OpenRouter, vLLM, …) or URL override. |
+| `EMBEDDING_PROVIDER`       | `auto`                               | No       | `auto` = Ollama if reachable, else OpenAI, else Gemini (the only clouds with embedding APIs). Pin with `ollama` \| `openai` \| `gemini` \| `custom` — pinning triggers an automatic re-embed when the stored model differs. |
+| `OPENAI_EMBEDDING_MODEL`   | `text-embedding-3-small`             | No       | Embedding model when OpenAI is active. `GEMINI_EMBEDDING_MODEL` defaults to `gemini-embedding-001`. |
+| `EMBEDDING_API_KEY`        | (falls back to per-provider / `LLM_API_KEY`) | No | Override only.                                                          |
+| `EMBEDDING_BASE_URL`       | (falls back / provider default)      | No       | Override only.                                                          |
 | `SEARXNG_URL`              | `http://localhost:8080`              | No       | Disable EXTERNAL path by pointing at an unreachable URL.                |
 | `MAX_UPLOAD_SIZE_MB`       | `100`                                | No       | Hard cap on POST `/papers/upload` body size.                            |
 | `REDIS_URL`                | `redis://localhost:6379/0`           | Yes      | Celery broker + result backend.                                         |
@@ -304,6 +323,44 @@ Loaded by `app/core/config.py` (pydantic-settings). Source is `backend/.env`
 > rotated at https://huggingface.co/settings/tokens before production
 > deployment** and never committed to a public repo.
 
+### Using a cloud LLM instead of Ollama (GPT / Claude / Gemini / Grok / DeepSeek)
+
+All five providers are reached through the OpenAI chat-completions protocol
+(`app/llm/client.py`); which backend answers is decided by `app/llm/resolver.py`.
+With the default `LLM_PROVIDER=auto` you don't switch anything manually:
+
+1. **Ollama running?** → it is used, with `CHAT_MODEL` / `VLM_MODEL` /
+   `EMBEDDING_MODEL` from `.env`.
+2. **Ollama off?** → the first cloud API key found is used (openai →
+   anthropic → gemini → xai → deepseek), with that provider's own
+   `*_CHAT_MODEL` (so your Ollama tags are never sent to a cloud API).
+3. **Neither?** → requests fail with explicit instructions to add an API key
+   or an Ollama connection (also logged at startup).
+
+So going cloud is just:
+
+```env
+# Paste whichever key you end up buying — nothing else to change:
+ANTHROPIC_API_KEY=sk-ant-...
+# (optional) override the default model for that provider:
+# ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6
+```
+
+then stop Ollama (or pin `LLM_PROVIDER=anthropic` to force cloud even while
+Ollama runs). Embeddings follow the same chain but only OpenAI and Gemini
+offer embedding APIs; when you move permanently, pin `EMBEDDING_PROVIDER=openai`
+(or `gemini`) — on the next start stale vectors are wiped and the library
+re-embeds automatically with the new model (summaries and figure descriptions
+are cached and don't re-run). In `auto` mode a model mismatch only logs a loud
+warning, so a temporarily-down Ollama can't wipe your embeddings.
+
+Default cloud models: `gpt-4o` (openai), `claude-sonnet-4-6` (anthropic),
+`gemini-2.5-flash` (gemini), `grok-4` (xai), `deepseek-chat` (deepseek — no
+vision, so figure images can't be described). `LLM_PROVIDER=custom` +
+`LLM_BASE_URL` works with any OpenAI-compatible server and uses `CHAT_MODEL`.
+Streaming (`POST /papers/{id}/ask/stream`, SSE) works on all providers
+including Ollama.
+
 ---
 
 ## 6. Bringing the stack up
@@ -314,11 +371,15 @@ Loaded by `app/core/config.py` (pydantic-settings). Source is `backend/.env`
    compose service.
 2. Install Redis (`brew install redis` / `apt install redis-server`) or use
    the compose service.
-3. Install Ollama; pull `gemma4:26b` and `nomic-embed-text`.
+3. Install Ollama; pull your `CHAT_MODEL` and `EMBEDDING_MODEL` (e.g.
+   `gemma4:31b-cloud` + `qwen3-embedding`). **Or skip Ollama entirely** and
+   paste one cloud API key in `.env` — see §15: with `LLM_PROVIDER=auto` the
+   backend picks Ollama when reachable, else the first cloud key it finds.
 4. Install MinerU; verify `mineru --help` works on the shell that the Celery
-   worker will inherit.
+   worker will inherit. (The Docker worker bakes MinerU + models into
+   `Dockerfile.mineru`, so nothing to install when running via compose.)
 5. Install SearXNG (compose handles this).
-6. Copy `backend/.env.example` → `backend/.env` and edit secrets.
+6. Copy `backend/.example.env` → `backend/.env` and edit secrets.
 
 ### 6.2 Backend (host)
 
@@ -344,10 +405,25 @@ cd backend
 docker compose up -d postgres redis searxng
 # (the celery_worker service is also defined; you can run it in compose too)
 docker compose up -d celery_worker
+
+# OR: the full server in containers (UI + API on :8000, see DEPLOYMENT.md)
+docker compose --profile server up -d --build
 ```
 
 `docker-compose.yml` mounts `./app/storage` so on-disk artifacts persist
 across container restarts and are shared with the host-side FastAPI process.
+
+**Auto-recovery (two layers).** Every long-running service (`postgres`,
+`redis`, `searxng`, `celery_worker`, `api`) has `restart: unless-stopped`, so
+a container that **crashes or exits** (e.g. the worker OOM-killed by a huge
+book, exit 137) is restarted by Docker automatically — uploads queued in
+Redis survive and resume. Separately, the `autoheal` watchdog service
+(`willfarrell/autoheal`) restarts any container labeled `autoheal=true`
+(`api`, `postgres`, `redis`) whose **healthcheck turns unhealthy** — that
+covers the failure mode `restart:` can't see: a container that is still
+running but hung/not responding. Autoheal needs the Docker socket mounted
+(`/var/run/docker.sock`), which is why it can issue restarts. Data volumes
+are never touched by either mechanism.
 
 ### 6.4 Frontend
 
@@ -365,13 +441,68 @@ npm run preview      # serves dist/ for smoke testing
 On `uvicorn` start the lifespan:
 
 1. Configures logging (`core/logging.py`).
-2. Ensures every storage subdir exists (`ensure_storage_dirs()` →
+2. Warns if Postgres still uses the default development password.
+3. Ensures every storage subdir exists (`ensure_storage_dirs()` →
    `documents/`, `extracted/`, `images/`, `assets/`, `logs/`).
-3. Calls `verify_connection()` against Postgres.
-4. Runs `apply_migrations()` (executes `database/schema.sql`).
-5. (Workers are started by Celery, not by lifespan, in the production path.)
+4. Mounts the built React SPA at `/` when `SERVE_FRONTEND=true` and a dist
+   exists (single-port server mode).
+5. Calls `verify_connection()` against Postgres.
+6. Runs `apply_migrations()` (executes `database/schema.sql`).
+7. **Reports the AI backend** (`_report_ai_backend()`): resolves the active
+   LLM via `llm/resolver.py` and logs which one auto-detection picked. If
+   nothing is usable it logs the exact "put your API key or your Ollama
+   connection" instructions — never fatal; stored papers still serve.
+8. Syncs the pgvector column to `VECTOR_DIMENSION` and ensures the HNSW
+   index. If the dimension changed, all embeddings are wiped and re-queued.
+9. If the dimension did NOT change, runs `_check_embedding_model_switch()`:
+   compares stored `embedding_model` values against the active embedding
+   target. A mismatch with a **pinned** `EMBEDDING_PROVIDER` wipes stale
+   vectors and re-embeds the library automatically (summaries / figure
+   descriptions are prompt-hash cached and don't re-run); in `auto` mode it
+   only warns, so a temporarily-down Ollama can never trigger a destructive
+   re-embed.
+10. (Workers are started by Celery, not by lifespan, in the production path.)
 
 Shutdown disposes the async engine.
+
+### 6.6 Temporary LAN server (`start-lan-server.sh`)
+
+Run `backend/start-lan-server.sh` to turn this machine into a temporary
+server that any device on the **same local network** (same Wi-Fi/Ethernet)
+can reach. The script:
+
+- Brings up the full Docker stack with the `server` profile (API + UI on one
+  port, Postgres, Redis, SearXNG, MinerU-enabled Celery worker) and builds
+  the React SPA inside a container (no Node.js needed on the host).
+- Writes a **throwaway compose override** (mktemp) instead of editing the
+  tracked compose file: it removes the upload cap (`MAX_UPLOAD_SIZE_MB`,
+  default 100 GB ≈ unlimited), raises the MinerU wall-clock timeout to 4 h
+  for huge books, and sets the OCR language (`MINERU_LANG`, default `en`).
+  Everything else (images, restart policies, autoheal, provider env) comes
+  from `docker-compose.yml` itself, so the script always inherits the latest
+  stack definition.
+- Clears any previous instance first (fixed container names would otherwise
+  collide), waits for the SPA build and the `/api/v1/health` check, then
+  prints the exact LAN URL (e.g. `http://192.168.1.42:8000`).
+- Streams api + worker logs until you stop it. On Ctrl+C, kill, or closing
+  the terminal it tears the whole stack down (`docker compose down`,
+  **without** `-v` — data volumes and uploaded papers persist).
+
+```bash
+cd backend
+./start-lan-server.sh
+# optional knobs:
+API_PORT=9000 MAX_UPLOAD_MB=2048 MINERU_TIMEOUT_SEC=7200 ./start-lan-server.sh
+```
+
+While the server is running, the auto-recovery described in §6.3 is active
+(crashed containers restart; hung-unhealthy ones are restarted by autoheal).
+Stopping the script is a deliberate stop — nothing restarts after that.
+
+> **Network scope:** this only works on the same local network — the script
+> detects your private LAN IP (e.g. `192.168.x.x`), which is not reachable
+> from the internet. Exposing the app publicly needs port forwarding, a
+> public IP, or a tunnel (e.g. ngrok) — plus real authentication (see §20).
 
 ---
 
@@ -509,7 +640,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 | Column           | Type         | Notes                                   |
 | ---------------- | ------------ | --------------------------------------- |
 | `chunk_id`       | `UUID PK`    | FK → `chunks.id` cascade.               |
-| `embedding`      | `vector(768)`| Cosine search via `ORDER BY <=>`.       |
+| `embedding`      | `vector(VECTOR_DIMENSION)` (default 1024) | Cosine search via `ORDER BY <=>`. |
 | `embedding_model`| `TEXT`       |                                         |
 | `created_at`     | `TIMESTAMPTZ`|                                         |
 
@@ -768,8 +899,8 @@ Dispatches `generate_section_summaries`. Returns
 ### 11.11 `POST /papers/{paper_id}/reconstruct-reading-order` → `202`
 
 Dispatches `reconstruct_reading_order` — sends chunks + bounding boxes to
-`gemma4:26b` to produce the canonical reading order for two-column / complex
-papers.
+the resolved chat model (§15) to produce the canonical reading order for
+two-column / complex papers.
 
 ### 11.12 `GET /papers/{paper_id}/chunks?limit=100&offset=0`
 
@@ -918,7 +1049,7 @@ poll /progress every 1s                                run_pipeline_sync()
    │
    ▼                                                   embed_document_chunks_sync()
 status='complete'                                       ├─ batches of 20 chunks → ollama /api/embeddings
-   │                                                   ├─ insert chunk_embeddings (vector(768))
+   │                                                   ├─ insert chunk_embeddings (vector(VECTOR_DIMENSION))
    ▼                                                   └─ on completion → generate_section_summaries.delay()
 ReadingView opens
                                                        generate_section_summaries (high-quality)
@@ -1040,11 +1171,17 @@ messages = [
 `RESEARCH_AWARE_COMBINED_PROMPT` is used. The latter allows the model to emit
 a `NEEDS_RESEARCH` signal that triggers the research agent.
 
-### Step 4 — LLM call (`llm/ollama_client.py`)
+### Step 4 — LLM call (`llm/client.py` → resolver → backend)
 
-POST `{base}/api/chat` with `{"model","messages","stream":false,"options":{"temperature":0.7}}`. **`httpx.Timeout`** is set to
+Call sites use the backend-agnostic entry points in `llm/client.py`
+(`chat`, `stream_chat`, `chat_sync`) and pass a **role** (`"chat"`,
+`"classifier"`, `"vlm"`) instead of a model name. The client asks
+`llm/resolver.py` for the active target (see §15), picks the model for that
+role, then dispatches: Ollama targets go through `llm/ollama_client.py`
+(POST `{base}/api/chat`), cloud targets POST `{base}/chat/completions` with
+the OpenAI-compatible schema and a Bearer key. **`httpx.Timeout`** is set to
 `connect=10s, read=600s, write=10s, pool=10s` — large `read` is intentional so
-the 26B model doesn't blow up at 120 s.
+a big local model doesn't blow up at 120 s.
 
 ### Step 4.5 — Research agent (`chat/research_agent.py`)
 
@@ -1120,18 +1257,53 @@ Expected behavior:
 
 ---
 
-## 15. Models used (chat, VLM, embedding)
+## 15. AI backend & models (auto-detection, chat, VLM, embedding)
 
-| Role           | Model                  | Source                  | Notes                                               |
-| -------------- | ---------------------- | ----------------------- | --------------------------------------------------- |
-| Chat           | `qwen3.5:cloud`*       | Ollama Cloud / local    | Multimodal — receives base64 images alongside text.  |
-| VLM            | `qwen3.5:cloud`*       | Ollama Cloud / local    | Used by `figure_describer_sync`.                     |
-| Embedding      | `nomic-embed-text`     | Ollama                  | Must produce **768-dim** vectors (`vector(768)`).   |
-| Reading order  | (chat model)           | Ollama                  | Long-context call; can be slow on large papers.     |
-| Section summary| (chat model)           | Ollama                  | Multi-pass; expensive (5–15 min / paper).            |
+### How the backend is chosen (`app/llm/resolver.py`)
 
-\* Configurable via `CHAT_MODEL` / `VLM_MODEL` env vars. Any Ollama-hosted
-multimodal model works (gemma4:26b, llama3.2-vision, qwen3.5, etc.).
+Nothing in the codebase hardcodes a model or provider. With the default
+`LLM_PROVIDER=auto` the resolver decides per call (probe result cached 30 s):
+
+1. **Ollama reachable** at `OLLAMA_BASE_URL` (GET `/api/tags`, 3 s timeout)
+   → use Ollama with `CHAT_MODEL` / `VLM_MODEL` / `CLASSIFIER_MODEL`.
+2. **Else walk the cloud keys in order** — OpenAI → Anthropic → Gemini →
+   xAI → DeepSeek — and use the first `*_API_KEY` that is set, speaking the
+   OpenAI-compatible `/chat/completions` protocol.
+3. **Else raise `NoLLMConfigured`** (HTTP 503, code `NO_LLM_CONFIGURED`) with
+   verbatim instructions: *"No AI backend is configured. Put your API key or
+   your Ollama connection in backend/.env…"* — shown in chat errors, API
+   responses, and the startup log.
+
+Pin a backend explicitly with `LLM_PROVIDER=ollama|openai|anthropic|gemini|
+xai|deepseek|custom` (`custom` = any OpenAI-compatible endpoint via
+`LLM_BASE_URL`, key optional).
+
+**Two model namespaces.** `CHAT_MODEL` / `VLM_MODEL` / `CLASSIFIER_MODEL` /
+`EMBEDDING_MODEL` are reserved for Ollama (and `custom`) — an Ollama tag like
+`gemma4:31b-cloud` is never sent to a cloud API. Each cloud provider has its
+own setting with a sensible default: `OPENAI_CHAT_MODEL=gpt-4o`,
+`ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6`, `GEMINI_CHAT_MODEL=gemini-2.5-flash`,
+`XAI_CHAT_MODEL=grok-4`, `DEEPSEEK_CHAT_MODEL=deepseek-chat` (no vision —
+figure images can't be described), `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`,
+`GEMINI_EMBEDDING_MODEL=gemini-embedding-001`.
+
+**Embeddings** follow the same chain but only OpenAI and Gemini offer
+embedding APIs. The choice is **pinned per process** after the first
+successful resolution — vectors from different models are not comparable, so
+a mid-run Ollama hiccup must never mix models inside one library. Startup
+detects a stored-vs-active model mismatch (§6.5 step 9): pinned provider →
+automatic wipe + re-embed; auto → loud warning only.
+
+### Roles
+
+| Role           | Resolved model (Ollama / cloud)                        | Notes                                                  |
+| -------------- | ------------------------------------------------------ | ------------------------------------------------------ |
+| Chat           | `CHAT_MODEL` / provider's `*_CHAT_MODEL`               | Multimodal — receives base64 images alongside text.    |
+| VLM            | `VLM_MODEL` (empty = chat) / provider chat model       | Used by `figure_describer_sync`.                       |
+| Classifier     | `CLASSIFIER_MODEL` (empty = chat) / provider chat model| Router + guardrail; a small fast model is the biggest `/ask` speedup. |
+| Embedding      | `EMBEDDING_MODEL` / `*_EMBEDDING_MODEL`                | Stored at `VECTOR_DIMENSION` (default **1024**); larger outputs truncated+renormalized (MRL), smaller zero-padded. |
+| Reading order  | (chat role)                                            | Long-context call; can be slow on large papers.        |
+| Section summary| (chat role, resolved upfront — name keys idempotency)  | Multi-pass; expensive on local models.                 |
 
 The httpx client uses a 600-second read timeout to accommodate cold-start
 + large model inference.
@@ -1245,9 +1417,13 @@ forked worker process gets a fresh connection pool — critical for
 
 | Failure                                  | Symptom                                                       | Recovery                                                                                   |
 | ---------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Postgres unreachable                     | `/health` → `database:"unavailable"`, requests 5xx            | Start Postgres; lifespan does not crash so the API will recover on the next request.       |
-| Ollama down                              | `/ask` raises in `ollama_client.chat`                         | Start Ollama (`OLLAMA_FLASH_ATTENTION=0 ollama serve`).                                    |
-| Ollama model not pulled                  | First request hangs while model downloads                     | `ollama pull qwen3.5:cloud` (or your model) ahead of time.                                                    |
+| Postgres unreachable                     | `/health` → `database:"unavailable"`, requests 5xx            | Start Postgres; lifespan does not crash so the API will recover on the next request. In compose: `restart: unless-stopped` + autoheal restart it automatically. |
+| No AI backend at all (Ollama down, no keys) | 503 `NO_LLM_CONFIGURED`; chat shows "No AI backend is configured. Put your API key or your Ollama connection in backend/.env…" | Start Ollama **or** paste any one cloud key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY`) and restart. |
+| Ollama down (cloud key present)          | Nothing visible — `LLM_PROVIDER=auto` falls back to the first cloud key within ~30 s (probe TTL) | No action needed; restart Ollama to shift back to local.                                   |
+| Ollama model not pulled                  | First request hangs while model downloads                     | `ollama pull <CHAT_MODEL>` ahead of time.                                                   |
+| Embedding model switched (stored ≠ active) | Startup warning; degraded vector search (vectors not comparable) | Pin `EMBEDDING_PROVIDER` and restart → stale vectors wiped + library re-embedded automatically. Or restore the old backend. |
+| Container crashes / worker OOM (exit 137) | `docker ps` shows restart; uploads pause then resume          | Automatic — `restart: unless-stopped` on every long-running service. Lower `MINERU_PAGE_BATCH_SIZE` or raise `WORKER_MEM_LIMIT` if OOM repeats. |
+| Container hung (running but unresponsive) | Healthcheck shows `unhealthy` in `docker ps`                  | Automatic — the `autoheal` watchdog restarts unhealthy containers labeled `autoheal=true` (api, postgres, redis). |
 | SearXNG down                             | EXTERNAL branch returns empty; answer is ungrounded but works | Start SearXNG (`docker compose up -d searxng`).                                            |
 | MinerU not installed                     | Pipeline marks doc `failed` with `MinerUError`                | Install MinerU; or set `ALLOW_PYMUPDF_FALLBACK=true` for degraded mode (no OCR/tables/math).|
 | Redis down (Celery)                      | Upload returns `failed` with descriptive `error_message`      | Start Redis + worker.                                                                       |
@@ -1300,6 +1476,7 @@ Suites:
 | `test_context_router.py`      | LOCAL / GLOBAL / OVERVIEW / EXTERNAL routing decisions.       |
 | `test_ingestion_pipeline.py`  | End-to-end pipeline (MinerU/PyMuPDF stub → chunks → assets). |
 | `test_vector_retrieval.py`    | `search_chunks` against pgvector with deterministic vectors. |
+| `test_provider_resolver.py`   | AI backend auto-detection (§15): Ollama-first, cloud fallback order, per-provider models (Ollama tags never sent to clouds), `NoLLMConfigured` instructions, embedding pinning + chat-only providers skipped. |
 
 `conftest.py` wires an in-memory async session against a test database (set
 `DATABASE_URL` to point at a throwaway DB before running).

@@ -59,43 +59,57 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Fetch papers from backend on mount and keep polling while the view is
-  // mounted. The poll has to keep running even when nothing is in-flight,
-  // otherwise a fresh upload won't appear in the list until the user reloads.
+  // mounted (so a fresh upload appears without a reload). The poll is
+  // adaptive: fast while any paper is still processing (live progress bars),
+  // slow once the library is fully settled.
   useEffect(() => {
     let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const refresh = async () => {
+    const tick = async () => {
+      let anyProcessing = false;
       try {
         const metas = await listPapers();
         if (!alive) return;
         setPapers(metas.map(metaToPaper));
         setLoadError(null);
+        anyProcessing = metas.some((m) => m.status !== 'complete' && m.status !== 'failed');
       } catch (e) {
         if (!alive) return;
         setLoadError((e as Error).message || 'Failed to load library');
       } finally {
         if (alive) setLoading(false);
       }
+      if (!alive) return;
+      timer = setTimeout(tick, anyProcessing ? 2500 : 10000);
     };
 
-    refresh();
-    const interval = setInterval(refresh, 2000);
+    tick();
     return () => {
       alive = false;
-      clearInterval(interval);
+      if (timer) clearTimeout(timer);
     };
   }, []);
 
+  // Debounce the search text so each keystroke doesn't re-filter (and
+  // re-render) the whole grid on large libraries.
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query), 200);
+    return () => clearTimeout(t);
+  }, [query]);
+
   const filtered = useMemo(() => {
+    const q = debouncedQuery.toLowerCase();
     let xs = papers.filter(
       (p) =>
-        p.title.toLowerCase().includes(query.toLowerCase()) ||
-        p.authors.toLowerCase().includes(query.toLowerCase()),
+        p.title.toLowerCase().includes(q) ||
+        p.authors.toLowerCase().includes(q),
     );
     if (sort === 'title') xs = [...xs].sort((a, b) => a.title.localeCompare(b.title));
     if (sort === 'pages') xs = [...xs].sort((a, b) => b.pages - a.pages);
     return xs;
-  }, [query, sort, papers]);
+  }, [debouncedQuery, sort, papers]);
 
   const cycleSorts: SortKey[] = ['recent', 'title', 'pages'];
 

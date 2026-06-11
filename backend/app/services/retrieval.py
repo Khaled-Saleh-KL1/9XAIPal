@@ -1,4 +1,4 @@
-"""Retrieval service: global vector search."""
+"""Retrieval service: hybrid (vector + full-text) chunk search."""
 
 from uuid import UUID
 from typing import Optional
@@ -6,9 +6,17 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
 from app.database.repositories import embeddings as emb_repo
 from app.database.repositories import assets as asset_repo
+from app.database.pgvector import search_chunks_fulltext
 from app.embeddings.model import get_query_embedding
+
+logger = get_logger(__name__)
+
+# Reciprocal-rank-fusion constant. 60 is the standard from the original RRF
+# paper; it keeps top ranks dominant without letting either leg drown the other.
+_RRF_K = 60
 
 
 async def search_chunks(
@@ -17,11 +25,48 @@ async def search_chunks(
     limit: int = 10,
     document_id: Optional[UUID] = None,
 ) -> list[dict]:
-    """Embed a query and search for similar chunks."""
+    """Hybrid retrieval: pgvector cosine search + Postgres full-text search,
+    fused with reciprocal-rank fusion.
+
+    Vector search captures paraphrases and semantics; full-text captures exact
+    terms embeddings blur (equation numbers, acronyms, author/dataset names).
+    A chunk found by both legs ranks above a chunk found by only one.
+    """
     query_embedding = await get_query_embedding(query)
-    return await emb_repo.search_embeddings(
-        session, query_embedding, limit=limit, document_id=document_id
+    # Over-fetch each leg so fusion has real candidates to reorder.
+    fetch_n = max(limit * 3, 15)
+    vec_hits = await emb_repo.search_embeddings(
+        session, query_embedding, limit=fetch_n, document_id=document_id
     )
+    try:
+        fts_hits = await search_chunks_fulltext(
+            session, query, limit=fetch_n, document_id=document_id
+        )
+    except Exception:
+        logger.exception("full-text search failed (non-fatal); using vector-only results")
+        fts_hits = []
+
+    if not fts_hits:
+        return vec_hits[:limit]
+
+    scores: dict = {}
+    by_id: dict = {}
+    for rank, row in enumerate(vec_hits):
+        scores[row["id"]] = scores.get(row["id"], 0.0) + 1.0 / (_RRF_K + rank + 1)
+        by_id.setdefault(row["id"], dict(row))
+    for rank, row in enumerate(fts_hits):
+        scores[row["id"]] = scores.get(row["id"], 0.0) + 1.0 / (_RRF_K + rank + 1)
+        by_id.setdefault(row["id"], dict(row))
+
+    fused = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    results = []
+    for chunk_id, score in fused:
+        row = by_id[chunk_id]
+        # Chunks surfaced only by the keyword leg carry no cosine similarity.
+        row.setdefault("similarity", 0.0)
+        row["rrf_score"] = score
+        results.append(row)
+    return results
 
 
 async def search_figure_chunks(

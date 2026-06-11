@@ -11,8 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from app.core.config import settings
-from app.llm import ollama_client
+from app.llm import client as llm_client
 from app.chat.prompts import ROUTER_SYSTEM_PROMPT
 
 
@@ -152,9 +151,9 @@ async def route_prompt(
 
         # Classification is a tiny task: use the (optionally smaller) classifier
         # model and cap output so it can't generate a long explanation.
-        result = await ollama_client.chat(
+        result = await llm_client.chat(
             messages,
-            model=settings.effective_classifier_model,
+            role="classifier",
             temperature=0.1,
             num_predict=64,
         )

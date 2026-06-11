@@ -232,7 +232,7 @@ Returns VLM-generated technical descriptions for every figure in the paper.
     "chunk_id": "<uuid>",
     "description_markdown": "This figure shows ...",
     "image_path": "<doc_id>/<uuid>.png",
-    "model": "qwen3.5:cloud"
+    "model": "gemma4:31b-cloud"
   }, ...]
 }
 ```
@@ -269,7 +269,7 @@ Response:
   "context_type":        "LOCAL" | "GLOBAL" | "OVERVIEW" | "EXTERNAL" | "OUT_OF_SCOPE",
   "router_reason":       "Query references visible content (matched: 'this figure')",
   "citations":           [Citation, ...],
-  "model":               "qwen3.5:cloud",
+  "model":               "gemma4:31b-cloud",
   "conversation_id":     "<uuid>",
   "research_performed":  true | false,
   "research_summary":    "Studied N sources across M iterations" | null

@@ -1,8 +1,27 @@
 import pytest
 from uuid import uuid4
 from sqlalchemy import text
+from app.core.config import settings
 from app.database.repositories.embeddings import search_embeddings
 from app.database.pgvector import insert_embedding
+
+
+async def _live_embedding_dimension(session) -> int:
+    """Dimension of the chunk_embeddings column in THIS database.
+
+    Tests run against whatever DB the environment points at; the column is
+    only re-typed to settings.vector_dimension by the app's startup migration,
+    so adapt instead of assuming.
+    """
+    result = await session.execute(
+        text("""
+            SELECT atttypmod FROM pg_attribute
+            WHERE attrelid = 'chunk_embeddings'::regclass
+              AND attname = 'embedding' AND NOT attisdropped
+        """)
+    )
+    dims = result.scalar_one_or_none()
+    return dims if dims and dims > 0 else settings.vector_dimension
 
 
 @pytest.mark.asyncio
@@ -27,13 +46,13 @@ async def test_search_similar_chunks_success(db_session):
     )
     await db_session.commit()
 
-    # 2. Insert fake embedding
-    fake_vector = [0.1] * 4096
+    # 2. Insert fake embedding (sized to the live column, named from config)
+    fake_vector = [0.1] * await _live_embedding_dimension(db_session)
     await insert_embedding(
         db_session,
         chunk_id=chunk_id,
         embedding=fake_vector,
-        model_name="qwen3-embedding",
+        model_name=settings.embedding_model,
     )
     await db_session.commit()
 

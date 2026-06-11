@@ -21,6 +21,11 @@ class ModelUnavailable(Exception):
         self.model = model
 
 
+class NoLLMConfigured(ModelUnavailable):
+    """Neither Ollama nor any cloud API key is usable. The message carries
+    full instructions, so handlers surface it verbatim (no prefix)."""
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Register all domain exception handlers."""
 
@@ -36,6 +41,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=404,
             content={"detail": f"Chunk not found: {exc.chunk_id}", "code": "CHUNK_NOT_FOUND"},
+        )
+
+    @app.exception_handler(NoLLMConfigured)
+    async def no_llm_configured_handler(request: Request, exc: NoLLMConfigured):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc.model), "code": "NO_LLM_CONFIGURED"},
         )
 
     @app.exception_handler(ModelUnavailable)

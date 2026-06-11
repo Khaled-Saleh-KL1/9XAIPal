@@ -231,10 +231,12 @@ export async function askPaper(
     parentTurnId?: string | null;
     threadRootTurnId?: string | null;
   },
+  signal?: AbortSignal,
 ): Promise<AskResponse> {
   const res = await fetch(`${BASE}/papers/${paperId}/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       query,
       current_sequence_order: currentSequenceOrder,
@@ -259,6 +261,123 @@ export async function askPaper(
   return res.json();
 }
 
+export interface AskStreamHandlers {
+  /** Called per generated token — append to the in-progress answer. */
+  onToken: (text: string) => void;
+  /** Transient status line (e.g. "Researching the web…"). */
+  onStatus?: (message: string) => void;
+  /** Discard the buffered answer — a research synthesis pass restreams it. */
+  onReplace?: () => void;
+}
+
+/**
+ * Streaming variant of askPaper using Server-Sent Events. Tokens arrive via
+ * `handlers` as they are generated; resolves with the final AskResponse
+ * (whose `answer` is authoritative — the backend may rewrite image URLs after
+ * streaming completes).
+ */
+export async function askPaperStream(
+  paperId: string,
+  query: string,
+  currentSequenceOrder: number | null,
+  conversationId: string | null = null,
+  options:
+    | {
+        visibleSequenceOrders?: number[];
+        focusedElement?: string | null;
+        imagesB64?: string[];
+        parentTurnId?: string | null;
+        threadRootTurnId?: string | null;
+      }
+    | undefined,
+  handlers: AskStreamHandlers,
+  signal?: AbortSignal,
+): Promise<AskResponse> {
+  const res = await fetch(`${BASE}/papers/${paperId}/ask/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      query,
+      current_sequence_order: currentSequenceOrder,
+      conversation_id: conversationId,
+      visible_sequence_orders: options?.visibleSequenceOrders ?? null,
+      focused_element: options?.focusedElement ?? null,
+      images_b64: options?.imagesB64 ?? null,
+      parent_turn_id: options?.parentTurnId ?? null,
+      thread_root_turn_id: options?.threadRootTurnId ?? null,
+    }),
+  });
+  if (!res.ok || !res.body) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      // body not JSON; keep status-only detail
+    }
+    throw new Error(detail);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let result: AskResponse | null = null;
+
+  const handleEvent = (raw: string) => {
+    let ev: Record<string, unknown>;
+    try {
+      ev = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    switch (ev.type) {
+      case 'token':
+        handlers.onToken(String(ev.text ?? ''));
+        break;
+      case 'status':
+        handlers.onStatus?.(String(ev.message ?? ''));
+        break;
+      case 'replace':
+        handlers.onReplace?.();
+        break;
+      case 'error':
+        throw new Error(String(ev.detail || 'Answer stream failed'));
+      case 'done':
+        result = {
+          answer: String(ev.answer ?? ''),
+          context_type: String(ev.context_type ?? ''),
+          router_reason: String(ev.router_reason ?? ''),
+          citations: (ev.citations as Citation[]) || [],
+          model: String(ev.model ?? ''),
+          conversation_id: (ev.conversation_id as string) ?? null,
+          research_performed: Boolean(ev.research_performed),
+          research_summary: (ev.research_summary as string) ?? null,
+        };
+        break;
+    }
+  };
+
+  // SSE framing: events are separated by a blank line; each carries one
+  // `data: {json}` line.
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data:')) handleEvent(line.slice(5).trim());
+      }
+    }
+  }
+
+  if (!result) throw new Error('Answer stream ended unexpectedly');
+  return result;
+}
+
 export interface ChatHistoryResponse {
   turns: ChatTurn[];
   isSubThread: boolean;
@@ -272,12 +391,13 @@ export async function getPaperChat(
   paperId: string,
   conversationId?: string | null,
   threadRootTurnId?: string | null,
+  signal?: AbortSignal,
 ): Promise<ChatHistoryResponse> {
   const params = new URLSearchParams();
   if (conversationId) params.set('conversation_id', conversationId);
   if (threadRootTurnId) params.set('thread_root_turn_id', threadRootTurnId);
   const qs = params.toString() ? `?${params}` : '';
-  const res = await fetch(`${BASE}/papers/${paperId}/chat${qs}`);
+  const res = await fetch(`${BASE}/papers/${paperId}/chat${qs}`, { signal });
   if (!res.ok) throw new Error(`Chat history fetch failed: ${res.status}`);
   const body = await res.json();
   return {

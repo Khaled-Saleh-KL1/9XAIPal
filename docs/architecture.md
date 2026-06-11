@@ -41,9 +41,11 @@ decides a query is about external information.
 └─────────┬─────────────────┬─────────────────────┬────────────────────────┘
           │                 │                     │
           ▼                 ▼                     ▼
-       Ollama           MinerU CLI            SearXNG (local)
+   Ollama OR cloud API   MinerU CLI            SearXNG (local)
    (chat + vlm +        (PDF → md + imgs)     (web search proxy)
-    embedding model)
+    embedding model;
+    auto-detected by
+    app/llm/resolver.py)
 ```
 
 ## Process model
@@ -95,7 +97,7 @@ The price is that the app inherits the cold-start latency of the local LLM
 | Failure                              | Behavior                                  |
 | ------------------------------------ | ----------------------------------------- |
 | Postgres unreachable                 | `/health` reports `database:"unavailable"`, requests 5xx |
-| Ollama down                          | `/ask` raises in `ollama_client.chat`; orchestrator surfaces the error |
+| Ollama down                          | `LLM_PROVIDER=auto` falls back to the first cloud API key in `.env`; with no key, requests answer 503 `NO_LLM_CONFIGURED` with configure-me instructions |
 | SearXNG down                         | EXTERNAL branch returns empty results → answer is ungrounded but not crashing |
 | MinerU exits non-zero                | Pipeline catches `MinerUError`, marks job + doc `failed`, frontend polling exits |
 | Worker crashes                       | Celery auto-restarts; task is retried |

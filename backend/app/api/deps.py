@@ -51,3 +51,10 @@ async def get_ask_limiter() -> AsyncIterator[None]:
     async with _ask_semaphore:
         yield
 
+
+def get_ask_semaphore() -> asyncio.Semaphore:
+    """The shared /ask concurrency limiter, for callers that must hold it
+    beyond the Depends lifecycle (the SSE streaming endpoint acquires it
+    inside its response generator, which runs after dependencies close)."""
+    return _ask_semaphore
+

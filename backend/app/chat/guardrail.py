@@ -1,6 +1,6 @@
 """Topic guardrail: restrict /ask to IT-related questions."""
 
-from app.llm import ollama_client
+from app.llm import client as llm_client
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.chat.prompts import GUARDRAIL_PROMPT
@@ -40,9 +40,9 @@ async def is_topic_allowed(prompt: str, *, in_paper_context: bool = False) -> bo
     ]
     try:
         # Verdict is one word — use the cheap classifier model and cap output.
-        result = await ollama_client.chat(
+        result = await llm_client.chat(
             messages,
-            model=settings.effective_classifier_model,
+            role="classifier",
             temperature=0.0,
             num_predict=8,
         )

@@ -1,6 +1,7 @@
 """Ollama chat and generation API wrapper."""
 
-from typing import Optional
+import json
+from typing import AsyncIterator, Optional
 
 import httpx
 
@@ -107,6 +108,74 @@ async def chat(
     }
 
 
+async def stream_chat(
+    messages: list[dict],
+    *,
+    model: Optional[str] = None,
+    temperature: float = 0.7,
+    num_predict: Optional[int] = None,
+    keep_alive: Optional[str] = None,
+) -> AsyncIterator[dict]:
+    """Stream a chat completion from Ollama token by token.
+
+    Yields ``{"type": "token", "text": ...}`` events as they arrive, then a
+    final ``{"type": "done", "content": <full answer>, "model": ...,
+    "prompt_tokens": ..., "completion_tokens": ...}`` event.
+    """
+    requested_model = model or settings.chat_model
+    url = f"{settings.ollama_base_url}/api/chat"
+
+    options: dict = {"temperature": temperature}
+    effective_cap = num_predict if num_predict is not None else (settings.chat_num_predict or None)
+    if effective_cap:
+        options["num_predict"] = effective_cap
+
+    timeout = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
+    content_parts: list[str] = []
+    prompt_tokens = None
+    completion_tokens = None
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resolved_model = await _resolve_model_tag(client, requested_model)
+        payload = {
+            "model": resolved_model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": keep_alive if keep_alive is not None else settings.ollama_keep_alive,
+            "options": options,
+        }
+        try:
+            async with client.stream("POST", url, json=payload) as response:
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode("utf-8", "replace")[:500]
+                    logger.error(f"Ollama stream HTTP {response.status_code}: {body}")
+                    raise ModelUnavailable(f"{resolved_model} ({response.status_code}: {body})")
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except ValueError:
+                        continue
+                    token = (data.get("message") or {}).get("content") or ""
+                    if token:
+                        content_parts.append(token)
+                        yield {"type": "token", "text": token}
+                    if data.get("done"):
+                        prompt_tokens = data.get("prompt_eval_count")
+                        completion_tokens = data.get("eval_count")
+                        break
+        except httpx.RequestError as e:
+            raise ModelUnavailable(f"{resolved_model} (network error: {e})")
+
+    yield {
+        "type": "done",
+        "content": "".join(content_parts),
+        "model": resolved_model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
+
+
 async def generate(
     prompt: str,
     *,
@@ -127,8 +196,15 @@ async def generate(
 
     timeout = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, json=payload)
-        response.raise_for_status()
+        try:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:500]
+            logger.error(f"Ollama generate HTTP {e.response.status_code}: {body}")
+            raise ModelUnavailable(f"{model} ({e.response.status_code}: {body})")
+        except httpx.RequestError as e:
+            raise ModelUnavailable(f"{model} (network error: {e})")
         data = response.json()
 
     return {

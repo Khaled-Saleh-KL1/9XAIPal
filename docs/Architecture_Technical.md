@@ -14,8 +14,8 @@ This document provides a comprehensive, exhaustive technical reference for the 9
 *   **Task Queue:** Celery + Redis (for long-running ingestion and embedding tasks).
 *   **Database:** PostgreSQL 16 with `pgvector` extension for semantic search.
 *   **Inference Engines:**
-    *   **Ollama:** Powers chat + VLM (`qwen3.5:cloud` or configurable) and Embeddings (`nomic-embed-text`).
-    *   **MinerU 3.x:** High-fidelity PDF-to-Markdown extraction including LaTeX equations, table structures, and figures.
+    *   **AI backend (auto-detected by `app/llm/resolver.py`):** local Ollama when reachable (`CHAT_MODEL` / `VLM_MODEL` / `EMBEDDING_MODEL` from `.env`), otherwise the first configured cloud API key in order OpenAI → Anthropic → Gemini → xAI → DeepSeek, each with its own model setting. Nothing is hardcoded.
+    *   **MinerU 3.x:** High-fidelity PDF-to-Markdown extraction including LaTeX equations, table structures, and figures (always local, regardless of LLM provider).
     *   **SearXNG:** Local metasearch engine for external web context.
 
 ---
@@ -43,8 +43,8 @@ The atomic unit of information.
 *   `image_refs` (TEXT[]): Links to images stored on disk.
 
 #### `chunk_embeddings`
-*   `embedding` (vector(768)): 768-dimensional vector produced by `nomic-embed-text`.
-*   `embedding_model`: The model used (for future migration support).
+*   `embedding` (vector(`VECTOR_DIMENSION`, default 1024)): produced by the active embedding model (Ollama `EMBEDDING_MODEL`, or OpenAI/Gemini when on a cloud key).
+*   `embedding_model`: The model that produced each vector — startup compares it against the active model and (with a pinned `EMBEDDING_PROVIDER`) auto re-embeds the library after a switch.
 
 #### `chunk_assets`
 *   Images extracted from MinerU output, linked back to chunks.
@@ -58,7 +58,7 @@ Pre-computed hierarchical overviews.
 #### `figure_descriptions`
 VLM-generated technical descriptions of diagrams/architectures.
 *   `description_markdown`: Detailed technical analysis of the image.
-*   `model`: The VLM used (e.g., `qwen3.5:cloud`).
+*   `model`: The VLM used (the resolved `VLM_MODEL` / cloud chat model at generation time).
 
 #### `conversation_turns`
 *   `parent_turn_id` (UUID, nullable): FK to self for nested sub-thread support.

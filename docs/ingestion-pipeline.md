@@ -45,7 +45,7 @@ poll /papers/{id}/progress every 1s
    ▼                                                  ▼
 status == 'complete'                             embed_document_chunks_sync()
    │                                                → batches of 20 chunks
-   ▼                                                → INSERT chunk_embeddings (vector(768))
+   ▼                                                → INSERT chunk_embeddings (vector(VECTOR_DIMENSION))
 switch to ReadingView                               → on completion: generate_section_summaries.delay()
 
                                                     generate_section_summaries
@@ -129,7 +129,7 @@ The Celery worker:
 2. Calls `embed_document_chunks_sync(session, document_id, batch_size=20)`.
 3. Loops fetching chunks with no `chunk_embeddings` row.
 4. Sends `plain_text` in batches to Ollama's embedding API.
-5. Inserts each result into `chunk_embeddings` (`vector(768)`).
+5. Inserts each result into `chunk_embeddings` (`vector(VECTOR_DIMENSION)`, default 1024) along with the resolved `embedding_model` name.
 6. Commits after each batch.
 
 ## Step 6 — Summarization (background)

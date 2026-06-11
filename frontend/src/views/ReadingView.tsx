@@ -1,9 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import rehypeRaw from 'rehype-raw';
+import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { ChatPane } from './ChatPane';
@@ -353,30 +350,6 @@ export function ReadingView({ paper, paperId, onBack }: Props) {
     setLoading(false);
   }, [paperId, chunkToUnits, loadProgress, saveProgress]);
 
-  // ── Reveal the next small unit (paragraph or special element) ──────────────
-  const revealNextUnit = useCallback(() => {
-    if (loading || atEnd) return;
-
-    // If we have more paragraphs inside the current chunk, just advance the pointer
-    const currentChunk = chunks[currentChunkIndex];
-    if (currentChunk) {
-      const unitsFromCurrent = chunkToUnits(currentChunk);
-      const isTextChunk = currentChunk.structural_type === 'text' || !currentChunk.structural_type;
-
-      if (isTextChunk && paragraphIndexInCurrent < unitsFromCurrent.length - 1) {
-        setParagraphIndexInCurrent(prev => prev + 1);
-        // Scroll to bottom after render
-        setTimeout(() => {
-          if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight;
-        }, 20);
-        return;
-      }
-    }
-
-    // Otherwise we need to fetch the next raw chunk from the backend
-    fetchAndAppend();
-  }, [chunks, currentChunkIndex, paragraphIndexInCurrent, chunkToUnits, loading, atEnd]);
-
   // Core function: fetch the next raw chunk (after the current cursor) and
   // convert it into units. Uses the gap-tolerant "after" endpoint so a hole in
   // the sequence numbers never truncates the document.
@@ -417,6 +390,30 @@ export function ReadingView({ paper, paperId, onBack }: Props) {
       setLoading(false);
     }
   }, [paperId, loading, atEnd, chunkToUnits, chunks.length, lastSeq, activeChapter, saveProgress]);
+
+  // ── Reveal the next small unit (paragraph or special element) ──────────────
+  const revealNextUnit = useCallback(() => {
+    if (loading || atEnd) return;
+
+    // If we have more paragraphs inside the current chunk, just advance the pointer
+    const currentChunk = chunks[currentChunkIndex];
+    if (currentChunk) {
+      const unitsFromCurrent = chunkToUnits(currentChunk);
+      const isTextChunk = currentChunk.structural_type === 'text' || !currentChunk.structural_type;
+
+      if (isTextChunk && paragraphIndexInCurrent < unitsFromCurrent.length - 1) {
+        setParagraphIndexInCurrent(prev => prev + 1);
+        // Scroll to bottom after render
+        setTimeout(() => {
+          if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight;
+        }, 20);
+        return;
+      }
+    }
+
+    // Otherwise we need to fetch the next raw chunk from the backend
+    fetchAndAppend();
+  }, [chunks, currentChunkIndex, paragraphIndexInCurrent, chunkToUnits, loading, atEnd, fetchAndAppend]);
 
   // Load rich figure descriptions (for beautiful architecture rendering)
   useEffect(() => {
@@ -902,9 +899,6 @@ export function ReadingView({ paper, paperId, onBack }: Props) {
 // serif body, KaTeX inline math, real HTML tables (via remark-gfm + rehype-raw
 // since MinerU may emit either pipe-tables or raw <table> HTML), centered
 // figures with a tiny filename caption, and a faint heading rule.
-
-const MARKDOWN_REMARK = [remarkGfm, remarkMath];
-const MARKDOWN_REHYPE = [rehypeRaw, rehypeKatex];
 
 function Md({ children }: { children: string }) {
   return (

@@ -99,7 +99,7 @@ If the current chunk is a figure, the model literally sees the picture.
 
 ## GLOBAL context ([chat/global_context.py](../backend/app/chat/global_context.py))
 
-1. Calls `get_query_embedding(prompt)` — produces a 768-dim vector.
+1. Calls `get_query_embedding(prompt)` — embeds the query with the active embedding backend (same resolver as ingestion, so query and stored vectors always match).
 2. Calls `embeddings.search_embeddings` — pgvector cosine-similarity.
 3. Returns top-K (default 3) chunks.
 4. Surfaces images attached to retrieved chunks for inline rendering.

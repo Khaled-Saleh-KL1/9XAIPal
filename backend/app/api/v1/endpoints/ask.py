@@ -1,18 +1,23 @@
 """Ask endpoint: routes prompts through context router to local LLM."""
 
+import json
 from uuid import UUID
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_ask_limiter
-from app.api.errors import DocumentNotFound
-from app.chat.orchestrator import handle_ask
+from app.api.deps import get_db, get_ask_limiter, get_ask_semaphore
+from app.api.errors import DocumentNotFound, ModelUnavailable, NoLLMConfigured
+from app.chat.orchestrator import handle_ask, handle_ask_stream
+from app.core.logging import get_logger
 from app.services import documents as doc_service
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import conversations as conv_repo
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -45,14 +50,10 @@ class AskPayload(BaseModel):
     thread_root_turn_id: Optional[UUID] = None
 
 
-@router.post("/{paper_id}/ask")
-async def ask_paper(
-    paper_id: UUID,
-    payload: AskPayload,
-    db: AsyncSession = Depends(get_db),
-    _limiter: None = Depends(get_ask_limiter),
-):
-    """Route a prompt to Local, Global, or External context and return an answer."""
+async def _resolve_ask_target(
+    db: AsyncSession, paper_id: UUID, payload: AskPayload
+) -> tuple[dict, Optional[UUID]]:
+    """Shared /ask pre-checks: 404, sub-thread depth cap, chunk resolution."""
     doc = await doc_service.get_document(db, paper_id)
     if not doc:
         raise DocumentNotFound(str(paper_id))
@@ -81,6 +82,19 @@ async def ask_paper(
         if chunk:
             current_chunk_id = chunk["id"]
 
+    return doc, current_chunk_id
+
+
+@router.post("/{paper_id}/ask")
+async def ask_paper(
+    paper_id: UUID,
+    payload: AskPayload,
+    db: AsyncSession = Depends(get_db),
+    _limiter: None = Depends(get_ask_limiter),
+):
+    """Route a prompt to Local, Global, or External context and return an answer."""
+    doc, current_chunk_id = await _resolve_ask_target(db, paper_id, payload)
+
     result = await handle_ask(
         db,
         prompt=payload.query,
@@ -92,6 +106,7 @@ async def ask_paper(
         user_images_b64=payload.images_b64,
         parent_turn_id=payload.parent_turn_id,
         thread_root_turn_id=payload.thread_root_turn_id,
+        document=doc,
     )
 
     return {
@@ -102,6 +117,60 @@ async def ask_paper(
         "model": result.model,
         "conversation_id": str(result.conversation_id) if result.conversation_id else None,
     }
+
+
+@router.post("/{paper_id}/ask/stream")
+async def ask_paper_stream(
+    paper_id: UUID,
+    payload: AskPayload,
+    db: AsyncSession = Depends(get_db),
+):
+    """Streaming /ask: same pipeline, answer delivered as Server-Sent Events.
+
+    Event types (one JSON object per `data:` line): token, status, replace,
+    done (full AskResponse payload), error. The concurrency semaphore is
+    acquired inside the generator — a Depends-based limiter would release
+    before the stream body even starts running.
+    """
+    doc, current_chunk_id = await _resolve_ask_target(db, paper_id, payload)
+
+    def sse(event: dict) -> str:
+        return f"data: {json.dumps(event)}\n\n"
+
+    async def event_stream():
+        async with get_ask_semaphore():
+            try:
+                async for event in handle_ask_stream(
+                    prompt=payload.query,
+                    document_id=paper_id,
+                    current_chunk_id=current_chunk_id,
+                    conversation_id=payload.conversation_id,
+                    visible_sequence_orders=payload.visible_sequence_orders,
+                    focused_element=payload.focused_element,
+                    user_images_b64=payload.images_b64,
+                    parent_turn_id=payload.parent_turn_id,
+                    thread_root_turn_id=payload.thread_root_turn_id,
+                    document=doc,
+                ):
+                    yield sse(event)
+            except NoLLMConfigured as e:
+                # The message already carries full instructions — no prefix.
+                yield sse({"type": "error", "detail": str(e.model)})
+            except ModelUnavailable as e:
+                yield sse({"type": "error", "detail": f"Model unavailable: {e.model}"})
+            except Exception:
+                logger.exception("ask_stream failed")
+                yield sse({"type": "error", "detail": "Answer generation failed. Check the server logs."})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Tell nginx-style proxies not to buffer the stream.
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _serialize_turn(t: dict) -> dict:

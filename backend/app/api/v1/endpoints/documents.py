@@ -46,15 +46,19 @@ async def upload_paper(
 
     content = await file.read()
     if len(content) > max_bytes:
-        # Clean up any partial file we may have written (in case of race or previous write)
-        try:
-            if dest.exists():
-                dest.unlink()
-        except Exception:
-            pass
         raise HTTPException(
             status_code=413,
             detail=f"File too large ({len(content) / (1024*1024):.1f} MB). Maximum allowed is {settings.max_upload_size_mb} MB.",
+        )
+
+    # Reject anything that is not actually a PDF before it touches disk or the
+    # extraction pipeline. The PDF spec requires the %PDF- header within the
+    # first 1024 bytes; checking content (not the filename) blocks disguised
+    # uploads (e.g. an executable renamed to .pdf).
+    if b"%PDF-" not in content[:1024]:
+        raise HTTPException(
+            status_code=415,
+            detail="Only PDF files are accepted (the uploaded file has no PDF header).",
         )
 
     # Defensive: ensure the storage directories exist right before we write.
@@ -128,16 +132,16 @@ async def upload_paper(
             ),
         )
 
+    except HTTPException:
+        raise
     except Exception as exc:
-        # This is the important safety net. Any DB error, write error, etc. in the
-        # early part of upload used to produce a completely opaque 500 with no detail.
-        # Now we log the *full* traceback server-side and return it in the response
-        # body so the frontend (which now extracts .detail) can show the real cause.
-        tb = traceback.format_exc()
-        logger.error(f"Upload pipeline failed for {display_name}:\n{tb}")
+        # Safety net for DB/write errors early in upload. The full traceback is
+        # logged server-side only — returning it to the client would leak
+        # filesystem paths, connection details, and internal code structure.
+        logger.error(f"Upload pipeline failed for {display_name}:\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail=f"Upload failed: {exc}\n\nFull traceback (see server logs too):\n{tb}"
+            detail=f"Upload failed: {type(exc).__name__}. Check the server logs for the full traceback.",
         ) from exc
 
 

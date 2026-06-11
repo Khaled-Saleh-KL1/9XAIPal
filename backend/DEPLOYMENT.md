@@ -2,7 +2,7 @@
 
 This document describes how to run the full 9XAIPal stack (API + UI + workers + infra) in containers so that **your machine acts as the server**.
 
-Ollama (the LLM/VLM/embeddings) can stay on the host (fastest for now) or be replaced later by any cloud endpoint (Grok, Gemini, GPT, Claude, self-hosted vLLM, etc.). The rest of the stack is now fully containerized and async-ready for multiple concurrent users on the same machine.
+Ollama (the LLM/VLM/embeddings) can stay on the host, or any cloud API can take over — with `LLM_PROVIDER=auto` (default) the backend uses Ollama when it is reachable and otherwise falls back to the first cloud API key found in `.env` (OpenAI → Anthropic → Gemini → xAI → DeepSeek). See "AI Backend" below. The rest of the stack is fully containerized and async-ready for multiple concurrent users on the same machine.
 
 ## Quick Start (Recommended for Your Machine as Server)
 
@@ -10,7 +10,7 @@ Ollama (the LLM/VLM/embeddings) can stay on the host (fastest for now) or be rep
 cd backend
 
 # 1. Copy and review env (no secrets in the example)
-cp .env.example .env
+cp .example.env .env
 # Edit .env if you want different models, larger pools, etc.
 
 # 2. (First time only — this builds the React UI once into a volume)
@@ -39,7 +39,32 @@ By default the containers reach your host Ollama via `host.docker.internal:11434
 
 - macOS / Windows (Docker Desktop): works out of the box.
 - Linux: may need `--add-host=host.docker.internal:host-gateway` (already in compose) or run `ollama serve` and point OLLAMA_BASE_URL at your LAN IP.
-- Later (cloud LLM): just change `OLLAMA_BASE_URL` and `CHAT_MODEL` / `VLM_MODEL` in .env. No other code changes needed for the rest of the system.
+- Cloud LLM: don't touch `OLLAMA_BASE_URL` — just paste an API key (see next section).
+
+## AI Backend (Ollama or any cloud API)
+
+`app/llm/resolver.py` auto-detects the backend on every call (`LLM_PROVIDER=auto`, default):
+
+1. **Ollama reachable** → uses it with your `CHAT_MODEL` / `VLM_MODEL` / `EMBEDDING_MODEL`.
+2. **Otherwise** → the first cloud key set in `.env`, in order: `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → `GEMINI_API_KEY` → `XAI_API_KEY` → `DEEPSEEK_API_KEY`. Each provider has its own model setting (`OPENAI_CHAT_MODEL=gpt-4o`, `ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6`, …) so Ollama tags are never sent to a cloud API.
+3. **Neither** → every request answers 503 with exact instructions: *"No AI backend is configured. Put your API key or your Ollama connection in backend/.env…"*.
+
+So "going cloud" is: paste one key into `.env`, `docker compose up -d api celery_worker` — done. Pin a backend explicitly with `LLM_PROVIDER=openai|anthropic|gemini|xai|deepseek|ollama|custom` if you don't want auto-detection.
+
+Embeddings follow the same chain (only OpenAI/Gemini offer embedding APIs). When you switch the embedder permanently, pin `EMBEDDING_PROVIDER=openai` (or `gemini`) — stored vectors from the old model are wiped and the whole library re-embeds automatically at the next startup (summaries/figure descriptions are cached and don't re-run). All compose services pass these variables through from `backend/.env` already.
+
+## Auto-Recovery (Self-Healing Containers)
+
+Two layers, both already wired in `docker-compose.yml`:
+
+1. **`restart: unless-stopped`** on every long-running service (postgres, redis, searxng, celery_worker, api, autoheal). A container that crashes or exits — e.g. the worker OOM-killed by a 700-page book (exit 137) — restarts automatically; queued uploads resume.
+2. **`autoheal` watchdog** (`willfarrell/autoheal`, Docker socket mounted): restarts any container labeled `autoheal=true` (api, postgres, redis) whose healthcheck turns **unhealthy** — the "running but hung" case that restart policies can't see.
+
+Neither mechanism touches data volumes. A deliberate `docker compose down` (or stopping the LAN script) is final — nothing restarts after that.
+
+## Temporary LAN Server
+
+`./start-lan-server.sh` brings up this whole stack with the `server` profile, removes the upload cap, raises the MinerU timeout for huge books, prints the LAN URL for other devices on the same network, and tears everything down on Ctrl+C (volumes preserved). Details: `docs/README.md` §6.6.
 
 ## Concurrency & Multiple Users
 
@@ -69,16 +94,6 @@ The frontend-build step only needs re-running when you change UI code.
 - Health: `curl http://localhost:8000/api/v1/health`
 - Logs: `docker compose logs -f api`
 - Full stack status: `docker compose ps`
-
-## Future LLM Swap (Grok / Gemini / GPT / Claude)
-
-When you are ready:
-
-1. Point `OLLAMA_BASE_URL` at an OpenAI-compatible endpoint (or add a thin adapter in `app/llm/`).
-2. Update model names.
-3. Everything else (context routing, research agent, sub-threads, compaction, citations, image persistence, ingestion pipeline, etc.) continues to work unchanged.
-
-The architecture was deliberately built with this future in mind.
 
 ## Troubleshooting First Build
 

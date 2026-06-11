@@ -14,9 +14,10 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.logging import get_logger
-from app.llm.ollama_client import chat_sync, hash_prompt
+from app.llm.client import chat_sync
+from app.llm.ollama_client import hash_prompt
+from app.llm.resolver import resolve_llm_sync
 from app.database.repositories import assets as asset_repo
 
 logger = get_logger(__name__)
@@ -120,7 +121,10 @@ def generate_figure_descriptions_sync(
     Main entry point. Generates high-quality VLM descriptions for all figures in a document.
     Designed to run after the main summarization pass (or as part of it).
     """
-    model = model or settings.chat_model
+    # Vision pipeline — the active backend's vision model (for Ollama that's
+    # VLM_MODEL from .env, falling back to CHAT_MODEL). Resolved upfront
+    # because the model name keys the idempotency check and stored rows.
+    model = model or resolve_llm_sync().vlm_model
     prompt_hash = _get_prompt_hash()
 
     logger.info(f"[figure-describer] Starting rich figure description generation for {document_id} using {model}")

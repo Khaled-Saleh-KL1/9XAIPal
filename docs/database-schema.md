@@ -79,7 +79,7 @@ loaded only when needed.
 | Column            | Type           | Notes                                |
 | ----------------- | -------------- | ------------------------------------ |
 | `chunk_id`        | `UUID`         | PK, FK → `chunks.id`, cascade.       |
-| `embedding`       | `vector(768)`  | Dimension matches `vector_dimension`. |
+| `embedding`       | `vector(N)` | N = `VECTOR_DIMENSION` env (default 1024); changing it re-embeds the library. |
 | `embedding_model` | `TEXT`         | Name of the embedding model used.    |
 | `created_at`      | `TIMESTAMPTZ`  |                                      |
 
@@ -194,7 +194,7 @@ VLM-generated technical descriptions of figures/diagrams.
 | `source_sequence_start`      | `INTEGER`     |                                          |
 | `source_sequence_end`        | `INTEGER`     |                                          |
 | `referenced_by_chunk_ids`    | `UUID[]`      | Text chunks that mention this figure.    |
-| `model`                      | `TEXT`        | eg. `qwen3.5:cloud`.                    |
+| `model`                      | `TEXT`        | eg. `gemma4:31b-cloud` (the resolved chat/VLM model at generation time).                    |
 | `prompt_hash`                | `TEXT`        |                                          |
 | `created_at`                 | `TIMESTAMPTZ` |                                          |
 

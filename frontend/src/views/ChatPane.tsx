@@ -1,18 +1,12 @@
-import { useState, useRef, useEffect, useCallback, type ImgHTMLAttributes, type AnchorHTMLAttributes } from 'react';
+import { useState, useRef, useEffect, useCallback, memo, type ImgHTMLAttributes, type AnchorHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import rehypeRaw from 'rehype-raw';
+import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import type { ChatMessage } from '../types';
 import { IconSend, IconSpinner } from '../components/Icons';
 import {
-  askPaper, getPaperChat, listPaperConversations,
+  askPaperStream, getPaperChat, listPaperConversations,
   type Citation, type ConversationSummary,
 } from '../api';
-
-const MARKDOWN_REMARK = [remarkGfm, remarkMath];
-const MARKDOWN_REHYPE = [rehypeRaw, rehypeKatex];
 
 // Lightbox is opened by dispatching a CustomEvent — keeps the markdown
 // renderer at module scope (no React state needed) while letting the
@@ -163,6 +157,9 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
+  // In-progress streamed answer: text grows token by token; status carries a
+  // transient line like "Researching the web…". null = no stream in flight.
+  const [streaming, setStreaming] = useState<{ text: string; status: string | null } | null>(null);
   // Image attachments for the next /ask call. Stored as { dataUrl, name } so
   // we can show a thumbnail in the input area; we strip the data: prefix when
   // sending to the backend (Ollama wants raw base64).
@@ -235,13 +232,17 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+  // Aborts the in-flight /ask (and its follow-up history refetch) when the
+  // user switches papers or the pane unmounts, so a slow answer for the OLD
+  // paper can never overwrite the NEW paper's chat state.
+  const askAbortRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
 
-  useEffect(() => { scrollToBottom(); }, [messages, thinking, scrollToBottom]);
+  useEffect(() => { scrollToBottom(); }, [messages, thinking, streaming, scrollToBottom]);
 
   // Close the picker when clicking outside of it.
   useEffect(() => {
@@ -258,6 +259,10 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   // Reset whenever the paper changes — each paper has its own threads only.
   useEffect(() => {
     let alive = true;
+    askAbortRef.current?.abort();
+    askAbortRef.current = null;
+    setThinking(false);
+    setStreaming(null);
     setMessages([]);
     setConversationId(null);
     setConversations([]);
@@ -289,7 +294,11 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
       }
     })();
 
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+      askAbortRef.current?.abort();
+      askAbortRef.current = null;
+    };
   }, [paperId]);
 
   const refreshConversations = useCallback(async () => {
@@ -414,6 +423,9 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
     setMessages((prev) => [...prev, { role: 'user', text: userBubbleText }]);
     setThinking(true);
 
+    const abort = new AbortController();
+    askAbortRef.current = abort;
+
     try {
       const threadOpts = currentThreadRoot
         ? {
@@ -422,7 +434,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
           }
         : undefined;
 
-      const res = await askPaper(
+      const res = await askPaperStream(
         paperId,
         q || 'Describe / explain the attached image in the context of this paper.',
         currentSequenceOrder,
@@ -430,9 +442,19 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
         imagesB64.length > 0
           ? { imagesB64, ...threadOpts }
           : threadOpts,
+        {
+          onToken: (t) => setStreaming((prev) => ({ text: (prev?.text ?? '') + t, status: null })),
+          onStatus: (msg) => setStreaming((prev) => ({ text: prev?.text ?? '', status: msg })),
+          // A research synthesis pass restreams the answer from scratch.
+          onReplace: () => setStreaming({ text: '', status: 'Rewriting with research findings…' }),
+        },
+        abort.signal,
       );
       const newConvId = res.conversation_id || conversationId;
       if (res.conversation_id) setConversationId(res.conversation_id);
+      // Swap the streamed draft for the authoritative final answer (the
+      // backend may have rewritten research image URLs after streaming).
+      setStreaming(null);
       setMessages((prev) => [
         ...prev,
         {
@@ -449,7 +471,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
       // emits). Scoped to the current sub-thread when applicable.
       if (newConvId) {
         try {
-          const { turns, maxDepth: md } = await getPaperChat(paperId, newConvId, currentThreadRoot ?? undefined);
+          const { turns, maxDepth: md } = await getPaperChat(paperId, newConvId, currentThreadRoot ?? undefined, abort.signal);
           setMaxDepth(md);
           setMessages(turns.map((t) => ({
             role: t.role,
@@ -464,13 +486,19 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
       }
       if (wasNewChat) refreshConversations();
     } catch (err) {
+      // Deliberate abort (paper switch / unmount) — state was already reset.
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       const detail = err instanceof Error ? err.message : String(err);
       setMessages((prev) => [
         ...prev,
         { role: 'assistant', text: `Backend error: ${detail}` },
       ]);
     } finally {
-      setThinking(false);
+      if (askAbortRef.current === abort) askAbortRef.current = null;
+      if (!abort.signal.aborted) {
+        setThinking(false);
+        setStreaming(null);
+      }
     }
   };
 
@@ -651,15 +679,19 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
               <MessageBubble
                 key={i}
                 m={m}
-                onOpenThread={canOpen ? () => enterSubThread(pairRoot!, m.text.slice(0, 60)) : undefined}
+                threadRoot={canOpen ? pairRoot : undefined}
+                onOpenThread={canOpen ? enterSubThread : undefined}
               />
             );
           })}
-          {thinking && (
+          {streaming && streaming.text && (
+            <MessageBubble m={{ role: 'assistant', text: streaming.text }} />
+          )}
+          {thinking && (!streaming || !streaming.text || streaming.status) && (
             <div className="flex items-center gap-2 text-[12.5px]" style={{ color: 'var(--muted)' }}>
               <IconSpinner className="w-3.5 h-3.5 spin" />
-              <span>thinking…</span>
-              <span className="opacity-60">(may include live research)</span>
+              <span>{streaming?.status || 'thinking…'}</span>
+              {!streaming?.status && <span className="opacity-60">(may include live research)</span>}
             </div>
           )}
         </div>
@@ -902,19 +934,30 @@ function LightboxImage({ src, alt }: { src: string; alt?: string }) {
   );
 }
 
-function MessageBubble({
+// Memoized: bubbles re-render markdown + KaTeX, which is expensive. The
+// parent re-renders on every keystroke in the input box, so without memo a
+// 50-message chat re-renders 50 markdown trees per keypress. Props are kept
+// stable for this purpose: `m` keeps identity between renders, `threadRoot`
+// is a string, and `onOpenThread` is the useCallback'd enterSubThread.
+const MessageBubble = memo(function MessageBubble({
   m,
+  threadRoot,
   onOpenThread,
 }: {
   m: ChatMessage;
-  onOpenThread?: () => void;
+  threadRoot?: string;
+  onOpenThread?: (rootTurnId: string, preview: string) => void;
 }) {
+  const openThread = threadRoot && onOpenThread
+    ? () => onOpenThread(threadRoot, m.text.slice(0, 60))
+    : undefined;
+
   if (m.role === 'user') {
-    const clickable = !!onOpenThread;
+    const clickable = !!openThread;
     return (
       <div className="flex justify-end">
         <div
-          onClick={clickable ? () => onOpenThread!() : undefined}
+          onClick={openThread}
           title={clickable ? 'Click to open this exchange in a focused sub-thread' : undefined}
           className={`max-w-[88%] rounded-2xl rounded-tr-sm px-3.5 py-2 text-[13.5px] ${clickable ? 'cursor-pointer hover:opacity-90' : ''}`}
           style={{
@@ -953,14 +996,14 @@ function MessageBubble({
     );
   }
 
-  const clickable = !!onOpenThread;
+  const clickable = !!openThread;
   return (
     <div
       onClick={clickable ? (e) => {
         // Don't hijack clicks on links, images, buttons inside the bubble
         const target = e.target as HTMLElement;
         if (target.closest('a, button, img, .md-body code')) return;
-        onOpenThread!();
+        openThread!();
       } : undefined}
       title={clickable ? 'Click this exchange to open it in a focused sub-thread' : undefined}
       className={`flex flex-col gap-2 rounded-lg p-2 -m-2 ${clickable ? 'cursor-pointer hover:bg-[color:var(--bg-3)]' : ''}`}
@@ -989,9 +1032,9 @@ function MessageBubble({
         )}
 
         {/* "Thread →" affordance — only shown on assistant turns that start a sub-thread */}
-        {onOpenThread && (
+        {openThread && (
           <button
-            onClick={(e) => { e.stopPropagation(); onOpenThread(); }}
+            onClick={(e) => { e.stopPropagation(); openThread(); }}
             className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded flex items-center gap-1"
             style={{
               border: '1px solid var(--accent)',
@@ -1036,4 +1079,4 @@ function MessageBubble({
       )}
     </div>
   );
-}
+});

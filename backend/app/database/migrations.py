@@ -1,9 +1,11 @@
 """Schema migration runner."""
 
+import re
 from pathlib import Path
 
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.database.connection import engine
 from app.core.logging import get_logger
 
@@ -21,6 +23,9 @@ async def apply_migrations() -> None:
     reading_order_*, etc.) unapplied.
     """
     schema_sql = SCHEMA_PATH.read_text()
+    # Fresh installs must create the embedding column at the configured
+    # dimension (existing DBs are re-typed by ensure_vector_dimension).
+    schema_sql = re.sub(r"vector\(\d+\)", f"vector({settings.vector_dimension})", schema_sql)
     statements = [s.strip() for s in schema_sql.split(";") if s.strip()]
 
     for i, stmt in enumerate(statements, 1):

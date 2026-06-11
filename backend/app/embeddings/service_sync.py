@@ -6,17 +6,15 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.core.config import settings
-from app.embeddings.model import get_embeddings_batch_sync
+from app.embeddings.model import active_embedding_model_sync, get_embeddings_batch_sync
 
 logger = get_logger(__name__)
 
 
-# Embedding model token-window sizing: qwen3-embedding supports long contexts,
-# but Ollama's /api/embed returns a hard 400 ("input length exceeds the context length")
-# rather than truncating — even with truncate=true. Dense tables tokenize heavily
-# (~3072 chars was the live ceiling for a numeric table, 4096 failed), so cap
-# conservatively at 3000 chars.
-_MAX_EMBED_CHARS = 3000
+# Embedding input sizing: Ollama's /api/embed returns a hard 400 ("input
+# length exceeds the context length") rather than truncating — even with
+# truncate=true. Dense tables tokenize heavily, so the cap is conservative.
+# Configurable via EMBED_MAX_CHARS (cloud embedders allow much more).
 
 
 def get_chunks_without_embeddings_sync(session: Session, document_id: UUID, limit: int = 20) -> list[dict]:
@@ -44,7 +42,7 @@ def _embed_text_for_chunk(chunk: dict) -> str:
     txt = (chunk.get("plain_text") or "").strip()
     if not txt:
         txt = f"[{chunk.get('chunk_type') or 'content'}]"
-    return txt[:_MAX_EMBED_CHARS]
+    return txt[:settings.embed_max_chars]
 
 
 def embed_document_chunks_sync(
@@ -60,6 +58,7 @@ def embed_document_chunks_sync(
 
         texts = [_embed_text_for_chunk(c) for c in chunks]
         embeddings = get_embeddings_batch_sync(texts)
+        model_name = active_embedding_model_sync()
 
         if not embeddings or len(embeddings) != len(chunks):
             raise ValueError(
@@ -74,7 +73,7 @@ def embed_document_chunks_sync(
             payloads.append({
                 "chunk_id": chunk["id"],
                 "embedding": cast_embedding,  # Explicit list of floats matching pgvector extension dialect
-                "model": settings.embedding_model,
+                "model": model_name,
             })
 
         # Insert batch into database

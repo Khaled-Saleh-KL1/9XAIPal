@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.core.lifecycle import lifespan
 from app.core.paths import images_dir, extracted_dir, assets_dir, research_images_dir
+from app.core.security import SecurityHeadersMiddleware, RateLimitMiddleware
 from app.api.v1.router import api_router
 from app.api.errors import register_exception_handlers
 
@@ -16,9 +17,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Middleware order matters: the LAST add_middleware call is the outermost
+# layer. Security headers and rate limiting are added first (inner), CORS
+# last (outer) so even 429 rejections carry CORS headers and the browser can
+# read them instead of failing opaquely.
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware, limit_per_minute=settings.rate_limit_per_minute)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

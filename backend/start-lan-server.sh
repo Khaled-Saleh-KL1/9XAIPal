@@ -91,25 +91,14 @@ services:
     environment:
       MAX_UPLOAD_SIZE_MB: "${MAX_UPLOAD_MB}"
   celery_worker:
-    # Build the worker from the MinerU-enabled image (layout + OCR + tables +
-    # math). The api stays on the slim image; only the worker extracts PDFs.
-    build:
-      context: .
-      dockerfile: Dockerfile.mineru
+    # The MinerU image, binary name and MINERU_BAKED_INTO_IMAGE flag are
+    # already set in docker-compose.yml — only LAN-session extras live here.
     environment:
-      # Use the modern \`mineru\` CLI (the compose default is the legacy
-      # \`magic-pdf\` name, which doesn't exist in MinerU 2.x/3.x).
-      MINERU_BINARY: "mineru"
       MINERU_LANG: "${MINERU_LANG:-en}"
       # A 700-page book on CPU-only Docker can take hours; don't let the
       # extractor's wall-clock timeout kill it.
       MINERU_TIMEOUT_SEC: "${MINERU_TIMEOUT_SEC:-14400}"
       MAX_UPLOAD_SIZE_MB: "${MAX_UPLOAD_MB}"
-      # Pipeline models are pre-baked into Dockerfile.mineru. This signal
-      # tells mineru_client.py to skip the HF_HUB_OFFLINE=1 toggle (which
-      # otherwise blocks MinerU's post-processing stage — manifests as
-      # "All connection attempts failed" on extraction).
-      MINERU_BAKED_INTO_IMAGE: "1"
 YAML
 
 echo "============================================================"
@@ -128,7 +117,8 @@ compose down --remove-orphans >/dev/null 2>&1 || true
 # Belt-and-suspenders: drop any stray containers using our fixed names, even if
 # they belong to a different compose context.
 docker rm -f 9xaipal-api 9xaipal-celery-worker 9xaipal-postgres \
-              9xaipal-redis 9xaipal-searxng 9xaipal-frontend-build >/dev/null 2>&1 || true
+              9xaipal-redis 9xaipal-searxng 9xaipal-frontend-build \
+              9xaipal-autoheal >/dev/null 2>&1 || true
 
 # Bring everything up. --build is required so the worker picks up the
 # MinerU image (Dockerfile.mineru); Docker layer-caches it after the first run.

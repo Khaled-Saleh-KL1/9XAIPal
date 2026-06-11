@@ -1,11 +1,17 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, lazy, Suspense } from 'react';
 import type { Route, LibraryLayout, UploadingFile } from './types';
 import type { Paper } from './types';
 import { LibraryView } from './views/LibraryView';
 import { ProcessingOverlay } from './views/ProcessingOverlay';
 import { ReadingView } from './views/ReadingView';
-import { PdfViewer } from './views/PdfViewer';
 import { RawFilesPanel } from './views/RawFilesPanel';
+
+// react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
+// keeps it out of the initial bundle so the library/reading views appear
+// fast; the viewer chunk is fetched only when a raw PDF is actually opened.
+const PdfViewer = lazy(() =>
+  import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
+);
 import { uploadPaper, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
 
 // Mirrors the mapping used inside LibraryView so deep-linked papers carry the
@@ -87,11 +93,19 @@ export function App() {
       .catch(() => {});
   }, []);
 
+  // This list only feeds the Raw Files slide-over, so don't hammer the backend
+  // with a permanent poll: load once on mount, then refresh (and slow-poll)
+  // only while the panel is actually open. LibraryView owns its own polling.
   useEffect(() => {
     refreshPapers();
-    const id = setInterval(refreshPapers, 2000);
-    return () => clearInterval(id);
   }, [refreshPapers]);
+
+  useEffect(() => {
+    if (!rawFilesOpen) return;
+    refreshPapers();
+    const id = setInterval(refreshPapers, 10000);
+    return () => clearInterval(id);
+  }, [rawFilesOpen, refreshPapers]);
 
   // Real file upload handler
   const handleFileUpload = useCallback(async (file: File, kind: DocKind) => {
@@ -264,16 +278,24 @@ export function App() {
       )}
 
       {route === 'pdf-viewer' && viewingPdf && (
-        <PdfViewer
-          paper={viewingPdf}
-          onBack={() => { setViewingPdf(null); setRoute('library'); }}
-          onReadStructured={(p) => {
-            setActivePaper(metaToPaper(p));
-            setActivePaperId(p.id);
-            setViewingPdf(null);
-            setRoute('reading');
-          }}
-        />
+        <Suspense
+          fallback={
+            <div className="h-screen flex items-center justify-center text-[13px]" style={{ color: 'var(--muted)' }}>
+              Loading PDF viewer…
+            </div>
+          }
+        >
+          <PdfViewer
+            paper={viewingPdf}
+            onBack={() => { setViewingPdf(null); setRoute('library'); }}
+            onReadStructured={(p) => {
+              setActivePaper(metaToPaper(p));
+              setActivePaperId(p.id);
+              setViewingPdf(null);
+              setRoute('reading');
+            }}
+          />
+        </Suspense>
       )}
 
       {route === 'processing' && uploadingFile && (

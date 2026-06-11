@@ -39,7 +39,7 @@ New fields on `documents`:
 - `reading_order_model`
 - `reading_order_updated_at`
 
-You can trigger reconstruction from the UI (ReadingView) with the "Reconstruct Reading Order (AI)" button. This sends chunks + bboxes per page to the LLM (gemma4:26b) to intelligently reorder text from two-column layouts and fix cross-page continuations.
+You can trigger reconstruction from the UI (ReadingView) with the "Reconstruct Reading Order (AI)" button. This sends chunks + bboxes per page to the resolved chat model to intelligently reorder text from two-column layouts and fix cross-page continuations.
 
 ## Rich Table Extraction + Figure/Architecture VLM Descriptions (2026 updates)
 

@@ -16,6 +16,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
 
   redis:
     image: redis:7-alpine
@@ -29,6 +32,9 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
 
   searxng:
     image: searxng/searxng:latest
@@ -61,8 +67,28 @@ services:
       # call fail with connection-refused.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:26b}
-      VLM_MODEL: ${VLM_MODEL:-gemma4:26b}
+      VLM_MODEL: ${VLM_MODEL:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding}
+      VECTOR_DIMENSION: ${VECTOR_DIMENSION:-1024}
+      # LLM provider (cloud APIs or local Ollama) — see backend/.example.env.
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o}
+      ANTHROPIC_CHAT_MODEL: ${ANTHROPIC_CHAT_MODEL:-claude-sonnet-4-6}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.5-flash}
+      XAI_CHAT_MODEL: ${XAI_CHAT_MODEL:-grok-4}
+      DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
       # Latency tuning (see app/core/config.py). Keep the model warm and let the
       # router/guardrail use a small fast model if one is installed.
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
@@ -149,8 +175,28 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       # Chat model — forwarded from host .env so the container uses the same model.
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:26b}
-      VLM_MODEL: ${VLM_MODEL:-gemma4:26b}
+      VLM_MODEL: ${VLM_MODEL:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding}
+      VECTOR_DIMENSION: ${VECTOR_DIMENSION:-1024}
+      # LLM provider (cloud APIs or local Ollama) — see backend/.example.env.
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o}
+      ANTHROPIC_CHAT_MODEL: ${ANTHROPIC_CHAT_MODEL:-claude-sonnet-4-6}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.5-flash}
+      XAI_CHAT_MODEL: ${XAI_CHAT_MODEL:-grok-4}
+      DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
       # Latency tuning (see app/core/config.py).
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
@@ -188,6 +234,24 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+
+  # Watchdog: restarts any container labeled autoheal=true whose healthcheck
+  # turns "unhealthy". `restart: unless-stopped` only fires when a process
+  # EXITS (crash/OOM); this covers the other failure mode — a container that
+  # is still running but hung/not responding. Needs the Docker socket to issue
+  # the restarts.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: 9xaipal-autoheal
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
   # One-shot service that builds the React frontend once and leaves the artifacts

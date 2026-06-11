@@ -13,12 +13,28 @@
 
 All of these run locally. The defaults are wired in
 [backend/app/core/config.py](../backend/app/core/config.py); override via a
-`.env` file in `backend/`.
+`.env` file in `backend/` (template: `backend/.example.env`).
 
-Models are configured via env vars (defaults in `backend/.env.example`):
-- `CHAT_MODEL=qwen3.5:cloud` — chat + VLM
-- `VLM_MODEL=qwen3.5:cloud` — figure describer pipeline
-- `EMBEDDING_MODEL=nomic-embed-text` — 768-dim embeddings
+**Ollama is optional.** With `LLM_PROVIDER=auto` (default) the backend uses
+Ollama when it is reachable and otherwise falls back to the first cloud API
+key set in `.env`, in order: `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` →
+`GEMINI_API_KEY` → `XAI_API_KEY` → `DEEPSEEK_API_KEY`. If neither is
+available, every request answers with clear instructions to add one. Full
+details: [README §15](README.md#15-ai-backend--models-auto-detection-chat-vlm-embedding).
+
+Ollama models are configured via env vars:
+- `CHAT_MODEL` — chat (e.g. `gemma4:31b-cloud`)
+- `VLM_MODEL` — figure describer pipeline (empty = reuse `CHAT_MODEL`)
+- `CLASSIFIER_MODEL` — router/guardrail (empty = reuse `CHAT_MODEL`)
+- `EMBEDDING_MODEL` — embeddings (e.g. `qwen3-embedding`), stored at
+  `VECTOR_DIMENSION` (default 1024)
+
+Cloud providers have their own model settings (`OPENAI_CHAT_MODEL=gpt-4o`,
+`ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6`, `GEMINI_CHAT_MODEL=gemini-2.5-flash`,
+`XAI_CHAT_MODEL=grok-4`, `DEEPSEEK_CHAT_MODEL=deepseek-chat`,
+`OPENAI_EMBEDDING_MODEL=text-embedding-3-small`,
+`GEMINI_EMBEDDING_MODEL=gemini-embedding-001`) — an Ollama tag is never sent
+to a cloud API.
 
 ## Backend
 
@@ -71,12 +87,22 @@ full stack:
 | `redis`         | `redis:7-alpine` | 6379 | Celery broker + backend |
 | `searxng`       | `searxng/searxng:latest` | 8080 | Local web search proxy |
 | `celery_worker` | Built from `Dockerfile.mineru` | — | MinerU + embedding + summarization |
-| `api`           | Built from `Dockerfile` | 8000 | FastAPI backend |
+| `api`           | Built from `Dockerfile` | 8000 | FastAPI backend (+ serves the built UI) |
+| `autoheal`      | `willfarrell/autoheal` | — | Restarts containers whose healthcheck turns unhealthy |
 
 ```bash
 cd backend
 docker compose up -d --build
 ```
+
+All long-running services carry `restart: unless-stopped`, so a crashed or
+OOM-killed container restarts automatically; the `autoheal` watchdog handles
+the hung-but-running case. Data volumes are never touched.
+
+To share the app with other devices on your local network, run
+`backend/start-lan-server.sh` — it brings up the full stack (UI + API on one
+port), prints the LAN URL, and tears everything down on Ctrl+C while keeping
+your data ([README §6.6](README.md#66-temporary-lan-server-start-lan-serversh)).
 
 For development, you can run only the ancillary services and keep the
 backend on the host:

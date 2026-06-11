@@ -31,7 +31,7 @@ backend/
 ├── Dockerfile
 ├── Dockerfile.mineru
 ├── pyproject.toml
-├── .env.example
+├── .example.env
 ├── .gitignore
 ├── docker/
 │   ├── postgres/init/01-enable-pgvector.sql
@@ -93,9 +93,9 @@ backend/
 │   │   ├── guardrail.py
 │   │   └── citations.py
 │   ├── llm/
+│   │   ├── resolver.py        # backend auto-detection (Ollama → cloud keys)
+│   │   ├── client.py          # backend-agnostic chat entry points
 │   │   ├── ollama_client.py
-│   │   ├── vlm_client.py
-│   │   ├── model_registry.py
 │   │   └── multimodal.py
 │   ├── search/
 │   │   ├── searxng_client.py

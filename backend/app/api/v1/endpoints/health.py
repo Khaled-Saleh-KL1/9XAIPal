@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from app.schemas.common import HealthResponse
-from app.llm.ollama_client import is_available as ollama_available
+from app.llm.client import is_available as llm_available
 from app.search.searxng_client import is_available as searxng_available
 from app.database.connection import verify_connection
 
@@ -20,8 +20,8 @@ async def health_check():
     except Exception:
         db_status = "unavailable"
 
-    # Ollama
-    ollama_status = "ok" if await ollama_available() else "unavailable"
+    # LLM provider (Ollama or the configured cloud API)
+    ollama_status = "ok" if await llm_available() else "unavailable"
 
     # SearXNG
     searxng_status = "ok" if await searxng_available() else "unavailable"
