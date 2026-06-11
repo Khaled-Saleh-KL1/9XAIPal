@@ -87,6 +87,14 @@ class Settings(BaseSettings):
     # described when DeepSeek is the active provider (captions still work).
     deepseek_chat_model: str = "deepseek-chat"
 
+    # ── Cloud thinking / reasoning mode ─────────────────────────────────────
+    # When True, sends ``reasoning_effort: "medium"`` to OpenAI-compatible
+    # chat-completions endpoints for reasoning models (o1, o3-mini, o4-mini,
+    # etc.). Only affects providers/models that support it; silently ignored
+    # for Anthropic, Gemini, xAI, DeepSeek, Ollama, and non-reasoning models.
+    # Make sure your active chat model is a reasoning model before enabling.
+    cloud_thinking_mode: bool = False
+
     # ── Embedding provider ──────────────────────────────────────────────────
     # "auto" (default): Ollama when reachable, else OPENAI_API_KEY, else
     # GEMINI_API_KEY — only OpenAI and Gemini offer embedding APIs (Anthropic/

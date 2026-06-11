@@ -77,6 +77,24 @@ def _to_openai_messages(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _is_reasoning_model(model: str) -> bool:
+    """Heuristic: OpenAI reasoning model names start with 'o' + digit."""
+    base = model.split("/")[-1]
+    return len(base) >= 2 and base[0] == "o" and base[1].isdigit()
+
+
+def _reasoning_effort_for(target: LLMTarget, resolved_model: str) -> Optional[str]:
+    """Return a ``reasoning_effort`` value when cloud thinking mode is
+    enabled and the resolved model looks like an OpenAI reasoning model."""
+    if not settings.cloud_thinking_mode:
+        return None
+    if target.provider == "ollama":
+        return None
+    if not _is_reasoning_model(resolved_model):
+        return None
+    return "medium"
+
+
 def _openai_payload(
     messages: list[dict],
     *,
@@ -84,6 +102,7 @@ def _openai_payload(
     temperature: float,
     max_tokens: Optional[int],
     stream: bool,
+    reasoning_effort: Optional[str] = None,
 ) -> dict:
     payload: dict = {
         "model": model,
@@ -93,6 +112,8 @@ def _openai_payload(
     }
     if max_tokens:
         payload["max_tokens"] = max_tokens
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     return payload
 
 
@@ -122,6 +143,7 @@ async def chat(
     cap = num_predict if num_predict is not None else (settings.chat_num_predict or None)
     payload = _openai_payload(
         messages, model=resolved, temperature=temperature, max_tokens=cap, stream=False,
+        reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
     async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
@@ -173,6 +195,7 @@ async def stream_chat(
     cap = num_predict if num_predict is not None else (settings.chat_num_predict or None)
     payload = _openai_payload(
         messages, model=resolved, temperature=temperature, max_tokens=cap, stream=True,
+        reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
     content_parts: list[str] = []
@@ -255,6 +278,7 @@ def chat_sync(
 
     payload = _openai_payload(
         final_messages, model=resolved, temperature=temperature, max_tokens=None, stream=False,
+        reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
     with httpx.Client(timeout=300.0) as client:
