@@ -2,17 +2,7 @@
 
 > 🎬 **Video demo**
 >
-> *Paste your video link here when ready.*
->
-> Example (YouTube):
-> ```markdown
-> [![Watch the demo](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
-> ```
->
-> Example (local MP4 / GitHub file):
-> ```markdown
-> <video src="./docs/demo.mp4" controls width="100%"></video>
-> ```
+> <video src="./assets/Video.mp4" controls width="100%"></video>
 
 ---
 
