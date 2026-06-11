@@ -13,6 +13,8 @@ venv/
 .uv/
 **/__pycache__/**/*
 *.egg
+pyproject.toml
+uv.lock
 
 # Node
 node_modules/

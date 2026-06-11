@@ -1,18 +1,34 @@
-# Runtime dependencies. Kept in sync with pyproject.toml.
-# Install via `pip install -r requirements.txt` (or `pip install -e .` in dev).
+# Runtime dependencies for the 9XAIPal backend.
+# Install via:  pip install -r requirements.txt
 
+# Web framework & server
 fastapi[standard]
 uvicorn[standard]
+python-multipart
+
+# Data validation & settings
 pydantic>=2.0
 pydantic-settings
+
+# HTTP client (Ollama / cloud LLM APIs)
 httpx
+
+# Database
 sqlalchemy[asyncio]>=2.0
 asyncpg
+psycopg2-binary       # sync driver used by Celery workers
 pgvector
-python-multipart
+
+# File & PDF handling
 aiofiles
 pypdf
+pymupdf               # PyMuPDF fallback when MinerU is unavailable (imported as 'fitz')
 
 # Background processing
-celery>=5.3
+ celery>=5.3
 redis>=5.0
+
+# NOTE: MinerU is the primary PDF extractor and is invoked as a CLI.
+# It must be installed separately per its official instructions
+# (https://github.com/opendatalab/MinerU). The first run downloads
+# ~5 GB of weights; set HF_TOKEN in your environment.
