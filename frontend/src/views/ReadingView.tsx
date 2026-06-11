@@ -8,7 +8,6 @@ import {
   getNextChunk,
   getChunkCount,
   getPaper,
-  deletePaper,
   getFigureDescriptions,
   triggerReadingOrderReconstruction,
   reextractPaper,
@@ -127,7 +126,6 @@ export function ReadingView({ paper, paperId, onBack }: Props) {
   const [useLogicalOrder, setUseLogicalOrder] = useState(false);
   const [reconstructionStatus, setReconstructionStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
 
-  const [deleting, setDeleting] = useState(false);
   const readerRef = useRef<HTMLDivElement>(null);
   const dPressed = useRef(false);
 
@@ -500,21 +498,6 @@ export function ReadingView({ paper, paperId, onBack }: Props) {
     }
   }, [paperId]);
 
-  const handleDelete = useCallback(async () => {
-    const ok = window.confirm(
-      `Delete "${meta?.original_filename || paper.title}"?\n\nThis removes the database rows AND the on-disk files (raw PDF, extracted images, MinerU output). It cannot be undone.`,
-    );
-    if (!ok) return;
-    setDeleting(true);
-    try {
-      await deletePaper(paperId);
-      onBack();
-    } catch (e) {
-      window.alert(`Delete failed: ${(e as Error).message}`);
-      setDeleting(false);
-    }
-  }, [paperId, meta, paper.title, onBack]);
-
   const displayTitle = meta?.original_filename?.replace(/\.pdf$/i, '') || paper.title;
   const displayPages = meta?.page_count ?? paper.pages ?? 0;
   const status = meta?.status ?? 'queued';
@@ -642,20 +625,6 @@ export function ReadingView({ paper, paperId, onBack }: Props) {
               }}
             />
           </div>
-          <button
-            onClick={handleDelete}
-            disabled={deleting}
-            title="Delete this paper"
-            className="text-[12px] px-2.5 py-1.5 rounded-md flex items-center gap-1.5"
-            style={{
-              color: '#c0392b',
-              border: '1px solid var(--border)',
-              background: 'var(--bg)',
-              opacity: deleting ? 0.5 : 1,
-            }}
-          >
-            {deleting ? 'Deleting…' : 'Delete'}
-          </button>
         </div>
       </header>
 
