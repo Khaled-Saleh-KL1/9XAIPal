@@ -236,14 +236,6 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   // user switches papers or the pane unmounts, so a slow answer for the OLD
   // paper can never overwrite the NEW paper's chat state.
   const askAbortRef = useRef<AbortController | null>(null);
-
-  const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, []);
-
-  useEffect(() => { scrollToBottom(); }, [messages, thinking, streaming, scrollToBottom]);
-
   // Close the picker when clicking outside of it.
   useEffect(() => {
     if (!pickerOpen) return;
