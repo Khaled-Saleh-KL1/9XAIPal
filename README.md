@@ -1,24 +1,38 @@
 # 9XAIPal
 
-> 🎬 **Video demo** — *coming soon. Place your recorded walkthrough here.*
+> 🎬 **Video demo**
+>
+> *Paste your video link here when ready.*
+>
+> Example (YouTube):
+> ```markdown
+> [![Watch the demo](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=VIDEO_ID)
+> ```
+>
+> Example (local MP4 / GitHub file):
+> ```markdown
+> <video src="./docs/demo.mp4" controls width="100%"></video>
+> ```
 
 ---
 
 ## What is it?
 
-**9XAIPal** is a local-first research assistant built for deep reading of scientific and technical PDFs. Drop a paper, and it structurally extracts text, math, tables, and figures — then lets you read chunk-by-chunk and ask contextual questions with grounded, citation-backed answers.
+**9XAIPal** is a local-first reading companion for **research papers, technical books, and long-form PDFs**. Drop a file and it structurally extracts headings, math, tables, and figures — then serves them back one piece at a time while you ask grounded, citation-backed questions in the side chat.
 
 ---
 
 ## Why I built it
 
-Reading dense academic papers is cognitively expensive. Most people skim and retain surprisingly little. Research in **cognitive load theory** and the **segmented learning** literature shows that breaking content into small, labeled chunks — and pairing it with **generative questioning** — significantly improves comprehension and retention over passive scrolling.
+Reading dense material is cognitively expensive — whether it's a 12-page paper or a 600-page textbook. Most people skim and retain surprisingly little. Research in **cognitive load theory** and the **segmented learning** literature shows that breaking content into small, labeled units — and pairing it with **generative questioning** — significantly improves comprehension and retention over passive scrolling.
 
-9XAIPal enforces both:
-- It reveals one *structural* chunk at a time (headings, equations, figures, tables) so you process the paper in digestible units.
-- An always-available side chat answers questions using only the context you've actually seen — or the full paper if you ask broader questions — so you learn by explaining, not just by highlighting.
+9XAIPal adapts the granularity to what you uploaded:
+- **Research papers** — read one *structural* chunk at a time: headings, equations, figures, tables.
+- **Books** — read one *chapter* at a time. The system detects major chapter boundaries and lets you study an entire chapter as a single unit, so you stay in narrative flow while still avoiding wall-of-text overwhelm.
 
-Everything runs locally by default. Your papers and conversations never leave your machine unless you explicitly ask a question that requires live web search.
+In both cases, the side chat answers questions using only the context you've actually seen (or the full document for broad questions), so you learn by explaining, not just by highlighting.
+
+Everything runs locally by default. Your documents and conversations never leave your machine unless you explicitly ask a question that requires live web search.
 
 ---
 
@@ -41,10 +55,12 @@ Everything runs locally by default. Your papers and conversations never leave yo
 ## Features
 
 - **Drag-and-drop PDF upload** with live progress overlay (`extracting → chunking → embedding → summarizing`)
-- **Structural chunk reader** — read one piece at a time: headings, paragraphs, math blocks, tables, figures
+- **Dual reading modes** — the reader adapts to the document type:
+  - **Paper mode** — granular chunk-by-chunk: headings, paragraphs, math blocks, tables, figures. Perfect for research papers with dense, mixed layouts.
+  - **Book mode** — chapter-by-chapter study. The system detects major chapter boundaries and lets you read and discuss one chapter at a time, preserving narrative flow across longer texts.
 - **Smart context routing** — the chat automatically picks the best source for each question:
-  - `LOCAL` — current chunk + neighbors + inline images (multimodal)
-  - `GLOBAL` — semantic vector search across the entire paper
+  - `LOCAL` — current chunk / chapter + neighbors + inline images (multimodal)
+  - `GLOBAL` — semantic vector search across the entire document
   - `OVERVIEW` — pre-computed hierarchical summaries (executive + H1 + H2)
   - `EXTERNAL` — live web search via SearXNG (only when the question demands it)
 - **Research agent** — iterative Observe → Reason → Act loop for deep external questions
