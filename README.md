@@ -2,7 +2,7 @@
 
 > 🎬 **Video demo**
 >
-> <video src="./assets/Video.mp4" controls width="100%"></video>
+> <video src="https://raw.githubusercontent.com/Khaled-Saleh-KL1/9XAIPal/main/assets/Video.mp4" controls width="100%"></video>
 
 ---
 
