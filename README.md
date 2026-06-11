@@ -1,4 +1,4 @@
-# 9XAIPal
+# 9XAIPal (V1)
 
 > 🎬 **Video demo**
 >
