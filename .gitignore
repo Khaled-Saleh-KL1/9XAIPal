@@ -43,11 +43,6 @@ backend/app/storage/images/*
 backend/app/storage/logs/*
 backend/app/storage/assets/*
 
-# Large media (keep demos on YouTube instead)
-*.mp4
-*.mov
-*.avi
-
 # SQLite (fallback)
 *.sqlite3
 *.sqlite3-*

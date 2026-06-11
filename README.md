@@ -1,6 +1,8 @@
 # 9XAIPal (V1)
 
-> 🎬 **Video demo** — [Watch on YouTube](https://youtu.be/m-uIaNKOOrk)
+> 🎬 **Video demo**
+>
+> <video src="https://raw.githubusercontent.com/Khaled-Saleh-KL1/9XAIPal/main/assets/Video.mp4" controls width="100%"></video>
 
 ---
 
