@@ -37,6 +37,31 @@ def test_auto_uses_ollama_when_reachable():
     assert target.vlm_model == settings.effective_vlm_model
 
 
+def test_ollama_targets_carry_api_key_when_set(monkeypatch):
+    """resolver must forward OLLAMA_API_KEY onto both target types, or the
+    Bearer auth wired into ollama_client.py / embeddings/model.py silently
+    becomes dead code (headers built from target.api_key would always be
+    empty)."""
+    monkeypatch.setattr(settings, "ollama_api_key", "sk-test")
+    llm_target = resolver.resolve_llm_sync(ollama_up=True)
+    assert llm_target.provider == "ollama"
+    assert llm_target.api_key == "sk-test"
+
+    embedding_target = resolver.resolve_embedding_sync(ollama_up=True)
+    assert embedding_target.provider == "ollama"
+    assert embedding_target.api_key == "sk-test"
+
+
+def test_ollama_targets_api_key_blank_when_unset():
+    # clean_resolver_state already blanks settings.ollama_api_key; this is
+    # the companion case to test_ollama_targets_carry_api_key_when_set.
+    llm_target = resolver.resolve_llm_sync(ollama_up=True)
+    assert llm_target.api_key == ""
+
+    embedding_target = resolver.resolve_embedding_sync(ollama_up=True)
+    assert embedding_target.api_key == ""
+
+
 def test_auto_falls_back_to_first_key_when_ollama_down(monkeypatch):
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
     target = resolver.resolve_llm_sync(ollama_up=False)
