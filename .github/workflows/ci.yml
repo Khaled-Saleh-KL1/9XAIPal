@@ -90,4 +90,7 @@ jobs:
           pip install pytest pytest-asyncio httpx
 
       - name: Run tests
-        run: pytest -q
+        # `python -m pytest` puts the backend/ working dir on sys.path so the
+        # `app` package imports without an editable install of the heavy
+        # (torch/MinerU) pyproject dependencies.
+        run: python -m pytest -q
