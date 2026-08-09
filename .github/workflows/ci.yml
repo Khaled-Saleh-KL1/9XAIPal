@@ -1,0 +1,96 @@
+name: CI
+
+# Runs on every PR into main (the merge gate) and on pushes to main
+# (post-merge sanity check). Deployment itself is handled by Vercel's native
+# Git integration: production on merge to main, preview URLs on each PR.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# A newer commit on the same PR/branch cancels the older, still-running check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Mirrors exactly what Vercel runs (package.json build = "tsc && vite build"),
+      # so a green check here means the production build will succeed.
+      - name: Type-check and build
+        run: npm run build
+
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    # Real Postgres with pgvector — the tests apply migrations (schema.sql
+    # creates the vector + uuid-ossp extensions) and exercise pgvector queries.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: 9xaipal
+          POSTGRES_PASSWORD: 9xaipal_dev_password
+          POSTGRES_DB: 9xaipal_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U 9xaipal -d 9xaipal_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: 9xaipal
+      POSTGRES_PASSWORD: 9xaipal_dev_password
+      POSTGRES_DB: 9xaipal_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # Light runtime deps only — no torch / MinerU (the app imports neither at
+      # module load; tests mock the embedding/extraction calls). Keeps CI ~1-2 min.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run tests
+        # `python -m pytest` puts the backend/ working dir on sys.path so the
+        # `app` package imports without an editable install of the heavy
+        # (torch/MinerU) pyproject dependencies.
+        run: python -m pytest -q
