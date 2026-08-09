@@ -1,3 +1,5 @@
+import json
+from unittest.mock import MagicMock
 import fitz
 from pathlib import Path
 from app.core.config import settings
@@ -26,3 +28,20 @@ def test_render_pages_returns_one_png_per_page(tmp_path):
     pngs = vlm_client.render_pages(_make_pdf(tmp_path), dpi=100)
     assert len(pngs) == 2
     assert pngs[0][:8] == b"\x89PNG\r\n\x1a\n"   # PNG magic
+
+
+def test_call_vlm_page_parses_blocks():
+    fake = {"message": {"content": json.dumps({"blocks": [
+        {"type": "text", "text": "Intro", "text_level": 1},
+        {"type": "text", "text": "Body text."},
+    ]})}}
+    client = MagicMock()
+    resp = MagicMock(); resp.json.return_value = fake; resp.raise_for_status.return_value = None
+    client.post.return_value = resp
+    blocks = vlm_client.call_vlm_page(b"\x89PNG", "qwen3-vl:test", client)
+    assert blocks[0]["text_level"] == 1
+    assert blocks[1]["text"] == "Body text."
+    # sends base64 image + format=json
+    _, kwargs = client.post.call_args
+    assert kwargs["json"]["format"] == "json"
+    assert kwargs["json"]["messages"][0]["images"]
