@@ -81,3 +81,40 @@ def test_extract_via_vlm_missing_bbox_falls_back_to_whole_page(tmp_path):
     assert imgs and imgs[0]["img_path"].startswith("images/")
     assert "bbox" not in imgs[0]
     assert (out / imgs[0]["img_path"]).exists()          # whole-page crop was saved
+
+
+def test_resolve_extractor_uses_vlm_when_selected(tmp_path, monkeypatch):
+    from app.extraction import pipeline_sync
+    monkeypatch.setattr(pipeline_sync.settings, "extractor_provider", "vlm")
+    called = {}
+
+    def fake_extract_via_vlm(p, o):
+        called["vlm"] = (p, o)
+        return o
+
+    monkeypatch.setattr(pipeline_sync, "extract_via_vlm", fake_extract_via_vlm)
+    out_dir, extractor = pipeline_sync.resolve_extractor(tmp_path / "x.pdf", tmp_path / "o")
+    assert "vlm" in called
+    assert out_dir == tmp_path / "o"
+    assert extractor == "vlm"
+
+
+def test_resolve_extractor_uses_mineru_by_default(tmp_path, monkeypatch):
+    """provider unset/'mineru' must still route through the existing MinerU
+    client path (extract_pdf_sync), unchanged from before this dispatcher
+    existed."""
+    from app.extraction import pipeline_sync
+    monkeypatch.setattr(pipeline_sync.settings, "extractor_provider", "mineru")
+    called = {}
+    fake_out = tmp_path / "o"
+
+    def fake_extract_pdf_sync(pdf_path, document_id):
+        called["mineru"] = (pdf_path, document_id)
+        return fake_out, "mineru"
+
+    monkeypatch.setattr(pipeline_sync, "extract_pdf_sync", fake_extract_pdf_sync)
+    out_dir, extractor = pipeline_sync.resolve_extractor(tmp_path / "x.pdf", fake_out)
+    assert "mineru" in called
+    assert called["mineru"] == (tmp_path / "x.pdf", "o")   # document_id derived from output_dir.name
+    assert out_dir == fake_out
+    assert extractor == "mineru"
