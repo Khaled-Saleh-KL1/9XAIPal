@@ -29,7 +29,18 @@ CREATE TABLE IF NOT EXISTS documents (
 
     -- Whether this document is a "book" (chapter-by-chapter reading navigation)
     -- or a "paper" (linear reading). Chosen by the user at upload time.
-    doc_kind TEXT NOT NULL DEFAULT 'paper'
+    doc_kind TEXT NOT NULL DEFAULT 'paper',
+
+    -- Paper-only mode: whether this document was embedded at ingestion, or the
+    -- embedding pass was skipped because the whole document fits in the chat
+    -- model's context (see docs/plans/paper-only-embedding-skip.md).
+    --
+    -- 'embedded' is the default so that upgrading changes nothing: every
+    -- pre-existing row keeps its current behaviour. The value is DECIDED ONCE
+    -- at ingestion and never re-derived, so changing PAPER_ONLY_MAX_TOKENS
+    -- cannot retroactively reclassify a library.
+    embedding_mode TEXT NOT NULL DEFAULT 'embedded',
+    embedding_skip_reason TEXT
 );
 
 COMMENT ON COLUMN documents.reading_order IS 'Array of original chunk sequence_ids in LLM-corrected logical reading order. Used to fix two-column and complex layout extraction issues.';
@@ -233,3 +244,192 @@ CREATE INDEX IF NOT EXISTS idx_section_summaries_document
 
 CREATE INDEX IF NOT EXISTS idx_section_summaries_document_created
     ON section_summaries(document_id, created_at DESC);
+
+-- ============================================================================
+-- Paper notes: the margin annotations that replaced the side chat.
+--
+-- One row is one question the reader asked about a specific place in the paper,
+-- plus the answer, rendered as a card in the right margin beside its anchor.
+--
+-- Deliberately NOT stored in conversation_turns. A note is a different artifact:
+-- it is anchored to a location, it is one Q+A pair rather than a rolling
+-- transcript, and none of the conversation machinery (routing, compaction,
+-- sub-threads) applies to it. Sharing that table would mean every note carried
+-- five columns it never uses and appeared in the chat history endpoints.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS paper_notes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+
+    -- Where the note hangs. anchor_sequence_id is the durable anchor and is
+    -- what the reader positions by. anchor_chunk_id is a convenience that goes
+    -- NULL if the paper is re-chunked. Keeping both means a re-chunk degrades
+    -- the anchor's precision instead of destroying the note.
+    anchor_chunk_id UUID REFERENCES chunks(id) ON DELETE SET NULL,
+    anchor_sequence_id INTEGER NOT NULL,
+
+    -- 'text'   the reader highlighted a passage, held in anchor_quote
+    -- 'figure' the reader picked a figure, located by anchor_image_path
+    -- 'block'  no selection, so the note hangs off the block in view
+    -- (no semicolons in these comments: the migration runner splits on them)
+    anchor_kind TEXT NOT NULL DEFAULT 'text',
+    anchor_quote TEXT,
+    anchor_image_path TEXT,
+
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL DEFAULT '',
+
+    -- Which sequence_ids the model actually leaned on, so the card can offer
+    -- "jump to §3.2" chips that scroll the article.
+    cited_sequence_ids INTEGER[],
+    -- 'whole' when the paper fitted in the context window, 'agent' when the
+    -- SEARCH/READ loop ran. Surfaced in the card so the reader knows whether
+    -- the answer saw everything or went looking.
+    retrieval_mode TEXT,
+
+    -- model: what the provider reported answering (shown on the card, so two
+    -- notes asking the same question of different models can be compared).
+    -- requested_model: what the reader actually picked. Kept separately
+    -- because a provider may report a resolved variant, and because it is the
+    -- authoritative value for follow-ups, which must stay on the model the
+    -- note was started with.
+    model TEXT,
+    requested_model TEXT,
+
+    -- Which margin the card sits in. Chosen automatically when the note is
+    -- created (whichever side is less crowded at that anchor) and overridable
+    -- per note, so a card can be moved off a figure it happens to cover.
+    -- Ignored on windows too narrow for two gutters.
+    margin_side TEXT NOT NULL DEFAULT 'right',
+
+    -- Follow-ups chain off their parent so a note can become a short thread
+    -- without leaving the margin.
+    parent_note_id UUID REFERENCES paper_notes(id) ON DELETE CASCADE,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_notes_document
+    ON paper_notes(document_id, anchor_sequence_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_paper_notes_parent
+    ON paper_notes(parent_note_id);
+
+-- ============================================================================
+-- Personal reading state: bookmarks, the reader's own notes, and decks.
+--
+-- These were localStorage-only, which made them per-browser: opening the same
+-- paper from the LAN server on a tablet showed none of the marks made on the
+-- desktop, and clearing site data destroyed them silently. They are small,
+-- entirely per-document, and belong next to paper_notes.
+--
+-- Note the split from paper_notes. A personal note has no question, no model,
+-- no citations, and no thread — sharing that table would mean carrying eight
+-- unused columns and appearing in every endpoint that lists answers.
+-- ============================================================================
+
+-- A place worth coming back to. Several per paper.
+CREATE TABLE IF NOT EXISTS reading_bookmarks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+
+    -- The durable anchor, same convention as paper_notes: a sequence id
+    -- survives a re-chunk, a chunk UUID does not.
+    sequence_id INTEGER NOT NULL,
+
+    -- Cached at save time so the bookmark list reads without loading the
+    -- document. A re-chunk can make this stale, which is the right trade:
+    -- a slightly wrong preview beats an empty one.
+    snippet TEXT,
+    -- 'text' | 'figure' | 'equation' | 'block', for labelling the row.
+    kind TEXT NOT NULL DEFAULT 'block',
+    page INTEGER,
+    -- Scroll fraction when the mark was made, for the progress rail.
+    progress REAL NOT NULL DEFAULT 0,
+    -- Optional name the reader gave this mark.
+    label TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- One mark per block. The UI treats a second press on a bookmarked block
+    -- as "actually, not here", so a duplicate is always a bug rather than an
+    -- intent worth storing.
+    UNIQUE (document_id, sequence_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reading_bookmarks_document
+    ON reading_bookmarks(document_id, sequence_id);
+
+-- Something the reader wrote, anchored beside the passage that prompted it.
+CREATE TABLE IF NOT EXISTS personal_notes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+
+    anchor_chunk_id UUID REFERENCES chunks(id) ON DELETE SET NULL,
+    anchor_sequence_id INTEGER NOT NULL,
+    anchor_quote TEXT,
+
+    -- Markdown, rendered by the same pipeline as an answer.
+    body TEXT NOT NULL,
+    margin_side TEXT NOT NULL DEFAULT 'right',
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_personal_notes_document
+    ON personal_notes(document_id, anchor_sequence_id, created_at);
+
+-- A stack of cards sharing one slot in the margin.
+--
+-- A deck owns nothing: it is an arrangement over notes that continue to exist
+-- independently, so spreading one leaves every note untouched. What it buys is
+-- vertical space, which is the gutter's scarce resource.
+CREATE TABLE IF NOT EXISTS note_decks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+
+    label TEXT,
+    -- Which member is face-up.
+    top_index INTEGER NOT NULL DEFAULT 0,
+    margin_side TEXT NOT NULL DEFAULT 'right',
+    -- Study mode hides each answer until the reader asks for it.
+    study BOOLEAN NOT NULL DEFAULT FALSE,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_decks_document
+    ON note_decks(document_id, created_at);
+
+-- Deck membership, in stacking order.
+--
+-- Two nullable foreign keys rather than one polymorphic id column, because
+-- this buys real referential integrity: deleting a note removes it from its
+-- deck automatically instead of leaving a dangling reference for the client
+-- to notice and skip.
+CREATE TABLE IF NOT EXISTS note_deck_members (
+    deck_id UUID NOT NULL REFERENCES note_decks(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+
+    ai_note_id UUID REFERENCES paper_notes(id) ON DELETE CASCADE,
+    personal_note_id UUID REFERENCES personal_notes(id) ON DELETE CASCADE,
+
+    PRIMARY KEY (deck_id, ordinal),
+
+    -- Exactly one of the two is set. A member is either an answer or a note,
+    -- never both and never neither.
+    CHECK ((ai_note_id IS NULL) <> (personal_note_id IS NULL))
+);
+
+-- A card belongs to at most one deck, enforced here rather than trusted from
+-- the client: the drag gesture that moves a card between decks is a delete
+-- plus an insert, and a dropped first half would otherwise duplicate it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_members_ai
+    ON note_deck_members(ai_note_id) WHERE ai_note_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_members_personal
+    ON note_deck_members(personal_note_id) WHERE personal_note_id IS NOT NULL;

@@ -75,22 +75,32 @@ def test_run_pipeline_success(
         mock_find_md.assert_called_once_with(fake_extracted_dir)
         mock_find_images.assert_called_once_with(fake_extracted_dir)
         mock_move_asset.assert_called_once_with(img_path, document_id=str(doc_id))
-        mock_embed_delay.assert_called_once_with(str(doc_id))
+        # Fast profile: nothing downstream is dispatched. The paper is answered
+        # at question time by app.chat.paper_agent, so there is no index to
+        # build and no reason to wake a worker.
+        mock_embed_delay.assert_not_called()
 
-    # 1. Verify job and document statuses. The pipeline deliberately does NOT
-    # mark the document "complete" here: completion is set at the true end of
-    # the chain (embeddings → summaries → figure descriptions) so the UI's
-    # "complete" is honest. After extraction+chunking the document stays
-    # "processing" and the job sits in the dispatched "embedding" stage.
+    # 1. Under the fast profile extraction IS the pipeline, so the document is
+    # complete the moment its chunks are persisted. Nothing runs afterwards
+    # that could contradict that status.
     res = db_session_sync.execute(
         text("SELECT status FROM documents WHERE id = :id"), {"id": doc_id}
     )
-    assert res.scalar_one() == "processing"
+    assert res.scalar_one() == "complete"
 
     res = db_session_sync.execute(
         text("SELECT status FROM ingestion_jobs WHERE id = :id"), {"id": job_id}
     )
-    assert res.scalar_one() == "embedding"
+    assert res.scalar_one() == "complete"
+
+    # The skip is recorded for auditability, the same way paper-only mode does.
+    res = db_session_sync.execute(
+        text("SELECT embedding_mode, embedding_skip_reason FROM documents WHERE id = :id"),
+        {"id": doc_id},
+    )
+    row = res.mappings().one()
+    assert row["embedding_mode"] == "skipped"
+    assert row["embedding_skip_reason"] == "fast_ingest"
 
     # 2. Verify chunks were persisted
     res = db_session_sync.execute(
@@ -273,3 +283,65 @@ def test_run_pipeline_failure_after_commit_cleans_up(
         text("SELECT * FROM chunk_assets")
     )
     assert len(assets.all()) == 0
+
+
+def test_run_pipeline_book_still_runs_full_chain(
+    db_session_sync,
+    tmp_path,
+):
+    """A book must keep the embed → summarize chain even under the fast profile.
+
+    The fast path exists because a paper can be read whole at question time.
+    That is not true of a book, so doc_kind='book' is the one gate that pulls
+    ingestion back onto the full pipeline — and the document must NOT be marked
+    complete here, because downstream tasks are still to run.
+    """
+    doc_id = uuid4()
+    job_id = uuid4()
+    pdf_path = tmp_path / "book.pdf"
+    pdf_path.write_text("fake pdf content")
+
+    db_session_sync.execute(
+        text(
+            "INSERT INTO documents (id, filename, original_filename, status, doc_kind) "
+            "VALUES (:id, 'book.pdf', 'book.pdf', 'queued', 'book')"
+        ),
+        {"id": doc_id},
+    )
+    db_session_sync.execute(
+        text(
+            "INSERT INTO ingestion_jobs (id, document_id, status) "
+            "VALUES (:id, :doc_id, 'queued')"
+        ),
+        {"id": job_id, "doc_id": doc_id},
+    )
+    db_session_sync.commit()
+
+    fake_extracted_dir = tmp_path / "extracted"
+    fake_extracted_dir.mkdir()
+    fake_md = fake_extracted_dir / "output.md"
+    fake_md.write_text("# Chapter One\nSome prose in the first chapter.\n")
+
+    with patch("app.extraction.pipeline_sync.extract_pdf_sync", return_value=(fake_extracted_dir, "mineru")), \
+         patch("app.extraction.pipeline_sync.find_markdown_output", return_value=fake_md), \
+         patch("app.extraction.pipeline_sync.find_images", return_value=[]), \
+         patch("app.workers.tasks.embed_document.delay") as mock_embed_delay:
+
+        run_pipeline_sync(
+            db_session_sync,
+            document_id=doc_id,
+            job_id=job_id,
+            pdf_path=pdf_path,
+        )
+
+        mock_embed_delay.assert_called_once_with(str(doc_id))
+
+    res = db_session_sync.execute(
+        text("SELECT status FROM documents WHERE id = :id"), {"id": doc_id}
+    )
+    assert res.scalar_one() == "processing"
+
+    res = db_session_sync.execute(
+        text("SELECT status FROM ingestion_jobs WHERE id = :id"), {"id": job_id}
+    )
+    assert res.scalar_one() == "embedding"

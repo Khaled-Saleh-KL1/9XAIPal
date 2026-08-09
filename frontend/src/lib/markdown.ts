@@ -1,6 +1,6 @@
 /**
  * Shared markdown pipeline for everything that renders model output or
- * extracted paper content (ChatPane, ReadingView).
+ * extracted paper content (ArticleBlock, NoteCard, BookReadingView, ChatPane).
  *
  * rehype-raw is needed because MinerU emits raw <table> HTML and models
  * occasionally emit inline HTML — but raw HTML without sanitization is an XSS

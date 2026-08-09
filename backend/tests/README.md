@@ -1,5 +1,26 @@
 # Test Plan
 
+## ⚠ How to run these
+
+```bash
+POSTGRES_DB=9xaipal_test pytest
+```
+
+**Every test truncates `documents CASCADE`.** That cascade takes chunks,
+assets, conversations, and notes with it, so running the suite against the
+development database deletes your entire library — the rows go, and only the
+PDFs on disk survive. `conftest.py` refuses to start unless `POSTGRES_DB`
+contains "test" (override with `ALLOW_DESTRUCTIVE_TESTS=1` if you genuinely
+mean it).
+
+First-time setup of the scratch database:
+
+```bash
+docker exec 9xaipal-postgres psql -U 9xaipal -d postgres -c 'CREATE DATABASE "9xaipal_test"'
+docker exec 9xaipal-postgres psql -U 9xaipal -d 9xaipal_test \
+  -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+```
+
 ## Purpose
 
 The `tests` directory validates architectural guarantees.
@@ -26,7 +47,9 @@ EXTERNAL.
 
 Verifies that MinerU output becomes normalized chunks, images are attached
 correctly, ingestion is transactional, and failed ingestion does not expose
-partial documents.
+partial documents. Also pins the profile split: a paper under
+`INGEST_PROFILE=fast` is complete at chunking with nothing dispatched, while a
+book still runs the full embed → summarize chain.
 
 ### `test_subthread_conversations.py`
 

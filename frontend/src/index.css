@@ -20,6 +20,12 @@
   --accent-fg:     oklch(0.99  0.005 80);
   --accent-soft:   oklch(0.94  0.04  38);
   --ok:            oklch(0.62  0.13 145);
+  --ok-soft:       oklch(0.94  0.04 145);
+  /* Decks get a third hue of their own. Two colors could be read as "asked"
+     vs "wrote"; a stack is neither, and it needs to be findable in a gutter
+     that already has both. */
+  --deck:          oklch(0.54  0.13 268);
+  --deck-soft:     oklch(0.94  0.035 268);
 }
 
 .dark {
@@ -35,6 +41,10 @@
   --accent:        oklch(0.72  0.13  50);
   --accent-fg:     oklch(0.18  0.010 70);
   --accent-soft:   oklch(0.28  0.05  50);
+  --ok:            oklch(0.72  0.13 150);
+  --ok-soft:       oklch(0.28  0.05 150);
+  --deck:          oklch(0.73  0.11 270);
+  --deck-soft:     oklch(0.28  0.05 270);
 }
 
 html, body, #root {
@@ -202,11 +212,1380 @@ body {
 /* ── Reveal bar ─────────────────────────────────────────────── */
 .reveal-bar {
   backdrop-filter: blur(8px);
-  background: color-mix(in oklch, var(--bg), transparent 18%);
+  background: color-mix(in oklab, var(--bg), transparent 18%);
   border: 1px solid var(--border);
 }
 
 /* ── Ring animation (progress ring) ────────────────────────── */
 .ring-anim circle {
   transition: stroke-dashoffset 200ms ease;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Article reader — the paper reading experience.
+
+   Layout is a two-column grid: a fixed-measure article and a note gutter.
+   Cards in the gutter are positioned by transform from JS (ArticleReader
+   lays them out against their anchors), so the gutter itself must not
+   introduce its own flow offsets when the gutter is active.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.reader-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+.reader-bar {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 52px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--bg), transparent 12%);
+  backdrop-filter: blur(10px);
+  z-index: 20;
+}
+.reader-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  transition: color 140ms ease;
+}
+.reader-back:hover { color: var(--fg); }
+.reader-sep { width: 1px; height: 16px; background: var(--border); }
+.reader-title {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 14.5px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46ch;
+}
+.reader-bar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.reader-meta {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.reader-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  background: var(--bg);
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+.reader-chip:hover { border-color: var(--accent); color: var(--accent); }
+.reader-chip.is-on { border-color: var(--accent); color: var(--accent); }
+.reader-chip .chip-glyph { fill: currentColor; opacity: 0.7; }
+.reader-chip .chip-badge {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--muted);
+}
+
+/* Add / lift a bookmark at the current position. Turns green once the block
+   you are looking at already carries one, so the button says what a second
+   press will do rather than silently toggling. */
+.reader-chip.is-mark.is-on {
+  color: var(--ok);
+  border-color: color-mix(in oklab, var(--ok), var(--border) 40%);
+  background: color-mix(in oklab, var(--ok), var(--bg) 90%);
+}
+.reader-chip.is-mark.is-on .chip-glyph { opacity: 1; }
+.reader-chip.is-mark.is-on:hover { border-color: var(--ok); color: var(--ok); }
+
+/* The Resume chip is the one that has to do work. Two states:
+   - default: a navigation target — accent color, click jumps to the bookmark.
+   - "here"  : the newest bookmark is the topmost visible block, so the chip
+               becomes a quiet indicator instead of offering a no-op jump. */
+.reader-chip.is-resume {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent), var(--border) 30%);
+  background: var(--accent-soft);
+  max-width: 300px;
+  min-width: 0;
+}
+.reader-chip.is-resume:disabled { cursor: default; }
+.reader-chip.is-resume.is-here {
+  color: var(--ok);
+  border-color: color-mix(in oklab, var(--ok), var(--border) 45%);
+  background: color-mix(in oklab, var(--ok), var(--bg) 88%);
+}
+.chip-arrow { font-size: 11px; line-height: 1; opacity: 0.8; flex-shrink: 0; }
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.chip-text {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.chip-when {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  opacity: 0.62;
+  flex-shrink: 0;
+}
+
+/* ── Progress rail ───────────────────────────────────────────── */
+/* A map of the paper, not just a fill: the ticks are the reader's bookmarks
+   at their position in the document, so a mark made twenty minutes ago is
+   visible and reachable without opening anything. */
+.reader-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+}
+.reader-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+.rail-tick {
+  position: absolute;
+  top: -5px;
+  width: 11px;
+  height: 13px;
+  margin-left: -5.5px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+/* The button is a generous hit target; only the bar inside it is painted. */
+.rail-tick::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--ok);
+  transition: height 130ms ease, top 130ms ease, background 130ms ease;
+}
+.rail-tick:hover::after {
+  top: 1px;
+  height: 11px;
+  background: var(--fg);
+}
+
+/* ── Marginalia panel — contents, bookmarks and notes ────────── */
+.marg-scrim {
+  position: absolute;
+  inset: 52px 0 0 0;
+  z-index: 30;
+  background: color-mix(in oklab, var(--bg), transparent 45%);
+  backdrop-filter: blur(3px);
+  animation: marg-fade 140ms ease;
+}
+@keyframes marg-fade { from { opacity: 0; } to { opacity: 1; } }
+.marg-panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 396px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: -24px 0 60px -40px rgba(0, 0, 0, 0.5);
+  animation: marg-slide 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes marg-slide {
+  from { transform: translateX(18px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+.marg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 0;
+}
+.marg-tabs { display: flex; gap: 4px; flex: 1; min-width: 0; }
+.marg-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  transition: background 130ms ease, color 130ms ease;
+}
+.marg-tab:hover { background: var(--bg-2); color: var(--fg-2); }
+.marg-tab.is-on { background: var(--bg-3); color: var(--fg); }
+.marg-badge {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  opacity: 0.7;
+}
+.marg-close {
+  font-size: 17px;
+  line-height: 1;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.marg-close:hover { color: var(--fg); background: var(--bg-2); }
+.marg-search {
+  margin: 10px 14px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.marg-search:focus { border-color: var(--accent); }
+.marg-search::placeholder { color: var(--faint); }
+.marg-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 10px 22px;
+}
+.marg-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: var(--fg-2);
+  transition: background 120ms ease, color 120ms ease;
+}
+.marg-row:hover { background: var(--bg-2); color: var(--fg); }
+/* Where the reader is right now, so the list is oriented without scrolling. */
+.marg-row.is-current {
+  background: color-mix(in oklab, var(--accent-soft), transparent 55%);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+.marg-row-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.marg-row-quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.marg-row-meta {
+  display: block;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  color: var(--faint);
+  margin-top: 4px;
+}
+.marg-row-body { min-width: 0; flex: 1; }
+.marg-row.is-note .card-dot { margin-top: 6px; flex-shrink: 0; }
+.marg-row.tone-ai { --tone: var(--accent); }
+.marg-row.tone-personal { --tone: var(--ok); }
+.marg-row.is-bookmark { padding: 0; gap: 0; }
+.marg-row-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 8px 4px 8px 10px;
+  border-radius: 7px 0 0 7px;
+}
+/* Same silhouette as the ribbon in the article, so the list and the page are
+   obviously talking about the same marks. */
+.marg-row-flag {
+  fill: var(--ok);
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.marg-row-drop {
+  padding: 0 10px;
+  color: var(--faint);
+  font-size: 14px;
+  line-height: 1;
+  border-radius: 0 7px 7px 0;
+  opacity: 0;
+  transition: opacity 130ms ease, color 130ms ease;
+}
+.marg-row.is-bookmark:hover .marg-row-drop { opacity: 1; }
+.marg-row-drop:hover { color: #c0392b; }
+.marg-empty {
+  padding: 26px 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-align: center;
+}
+.marg-hint { margin-top: 10px; font-size: 11.5px; color: var(--faint); }
+.marg-cta {
+  margin-top: 12px;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--fg-2);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.marg-cta:hover { border-color: var(--accent); color: var(--accent); }
+/* Heading depth, shared with the old outline naming. */
+.outline-l1 .marg-row-text { font-size: 15px; }
+.outline-l2 { padding-left: 26px; }
+.outline-l3 { padding-left: 44px; }
+.outline-l3 .marg-row-text { font-size: 13px; color: var(--muted); }
+
+/* ── Scroll region + two-column layout ───────────────────────── */
+.reader-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+}
+/* ⚠ The article column is ALWAYS dead-centre. Both margins are declared as
+   real grid columns of equal width whether or not they hold a card, so a note
+   appearing can never shift the text under the reader's eye. The cost is some
+   empty space on a paper with no notes; the alternative — text that jumps
+   sideways mid-sentence — is far worse. */
+.reader-layout {
+  position: relative;
+  padding: 72px 32px 45vh;
+  display: grid;
+  justify-content: center;
+  gap: 0 44px;
+}
+.reader-layout.layout-inline {
+  grid-template-columns: minmax(0, 680px);
+}
+/* Only one margin fits, but the article must still be centred — so the left
+   column stays in the grid as an empty spacer and both sides share whatever
+   room is left. Cards get narrower rather than the text moving. */
+.reader-layout.layout-right-only {
+  grid-template-columns: minmax(0, 1fr) 680px minmax(0, 1fr);
+  gap: 0 26px;
+  justify-content: stretch;
+}
+.reader-layout.layout-both {
+  grid-template-columns: 360px 680px 360px;
+}
+.reader-article { position: relative; min-width: 0; }
+
+/* ── Article typography ──────────────────────────────────────── */
+.article-title {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 42px;
+  line-height: 1.15;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  color: var(--fg);
+  margin-bottom: 14px;
+  text-wrap: balance;
+}
+.article-dek {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  padding-bottom: 30px;
+  margin-bottom: 34px;
+  border-bottom: 1px solid var(--border);
+}
+
+.article-block {
+  position: relative;
+  margin: 0 0 26px;
+  border-radius: 4px;
+  transition: background 200ms ease;
+}
+.article-block .md-body {
+  font-size: 20px;
+  line-height: 1.72;
+}
+/* A note whose quote could not be re-located after a re-chunk: mark the block
+   so the reader can still see where the note belongs. */
+.article-block.is-tinted {
+  box-shadow: -14px 0 0 -12px var(--accent);
+}
+.article-block.is-active {
+  background: color-mix(in oklab, var(--accent-soft), transparent 55%);
+}
+.article-block.is-bookmarked {
+  /* A stripe plus a faint green wash — the bookmark is the one mark in the
+     reader guaranteed to mean something on a return visit, so it should be
+     findable at a glance, not only on careful reading. */
+  box-shadow: inset 3px 0 0 0 var(--ok);
+  background: color-mix(in oklab, var(--ok), transparent 94%);
+  border-radius: 4px;
+  padding-left: 14px;
+  margin-left: -14px;
+}
+/* The ribbon is the shape half of that job: a wash is easy to scroll past,
+   a silhouette in the margin is not. It is also the control that lifts the
+   mark, which is where you would reach for it anyway. */
+.article-bookmark-flag {
+  position: absolute;
+  /* In the gap between the article and the left gutter, clear of any card
+     parked there. */
+  left: -24px;
+  top: 3px;
+  padding: 2px;
+  line-height: 0;
+  color: var(--ok);
+  opacity: 0.85;
+  transition: opacity 140ms ease, transform 140ms ease, color 140ms ease;
+}
+.article-bookmark-flag svg { fill: currentColor; }
+.article-bookmark-flag:hover {
+  opacity: 1;
+  transform: translateY(-1px);
+  color: #c0392b;
+}
+.layout-inline .article-bookmark-flag { left: -22px; }
+.article-block.is-flash {
+  animation: block-flash 1.2s ease;
+}
+@keyframes block-flash {
+  0%, 40% { background: color-mix(in oklab, var(--accent-soft), transparent 25%); }
+  100%    { background: transparent; }
+}
+
+.article-h {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  color: var(--fg);
+  letter-spacing: -0.018em;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+.article-h1 { font-size: 30px; font-weight: 600; margin: 52px 0 4px; }
+.article-h2 { font-size: 24px; font-weight: 600; margin: 42px 0 2px; }
+.article-h3 { font-size: 20px; font-weight: 600; margin: 34px 0 0; color: var(--fg-2); }
+/* The first heading should not push the article away from its own title. */
+.reader-article > .article-block:first-of-type .article-h { margin-top: 8px; }
+
+.article-figure {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 20px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+}
+.article-figure img {
+  max-height: 560px;
+  max-width: 100%;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 4px;
+  padding: 12px;
+}
+.article-figure-missing {
+  padding: 44px 0;
+  width: 100%;
+  text-align: center;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+}
+.article-figure-ask {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  font-size: 11.5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--fg-2);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease;
+}
+.article-figure:hover .article-figure-ask { opacity: 1; transform: translateY(0); }
+.article-figure-ask:hover { border-color: var(--accent); color: var(--accent); }
+.article-caption {
+  margin-top: 12px;
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 14.5px;
+  line-height: 1.55;
+  font-style: italic;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* A KaTeX block is a tree of spans; dragging across it selects markup rather
+   than the formula, so an equation needs the same explicit affordance a figure
+   has. The button is positioned outside the scrolling math so a wide formula
+   cannot push it out of reach. */
+.article-math {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+}
+.article-math .md-body {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+}
+.article-math-ask {
+  position: absolute;
+  right: 0;
+  bottom: -6px;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.article-math:hover .article-math-ask { opacity: 1; transform: translateY(0); }
+.article-math-ask:hover { border-color: var(--accent); color: var(--accent); }
+.article-table { overflow-x: auto; }
+.article-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.article-table th,
+.article-table td {
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+}
+.article-table th { background: var(--bg-2); font-weight: 600; }
+.article-code .md-body { font-size: 14px; }
+.article-footnote {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+  border-left: 2px solid var(--border-strong);
+  padding: 2px 0 2px 14px;
+}
+.article-end {
+  margin: 60px 0 0;
+  text-align: center;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+/* ── Anchor highlights (CSS Custom Highlight API) ────────────── */
+/* Two tones, because "I asked about this" and "I wrote something here" are
+   different memories and the page should not make you open a card to tell
+   them apart. */
+::highlight(note-anchor) {
+  background: color-mix(in oklab, var(--accent-soft), transparent 30%);
+}
+::highlight(note-anchor-personal) {
+  background: color-mix(in oklab, var(--ok-soft), transparent 30%);
+}
+::highlight(note-anchor-active) {
+  background: var(--accent-soft);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+
+/* ── Note gutter ─────────────────────────────────────────────── */
+.reader-gutter { position: relative; min-width: 0; }
+/* Cards are positioned against their anchor by a transform the reader sets in
+   a layout effect, so the slot itself must not participate in flow. */
+.layout-right-only .note-slot,
+.layout-both .note-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Narrow window: no margins, so notes fall back to normal flow beneath the
+   article instead of being positioned against anchors they can't reach. */
+.layout-inline .reader-gutter {
+  margin-top: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* A left-margin card reads right-aligned: its edge sits against the text it
+   annotates, mirroring how the right margin behaves. */
+.gutter-left .note-card { text-align: left; }
+.gutter-left .note-quote {
+  border-left: none;
+  border-right: 2px solid var(--accent);
+  padding-left: 0;
+  padding-right: 10px;
+}
+
+/* Every card carries its tone on a token, so the eyebrow, the spine, the
+   quote rule and the deck dots all recolour from one place. */
+.note-card {
+  --tone: var(--accent);
+  --tone-soft: var(--accent-soft);
+  position: relative;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 15px 13px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg-2);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+/* A spine down the binding edge. It survives being clipped by the window edge
+   and by a card stacked on top, which a border colour does not. */
+.note-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--tone);
+  opacity: 0.55;
+  transition: opacity 160ms ease;
+}
+.gutter-left .note-card::before { left: auto; right: 0; border-radius: 2px 0 0 2px; }
+.note-card.is-active,
+.note-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 6px 24px -14px rgba(0, 0, 0, 0.35);
+}
+.note-card.is-active::before,
+.note-card:hover::before { opacity: 1; }
+.note-card.is-active {
+  border-color: color-mix(in oklab, var(--tone), var(--border) 45%);
+}
+
+.note-card.is-personal { --tone: var(--ok); --tone-soft: var(--ok-soft); }
+.note-card.is-deck { --tone: var(--deck); --tone-soft: var(--deck-soft); }
+.note-card.is-composer {
+  border-color: color-mix(in oklab, var(--tone), var(--border) 25%);
+  box-shadow: 0 8px 28px -18px rgba(0, 0, 0, 0.45);
+}
+.note-card.is-personal .note-quote { border-color: var(--ok); }
+.gutter-left .note-card.is-personal .note-quote {
+  border-right-color: var(--ok);
+  border-left: none;
+}
+
+/* ── Card eyebrow ────────────────────────────────────────────── */
+.card-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border), transparent 35%);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+.card-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--tone, var(--accent));
+  flex-shrink: 0;
+}
+.card-eyebrow.tone-personal { --tone: var(--ok); }
+.card-eyebrow.tone-deck { --tone: var(--deck); }
+.card-tone-word {
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 14ch;
+}
+.card-anchor-ref {
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  transition: color 130ms ease;
+}
+.card-anchor-ref:hover:not(:disabled) { color: var(--tone, var(--accent)); }
+.card-anchor-ref:disabled { cursor: default; }
+.card-eyebrow-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The drag handle. Only the grip starts a drag, so selecting text inside a
+   card still works — making the whole card draggable breaks that. */
+.card-grip {
+  display: inline-flex;
+  align-items: center;
+  width: 10px;
+  flex-shrink: 0;
+  color: var(--faint);
+  cursor: grab;
+  opacity: 0;
+  /* Without this a touch drag scrolls the article instead of moving the card. */
+  touch-action: none;
+  transition: opacity 140ms ease, color 140ms ease;
+}
+.card-grip svg { fill: currentColor; }
+.card-grip.is-inert { cursor: default; opacity: 0; touch-action: auto; }
+.note-card:hover .card-grip,
+.deck:hover .card-grip,
+.note-card:focus-within .card-grip { opacity: 1; }
+/* On a touch screen there is no hover to reveal it, so it simply stays. */
+@media (hover: none) {
+  .card-grip { opacity: 0.6; }
+}
+.card-grip:hover { color: var(--fg-2); }
+.card-grip:active { cursor: grabbing; }
+
+/* ── Collapsing long cards ───────────────────────────────────── */
+.card-clamp { position: relative; overflow: hidden; }
+.card-clamp.is-clamped::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 52px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--bg-2));
+}
+.card-more {
+  margin-top: 7px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  transition: color 130ms ease;
+}
+.card-more:hover { color: var(--tone, var(--accent)); }
+
+/* ── Study mode ──────────────────────────────────────────────── */
+.is-study-front { padding: 6px 0 2px; }
+.card-reveal {
+  margin-top: 12px;
+  width: 100%;
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in oklab, var(--deck), var(--border) 40%);
+  color: var(--deck);
+  background: color-mix(in oklab, var(--deck-soft), transparent 55%);
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.card-reveal:hover {
+  background: var(--deck-soft);
+  border-style: solid;
+}
+
+.note-quote {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 13px;
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--muted);
+  border-left: 2px solid var(--tone, var(--accent));
+  padding-left: 10px;
+  margin-bottom: 10px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.note-quote-figure {
+  font-style: normal;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.composer-thumb {
+  width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 5px;
+  padding: 6px;
+  margin-bottom: 10px;
+}
+
+.note-question {
+  font-weight: 500;
+  color: var(--fg);
+  margin-bottom: 8px;
+}
+.note-answer p { margin: 0; }
+.note-answer p + p { margin-top: 0.7em; }
+.note-answer ul, .note-answer ol { padding-left: 1.2em; margin: 0.5em 0; }
+.note-answer code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.85em;
+  padding: 1px 4px;
+  background: var(--bg-3);
+  border-radius: 3px;
+}
+.note-answer a {
+  color: var(--accent);
+  text-decoration: none;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.82em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--accent-soft), transparent 40%);
+}
+.note-answer .katex { font-size: 0.95em; }
+
+.note-reply {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.note-cites { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.note-cite {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.note-cite:hover { border-color: var(--accent); color: var(--accent); }
+
+.note-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.note-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
+.note-error { font-size: 12.5px; color: #c0392b; }
+
+.note-footer { margin-top: 12px; }
+.note-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.note-actions button {
+  font-size: 11.5px;
+  padding: 4px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  background: var(--bg);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.note-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.note-actions button:disabled { opacity: 0.45; }
+.note-actions-quiet { opacity: 0.35; transition: opacity 160ms ease; }
+.note-card:hover .note-actions-quiet { opacity: 1; }
+/* Move-to-other-margin control. Deliberately a plain arrow: it is a spatial
+   action, and an arrow says where the card is going better than a word can. */
+.note-flip {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  min-width: 28px;
+  text-align: center;
+}
+
+/* ── Model picker + attribution ──────────────────────────────────────── */
+.model-picker { display: block; margin-top: 8px; }
+.model-picker select {
+  width: 100%;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 140ms ease;
+}
+.model-picker select:hover,
+.model-picker select:focus { border-color: var(--accent); }
+
+/* Which model produced an answer. Quiet by default — it is reference
+   information, only wanted when comparing two cards. */
+.note-model {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--bg-3);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-bottom: 8px;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-hint {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--faint);
+  margin-left: auto;
+}
+.note-mode {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  margin-left: auto;
+}
+
+.note-card textarea,
+.note-followup textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 11px;
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.note-card textarea:focus { border-color: var(--accent); }
+.note-card textarea::placeholder { color: var(--faint); }
+
+/* ── Ask affordances ─────────────────────────────────────────── */
+.ask-pill-group {
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  gap: 6px;
+  animation: ask-pill-in 130ms ease;
+}
+.ask-pill {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 14px;
+  border-radius: 999px;
+  color: var(--accent-fg);
+  background: var(--accent);
+  box-shadow: 0 6px 20px -8px rgba(0, 0, 0, 0.45);
+  transition: background 140ms ease, transform 140ms ease;
+}
+.ask-pill:hover { transform: translateY(-1px); }
+.ask-pill.is-note {
+  color: var(--accent-fg);
+  background: var(--ok);
+}
+.ask-pill.is-bookmark {
+  color: var(--accent-fg);
+  background: color-mix(in oklab, var(--accent), var(--ok) 30%);
+}
+@keyframes ask-pill-in {
+  from { opacity: 0; transform: translate(-50%, -4px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Two actions, one cluster — stacking them at different `bottom` offsets made
+   them read as two unrelated controls that happened to overlap.
+   Bottom LEFT, not right: the right gutter always holds cards, so a control
+   pinned to that corner sits on top of a note at almost every scroll
+   position. The left column is an empty spacer in the mid tier and holds
+   only deliberately-flipped cards in the widest one. */
+.reader-fabs {
+  position: absolute;
+  left: 26px;
+  bottom: 26px;
+  z-index: 25;
+  display: flex;
+  gap: 8px;
+}
+.ask-fab {
+  font-size: 12.5px;
+  padding: 9px 18px;
+  border-radius: 999px;
+  color: var(--fg-2);
+  background: color-mix(in oklab, var(--bg), transparent 8%);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: blur(8px);
+  transition: border-color 140ms ease, color 140ms ease, transform 140ms ease;
+}
+.ask-fab:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+.note-fab { border-color: color-mix(in oklab, var(--ok), var(--border-strong) 40%); }
+.note-fab:hover { border-color: var(--ok); color: var(--ok); }
+
+.reader-notice {
+  max-width: 680px;
+  margin: 40px auto 0;
+  padding: 14px 18px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+}
+.reader-notice.is-error { border-color: #c0392b; color: #c0392b; }
+
+/* Transient acknowledgement under the bar: what the localStorage migration
+   moved, or why a write did not land. Personal state is the reader's own
+   work, so a save that fails has to say so rather than disappear. */
+.reader-toast {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 9px 10px 9px 16px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-2);
+  background: color-mix(in oklab, var(--bg-2), transparent 6%);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 14px 40px -22px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+  animation: toast-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reader-toast.is-error {
+  color: #c0392b;
+  border-color: color-mix(in oklab, #c0392b, var(--border) 45%);
+}
+.reader-toast button {
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.reader-toast button:hover { color: var(--fg); background: var(--bg-3); }
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reader-toast { animation: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Decks — several cards sharing one slot in the margin.
+
+   The gutter's budget is vertical space, and it is spent the moment a card is
+   placed: everything anchored below it is pushed down by its full height. A
+   deck buys that space back by showing one card at a time, so the stack stays
+   beside the passage that produced it instead of drifting a screen below it.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.deck { position: relative; }
+.note-card.is-deck { z-index: 1; }
+
+/* The paper underneath. Real elements rather than pseudo-elements: a negative
+   z-index child would still paint above the card's own background, which is
+   exactly the seam this is trying to avoid. */
+.deck-edge {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -8px;
+  height: 30px;
+  padding: 0;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 1px solid color-mix(in oklab, var(--deck), var(--border) 62%);
+  cursor: pointer;
+  transition: bottom 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 160ms ease;
+}
+.deck-edge-2 {
+  left: 17px;
+  right: 17px;
+  bottom: -15px;
+  background: var(--bg-3);
+}
+.deck:hover .deck-edge-1 { bottom: -11px; }
+.deck:hover .deck-edge-2 { bottom: -21px; }
+.deck:hover .deck-edge { border-color: color-mix(in oklab, var(--deck), var(--border) 25%); }
+
+.deck-pager { display: inline-flex; align-items: center; gap: 5px; }
+.deck-step {
+  font-size: 13px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  transition: color 130ms ease, background 130ms ease;
+}
+.deck-step:hover { color: var(--deck); background: var(--bg-3); }
+.deck-dots { display: inline-flex; align-items: center; gap: 4px; }
+.deck-dot {
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+.deck-dot.tone-ai.is-on { background: var(--accent); border-color: var(--accent); }
+.deck-dot.tone-personal.is-on { background: var(--ok); border-color: var(--ok); }
+.deck-dot:hover { transform: scale(1.25); }
+.deck-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  color: var(--fg-2);
+}
+
+/* ── The turn ────────────────────────────────────────────────────────────
+   Changing card is a card being turned over, not a crossfade. Two halves,
+   with the content swapped at the midpoint where the card is edge-on and
+   nothing can be read anyway — which is exactly how you can get away with
+   one element instead of two stacked faces.
+
+   ⚠ The durations here are duplicated in DeckCard.tsx (FLIP_OUT_MS /
+   FLIP_IN_MS) because the swap is scheduled in JS. Change both. */
+.deck-stage {
+  /* Perspective belongs on the parent of the rotating element, and this is
+     also what holds the height steady across the swap. */
+  perspective: 1400px;
+  perspective-origin: 50% 40%;
+  transition: height 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.deck-face {
+  transform-origin: 50% 50%;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+.deck-face.is-out.dir-next  { animation: deck-turn-out-next 150ms ease-in forwards; }
+.deck-face.is-in.dir-next   { animation: deck-turn-in-next 230ms cubic-bezier(0.22, 1, 0.36, 1); }
+.deck-face.is-out.dir-prev  { animation: deck-turn-out-prev 150ms ease-in forwards; }
+.deck-face.is-in.dir-prev   { animation: deck-turn-in-prev 230ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Rotating past 90° would show the mirrored back of the same element, so
+   each half stops just short of the edge and the swap happens there. The
+   slight scale-down is the card moving away from you as it turns. */
+@keyframes deck-turn-out-next {
+  from { transform: rotateY(0deg) scale(1); opacity: 1; }
+  to   { transform: rotateY(-86deg) scale(0.94); opacity: 0.15; }
+}
+@keyframes deck-turn-in-next {
+  from { transform: rotateY(86deg) scale(0.94); opacity: 0.15; }
+  to   { transform: rotateY(0deg) scale(1); opacity: 1; }
+}
+@keyframes deck-turn-out-prev {
+  from { transform: rotateY(0deg) scale(1); opacity: 1; }
+  to   { transform: rotateY(86deg) scale(0.94); opacity: 0.15; }
+}
+@keyframes deck-turn-in-prev {
+  from { transform: rotateY(-86deg) scale(0.94); opacity: 0.15; }
+  to   { transform: rotateY(0deg) scale(1); opacity: 1; }
+}
+
+/* The rest of the stack settles while the top card is in the air — small,
+   but it is what stops the deck reading as a single card with changing text. */
+.deck.is-turning .deck-edge-1 { bottom: -12px; }
+.deck.is-turning .deck-edge-2 { bottom: -22px; }
+.deck.is-turning .deck-edge {
+  border-color: color-mix(in oklab, var(--deck), var(--border) 25%);
+}
+/* The face inherits its member's colour so the quote rule keeps saying
+   whether you are looking at a question or something you wrote. */
+.note-card.is-deck.tone-ai .deck-face { --tone: var(--accent); }
+.note-card.is-deck.tone-personal .deck-face { --tone: var(--ok); }
+
+.deck-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in oklab, var(--border), transparent 35%);
+  opacity: 0.4;
+  transition: opacity 160ms ease;
+}
+.deck:hover .deck-foot,
+.note-card.is-deck:focus-within .deck-foot { opacity: 1; }
+.deck-foot button {
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.deck-foot button:hover { border-color: var(--deck); color: var(--deck); }
+.deck-foot button.is-on {
+  border-color: var(--deck);
+  color: var(--deck);
+  background: color-mix(in oklab, var(--deck-soft), transparent 45%);
+}
+.deck-foot .note-flip { margin-left: auto; }
+.deck-rename {
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--deck);
+  border-radius: 7px;
+  outline: none;
+}
+.note-card.is-deck:focus-visible { outline: 2px solid var(--deck); outline-offset: 2px; }
+
+/* ── Drag to stack ───────────────────────────────────────────── */
+/* The card itself is what moves, so it should look picked up rather than
+   ghosted: lifted off the page, tilted with the throw, and out of the way of
+   hit-testing so the card beneath can light up. */
+.note-slot:has(.is-dragging) { z-index: 40; }
+.note-card.is-dragging,
+.deck.is-dragging .note-card {
+  border-color: var(--deck);
+  box-shadow: 0 26px 50px -22px rgba(0, 0, 0, 0.55);
+  cursor: grabbing;
+}
+.note-card.is-dragging,
+.deck.is-dragging { transition: none; }
+
+/* While something is in flight every other card advertises that it will
+   accept it — otherwise the gesture is only discoverable by accident. */
+.is-dragging-card .note-card:not(.is-dragging),
+.is-dragging-card .deck:not(.is-dragging) .note-card {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--deck), var(--border) 55%);
+}
+.note-card.is-drop-target,
+.deck.is-drop-target .note-card {
+  border-style: solid;
+  border-color: var(--deck);
+  background: color-mix(in oklab, var(--deck-soft), var(--bg-2) 62%);
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.5);
+  transform: translateY(-2px);
+}
+.note-card.is-drop-target::after,
+.deck.is-drop-target .note-card::after {
+  content: 'Stack here';
+  position: absolute;
+  top: -9px;
+  right: 12px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--accent-fg);
+  background: var(--deck);
+}
+
+/* ── Small card metadata ─────────────────────────────────────── */
+.note-when {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.note-thread-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--muted);
+}
+.note-actions button.is-armed {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deck-face,
+  .marg-panel,
+  .marg-scrim,
+  .ask-pill-group { animation: none; }
+  /* DeckCard also skips the two-phase swap entirely under this preference,
+     so the card changes in one commit rather than sitting at 86°. */
+  .deck-stage { transition: none; }
+  .layout-right-only .note-slot,
+  .layout-both .note-slot { transition: none; }
 }

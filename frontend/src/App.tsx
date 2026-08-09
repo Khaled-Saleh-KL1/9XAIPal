@@ -72,6 +72,9 @@ export function App() {
   >('queued');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadExtractor, setUploadExtractor] = useState<string | null>(null);
+  // The overlay shows a different step list per kind: a paper is done at
+  // chunking, a book continues through embedding and summarization.
+  const [uploadKind, setUploadKind] = useState<DocKind>('paper');
   const [layout, setLayout] = useState<LibraryLayout>('grid');
   // When set, the "Book or Research paper?" chooser is open.
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
@@ -117,6 +120,7 @@ export function App() {
     setUploadStatus('queued');
     setUploadError(null);
     setUploadExtractor(null);
+    setUploadKind(kind);
     setRoute('processing');
 
     try {
@@ -304,6 +308,7 @@ export function App() {
           status={uploadStatus}
           errorMessage={uploadError}
           extractor={uploadExtractor}
+          kind={uploadKind}
           onClose={onProcessingClose}
           onCancel={onCancel}
         />

@@ -7,20 +7,43 @@ MoE designs shown in the diagrams") have excellent grounded context.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.paths import images_dir
 from app.llm.client import chat_sync
 from app.llm.ollama_client import hash_prompt
 from app.llm.resolver import resolve_llm_sync
 from app.database.repositories import assets as asset_repo
 
 logger = get_logger(__name__)
+
+
+def _encode_figure_image(image_path: str) -> Optional[list[str]]:
+    """Read a figure off disk and base64-encode it for the vision model.
+
+    Done on the calling thread, before the pool: keeps file I/O out of the
+    concurrent section and lets a missing/unreadable image degrade to a
+    text-only description rather than failing the figure.
+    """
+    if not image_path:
+        return None
+    try:
+        candidate = images_dir() / image_path
+        if candidate.exists():
+            return [base64.b64encode(candidate.read_bytes()).decode("utf-8")]
+    except Exception:
+        logger.warning(f"[figure-describer] Could not read image {image_path}; using text only")
+    return None
 
 
 FIGURE_DESCRIPTION_PROMPT_V1 = """You are an expert research assistant helping a scientist deeply understand the figures and diagrams in their own paper.
@@ -153,55 +176,71 @@ def generate_figure_descriptions_sync(
         logger.info(f"[figure-describer] No figures found for document {document_id}")
         return {"created": 0, "reason": "no_figures"}
 
-    created = 0
-
+    # ── Phase 1: assemble every request on THIS thread ───────────────────────
+    #
+    # A SQLAlchemy Session is not thread-safe, so all DB reads (surrounding
+    # text) and disk reads (image bytes) happen here, before the pool starts.
+    # Nothing in phase 2 touches `session`.
+    jobs: list[dict] = []
     for fig in figures:
-        chunk_id = fig["chunk_id"]
         caption = fig.get("caption_md") or fig.get("caption_plain") or ""
-        image_path = fig.get("image_path") or ""
-
-        surrounding = _get_surrounding_text(session, document_id, fig["sequence_id"])
-
         prompt = FIGURE_DESCRIPTION_PROMPT_V1.format(
             caption=caption[:500],
-            surrounding_text=surrounding,
+            surrounding_text=_get_surrounding_text(session, document_id, fig["sequence_id"]),
         )
+        jobs.append({
+            "fig": fig,
+            "messages": [
+                {"role": "system", "content": "You are a precise technical research assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            "images": _encode_figure_image(fig.get("image_path") or ""),
+        })
 
-        messages = [
-            {"role": "system", "content": "You are a precise technical research assistant."},
-            {"role": "user", "content": prompt},
-        ]
-
-        # Try to attach image if we have a path (vision-capable models will use it)
-        image_paths = [image_path] if image_path else None
-
+    # ── Phase 2: run the VLM calls concurrently ──────────────────────────────
+    #
+    # These were sequential, which made ingestion wall-clock the SUM of every
+    # figure's generation. Measured 2026-07-25 on a 14-page paper: 190s + 210s
+    # + 72s = 472s, i.e. 86% of a 549s ingestion. The calls are pure network
+    # I/O (vision prefill + generation happen server-side), so a thread pool
+    # turns the sum into roughly the slowest single figure.
+    def _describe(job: dict) -> tuple[dict, Optional[str], Optional[Exception]]:
         try:
-            # Attach base64 images if we have a path (for vision-capable models like gemma4 vision variants)
-            image_b64_list: list[str] | None = None
-            if image_path:
-                try:
-                    from pathlib import Path as _Path
-                    from app.core.paths import images_dir as _images_dir
-                    candidate = _images_dir() / image_path
-                    if candidate.exists():
-                        import base64 as _b64
-                        image_b64_list = [_b64.b64encode(candidate.read_bytes()).decode("utf-8")]
-                except Exception:
-                    pass  # non-fatal, fall back to text-only
+            result = chat_sync(
+                job["messages"], model=model, temperature=0.2, images=job["images"]
+            )
+            return job, (result.get("content") or "").strip(), None
+        except Exception as exc:  # isolated per figure — one failure must not kill the batch
+            return job, None, exc
 
-            result = chat_sync(messages, model=model, temperature=0.2, images=image_b64_list)
-            content = (result.get("content") or "").strip()
-        except Exception as e:
-            logger.exception(f"[figure-describer] VLM call failed for figure {chunk_id}: {e}")
-            content = f"[Description generation failed: {e}]"
+    workers = max(1, min(settings.vlm_max_concurrency, len(jobs)))
+    logger.info(
+        f"[figure-describer] Describing {len(jobs)} figure(s) with {workers} concurrent call(s)"
+    )
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(_describe, jobs))
+    logger.info(
+        f"[figure-describer] All {len(jobs)} VLM call(s) finished in "
+        f"{time.time() - t0:.1f}s (concurrency={workers})"
+    )
 
+    # ── Phase 3: persist, back on THIS thread ────────────────────────────────
+    created = 0
+    for job, content, err in results:
+        fig = job["fig"]
+        chunk_id = fig["chunk_id"]
+        image_path = fig.get("image_path") or ""
+
+        if err is not None:
+            logger.error(f"[figure-describer] VLM call failed for figure {chunk_id}: {err}")
+            content = f"[Description generation failed: {err}]"
+
+        content = content or ""
         plain = content[:2000]  # keep reasonable plain version
 
         # Store
         try:
-            from app.database.repositories.figure_descriptions import upsert_figure_description
-            # Note: we call the async repo from sync context via raw SQL here for simplicity in worker
-            # (the repository is async; we do direct insert for the sync worker)
             session.execute(
                 text("""
                     INSERT INTO figure_descriptions (

@@ -35,7 +35,7 @@ import fitz  # PyMuPDF (only used by the degraded fallback)
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.paths import extracted_dir
+from app.core.paths import extracted_dir, logs_dir
 
 logger = get_logger(__name__)
 
@@ -366,7 +366,16 @@ def _start_mineru_api_server(env: dict) -> tuple[str, "subprocess.Popen", Path]:
     host = "127.0.0.1"
     base_url = f"http://{host}:{port}"
 
-    log_dir = Path(env.get("STORAGE_ROOT", "/data/storage")) / "logs"
+    # Resolve through paths.py, which derives from settings.storage_root.
+    #
+    # ⚠ This used to read `env.get("STORAGE_ROOT", "/data/storage")` — the
+    # subprocess env dict, defaulted to the *container* path. STORAGE_ROOT is
+    # never placed in that dict (_build_mineru_env does not set it); inside
+    # Docker it happened to work only because compose exports it to the whole
+    # process. On a host run — the flow docs/01-orientation/setup.md documents
+    # as normal development — the fallback fired and extraction died with
+    # "OSError: [Errno 30] Read-only file system: '/data'".
+    log_dir = logs_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "mineru-api.log"
 

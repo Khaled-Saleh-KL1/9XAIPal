@@ -223,9 +223,13 @@ services:
         condition: service_healthy
       searxng:
         condition: service_started
-    # Note: For a fully automatic "up", start the one-shot frontend-build first
-    # (or use a profile that brings it up before api). The SPA mount in main.py
-    # is guarded, so an empty volume is harmless.
+      # The SPA has to be in the volume before this container starts serving,
+      # or the first person to open the app gets a 404 at "/" and has to know
+      # to reload. `service_completed_successfully` waits for the one-shot
+      # build to exit 0 — and fails the `up` loudly if the build breaks,
+      # instead of quietly starting an API with no UI in front of it.
+      frontend-build:
+        condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -254,17 +258,27 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
-  # One-shot service that builds the React frontend once and leaves the artifacts
-  # in a named volume. The api service mounts the volume read-only at the
-  # container path expected by main.py when SERVE_FRONTEND=true.
-  # This gives a true "docker compose up" experience for the full server
-  # (UI + API on :8000) without requiring npm on the host.
+  # One-shot service that builds the React frontend and leaves the artifacts in
+  # a named volume. The api service mounts that volume read-only at the path
+  # main.py serves from when SERVE_FRONTEND=true, so the whole app — UI and API
+  # — comes up on a single port from one `docker compose up`, with no npm on
+  # the host and no reverse proxy.
+  #
+  # ⚠ Deliberately NOT behind a profile. It used to be, which meant a plain
+  # `docker compose up` started an API with an empty SPA volume and served
+  # nothing at "/" — the UI only appeared if you happened to know to pass
+  # `--profile server`.
   frontend-build:
     image: node:20-alpine
     container_name: 9xaipal-frontend-build
     working_dir: /src
     volumes:
       - ../frontend:/src
+      # ⚠ Anonymous volume, shadowing the bind mount above. Without it the
+      # Linux `npm ci` below writes its node_modules straight into the host's
+      # working tree, replacing the macOS binaries there — and the next
+      # `npm run dev` on the host dies on a wrong-platform esbuild.
+      - /src/node_modules
       - frontend-dist:/dist
     command: >
       sh -c "
@@ -275,10 +289,9 @@ services:
         cp -r dist/* /dist/ &&
         echo 'Frontend dist ready in volume (index.html and assets).'
       "
-    profiles:
-      - server
-      - full
-    # This service exits after build; api waits for it via depends_on condition.
+    # Exits after the build. `api` waits on it via a depends_on condition, so
+    # this must not restart or the API would wait forever.
+    restart: "no"
 
 volumes:
   9xaipal_postgres_data:

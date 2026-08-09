@@ -345,6 +345,20 @@ async def rechunk_paper(
     if not chunks:
         raise HTTPException(status_code=500, detail="Re-chunking produced zero chunks.")
 
+    # Repair the inline math variables MinerU turned into U+FFFD. Runs here too
+    # (not only in the pipeline) so a paper already on disk can be fixed with a
+    # re-chunk instead of a full re-extraction.
+    from app.extraction.glyph_repair import repair_chunks
+    glyphs_repaired = 0
+    source_pdf = documents_dir() / (doc.get("filename") or "")
+    if source_pdf.exists():
+        try:
+            glyphs_repaired = repair_chunks(chunks, source_pdf)
+        except Exception:
+            logger.exception("[glyph-repair] failed during rechunk (non-fatal)")
+    else:
+        logger.warning("[glyph-repair] source PDF missing for %s — skipping", paper_id)
+
     # Wipe and rebuild chunks / embeddings / assets atomically.
     await db.execute(text("""
         DELETE FROM chunk_embeddings
@@ -357,23 +371,27 @@ async def rechunk_paper(
     await db.execute(text("DELETE FROM chunks WHERE document_id = :doc_id"),
                      {"doc_id": paper_id})
 
-    # Re-register existing images so chunks can link to them. Images may already
-    # have been moved to storage/images/<paper_id>; if so, use them directly.
-    images_root = images_dir() / str(paper_id)
+    # Re-register images from the EXTRACTION directory, always.
+    #
+    # ⚠ Do not "optimise" this by reading storage/images/<paper_id> instead.
+    # Chunks reference images by their original MinerU filename (the hash in
+    # `![](<hash>.jpg)`), but move_asset_to_storage renames every file to a
+    # fresh uuid on the way into storage. Keying the map off the stored
+    # filenames therefore produces names that no chunk can ever match, and
+    # every figure silently loses its image — with the files sitting right
+    # there on disk. Only the extraction dir still knows the original names.
+    #
+    # Re-copying leaves the previous copies orphaned. That is deliberate: they
+    # may still be referenced by figure_descriptions rows, and a few stale
+    # images cost less than a broken figure.
+    from app.extraction.mineru_client import find_images
     asset_map: dict[str, str] = {}
-    if images_root.exists():
-        for img in images_root.rglob("*"):
-            if img.is_file() and img.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
-                asset_map[img.name] = str(img)
-    else:
-        # Fall back to whatever MinerU dropped in the extraction dir.
-        from app.extraction.mineru_client import find_images
-        for img_path in find_images(extract_path):
-            try:
-                meta = move_asset_to_storage(img_path, document_id=str(paper_id))
-                asset_map[meta["original_name"]] = meta["file_path"]
-            except Exception:
-                logger.exception("re-register image failed for %s", img_path)
+    for img_path in find_images(extract_path):
+        try:
+            meta = move_asset_to_storage(img_path, document_id=str(paper_id))
+            asset_map[meta["original_name"]] = meta["file_path"]
+        except Exception:
+            logger.exception("re-register image failed for %s", img_path)
 
     # Use raw SQL with explicit ::uuid / ::jsonb / ::text[] casts. The shared
     # `chunks_table` is declared with String columns (sized for the sync path);
@@ -433,10 +451,19 @@ async def rechunk_paper(
     # already replaced the chunks in-process; only embeddings need to be
     # (re)generated, so dispatch embed_document (not the full ingestion task,
     # which requires job_id/filename and would re-run extraction).
-    try:
-        embed_document.delay(str(paper_id))  # type: ignore[attr-defined]
-    except Exception:
-        logger.exception("could not dispatch re-embedding task after rechunk")
+    #
+    # Under the fast profile a paper has no embeddings to regenerate — the new
+    # chunks are immediately answerable via app.chat.paper_agent, which reads
+    # the chunks table directly. Dispatching here would burn worker time on an
+    # index nothing queries.
+    from app.core.config import settings as app_settings
+    reembedding = not (app_settings.fast_ingest and doc.get("doc_kind") != "book")
+    if reembedding:
+        try:
+            embed_document.delay(str(paper_id))  # type: ignore[attr-defined]
+        except Exception:
+            logger.exception("could not dispatch re-embedding task after rechunk")
+            reembedding = False
 
     counts: dict[str, int] = {}
     for c in chunks:
@@ -448,9 +475,12 @@ async def rechunk_paper(
         "source": source,
         "chunks_total": len(chunks),
         "chunks_by_type": counts,
+        "glyphs_repaired": glyphs_repaired,
         "message": (
             "Re-chunked from cached extraction. Embeddings are regenerating in "
             "the background; chat may be slow until they finish."
+            if reembedding
+            else "Re-chunked from cached extraction. Reopen the paper to read it."
         ),
     }
 

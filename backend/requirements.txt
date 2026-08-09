@@ -25,10 +25,14 @@ pypdf
 pymupdf               # PyMuPDF fallback when MinerU is unavailable (imported as 'fitz')
 
 # Background processing
- celery>=5.3
+celery>=5.3
 redis>=5.0
 
-# NOTE: MinerU is the primary PDF extractor and is invoked as a CLI.
-# It must be installed separately per its official instructions
-# (https://github.com/opendatalab/MinerU). The first run downloads
-# ~5 GB of weights; set HF_TOKEN in your environment.
+# PDF extraction — the primary extractor, invoked as the `mineru` CLI.
+# Pinned 2026-07-25: 3.4.4 verified working on Apple Silicon (host, no CUDA,
+# no Docker). Keep the `pipeline` backend that mineru_client.py passes —
+# `hybrid-engine` measured 8.5x slower with worse heading classification, and
+# its default `--effort medium` silently disables image/chart analysis, which
+# the figure pipeline depends on. See docs/plans/pdf-parser-evaluation.md.
+# First run downloads ~5 GB of model weights; set HF_TOKEN if rate-limited.
+mineru[core]>=3.4.4

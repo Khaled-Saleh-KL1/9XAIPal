@@ -27,8 +27,18 @@ async def _requeue_all_embeddings(session) -> None:
     """
     from sqlalchemy import text
 
+    # ⚠ Documents ingested in paper-only mode deliberately have no embeddings.
+    # Without this filter a single VECTOR_DIMENSION change would re-embed them,
+    # silently undoing the skip for the whole library while
+    # documents.embedding_mode still read 'skipped' — i.e. the stored state
+    # would become a lie. See docs/plans/paper-only-embedding-skip.md.
     result = await session.execute(
-        text("SELECT DISTINCT document_id FROM chunks")
+        text("""
+            SELECT DISTINCT c.document_id
+            FROM chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE d.embedding_mode = 'embedded'
+        """)
     )
     doc_ids = [row[0] for row in result.fetchall()]
     if not doc_ids:

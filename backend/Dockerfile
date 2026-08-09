@@ -1,7 +1,11 @@
-# Backend API image. Dependencies are installed with **uv** straight from the
-# committed uv.lock (fast, reproducible) instead of pip. The BuildKit cache
-# mount keeps uv's download cache across builds, so heavy wheels (torch, mineru)
-# download once and are reused — including by the worker image (Dockerfile.mineru).
+# Backend API image. Dependencies are installed with **uv** from
+# requirements.txt (fast) instead of pip. The BuildKit cache mount keeps uv's
+# download cache across builds, so heavy wheels (torch, mineru) download once
+# and are reused — including by the worker image (Dockerfile.mineru).
+#
+# ⚠ This used to read a committed pyproject.toml + uv.lock. Neither is in the
+# repo, so every image build failed at the COPY. requirements.txt is what the
+# README and the venv setup actually use, so it is the one source of truth.
 #
 # The Celery worker uses Dockerfile.mineru, which adds the OpenCV/runtime libs
 # and pre-downloads the MinerU pipeline models.
@@ -31,16 +35,15 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Resolve the exact locked deps to a hashed requirements file, then install them
-# into the system environment. `--mount=type=cache` persists uv's wheel cache
-# between builds (this is the pip -> uv download speedup).
-COPY pyproject.toml uv.lock ./
+# Install the runtime deps into the system environment. `--mount=type=cache`
+# persists uv's wheel cache between builds (this is the pip -> uv speedup), and
+# the CPU torch index keeps the multi-hundred-MB CUDA wheels out of the image.
+COPY requirements.txt ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.lock \
- && uv pip install --system \
+    uv pip install --system \
       --extra-index-url https://download.pytorch.org/whl/cpu \
       --index-strategy unsafe-best-match \
-      -r /tmp/requirements.lock
+      -r requirements.txt
 
 COPY app ./app
 

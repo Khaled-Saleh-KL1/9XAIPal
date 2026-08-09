@@ -130,6 +130,70 @@ async def get_document_chunks(
     return [dict(r) for r in result.mappings().all()]
 
 
+async def get_all_document_chunks(session: AsyncSession, document_id: UUID) -> list[dict]:
+    """Every chunk of a document in sequence order, unpaginated.
+
+    Deliberately has no LIMIT: the article reader renders the whole paper in
+    one pass, and the paper agent stuffs or scans the whole paper. Paginating
+    here would just move the loop into the caller.
+    """
+    result = await session.execute(
+        text("""
+            SELECT * FROM chunks
+            WHERE document_id = :document_id
+            ORDER BY sequence_id ASC
+        """),
+        {"document_id": document_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def get_chunks_in_range(
+    session: AsyncSession, document_id: UUID, start: int, end: int, limit: int
+) -> list[dict]:
+    """Chunks whose sequence_id falls in [start, end], capped at ``limit``.
+
+    Backs the paper agent's READ tool. The cap is enforced in SQL rather than
+    in Python so a greedy "READ: 1-9999" costs one bounded query.
+    """
+    result = await session.execute(
+        text("""
+            SELECT * FROM chunks
+            WHERE document_id = :document_id
+              AND sequence_id BETWEEN :start AND :end
+            ORDER BY sequence_id ASC
+            LIMIT :limit
+        """),
+        {"document_id": document_id, "start": start, "end": end, "limit": limit},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def search_chunks_substring(
+    session: AsyncSession, document_id: UUID, needle: str, limit: int
+) -> list[dict]:
+    """Case-insensitive substring search over a document's chunks.
+
+    Complements full-text search, which cannot find what it does not tokenize:
+    single Greek letters (τ, λ), equation numbers, subscripted symbols, and
+    hyphenated compounds all vanish from a tsvector but match literally here.
+    Ranked by sequence so results read in document order.
+    """
+    if not needle.strip():
+        return []
+    result = await session.execute(
+        text("""
+            SELECT * FROM chunks
+            WHERE document_id = :document_id
+              AND (plain_text ILIKE :pattern OR markdown ILIKE :pattern)
+            ORDER BY sequence_id ASC
+            LIMIT :limit
+        """),
+        {"document_id": document_id, "pattern": f"%{needle.strip()}%", "limit": limit},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def count_document_chunks(session: AsyncSession, document_id: UUID) -> int:
     """Total number of chunks for the given document."""
     result = await session.execute(

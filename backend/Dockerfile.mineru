@@ -44,16 +44,17 @@ RUN apt-get update \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the full locked dependency set (incl. mineru + torch) with uv. The
-# shared cache mount means torch/mineru are pulled from uv's cache (already
-# populated by the API image build) instead of re-downloading.
-COPY pyproject.toml uv.lock ./
+# Install the full dependency set (incl. mineru + torch) with uv. The shared
+# cache mount means torch/mineru are pulled from uv's cache (already populated
+# by the API image build) instead of re-downloading.
+#
+# ⚠ Reads requirements.txt, not a uv.lock — see the note in Dockerfile.
+COPY requirements.txt ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.lock \
- && uv pip install --system \
+    uv pip install --system \
       --extra-index-url https://download.pytorch.org/whl/cpu \
       --index-strategy unsafe-best-match \
-      -r /tmp/requirements.lock
+      -r requirements.txt
 
 # Pre-download the pipeline models INTO the image so the first upload doesn't
 # stall on a multi-GB download. Non-interactive (both -s and -m supplied).

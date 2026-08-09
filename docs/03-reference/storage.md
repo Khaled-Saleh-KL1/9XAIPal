@@ -1,8 +1,21 @@
-# Storage & Static Files
+# Storage & static files
+
+> **What this is:** what lands on disk, where, and which URL serves it.
+>
+> **Owns:** the storage-root layout and the disk-path ↔ static-URL mapping.
+> **Does not own:** `STORAGE_ROOT` configuration ([configuration.md](configuration.md)).
+>
+> **Status:** current · **Last verified:** 2026-07-25 against
+> [`core/paths.py`](../../backend/app/core/paths.py) and
+> [`main.py`](../../backend/app/main.py)
+> **Verify with:** `ls -R backend/app/storage`
+>
+> ⚠ Every file under the storage root is served publicly at `/static/*` with no auth. Treat
+> uploaded PDFs and extracted assets as world-readable to anyone who can reach the API.
 
 Everything that isn't in Postgres lives under the **storage root** —
 configurable via `settings.storage_root` (default `app/storage`). Paths
-are managed in [core/paths.py](../backend/app/core/paths.py) and all
+are managed in [core/paths.py](../../backend/app/core/paths.py) and all
 subdirectories are created at startup by `ensure_storage_dirs()`.
 
 ## Layout
@@ -50,7 +63,7 @@ predictable. Used by:
 ### `logs/`
 Reserved for future structured logs. Not used at the moment.
 
-## Static mounts ([main.py](../backend/app/main.py))
+## Static mounts ([main.py](../../backend/app/main.py))
 
 ```python
 app.mount("/static/images",    StaticFiles(directory=images_dir(),    check_dir=False))

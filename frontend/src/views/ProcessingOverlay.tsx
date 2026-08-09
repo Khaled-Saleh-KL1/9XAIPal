@@ -3,8 +3,14 @@ import { IconDoc, IconCheck } from '../components/Icons';
 
 /**
  * Backend-driven processing overlay. The visible step states are derived
- * directly from the document's real status (queued → extracting → chunking
- * → embedding → complete | failed). No fake timer, no fake counters.
+ * directly from the document's real status. No fake timer, no fake counters.
+ *
+ * The step LIST depends on the document kind, because the pipelines differ:
+ * a paper under the fast ingest profile is complete once it is chunked
+ * (nothing is embedded or summarized — the model reads the paper at question
+ * time), while a book still runs the full embed → summarize chain. Showing a
+ * paper an "Embedding" step it never runs would tick green having done
+ * nothing, which is exactly the dishonesty this overlay exists to avoid.
  */
 
 type BackendStatus =
@@ -23,7 +29,7 @@ interface StepDef {
   matches: BackendStatus[]; // statuses for which this step is "active"
 }
 
-const STEPS: StepDef[] = [
+const EXTRACT_STEPS: StepDef[] = [
   {
     id: 1,
     title: 'Extracting structure',
@@ -36,10 +42,13 @@ const STEPS: StepDef[] = [
     sub: 'Splitting the document into structural units',
     matches: ['chunking'],
   },
+];
+
+const INDEX_STEPS: StepDef[] = [
   {
     id: 3,
     title: 'Embedding',
-    sub: 'Building the local vector index for /ask',
+    sub: 'Building the local vector index',
     matches: ['embedding'],
   },
   {
@@ -73,6 +82,8 @@ interface Props {
   status: BackendStatus;
   errorMessage?: string | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | null while pending
+  /** Papers finish at chunking; books continue through embed + summarize. */
+  kind?: 'book' | 'paper';
   onClose: () => void;
   onCancel: () => void;
 }
@@ -83,10 +94,13 @@ function extractorLabel(ex: string | null | undefined): { label: string; tone: '
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
-export function ProcessingOverlay({ file, status, errorMessage, extractor, onClose, onCancel }: Props) {
+export function ProcessingOverlay({ file, status, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
-  const order: BackendStatus[] = ['queued', 'extracting', 'chunking', 'embedding', 'summarizing', 'complete'];
+  const steps = kind === 'book' ? [...EXTRACT_STEPS, ...INDEX_STEPS] : EXTRACT_STEPS;
+  const order: BackendStatus[] = kind === 'book'
+    ? ['queued', 'extracting', 'chunking', 'embedding', 'summarizing', 'complete']
+    : ['queued', 'extracting', 'chunking', 'complete'];
   const overall = complete
     ? 1
     : failed
@@ -180,7 +194,7 @@ export function ProcessingOverlay({ file, status, errorMessage, extractor, onClo
 
         {/* step list */}
         <div className="px-7 pb-7" style={{ borderTop: '1px solid var(--border)' }}>
-          {STEPS.map((step) => (
+          {steps.map((step) => (
             <StepRow key={step.id} step={step} state={stateFor(step, status)} />
           ))}
         </div>
@@ -196,7 +210,9 @@ export function ProcessingOverlay({ file, status, errorMessage, extractor, onClo
           />
           <span className="text-[12px] font-mono" style={{ color: 'var(--muted)' }}>
             {complete
-              ? 'indexing complete — back to library'
+              ? kind === 'book'
+                ? 'indexing complete — back to library'
+                : 'extracted — ready to read'
               : failed
               ? (errorMessage || 'pipeline failed').slice(0, 120)
               : 'safe to leave — processing continues in the background'}

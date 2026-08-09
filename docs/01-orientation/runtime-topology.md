@@ -1,0 +1,146 @@
+# Runtime topology & ports
+
+> **What this is:** what runs, where it listens, what talks to what, and which parts are optional.
+> Read this before debugging anything that looks like a connection problem.
+>
+> **Owns:** the service inventory and the network edges between services.
+> **Does not own:** how to start them ([setup.md](setup.md)), env-var meanings
+> ([configuration.md](../03-reference/configuration.md)).
+>
+> **Status:** current · **Last verified:** 2026-07-25 against
+> [`docker-compose.yml`](../../backend/docker-compose.yml) and
+> [`main.py`](../../backend/app/main.py)
+> **Verify with:** `docker compose ps` · `curl localhost:8000/api/v1/health`
+
+---
+
+## Service inventory
+
+| Service | Default URL | Required | Notes |
+| --- | --- | --- | --- |
+| FastAPI | `http://localhost:8000` | Yes | `uvicorn app.main:app` |
+| Vite dev server | `http://localhost:5173` | Dev only | Proxies `/api` and `/static` to `:8000` |
+| PostgreSQL | `localhost:5432` | Yes | `pgvector/pgvector:pg16`; needs `vector` + `uuid-ossp` |
+| Redis | `localhost:6379` | Yes | Celery broker **and** result backend |
+| Celery worker | — | Yes | No port; consumes from Redis |
+| Ollama | `http://localhost:11434` | Optional* | Chat / VLM / classifier / embedding host |
+| MinerU CLI | binary on `$PATH` | Yes | Subprocess, not a service. `ALLOW_PYMUPDF_FALLBACK=true` degrades gracefully |
+| SearXNG | `http://localhost:8080` | Optional | Only on the EXTERNAL route |
+| autoheal | — | Compose only | Restarts containers whose healthcheck goes unhealthy |
+
+\* **One AI backend is required** — either Ollama or a cloud API key. Neither ⇒ chat returns
+503 `NO_LLM_CONFIGURED` with configure-me instructions, but stored papers still serve.
+
+---
+
+## Topology
+
+```text
+        ┌──────────────────────────────────────┐
+        │  Browser                             │
+        │  dev:  localhost:5173  (Vite)        │
+        │  prod: localhost:8000  (SPA from API)│
+        └──────────────┬───────────────────────┘
+                       │ /api/v1/*  ·  /static/*
+                       │ (dev: proxied by Vite → :8000)
+                       ▼
+        ┌──────────────────────────────────────┐
+        │  FastAPI  :8000                      │
+        │   middleware: CORS → RateLimit →     │
+        │               SecurityHeaders        │
+        │   /api/v1/*         (router)         │
+        │   /static/images    /static/assets   │
+        │   /static/extracted /static/images/research
+        └───┬──────────────────────┬───────────┘
+            │ asyncpg              │ .delay()
+            ▼                      ▼
+  ┌───────────────────┐   ┌──────────────────┐
+  │ Postgres :5432    │   │ Redis :6379      │
+  │  + pgvector HNSW  │   │  broker + result │
+  └───────────────────┘   └────────┬─────────┘
+            ▲                      │ consumes
+            │ psycopg2 (sync)      ▼
+            │            ┌──────────────────────────┐
+            └────────────┤ Celery worker            │
+                         │  process_ingestion       │
+                         │  embed_document          │
+                         │  generate_section_summaries
+                         │  reconstruct_reading_order
+                         └──┬────────────────┬──────┘
+                            │ subprocess     │ HTTP
+                            ▼                ▼
+                  ┌──────────────┐  ┌─────────────────────────┐
+                  │ MinerU CLI   │  │ Ollama :11434           │
+                  │ PDF → md+img │  │  chat · vlm · classifier│
+                  └──────────────┘  │  · embedding            │
+                                    │ OR cloud API fallback   │
+                                    └─────────────────────────┘
+
+                  ┌──────────────────────┐
+                  │ SearXNG :8080        │  ⚠ the ONLY egress to the public
+                  └──────────────────────┘     internet, and only on EXTERNAL
+```
+
+### (rendered)
+
+```mermaid
+%%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
+flowchart TD
+    B([Browser]) -->|"/api/v1 · /static"| API[FastAPI :8000]
+    API --> PG[(Postgres :5432<br/>pgvector HNSW)]
+    API -->|".delay()"| RD[(Redis :6379)]
+    RD --> W[Celery worker]
+    W --> PG
+    W -->|subprocess| MU[MinerU CLI]
+    W -->|HTTP| OL([Ollama :11434])
+    API -->|HTTP| OL
+    API -->|EXTERNAL route only| SX([SearXNG :8080])
+    OL -.->|"when unreachable"| CLOUD([cloud LLM API])
+    SX -.-> NET([public internet])
+
+    classDef owned stroke:#3b82f6,stroke-width:2px
+    classDef store stroke:#10b981,stroke-width:2px
+    classDef ext stroke:#f59e0b,stroke-dasharray:4 3
+    class API,W,MU owned
+    class PG,RD store
+    class OL,SX,CLOUD,NET ext
+```
+
+> 🟦 owned process · 🟩 data store · 🟨 external / optional.
+> Two edges are worth memorising: **the worker talks to Postgres over psycopg2 (sync), the API
+> over asyncpg (async)** — two separate pools against one database; and **SearXNG is the only
+> arrow leaving the machine**, which is what makes the local-first claim true.
+
+---
+
+## Deployment modes
+
+| Mode | Command | UI | API | Notes |
+| --- | --- | --- | --- | --- |
+| Host dev | `uvicorn` + `npm run dev` + compose infra | `:5173` | `:8000` | Hot reload both sides. The normal loop. |
+| Single-port server | `docker compose --profile server up` | `:8000` | `:8000` | `frontend-build` one-shot builds the SPA into a volume; the API serves it at `/`. No CORS. |
+| LAN server | `backend/start-lan-server.sh` | `:8000` | `:8000` | Same as above + removes the upload cap, prints the LAN URL, tears down on Ctrl+C. |
+
+⚠ In compose, `OLLAMA_BASE_URL` is deliberately **not** inherited from the host `.env`. It is
+hardcoded to `http://host.docker.internal:11434`, because a value like `http://localhost:11434`
+inside a container resolves to *that container* and every model call fails with
+connection-refused. The same trap applies to `SEARXNG_URL`, which compose sets to
+`http://searxng:8080` (service name, not localhost).
+
+---
+
+## Recovery layers
+
+Two mechanisms, covering two different failure modes:
+
+| Mechanism | Covers | Applies to |
+| --- | --- | --- |
+| `restart: unless-stopped` | Process **exits** — crash, OOM-kill (exit 137) | `postgres`, `redis`, `searxng`, `celery_worker`, `api` |
+| `autoheal` watchdog | Process **hangs** — running but healthcheck unhealthy | containers labeled `autoheal=true`: `api`, `postgres`, `redis` |
+
+`restart:` cannot see a hung-but-alive container, which is why autoheal exists; it needs
+`/var/run/docker.sock` mounted to issue restarts. Neither mechanism touches data volumes.
+
+The worker has a memory limit (`WORKER_MEM_LIMIT`, default 12 G) so a MinerU OOM on a large book
+kills *that container* cleanly and it restarts, rather than pressuring the host. ⚠ This limit must
+stay below Docker Desktop's total VM memory or the worker is OOM-killed mid-extraction every time.

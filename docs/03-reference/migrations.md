@@ -1,4 +1,19 @@
-# Database Migrations & Schema Changes (Personal Use)
+# Database migrations & schema changes
+
+> **What this is:** how schema changes reach a running database, and what to do when they don't.
+>
+> **Owns:** the migration procedure.
+> **Does not own:** what the tables contain ([database-schema.md](database-schema.md)).
+>
+> **Status:** current · **Last verified:** 2026-07-25 against
+> [`database/migrations.py`](../../backend/app/database/migrations.py) (`main`, 9b75500)
+> **Verify with:** restart the API and read the migration log lines
+>
+> ⚠ **Migrations are best-effort by design.** Each statement runs in its own transaction and a
+> failure is logged as a warning, not raised — then `_ensure_recent_columns()` patches up columns
+> that didn't apply. This is a recovery mechanism, not a migration system: it cannot detect a
+> partially-applied change it doesn't already know about. Replacing it with Alembic is tracked in
+> [roadmap.md](../roadmap.md).
 
 This project uses an "apply the SQL" approach rather than Alembic because it is a single-tenant local desktop tool.
 
@@ -117,3 +132,35 @@ psql -h localhost -U postgres -d 9xaipal -f backend/app/database/schema.sql
 Compaction, orchestrator context routing, and the UI are now fully thread-aware. Sub-threads run in paper-free mode by default.
 
 All previous conversations (created before this feature) continue to work unchanged because they have `parent_turn_id = NULL`.
+
+## Margin notes (`paper_notes`)
+
+Added with the article reader. Columns are in
+[database-schema.md](database-schema.md#paper_notes); this section covers only how the change
+lands.
+
+The table itself is created by `schema.sql` on startup (`CREATE TABLE IF NOT EXISTS`). Two columns
+were added after it first shipped, so they also live in `_ensure_recent_columns()`:
+
+```sql
+ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS margin_side TEXT NOT NULL DEFAULT 'right';
+ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS requested_model TEXT;
+```
+
+⚠ **The migration runner splits `schema.sql` on `;`.** A semicolon inside a SQL comment therefore
+truncates the statement mid-definition, and the table silently fails to create — the failure is a
+logged warning, not an error, so the first symptom is a 500 at runtime. This bit during
+development. Keep semicolons out of comments in `schema.sql`.
+
+Nothing needs re-ingesting: existing papers gain the table empty, and every reader action that
+writes a note tolerates a `NULL` `anchor_chunk_id`.
+
+## Equation crops on `math` chunks
+
+No schema change. The chunker now records MinerU's cropped equation bitmap in `image_refs` for
+`equation` entries, so `chunk_assets` gains rows for `math` chunks on the next ingest.
+
+⚠ Existing papers do **not** gain equation crops until re-chunked
+(`POST /papers/{id}/rechunk`) — cheap, since it reuses the cached MinerU output and never re-runs
+extraction. The same re-chunk also applies the U+FFFD glyph repair described in
+[ingestion-pipeline.md](../02-architecture/ingestion-pipeline.md).

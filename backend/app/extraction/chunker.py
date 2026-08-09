@@ -793,9 +793,16 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
             label_suffix = f" \\quad ({tag})" if tag else ""
             md = f"$$\n{body}{label_suffix}\n$$"
             plain = body + (f" ({tag})" if tag else "")
+            # MinerU also crops a bitmap of the typeset equation. The chunk
+            # still renders from LaTeX (sharp, themeable, selectable), but the
+            # crop is linked so a question about a formula can hand the model
+            # the equation as it actually appears on the page — which is the
+            # ground truth when the LaTeX transcription is imperfect.
+            eq_img = entry.get("img_path") or ""
+            eq_name = eq_img.rsplit("/", 1)[-1] if eq_img else ""
             chunks.append(_chunk(
                 sequence_id, "math", md, plain, page_one_indexed,
-                heading_path, image_refs=[],
+                heading_path, image_refs=[eq_name] if eq_name else [],
             ))
             continue
 

@@ -123,6 +123,15 @@ class Settings(BaseSettings):
     def effective_vlm_model(self) -> str:
         return self.vlm_model or self.chat_model
 
+    # How many figure descriptions to generate concurrently at ingestion.
+    # The VLM calls are pure network I/O, so running them in a small thread
+    # pool turns total wall-clock from the SUM of every figure into roughly the
+    # slowest one. Measured 2026-07-25 on a 14-page paper: sequential was
+    # 190+210+72 = 472s, i.e. 86% of a 549s ingestion.
+    # Keep this modest — it is concurrent load on one inference endpoint, and a
+    # hosted one may rate-limit. 1 restores the old sequential behaviour.
+    vlm_max_concurrency: int = 4
+
     # ── Latency tuning ──────────────────────────────────────────────────────
     # Small, fast model used ONLY for cheap classification (router + guardrail).
     # Leave empty to reuse chat_model. Pointing this at a 1–3B model (e.g.
@@ -143,6 +152,61 @@ class Settings(BaseSettings):
     @property
     def effective_classifier_model(self) -> str:
         return self.classifier_model or self.chat_model
+
+    # ── Ingest profile ──────────────────────────────────────────────────────
+    # "fast" (default): a paper is DONE the moment MinerU has extracted it and
+    # the chunker has run. No embedding pass, no section summaries, no VLM
+    # figure descriptions — nothing between dropping the PDF and reading it.
+    # Everything the model needs is derived at question time by
+    # app.chat.paper_agent (whole-document stuffing, or full-text SEARCH/READ
+    # over chunks when the paper is too large to stuff).
+    #
+    # "full": the historical chain (embeddings → summaries → figure
+    # descriptions), still honouring paper_only_mode below.
+    #
+    # ⚠ The profile only applies to doc_kind='paper'. Books are far too large
+    # to stuff or to full-text-scan usefully, so they always take the full
+    # chain regardless of this setting.
+    ingest_profile: str = "fast"
+
+    @property
+    def fast_ingest(self) -> bool:
+        return self.ingest_profile.strip().lower() == "fast"
+
+    # ── Paper agent (answering without embeddings) ──────────────────────────
+    # Stuff the ENTIRE document into the prompt when its measured token count
+    # is at or below this. Above it, the agent falls back to an iterative
+    # SEARCH/READ loop over chunks.
+    # ⚠ token_count is len(plain_text)/4 — a character heuristic that
+    # undercounts math and tables badly. Leave headroom below the real window.
+    whole_paper_max_tokens: int = 120_000
+    # How many SEARCH/READ rounds the agent may run before it is forced to
+    # answer with whatever it has gathered.
+    paper_agent_max_steps: int = 4
+    # Ceiling on how many chunks a single READ may pull back, so one greedy
+    # range request cannot blow the context window.
+    paper_agent_read_max_chunks: int = 40
+    # Ceiling on how many chunks a single SEARCH may return as hits.
+    paper_agent_search_limit: int = 8
+
+    # ── Paper-only mode ─────────────────────────────────────────────────────
+    # Skip the embedding pass for documents small enough to fit whole in the
+    # chat model's context, serving GLOBAL from full-text search + document
+    # stuffing instead of pgvector. See
+    # docs/plans/paper-only-embedding-skip.md.
+    #
+    # Default False so upgrading changes nothing. The decision is made once, at
+    # ingestion, and stored in documents.embedding_mode — it is never
+    # re-derived, so flipping this (or the threshold) never reclassifies a
+    # library that is already ingested.
+    paper_only_mode: bool = False
+    # Skip only when SUM(chunks.token_count) is at or below this.
+    # NOT set near the model's full context: the document body has to share the
+    # window with the system prompt, conversation history, and the answer.
+    # ⚠ token_count is len(plain_text)/4 — a character heuristic that
+    # undercounts math and tables badly, which is most of what this app ingests.
+    # 50k against a 262k window absorbs that error; 250k would not.
+    paper_only_max_tokens: int = 50_000
 
     # LOCAL context window size (number of chunks on each side of the current one)
     local_context_window: int = 3   # Increased from 2 for better "see surrounding" experience

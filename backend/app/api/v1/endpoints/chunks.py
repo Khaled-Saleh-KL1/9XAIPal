@@ -67,6 +67,77 @@ async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
     }
 
 
+@router.get("/{paper_id}/document")
+async def get_full_document(
+    paper_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return every block of the paper, in reading order, in ONE response.
+
+    This is what the article reader loads. The old reader walked
+    ``/chunks/after/{seq}`` once per chunk — a 105-chunk paper cost 105
+    sequential round-trips before a single word appeared. Here the chunks and
+    all their image assets are fetched in two queries and joined in memory.
+
+    ``outline`` is the heading spine, which the reader uses for the section
+    rail and the agent uses as its map of the document.
+    """
+    doc = await doc_service.get_document(db, paper_id)
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    chunks = await chunk_repo.get_all_document_chunks(db, paper_id)
+
+    from app.database.repositories import assets as asset_repo
+    assets = await asset_repo.get_assets_for_chunks(db, [c["id"] for c in chunks])
+    by_chunk: dict = {}
+    for a in assets:
+        by_chunk.setdefault(a["chunk_id"], []).append(a)
+
+    blocks = []
+    outline = []
+    for c in chunks:
+        chunk_assets = by_chunk.get(c["id"], [])
+        image_url = next(
+            (
+                f"/static/images/{a['file_path']}"
+                for a in chunk_assets
+                if a.get("asset_type") == "image" and a.get("file_path")
+            ),
+            None,
+        )
+        blocks.append({
+            "id": str(c["id"]),
+            "sequence_order": c["sequence_id"],
+            "structural_type": c["chunk_type"],
+            "content_markdown": c["markdown"],
+            "plain_text": c["plain_text"],
+            "heading_path": c.get("heading_path"),
+            "page_start": c.get("page_start"),
+            "page_end": c.get("page_end"),
+            "table_json": c.get("table_json"),
+            "image_url": image_url,
+        })
+        if c["chunk_type"] == "heading":
+            outline.append({
+                "sequence_order": c["sequence_id"],
+                "text": (c.get("plain_text") or "").strip(),
+                "level": len(c.get("heading_path") or []) or 1,
+            })
+
+    return {
+        "paper_id": str(paper_id),
+        "title": (doc.get("original_filename") or "").rsplit(".", 1)[0],
+        "doc_kind": doc.get("doc_kind"),
+        "status": doc.get("status"),
+        "page_count": doc.get("page_count"),
+        "extractor": doc.get("extractor"),
+        "blocks": blocks,
+        "outline": outline,
+        "total": len(blocks),
+    }
+
+
 @router.get("/{paper_id}/chunks/after/{sequence_order}")
 async def get_chunk_after_sequence(
     paper_id: UUID,

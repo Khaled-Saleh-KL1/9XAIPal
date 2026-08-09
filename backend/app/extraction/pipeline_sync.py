@@ -23,6 +23,7 @@ from app.extraction.chunker import (
     create_chunks_from_markdown,
 )
 from app.extraction.assets import move_asset_to_storage
+from app.extraction.glyph_repair import repair_chunks
 from app.extraction.jobs import JobStatus
 
 logger = get_logger(__name__)
@@ -100,6 +101,98 @@ def update_job_status_sync(session: Session, job_id: UUID, status: str, error_me
         text(f"UPDATE ingestion_jobs SET {', '.join(sets)} WHERE id = :id"),
         params,
     )
+
+
+def set_embedding_mode_sync(
+    session: Session,
+    document_id: UUID,
+    mode: str,
+    reason: str,
+) -> None:
+    """Record whether this document was embedded or skipped, and why.
+
+    Stored once at ingestion and never recomputed: the mode is a fact about
+    what was done, not a policy to be re-evaluated. That is what keeps a later
+    change to PAPER_ONLY_MAX_TOKENS from silently reclassifying an existing
+    library.
+    """
+    session.execute(
+        text(
+            "UPDATE documents SET embedding_mode = :mode, "
+            "embedding_skip_reason = :reason, updated_at = NOW() WHERE id = :id"
+        ),
+        {"mode": mode, "reason": reason, "id": document_id},
+    )
+
+
+def _is_fast_ingest(session: Session, document_id: UUID) -> bool:
+    """True when this document is DONE as soon as it is extracted and chunked.
+
+    Two gates, both required:
+
+    1. INGEST_PROFILE is "fast" (the default).
+    2. The document is not a book. A book cannot be stuffed into a context
+       window, so it still needs the embedding pass to be answerable; a paper
+       is served at question time by app.chat.paper_agent instead.
+
+    ⚠ Unlike _should_skip_embeddings this does NOT gate on token count. A
+    survey too large to stuff is still readable immediately, and the agent's
+    SEARCH/READ path covers it — there is nothing an embedding would buy that
+    full-text search over the same chunks does not.
+    """
+    from app.core.config import settings
+
+    if not settings.fast_ingest:
+        return False
+
+    row = session.execute(
+        text("SELECT doc_kind FROM documents WHERE id = :id"),
+        {"id": document_id},
+    ).mappings().first()
+    return not (row and row.get("doc_kind") == "book")
+
+
+def _should_skip_embeddings(session: Session, document_id: UUID) -> tuple[bool, str]:
+    """Decide whether the embedding pass can be skipped for this document.
+
+    Gates, in order — every one of them must pass:
+
+    1. The feature is on (PAPER_ONLY_MODE, default False).
+    2. The document is not a book. ⚠ doc_kind is a *guard*, never the gate:
+       it defaults to 'paper' (schema + upload fallback), so every document
+       predating the book/paper chooser is already labelled 'paper'. Gating on
+       it alone would sweep in the entire existing library.
+    3. The measured token count fits the budget. This is the real test —
+       "paper" is not a size, and a 90-page survey is a paper by every UI
+       meaning while being far too large to stuff.
+
+    Returns (skip, reason); the reason is stored for auditability either way.
+    """
+    from app.core.config import settings
+
+    if not settings.paper_only_mode:
+        return False, "feature_disabled"
+
+    row = session.execute(
+        text("SELECT doc_kind FROM documents WHERE id = :id"),
+        {"id": document_id},
+    ).mappings().first()
+    if row and row.get("doc_kind") == "book":
+        return False, "doc_kind=book"
+
+    total = session.execute(
+        text("SELECT COALESCE(SUM(token_count), 0) FROM chunks WHERE document_id = :id"),
+        {"id": document_id},
+    ).scalar_one()
+    total = int(total or 0)
+
+    if total == 0:
+        # No chunks, or token_count never populated — cannot prove it fits, so
+        # take the safe branch and embed.
+        return False, "no_token_count"
+    if total > settings.paper_only_max_tokens:
+        return False, f"too_large({total}>{settings.paper_only_max_tokens})"
+    return True, f"fits({total}<={settings.paper_only_max_tokens})"
 
 
 def update_document_status_sync(
@@ -196,6 +289,15 @@ def run_pipeline_sync(
         if not chunks:
             raise MinerUError("No structural chunks extracted from document")
 
+        # Step 2b: Undo MinerU's mangling of inline math variables. It writes
+        # U+FFFD wherever the paper used a Mathematical Alphanumeric Symbol
+        # (𝑛, 𝑚, 𝑇 …); the PDF still knows, so we read it back.
+        # See app/extraction/glyph_repair.py.
+        try:
+            repair_chunks(chunks, pdf_path)
+        except Exception:
+            logger.exception("[glyph-repair] failed (non-fatal, chunks kept as-is)")
+
         # Step 3: Handle physical image assets
         images = find_images(output_dir)
         asset_map = {}
@@ -259,12 +361,65 @@ def run_pipeline_sync(
         session.commit()
         logger.info(f"Synchronously persisted {len(chunks)} chunks and {len(asset_payloads)} assets for document {document_id}")
 
-        # Step 5: Dispatch embedding via Celery (pass to async or sync)
-        update_job_status_sync(session, job_id, JobStatus.EMBEDDING)
+        # Page count is needed by both branches below — the fast path marks the
+        # document complete inline, so it cannot be deferred to the end.
+        page_count = get_page_count(pdf_path)
+
+        # Step 5a: Fast profile — extraction IS the pipeline. Mark the document
+        # complete right here and dispatch nothing.
+        #
+        # ⚠ This is the ONE place other than generate_section_summaries that
+        # sets status='complete'. That is deliberate and safe precisely because
+        # nothing is dispatched afterwards: there is no downstream task left to
+        # contradict it. Adding a dispatch to this branch without moving the
+        # completion would reintroduce the "UI says done while the worker is
+        # still running" bug.
+        if _is_fast_ingest(session, document_id):
+            set_embedding_mode_sync(
+                session, document_id, "skipped", "fast_ingest"
+            )
+            update_document_status_sync(
+                session, document_id, "complete", page_count=page_count
+            )
+            update_job_status_sync(session, job_id, JobStatus.COMPLETE)
+            session.commit()
+            logger.info(
+                f"[fast-ingest] Document {document_id} complete after extraction: "
+                f"{len(chunks)} chunks, {len(asset_payloads)} assets, {page_count} pages "
+                "— no embeddings, no summaries, no figure descriptions"
+            )
+            return
+
+        # Step 5b: Full profile — decide whether this document needs embeddings,
+        # then dispatch the right downstream task.
+        #
+        # ⚠ The dispatcher is conditional; the CHAIN IS NOT. Completion is only
+        # ever set by generate_section_summaries (see workers/tasks.py), which
+        # is normally reached via embed_document. If the skip path simply
+        # dropped embed_document, nothing would ever mark the document
+        # complete — it would sit at 'processing' forever with the frontend
+        # overlay spinning and no error. So the skip path dispatches
+        # generate_section_summaries directly, re-attaching the chain.
+        skip, reason = _should_skip_embeddings(session, document_id)
+        set_embedding_mode_sync(
+            session, document_id, "skipped" if skip else "embedded", reason
+        )
         session.commit()
 
-        from app.workers.tasks import embed_document
-        embed_document.delay(str(document_id))  # type: ignore[attr-defined]
+        if skip:
+            logger.info(
+                f"[paper-only] Skipping embeddings for document {document_id} ({reason}); "
+                "dispatching summaries directly"
+            )
+            update_job_status_sync(session, job_id, JobStatus.SUMMARIZING)
+            session.commit()
+            from app.workers.tasks import generate_section_summaries
+            generate_section_summaries.delay(str(document_id))  # type: ignore[attr-defined]
+        else:
+            update_job_status_sync(session, job_id, JobStatus.EMBEDDING)
+            session.commit()
+            from app.workers.tasks import embed_document
+            embed_document.delay(str(document_id))  # type: ignore[attr-defined]
 
         # Step 6: Record page count, but DO NOT mark complete yet.
         #
@@ -273,7 +428,6 @@ def run_pipeline_sync(
         # The document only becomes "complete" when that final task finishes.
         # Marking it complete here was the bug that made the UI report "done"
         # while the worker was still embedding and describing figures.
-        page_count = get_page_count(pdf_path)
         update_document_status_sync(session, document_id, "processing", page_count=page_count)
         session.commit()
 
