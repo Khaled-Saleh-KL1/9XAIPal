@@ -46,6 +46,14 @@ def _cloud_headers(target: EmbeddingTarget) -> dict:
     return headers
 
 
+def _ollama_headers(target: EmbeddingTarget) -> dict:
+    """Headers for native Ollama embed endpoints; adds Bearer auth when a key is set."""
+    headers = {"Content-Type": "application/json"}
+    if target.api_key:
+        headers["Authorization"] = f"Bearer {target.api_key}"
+    return headers
+
+
 def shape_embedding(vec: list[float]) -> list[float]:
     """Fit an embedding to settings.vector_dimension (truncate+renorm or pad)."""
     dim = settings.vector_dimension
@@ -97,7 +105,7 @@ async def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
         }
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=_ollama_headers(target))
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPError as e:
@@ -130,8 +138,14 @@ async def get_query_embedding(query: str) -> list[float]:
     return await get_embedding(query)
 
 
-def _embed_one_sync(client: "httpx.Client", url: str, model: str, text: str) -> list[float] | None:
-    r = client.post(url, json={"model": model, "input": text, "keep_alive": settings.ollama_keep_alive})
+def _embed_one_sync(
+    client: "httpx.Client", url: str, model: str, text: str, target: EmbeddingTarget
+) -> list[float] | None:
+    r = client.post(
+        url,
+        json={"model": model, "input": text, "keep_alive": settings.ollama_keep_alive},
+        headers=_ollama_headers(target),
+    )
     r.raise_for_status()
     embs = r.json().get("embeddings", [])
     return embs[0] if embs else None
@@ -172,7 +186,11 @@ def get_embeddings_batch_sync(texts: list[str]) -> list[list[float]]:
     with httpx.Client(timeout=120.0) as client:
         # Fast path: the whole batch in one request.
         try:
-            r = client.post(url, json={"model": model, "input": texts, "keep_alive": settings.ollama_keep_alive})
+            r = client.post(
+                url,
+                json={"model": model, "input": texts, "keep_alive": settings.ollama_keep_alive},
+                headers=_ollama_headers(target),
+            )
             r.raise_for_status()
             embs = r.json().get("embeddings", [])
             if len(embs) == len(texts):
@@ -188,7 +206,9 @@ def get_embeddings_batch_sync(texts: list[str]) -> list[list[float]]:
             emb: list[float] | None = None
             for cap in (None, 2000, 1000, 400):
                 try:
-                    emb = _embed_one_sync(client, url, model, t if cap is None else t[:cap])
+                    emb = _embed_one_sync(
+                        client, url, model, t if cap is None else t[:cap], target
+                    )
                     if emb:
                         break
                 except httpx.HTTPStatusError:

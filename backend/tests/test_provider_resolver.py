@@ -21,6 +21,7 @@ def clean_resolver_state(monkeypatch):
     monkeypatch.setattr(settings, "llm_base_url", "")
     monkeypatch.setattr(settings, "embedding_api_key", "")
     monkeypatch.setattr(settings, "embedding_base_url", "")
+    monkeypatch.setattr(settings, "ollama_api_key", "")
     for provider in resolver.CLOUD_PROVIDER_ORDER:
         monkeypatch.setattr(settings, f"{provider}_api_key", "")
     yield
