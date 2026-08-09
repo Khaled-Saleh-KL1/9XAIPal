@@ -1,7 +1,9 @@
 name: CI
 
 # Runs on every PR into main (the merge gate) and on pushes to main
-# (post-merge sanity check). Deployment itself is handled by Vercel's native
+# (post-merge sanity check). Each job is path-gated (see the `changes` job), so
+# a PR only runs the checks for the area it touches — a docs- or frontend-only
+# PR won't wait on the backend suite. Deployment is handled by Vercel's native
 # Git integration: production on merge to main, preview URLs on each PR.
 on:
   pull_request:
@@ -18,8 +20,34 @@ permissions:
   contents: read
 
 jobs:
+  # Detect which areas a PR touches so we only run the jobs that matter.
+  # IMPORTANT: a job skipped by the `if:` below still reports "success" to
+  # branch protection, so required checks stay satisfied and merges are never
+  # blocked. (Filtering at the workflow `on:` level would instead leave checks
+  # "pending" and block merges — hence per-job gating here.)
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+
   frontend:
     name: frontend
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -43,6 +71,8 @@ jobs:
 
   backend:
     name: backend
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
