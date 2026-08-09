@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import fitz
 from pathlib import Path
 from app.core.config import settings
@@ -45,3 +45,23 @@ def test_call_vlm_page_parses_blocks():
     _, kwargs = client.post.call_args
     assert kwargs["json"]["format"] == "json"
     assert kwargs["json"]["messages"][0]["images"]
+
+
+def test_extract_via_vlm_writes_content_list_and_crops(tmp_path):
+    pdf = _make_pdf(tmp_path)                     # 2-page PDF from Task 2 helper
+    out = tmp_path / "out"
+    def fake_call(png, model, client):
+        return [
+            {"type": "text", "text": "Title", "text_level": 1},
+            {"type": "image", "bbox": [10, 10, 60, 60], "img_caption": ["Fig 1"]},
+        ]
+    with patch.object(vlm_client, "call_vlm_page", side_effect=fake_call):
+        result = vlm_client.extract_via_vlm(pdf, out)
+    data = json.loads((result / "content_list.json").read_text())
+    assert result == out
+    assert any(b["type"] == "text" and b.get("text_level") == 1 for b in data)
+    imgs = [b for b in data if b["type"] == "image"]
+    assert imgs and imgs[0]["img_path"].startswith("images/")
+    assert "bbox" not in imgs[0]
+    assert (out / imgs[0]["img_path"]).exists()          # crop was saved
+    assert all("page_idx" in b for b in data)

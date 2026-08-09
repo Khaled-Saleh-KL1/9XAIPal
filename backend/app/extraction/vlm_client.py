@@ -44,3 +44,57 @@ def call_vlm_page(png: bytes, model: str, client: httpx.Client) -> list[dict]:
     data = json.loads(content)
     blocks = data.get("blocks", data) if isinstance(data, dict) else data
     return [b for b in blocks if isinstance(b, dict) and b.get("type")]
+
+def _crop_figure(doc, page_idx: int, bbox, dpi: int, dest: Path) -> bool:
+    try:
+        page = doc[page_idx]
+        pix = page.get_pixmap(dpi=dpi)
+        x0, y0, x1, y1 = (int(v) for v in bbox)
+        irect = fitz.IRect(x0, y0, x1, y1) & fitz.IRect(0, 0, pix.width, pix.height)
+        if irect.is_empty or irect.width < 4 or irect.height < 4:
+            crop = pix                      # bad bbox -> whole page
+        else:
+            target = fitz.Pixmap(pix.colorspace, irect, pix.alpha)
+            target.copy(pix, irect)
+            crop = target
+        crop.save(dest)
+        return True
+    except Exception as e:
+        logger.warning(f"figure crop failed p{page_idx}: {e}")
+        return False
+
+def extract_via_vlm(pdf_path: Path, output_dir: Path) -> Path:
+    dpi = settings.extractor_vlm_dpi
+    model = settings.extractor_vlm_model
+    images_dir = output_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    pngs = render_pages(pdf_path, dpi)
+    if settings.extractor_vlm_max_pages:
+        pngs = pngs[: settings.extractor_vlm_max_pages]
+    doc = fitz.open(pdf_path)
+    content: list[dict] = []
+    fig_n = 0
+    try:
+        with httpx.Client(timeout=180.0) as client:
+            for pidx, png in enumerate(pngs):
+                try:
+                    blocks = call_vlm_page(png, model, client)
+                except Exception as e:                     # per-page fallback
+                    logger.warning(f"VLM page {pidx} failed ({e}); PyMuPDF text fallback")
+                    text = doc[pidx].get_text().strip()
+                    blocks = [{"type": "text", "text": text}] if text else []
+                for b in blocks:
+                    b["page_idx"] = pidx
+                    if b.get("type") == "image":
+                        fig_n += 1
+                        name = f"images/fig_{pidx+1}_{fig_n}.png"
+                        if _crop_figure(doc, pidx, b.get("bbox") or [], dpi, output_dir / name):
+                            b["img_path"] = name
+                        b.pop("bbox", None)
+                    content.append(b)
+    finally:
+        doc.close()
+    (output_dir / "content_list.json").write_text(
+        json.dumps(content, ensure_ascii=False), encoding="utf-8")
+    logger.info(f"VLM extraction: {len(content)} blocks over {len(pngs)} pages")
+    return output_dir
