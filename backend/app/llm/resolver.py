@@ -65,7 +65,7 @@ NO_EMBEDDING_MESSAGE = (
 @dataclass(frozen=True)
 class LLMTarget:
     provider: str          # "ollama" | "openai" | ... | "custom"
-    api_key: str           # "" for ollama (and optionally for custom)
+    api_key: str           # "" for local ollama / optionally for custom
     base_url: str          # OpenAI-compatible base, or OLLAMA_BASE_URL for ollama
     chat_model: str
     classifier_model: str
@@ -106,6 +106,14 @@ def _probe_store(url: str, up: bool) -> None:
     _probe_cache[url] = (time.monotonic(), up)
 
 
+def _ollama_headers() -> dict:
+    """Headers for native Ollama endpoints; adds Bearer auth when a key is set."""
+    headers = {}
+    if settings.ollama_api_key:
+        headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
+    return headers
+
+
 def ollama_reachable_sync() -> bool:
     url = settings.ollama_base_url
     cached = _probe_cached(url)
@@ -113,7 +121,7 @@ def ollama_reachable_sync() -> bool:
         return cached
     try:
         with httpx.Client(timeout=3.0) as client:
-            up = client.get(f"{url}/api/tags").status_code == 200
+            up = client.get(f"{url}/api/tags", headers=_ollama_headers()).status_code == 200
     except Exception:
         up = False
     _probe_store(url, up)
@@ -127,7 +135,7 @@ async def ollama_reachable() -> bool:
         return cached
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            up = (await client.get(f"{url}/api/tags")).status_code == 200
+            up = (await client.get(f"{url}/api/tags", headers=_ollama_headers())).status_code == 200
     except Exception:
         up = False
     _probe_store(url, up)
@@ -150,7 +158,7 @@ def _explicit_llm_provider() -> Optional[str]:
 def _ollama_target() -> LLMTarget:
     return LLMTarget(
         provider="ollama",
-        api_key="",
+        api_key=settings.ollama_api_key,
         base_url=settings.ollama_base_url,
         chat_model=settings.chat_model,
         classifier_model=settings.effective_classifier_model,
@@ -252,7 +260,7 @@ def _explicit_embedding_provider() -> Optional[str]:
 def _ollama_embedding_target() -> EmbeddingTarget:
     return EmbeddingTarget(
         provider="ollama",
-        api_key="",
+        api_key=settings.ollama_api_key,
         base_url=settings.ollama_base_url,
         model=settings.embedding_model,
     )

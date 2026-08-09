@@ -112,6 +112,8 @@ class Settings(BaseSettings):
 
     # Ollama (local default backend; model names live in .env)
     ollama_base_url: str = "http://localhost:11434"
+    # Optional API key for hosted/protected Ollama endpoints (leave empty for local).
+    ollama_api_key: str = ""
     chat_model: str = "gemma4:26b"
     # Vision model for figure descriptions / image questions. Empty = reuse
     # chat_model (set it only when a separate multimodal model should handle
