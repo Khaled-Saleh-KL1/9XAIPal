@@ -1,10 +1,32 @@
 /**
  * API client for 9XAIPal backend.
- * All requests proxy through Vite to http://localhost:8000.
+ *
+ * Base URL resolution:
+ *  - Local dev: leave VITE_API_BASE_URL unset — requests stay relative
+ *    ('/api/v1') and Vite proxies them to the backend on http://localhost:8000.
+ *  - Hosted frontend (e.g. Vercel): set VITE_API_BASE_URL to the backend's
+ *    public origin. Otherwise the static host has no /api and every call 404s.
  */
 import type { ContextType } from './types';
 
-const BASE = '/api/v1';
+// Trailing slashes trimmed so `${API_ORIGIN}/api/v1` never doubles up.
+const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
+const BASE = `${API_ORIGIN}/api/v1`;
+
+/**
+ * Whether there is a backend to talk to at all: either an explicit origin was
+ * configured, or we're on localhost where Vite proxies /api during dev. When
+ * false — a hosted frontend with no backend configured — API calls would hit a
+ * static host and 404, so callers should surface NO_BACKEND_MESSAGE instead.
+ */
+export const HAS_BACKEND =
+  API_ORIGIN !== '' ||
+  (typeof window !== 'undefined' &&
+    ['localhost', '127.0.0.1'].includes(window.location.hostname));
+
+export const NO_BACKEND_MESSAGE =
+  'No backend connected. This is a UI preview — run 9XAIPal locally, or set ' +
+  'VITE_API_BASE_URL to a reachable backend (see the README).';
 
 export interface PaperMeta {
   id: string;
@@ -129,6 +151,7 @@ export async function listPapers(): Promise<PaperMeta[]> {
 export type DocKind = 'book' | 'paper';
 
 export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<{ id: string; status: string }> {
+  if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
   const form = new FormData();
   form.append('file', file);
   form.append('kind', kind);
