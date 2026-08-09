@@ -49,14 +49,16 @@ def _crop_figure(doc, page_idx: int, bbox, dpi: int, dest: Path) -> bool:
     try:
         page = doc[page_idx]
         pix = page.get_pixmap(dpi=dpi)
-        x0, y0, x1, y1 = (int(v) for v in bbox)
-        irect = fitz.IRect(x0, y0, x1, y1) & fitz.IRect(0, 0, pix.width, pix.height)
-        if irect.is_empty or irect.width < 4 or irect.height < 4:
-            crop = pix                      # bad bbox -> whole page
-        else:
-            target = fitz.Pixmap(pix.colorspace, irect, pix.alpha)
-            target.copy(pix, irect)
-            crop = target
+        crop = pix                          # default: whole page (missing/bad bbox)
+        try:
+            x0, y0, x1, y1 = (int(v) for v in bbox)
+            irect = fitz.IRect(x0, y0, x1, y1) & fitz.IRect(0, 0, pix.width, pix.height)
+            if not irect.is_empty and irect.width >= 4 and irect.height >= 4:
+                target = fitz.Pixmap(pix.colorspace, irect, pix.alpha)
+                target.copy(pix, irect)
+                crop = target
+        except (ValueError, TypeError):
+            pass                             # missing/malformed bbox -> whole page
         crop.save(dest)
         return True
     except Exception as e:

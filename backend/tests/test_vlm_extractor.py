@@ -65,3 +65,19 @@ def test_extract_via_vlm_writes_content_list_and_crops(tmp_path):
     assert "bbox" not in imgs[0]
     assert (out / imgs[0]["img_path"]).exists()          # crop was saved
     assert all("page_idx" in b for b in data)
+
+
+def test_extract_via_vlm_missing_bbox_falls_back_to_whole_page(tmp_path):
+    pdf = _make_pdf(tmp_path)
+    out = tmp_path / "out"
+    def fake_call(png, model, client):
+        return [
+            {"type": "image", "img_caption": ["Fig 1"]},   # no bbox key at all
+        ]
+    with patch.object(vlm_client, "call_vlm_page", side_effect=fake_call):
+        result = vlm_client.extract_via_vlm(pdf, out)
+    data = json.loads((result / "content_list.json").read_text())
+    imgs = [b for b in data if b["type"] == "image"]
+    assert imgs and imgs[0]["img_path"].startswith("images/")
+    assert "bbox" not in imgs[0]
+    assert (out / imgs[0]["img_path"]).exists()          # whole-page crop was saved
