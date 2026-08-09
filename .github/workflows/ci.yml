@@ -71,6 +71,13 @@ jobs:
       POSTGRES_USER: 9xaipal
       POSTGRES_PASSWORD: 9xaipal_dev_password
       POSTGRES_DB: 9xaipal_test
+      # One test resolves an embedding provider (the actual HTTP call is mocked);
+      # pin to Ollama so resolution succeeds offline with no API key or network.
+      EMBEDDING_PROVIDER: ollama
+      # test_chunk_sequence inserts raw 4096-dim mock vectors, so the migrated
+      # chunk_embeddings.embedding column must be vector(4096). The oversized
+      # HNSW index (>2000 dims) is skipped best-effort; the test doesn't use it.
+      VECTOR_DIMENSION: "4096"
 
     steps:
       - uses: actions/checkout@v4
