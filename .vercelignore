@@ -1,0 +1,28 @@
+# Vercel deploys only the frontend (project root dir = frontend).
+# Exclude everything that isn't needed for the static SPA build so the
+# upload stays small and fast.
+backend/
+.venv/
+.venv*/
+venv/
+.uv/
+.git/
+.gitignore
+__pycache__/
+*.py[cod]
+*.egg-info/
+samples/
+assets/
+docs/
+scripts/
+.remember/
+.superpowers/
+.claude/
+.grok/
+.cursor/
+.copilot/
+.idea/
+.vscode/
+.DS_Store
+*.env
+.env.local

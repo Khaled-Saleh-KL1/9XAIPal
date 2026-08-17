@@ -1,0 +1,17 @@
+# Caddyfile — HTTPS front door for the 9XAIPal API.
+# ---------------------------------------------------------------------------
+# Caddy is the ONLY public entrypoint. It fetches a real Let's Encrypt
+# certificate for {$CADDY_SITE_ADDRESS} (a sslip.io hostname that resolves to
+# this VM's public IP, so no DNS setup is needed) and reverse-proxies HTTPS
+# traffic to the FastAPI container on the internal compose network.
+#
+#   CADDY_SITE_ADDRESS   e.g. 152-67-12-34.sslip.io   (set in .env)
+#
+# flush_interval -1 disables response buffering so streaming/SSE responses
+# (e.g. streamed chat tokens) reach the browser immediately.
+# ---------------------------------------------------------------------------
+{$CADDY_SITE_ADDRESS} {
+	reverse_proxy api:8000 {
+		flush_interval -1
+	}
+}

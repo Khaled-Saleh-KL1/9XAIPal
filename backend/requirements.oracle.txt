@@ -1,0 +1,44 @@
+# Runtime dependencies for the 9XAIPal backend as deployed on the Oracle
+# Always-Free ARM VM (EXTRACTOR_PROVIDER=vlm).
+#
+# This is requirements.txt MINUS `mineru[core]`.
+#
+# Why: MinerU is never imported by app/ — it is invoked as a CLI subprocess
+# (see `mineru_binary` in app/core/config.py). On the Oracle deployment
+# EXTRACTOR_PROVIDER=vlm routes all PDF extraction to Qwen3-VL on Ollama
+# Cloud, so the `mineru` CLI is never called. Installing it anyway would drag
+# in torch/OpenCV/transformers — multi-hundred-MB wheels with patchy aarch64
+# support — turning a ~2 minute build into a very long and fragile one on a
+# 4-core ARM box, for code that never runs.
+#
+# PDF page rasterisation for the VLM path, and the degraded text-only
+# fallback (ALLOW_PYMUPDF_FALLBACK), both come from pymupdf, which IS here.
+#
+# Keep in sync with requirements.txt when adding non-MinerU dependencies.
+
+# Web framework & server
+fastapi[standard]
+uvicorn[standard]
+python-multipart
+
+# Data validation & settings
+pydantic>=2.0
+pydantic-settings
+
+# HTTP client (Ollama / cloud LLM APIs)
+httpx
+
+# Database
+sqlalchemy[asyncio]>=2.0
+asyncpg
+psycopg2-binary       # sync driver used by Celery workers
+pgvector
+
+# File & PDF handling
+aiofiles
+pypdf
+pymupdf               # page rasterisation for the VLM extractor + text fallback
+
+# Background processing
+celery>=5.3
+redis>=5.0

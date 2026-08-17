@@ -81,3 +81,10 @@ samples/eval/
 backend/output
 # Playwright MCP run artifacts (screenshots, snapshots, console logs)
 .playwright-mcp/
+.vercel
+.env*
+# ...but keep the secret-free deployment templates. `.env*` above is added by
+# `vercel link`; without these negations it also swallows the checked-in
+# templates, which carry only empty placeholders.
+!backend/.env.oracle
+!*.env.example
