@@ -104,10 +104,11 @@ services:
        # Embeddings run on Gemini: this Ollama key has chat+vision only.
       GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
       LLM_PROVIDER: ollama
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-gemini}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-custom}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:31b}
       VLM_MODEL: ${VLM_MODEL:-gemma4:31b}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-minilm}
       VECTOR_DIMENSION: ${VECTOR_DIMENSION:-1024}
       EMBED_MAX_CHARS: ${EMBED_MAX_CHARS:-3000}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
@@ -115,6 +116,7 @@ services:
       CHAT_NUM_PREDICT: ${CHAT_NUM_PREDICT:-0}
        # ── Extraction: cloud VLM, no local MinerU ─────────────────────────
       EXTRACTOR_PROVIDER: vlm
+      INGEST_PROFILE: ${INGEST_PROFILE:-full}
       EXTRACTOR_VLM_MODEL: ${EXTRACTOR_VLM_MODEL:-gemma4:31b}
       EXTRACTOR_VLM_DPI: ${EXTRACTOR_VLM_DPI:-180}
       EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}
@@ -167,10 +169,11 @@ services:
        # Embeddings run on Gemini: this Ollama key has chat+vision only.
       GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
       LLM_PROVIDER: ollama
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-gemini}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-custom}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:31b}
       VLM_MODEL: ${VLM_MODEL:-gemma4:31b}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-minilm}
       VECTOR_DIMENSION: ${VECTOR_DIMENSION:-1024}
       EMBED_MAX_CHARS: ${EMBED_MAX_CHARS:-3000}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
@@ -179,6 +182,7 @@ services:
       GUARDRAIL_SKIP_IN_PAPER: ${GUARDRAIL_SKIP_IN_PAPER:-true}
        # ── Extraction: cloud VLM ──────────────────────────────────────────
       EXTRACTOR_PROVIDER: vlm
+      INGEST_PROFILE: ${INGEST_PROFILE:-full}
       EXTRACTOR_VLM_MODEL: ${EXTRACTOR_VLM_MODEL:-gemma4:31b}
       EXTRACTOR_VLM_DPI: ${EXTRACTOR_VLM_DPI:-180}
       EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}

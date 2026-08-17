@@ -2,7 +2,7 @@
 
 **Goal:** run the whole app without your local machine. The backend lives on a
 free, always-on Oracle ARM VM; the UI lives on Vercel; chat and vision run on
-Ollama Cloud; embeddings run on Gemini.
+Ollama Cloud; embeddings run locally on the VM.
 
 ## Why not "everything on Vercel"?
 
@@ -23,7 +23,7 @@ Vercel (static SPA, 9xaipal.vercel.app)
                               ├─ redis                       ├ internal only
                               └─ searxng                     ┘
    chat + vision ──▶ Ollama Cloud (OLLAMA_API_KEY)
-   embeddings    ──▶ Gemini      (GEMINI_API_KEY)
+   embeddings    ──▶ local `ollama` container (all-minilm, no quota)
 ```
 
 Postgres, Redis and SearXNG are **not** published to the host — they are
@@ -36,7 +36,7 @@ reachable only by service name on the compose network. The API binds to
 |---|---|---|---|
 | Chat / Q&A | `gemma4:31b` | Ollama Cloud | `CHAT_MODEL` |
 | Vision / PDF extraction | `gemma4:31b` | Ollama Cloud | `VLM_MODEL`, `EXTRACTOR_VLM_MODEL` |
-| Embeddings | `gemini-embedding-001` | Gemini | `EMBEDDING_MODEL` |
+| Embeddings | `all-minilm` | **local `ollama` container** | `EMBEDDING_MODEL` |
 
 Three findings that shaped this table — all confirmed against the live APIs:
 
@@ -45,14 +45,25 @@ Three findings that shaped this table — all confirmed against the live APIs:
    was verified to transcribe a real paper page correctly at 180 DPI, so it
    serves as both chat and vision model.
 2. **This Ollama key has no embedding access** — every embedding model returns
-   `{"error":"unauthorized"}`. Embeddings therefore run on Gemini.
-   `gemini-embedding-001` returns exactly **1024** dimensions, matching
-   `VECTOR_DIMENSION`, so no truncation or zero-padding occurs. Retrieval uses
-   cosine distance (`<=>`, `vector_cosine_ops`), so the vectors not being
-   L2-normalised is harmless.
-3. **`EMBEDDING_PROVIDER` must be pinned to `gemini`.** With the default
+   `{"error":"unauthorized"}`.
+3. **Gemini's free tier cannot do ingestion.** It answers queries fine, but
+   embeddings are generated per CHUNK, not per question. Measured 2026-08-17:
+   `gemini-embedding-001` returned HTTP **429** after ~5 batched requests
+   (~100 chunks) — about a third of ONE paper — and ingestion could never
+   finish. Embeddings therefore run **locally**, in an `ollama` container on
+   the VM, using `all-minilm` (45 MB, 384-dim). No quota, no per-token cost.
+   The app zero-pads to `VECTOR_DIMENSION`, and zero-padding does not change
+   cosine similarity, so retrieval stays correct.
+4. **`EMBEDDING_PROVIDER` must be pinned** (to `custom` here). With the default
    `auto`, the resolver probes Ollama first, finds `https://ollama.com`
-   reachable, selects it, and then fails on every embed call.
+   reachable, selects it, and then fails on every embed call. `custom` points
+   at `EMBEDDING_BASE_URL=http://ollama:11434/v1` — Ollama's
+   OpenAI-compatible endpoint.
+5. **`INGEST_PROFILE=full` is required for Q&A.** The default `fast` profile
+   skips embeddings for papers, and the ASK/GLOBAL path is vector-first.
+   Full-text search cannot cover for it: Postgres `websearch_to_tsquery` ANDs
+   every term, so a natural-language question matches no chunk even when the
+   phrase is present.
 
 `EXTRACTOR_PROVIDER=vlm` routes PDF extraction to the cloud VLM, so **no MinerU
 and no 5 GB model download**. The images build from `Dockerfile.oracle` +
@@ -91,12 +102,12 @@ cd 9XAIPal/backend
 cp .env.oracle .env
 ```
 
-Set these four in `.env`:
+Set these in `.env`:
 
 | Var | Value |
 |---|---|
 | `OLLAMA_API_KEY` | from https://ollama.com/settings/keys |
-| `GEMINI_API_KEY` | from https://aistudio.google.com/apikey |
+| `INGEST_PROFILE` | `full` — required for Q&A (see above) |
 | `POSTGRES_PASSWORD` | a long random string |
 | `CADDY_SITE_ADDRESS` | the VM's public IP with dots→dashes + `.sslip.io`, e.g. `152-67-12-34.sslip.io` |
 
@@ -135,7 +146,7 @@ will not pick it up.
 - Oracle `VM.Standard.A1.Flex` (4 OCPU / 24 GB): **$0** (Always Free)
 - Vercel Hobby: **$0**
 - Ollama Cloud: credits per chat/vision call
-- Gemini embeddings: free tier (~100 req/min; a large upload may need retries)
+- Embeddings: **$0** — they run locally on the VM
 
 ## Troubleshooting
 
@@ -145,7 +156,8 @@ will not pick it up.
 | Frontend shows "No backend connected" | `VITE_API_BASE_URL` unset, or set but not redeployed. |
 | Browser blocks requests | Backend on `http://`. It must be HTTPS. |
 | No certificate issued | Port 80 blocked (security list or VM iptables). |
-| Uploads ingest but search returns nothing | Embeddings failing — check `EMBEDDING_PROVIDER=gemini` is pinned. |
+| Uploads ingest but search returns nothing | No embeddings. Check `INGEST_PROFILE=full` and that the `ollama` container is up. |
+| Embedding calls return HTTP 429 | A cloud embedding provider's free quota. Switch to the local `ollama` embedder. |
 | Extraction quality poor, logs show "PyMuPDF text fallback" | The VLM reply failed to parse; see `vlm_client._strip_code_fence`. |
 | `*.vercel.app` unreachable on your network | Some ISPs/campus networks block it by TLS SNI. Test on mobile data. |
 
@@ -155,4 +167,24 @@ will not pick it up.
 - `backend/Dockerfile.oracle` / `requirements.oracle.txt` — lean ARM image, no MinerU/torch
 - `backend/Caddyfile` — HTTPS reverse proxy
 - `backend/.env.oracle` — env template
-- `backend/oracle-setup.sh` — one-command VM bootstrap
+- `backend/oracle-setup.sh` — one-command VM bootstrap (ARM box)
+- `backend/docker-compose.micro.yml` — overlay for the 1 GB AMD Always-Free
+  micro VM: adds the local `ollama` embedder and trims Postgres/Redis/uvicorn
+  to fit under a gigabyte
+- `backend/oracle-micro-bootstrap.sh` — swap + firewall + Docker for that box
+
+## Running on the AMD micro (`VM.Standard.E2.1.Micro`, 1 OCPU / 1 GB)
+
+ARM A1 capacity is frequently exhausted; the AMD micro is a separate pool and
+is usually available. It runs the same stack with an overlay:
+
+```bash
+./oracle-micro-bootstrap.sh        # 6 GB swap, ports 80/443, Docker
+docker compose -f docker-compose.oracle.yml -f docker-compose.micro.yml up -d --build
+docker exec 9xaipal-ollama ollama pull all-minilm
+```
+
+Swap is not optional at 1 GB — the stack idles around 600 MB and `docker build`
+alone can exhaust RAM. Verified 2026-08-17: all six services plus the local
+embedder run with no OOM kills, a 15-page paper ingests via the VLM, and 287
+chunks embed in about 40 s per paper.
