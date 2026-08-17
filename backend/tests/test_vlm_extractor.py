@@ -47,6 +47,76 @@ def test_call_vlm_page_parses_blocks():
     assert kwargs["json"]["messages"][0]["images"]
 
 
+def _resp(content: str):
+    """Mock httpx client whose /api/chat returns ``content`` as the message."""
+    client = MagicMock()
+    resp = MagicMock()
+    resp.json.return_value = {"message": {"content": content}}
+    resp.raise_for_status.return_value = None
+    client.post.return_value = resp
+    return client
+
+
+def test_call_vlm_page_strips_markdown_code_fence():
+    """gemma4:31b wraps its reply in ```json ... ``` even with format="json".
+
+    Observed against Ollama Cloud on 2026-08-17: json.loads() on the raw
+    content raised "Expecting value: line 1 column 1 (char 0)", so every page
+    silently fell back to PyMuPDF text-only extraction.
+    """
+    fenced = '```json\n{"blocks": [{"type": "text", "text": "Body."}]}\n```'
+    blocks = vlm_client.call_vlm_page(b"\x89PNG", "gemma4:31b", _resp(fenced))
+    assert blocks == [{"type": "text", "text": "Body."}]
+
+
+def test_call_vlm_page_strips_bare_fence_without_language():
+    bare = '```\n{"blocks": [{"type": "text", "text": "Body."}]}\n```'
+    blocks = vlm_client.call_vlm_page(b"\x89PNG", "gemma4:31b", _resp(bare))
+    assert blocks[0]["text"] == "Body."
+
+
+def test_call_vlm_page_normalizes_heading_aliases():
+    """The model emits "title"/"header" instead of the prompted text_level.
+
+    The chunker keys headings off type="text" + text_level, so unmapped
+    aliases would land as plain body text and break chapter navigation.
+    """
+    content = json.dumps({"blocks": [
+        {"type": "title", "text": "Attention Is All You Need"},
+        {"type": "heading", "text": "1  Introduction"},
+        {"type": "paragraph", "text": "Body."},
+        {"type": "figure", "bbox": [0, 0, 10, 10]},
+        {"type": "formula", "text": "$$x$$"},
+    ]})
+    blocks = vlm_client.call_vlm_page(b"\x89PNG", "gemma4:31b", _resp(content))
+    assert blocks[0]["type"] == "text" and blocks[0]["text_level"] == 1
+    assert blocks[1]["type"] == "text" and blocks[1]["text_level"] == 2
+    assert blocks[2]["type"] == "text" and "text_level" not in blocks[2]
+    assert blocks[3]["type"] == "image"
+    assert blocks[4]["type"] == "equation"
+
+
+def test_call_vlm_page_leaves_page_furniture_for_the_chunker_to_drop():
+    """"header"/"footer"/"page_number" are the chunker's _DROP_TYPES.
+
+    gemma4 uses "header" for running page furniture (the publisher notice on
+    page 1), so it must pass through untouched — mapping it to a heading would
+    resurrect that furniture as document structure.
+    """
+    content = json.dumps({"blocks": [
+        {"type": "header", "text": "Provided proper attribution..."},
+        {"type": "page_number", "text": "2"},
+    ]})
+    blocks = vlm_client.call_vlm_page(b"\x89PNG", "gemma4:31b", _resp(content))
+    assert [b["type"] for b in blocks] == ["header", "page_number"]
+
+
+def test_call_vlm_page_survives_unparseable_content():
+    """A non-JSON reply must yield no blocks rather than raise, so one bad
+    page degrades to the PyMuPDF fallback instead of failing the document."""
+    assert vlm_client.call_vlm_page(b"\x89PNG", "gemma4:31b", _resp("sorry, I cannot")) == []
+
+
 def test_extract_via_vlm_writes_content_list_and_crops(tmp_path):
     pdf = _make_pdf(tmp_path)                     # 2-page PDF from Task 2 helper
     out = tmp_path / "out"

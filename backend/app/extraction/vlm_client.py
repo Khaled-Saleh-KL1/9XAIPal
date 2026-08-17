@@ -28,6 +28,47 @@ def render_pages(pdf_path: Path, dpi: int) -> list[bytes]:
     finally:
         doc.close()
 
+def _strip_code_fence(content: str) -> str:
+    """Unwrap a ```json ... ``` fence if the model added one.
+
+    gemma4:31b wraps its reply in a markdown fence even when the request sets
+    ``format="json"``. Feeding that straight to json.loads() raises
+    "Expecting value: line 1 column 1 (char 0)", which made every page fall
+    back to PyMuPDF text-only extraction.
+    """
+    s = content.strip()
+    if not s.startswith("```"):
+        return s
+    s = s.split("\n", 1)[1] if "\n" in s else ""      # drop the ```json line
+    end = s.rfind("```")
+    return (s[:end] if end != -1 else s).strip()
+
+
+# Types models emit instead of the prompted schema. The chunker keys headings
+# off type="text" + text_level, so these have to be mapped or headings arrive
+# as plain body text and chapter navigation loses them.
+#
+# Deliberately NOT mapped: "header", "footer" and "page_number". Those are the
+# chunker's _DROP_TYPES for running page furniture, and gemma4 uses "header"
+# in exactly that sense (e.g. the publisher notice atop page 1). Passing them
+# through unchanged lets the chunker drop them; mapping "header" to a heading
+# would resurrect page furniture as document structure.
+_HEADING_ALIASES = {"title": 1, "heading": 2, "section": 2,
+                    "section_header": 2, "subtitle": 2}
+_TYPE_ALIASES = {"figure": "image", "picture": "image", "formula": "equation",
+                 "math": "equation", "paragraph": "text", "body": "text",
+                 "plain_text": "text", "caption": "text"}
+
+
+def _normalize_block(b: dict) -> dict:
+    etype = str(b.get("type", "")).strip().lower()
+    if etype in _HEADING_ALIASES:
+        b = {**b, "type": "text", "text_level": b.get("text_level") or _HEADING_ALIASES[etype]}
+    elif etype in _TYPE_ALIASES:
+        b = {**b, "type": _TYPE_ALIASES[etype]}
+    return b
+
+
 def call_vlm_page(png: bytes, model: str, client: httpx.Client) -> list[dict]:
     b64 = base64.b64encode(png).decode()
     payload = {
@@ -41,9 +82,18 @@ def call_vlm_page(png: bytes, model: str, client: httpx.Client) -> list[dict]:
                        json=payload, headers=_ollama_headers())
     resp.raise_for_status()
     content = resp.json().get("message", {}).get("content", "") or "{}"
-    data = json.loads(content)
+    try:
+        data = json.loads(_strip_code_fence(content) or "{}")
+    except json.JSONDecodeError:
+        # One unusable page must not fail the document — the caller falls back
+        # to PyMuPDF text for this page.
+        logger.warning("VLM returned unparseable content (%d chars); skipping page",
+                       len(content))
+        return []
     blocks = data.get("blocks", data) if isinstance(data, dict) else data
-    return [b for b in blocks if isinstance(b, dict) and b.get("type")]
+    if not isinstance(blocks, list):
+        return []
+    return [_normalize_block(b) for b in blocks if isinstance(b, dict) and b.get("type")]
 
 def _crop_figure(doc, page_idx: int, bbox, dpi: int, dest: Path) -> bool:
     try:
