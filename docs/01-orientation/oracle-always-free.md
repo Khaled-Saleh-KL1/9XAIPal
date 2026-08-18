@@ -130,6 +130,43 @@ filtered, Caddy's ACME challenge fails and no certificate is issued.
 Confirm: `curl https://<CADDY_SITE_ADDRESS>/api/v1/health` →
 `{"status":"ok","database":"ok",...}`
 
+## Step 4b — Serve the UI from the VM too (recommended)
+
+Some networks block `*.vercel.app` wholesale by TLS SNI, which makes the Vercel
+URL unreachable while this host is fine. Caddy therefore serves the built SPA
+at `/` and proxies `/api/*` to the API, so the app is reachable from either
+place at no extra cost. Same-origin also means no CORS preflight.
+
+```bash
+# on your machine
+cd frontend && VITE_API_BASE_URL="https://<CADDY_SITE_ADDRESS>" npm run build
+tar -C dist -czf - . | ssh ubuntu@<VM_IP> 'tar -C ~/9XAIPal/backend/frontend-dist -xzf -'
+```
+
+`VITE_API_BASE_URL` must be set even when serving same-origin: the SPA treats an
+empty origin as "no backend configured" off localhost and shows a preview notice.
+
+## A stable, memorable URL
+
+Oracle assigns an **ephemeral** public IP by default — it changes if the VM is
+ever stopped and started, which would break an `sslip.io` name permanently.
+Always Free includes 2 **reserved** IPs; reserve one (this assigns a new
+address, so do it before sharing links):
+
+```bash
+RES=$(oci network public-ip create --compartment-id $T --lifetime RESERVED \
+        --display-name 9xaipal-static-ip --wait-for-state AVAILABLE --query 'data.id' --raw-output)
+oci network public-ip delete --public-ip-id <EPHEMERAL_OCID> --force --wait-for-state TERMINATED
+oci network public-ip update --public-ip-id $RES --private-ip-id <PRIVATE_IP_OCID> --wait-for-state ASSIGNED
+```
+
+Then point a free DuckDNS subdomain at it and use that as
+`CADDY_SITE_ADDRESS` — Caddy issues a Let's Encrypt cert for it automatically:
+
+```bash
+curl "https://www.duckdns.org/update?domains=<name>&token=<token>&ip=<STATIC_IP>"
+```
+
 ## Step 5 — Point Vercel at the backend
 
 In Vercel → project **9xaipal** → **Settings → Environment Variables**:

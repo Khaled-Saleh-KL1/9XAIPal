@@ -232,6 +232,10 @@ services:
       CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:?set CADDY_SITE_ADDRESS in .env (e.g. 152-67-12-34.sslip.io)}
     volumes:
        - ./Caddyfile:/etc/caddy/Caddyfile:ro
+       # The built SPA, served at / alongside the API at /api. Present so the
+       # app stays reachable on networks that block *.vercel.app by TLS SNI.
+       # Populate with:  frontend/  npm run build  ->  scp dist/ to ./frontend-dist
+       - ./frontend-dist:/srv/frontend:ro
        - 9xaipal_caddy_data:/data
        - 9xaipal_caddy_config:/config
     depends_on:

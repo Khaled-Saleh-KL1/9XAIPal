@@ -1,17 +1,38 @@
-# Caddyfile — HTTPS front door for the 9XAIPal API.
+# Caddyfile — public entrypoint for 9XAIPal.
 # ---------------------------------------------------------------------------
 # Caddy is the ONLY public entrypoint. It fetches a real Let's Encrypt
 # certificate for {$CADDY_SITE_ADDRESS} (a sslip.io hostname that resolves to
-# this VM's public IP, so no DNS setup is needed) and reverse-proxies HTTPS
-# traffic to the FastAPI container on the internal compose network.
+# this VM's public IP, so no DNS setup is needed) and then:
 #
-#   CADDY_SITE_ADDRESS   e.g. 152-67-12-34.sslip.io   (set in .env)
+#   /api/*  -> the FastAPI container on the internal compose network
+#   /*      -> the built SPA from /srv/frontend
+#
+# Serving the SPA here as WELL as on Vercel is deliberate. Some networks
+# (the author's ISP among them) block *.vercel.app wholesale by TLS SNI, so
+# the Vercel URL is unreachable for them while this host is fine. Serving both
+# means the app is always reachable from one of the two, at no extra cost.
+#
+# Same-origin is a bonus: the SPA calls /api on the host it was served from,
+# so there is no CORS preflight and no mixed-content risk.
 #
 # flush_interval -1 disables response buffering so streaming/SSE responses
 # (e.g. streamed chat tokens) reach the browser immediately.
 # ---------------------------------------------------------------------------
 {$CADDY_SITE_ADDRESS} {
-	reverse_proxy api:8000 {
-		flush_interval -1
+	encode gzip
+
+	# API first — more specific than the catch-all file server below.
+	handle /api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# Everything else is the SPA. try_files sends unknown paths to index.html
+	# so client-side routes survive a hard refresh.
+	handle {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
 	}
 }

@@ -88,3 +88,6 @@ backend/output
 # templates, which carry only empty placeholders.
 !backend/.env.oracle
 !*.env.example
+
+# Built SPA copied to the VM and served by Caddy (build artifact, not source)
+backend/frontend-dist/
