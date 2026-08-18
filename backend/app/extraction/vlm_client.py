@@ -193,10 +193,28 @@ def extract_via_vlm(pdf_path: Path, output_dir: Path) -> Path:
             for pidx, png in enumerate(pngs):
                 try:
                     blocks = call_vlm_page(png, model, client)
-                except Exception as e:                     # per-page fallback
+                except Exception as e:                     # transport/HTTP failure
                     logger.warning(f"VLM page {pidx} failed ({e}); PyMuPDF text fallback")
+                    blocks = []
+                # An EMPTY result needs the same fallback as a raised one.
+                # call_vlm_page returns [] for unparseable JSON rather than
+                # raising (so one bad page cannot fail the document), which
+                # meant the `except` above never fired for that case and the
+                # page silently contributed nothing — it cost the live corpus
+                # five pages, including this paper's entire Introduction.
+                # Keying off the empty list covers both paths.
+                if not blocks:
                     text = doc[pidx].get_text().strip()
-                    blocks = [{"type": "text", "text": text}] if text else []
+                    if text:
+                        logger.warning(
+                            f"VLM page {pidx} produced no blocks; "
+                            f"PyMuPDF text fallback ({len(text)} chars)"
+                        )
+                        blocks = [{"type": "text", "text": text}]
+                    else:
+                        # Genuinely blank page — nothing to recover, and
+                        # emitting an empty block would be worse than nothing.
+                        logger.info(f"VLM page {pidx} produced no blocks and the page has no text")
                 for b in blocks:
                     b["page_idx"] = pidx
                     if b.get("type") == "image":
