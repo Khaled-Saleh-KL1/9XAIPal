@@ -1,6 +1,6 @@
 name: Deploy
 
-# Ships main to the Oracle VM that serves https://9xai.duckdns.org.
+# Ships main to the Oracle VM that serves https://9xaipal.duckdns.org.
 #
 # Vercel's own Git integration already redeploys 9xaipal.vercel.app on merge,
 # but that is NOT the whole app: the VM serves the SPA as well (some networks
@@ -37,7 +37,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     environment:
       name: production
-      url: https://9xai.duckdns.org
+      url: https://9xaipal.duckdns.org
 
     steps:
       - uses: actions/checkout@v4
@@ -99,9 +99,18 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$USER@$HOST" bash -euo pipefail <<'REMOTE'
             cd ~/9XAIPal
+            # The box may have been cloned with `--depth 1 -b <branch>`, which
+            # pins the remote's fetch refspec to that one branch — `origin/main`
+            # then never exists and `checkout -B main origin/main` fails with
+            # "not a commit". Widen the refspec, then work off FETCH_HEAD so
+            # this holds regardless of how the clone was originally made.
+            git remote set-branches origin '*'
             git fetch --depth 1 origin main
-            git checkout -B main origin/main
-            git reset --hard origin/main
+            # -f: files created by hand on the box during earlier debugging are
+            # tracked on main now, and would otherwise block the checkout.
+            # .env and frontend-dist/ are gitignored, so they survive.
+            git checkout -f -B main FETCH_HEAD
+            git reset --hard FETCH_HEAD
             cd backend
             sudo docker compose \
               -f docker-compose.oracle.yml \

@@ -78,6 +78,10 @@ export function App() {
   const [layout, setLayout] = useState<LibraryLayout>('grid');
   // When set, the "Book or Research paper?" chooser is open.
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
+  // A file handed to us by a drag-and-drop. The kind chooser still has to run
+  // (a drop can't say whether it's a book or a paper), so the file waits here
+  // until a kind is picked — and then skips the native file picker entirely.
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Tracks the document id of the in-flight upload so Cancel can actually
   // delete it on the backend (a ref, because Cancel may fire before the
@@ -163,14 +167,25 @@ export function App() {
     }
   }, [refreshPapers]);
 
-  // Step 1 of upload: ask whether this is a book or a research paper.
-  const startUpload = useCallback(() => {
+  // Step 1 of upload: ask whether this is a book or a research paper. A drop
+  // already carries the file, so it comes in as `file` and we hold onto it;
+  // the button passes nothing and the file gets picked in step 2.
+  const startUpload = useCallback((file?: File) => {
+    setPendingFile(file ?? null);
     setKindPickerOpen(true);
   }, []);
 
-  // Step 2: once the kind is chosen, open the native file picker and upload.
+  // Step 2: once the kind is chosen, upload the dropped file if we already have
+  // one; otherwise open the native file picker.
   const pickFileWithKind = useCallback((kind: DocKind) => {
     setKindPickerOpen(false);
+
+    if (pendingFile) {
+      setPendingFile(null);
+      handleFileUpload(pendingFile, kind);
+      return;
+    }
+
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.pdf';
@@ -180,7 +195,7 @@ export function App() {
       if (file) handleFileUpload(file, kind);
     };
     input.click();
-  }, [handleFileUpload]);
+  }, [handleFileUpload, pendingFile]);
 
   const openPaper = useCallback((p: Paper) => {
     setActivePaper(p);
@@ -317,7 +332,7 @@ export function App() {
       {kindPickerOpen && (
         <UploadKindModal
           onChoose={pickFileWithKind}
-          onCancel={() => setKindPickerOpen(false)}
+          onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
         />
       )}
 

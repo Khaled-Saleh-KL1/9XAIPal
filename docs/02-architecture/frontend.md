@@ -5,9 +5,11 @@
 > **Owns:** client-side state and view behavior.
 > **Does not own:** endpoint contracts ([api.md](../03-reference/api.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-28 against
+> **Status:** current · **Last verified:** 2026-08-18 against
 > [`frontend/src/App.tsx`](../../frontend/src/App.tsx) and
-> [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) (`main`, 5471870)
+> [`views/LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) (`main`, 79903be).
+> The ArticleReader sections below were last verified 2026-07-28 against
+> [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) (`main`, 5471870).
 > **Verify with:** `cd frontend && npm run build` (runs `tsc` first)
 
 Vite + React + Tailwind, no router library — a tiny state machine in
@@ -75,14 +77,60 @@ All functions throw on non-`2xx`.
 ## LibraryView ([views/LibraryView.tsx](../../frontend/src/views/LibraryView.tsx))
 
 Renders a paper grid/list. On mount, calls `listPapers()`. Features:
-- Drag-and-drop and click-to-upload dropzone.
+- Drag-and-drop and click-to-upload dropzone. Both call the same `onUpload` prop; a drop
+  passes the dropped `File`, a click passes nothing. See
+  [Upload + processing](#upload--processing-apptsx).
 - Local search (substring match over title and authors).
 - Local sort cycle: `recent → title → pages`.
 - Two layouts: grid (cards) and list (rows).
 
 ## Upload + processing ([App.tsx](../../frontend/src/App.tsx))
 
-`handleFileUpload(file)`:
+### Getting in — two entry paths, one chooser
+
+Upload is two steps, and **the kind chooser always runs first**. Nothing can be uploaded without a
+`DocKind`: it decides which reader the document opens in and whether the embedding pass runs at all
+([ingestion-pipeline.md](ingestion-pipeline.md)), and a drop cannot state it. What differs between
+the two entries is only *where the file comes from*.
+
+| Entry | `startUpload` receives | After the chooser (`pickFileWithKind`) |
+| --- | --- | --- |
+| Click the dropzone | nothing | Builds an `<input type=file accept=.pdf>` and clicks it |
+| Drop a PDF on it | the `File` off `e.dataTransfer` | Uploads `pendingFile` directly — **no picker** |
+
+```text
+  click ──┐                                    ┌── pendingFile === null ──► native file picker ──┐
+          ├─► startUpload(file?) ─► kind modal ─┤                                                 ├─► handleFileUpload(file, kind)
+  drop ───┘   sets pendingFile     (DocKind)   └── pendingFile !== null ──► use it, clear it ────┘
+```
+
+```mermaid
+%%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
+flowchart LR
+    C[Click dropzone] -->|no file| SU["startUpload(file?)<br/>sets pendingFile"]
+    D[Drop PDF] -->|"first PDF in<br/>e.dataTransfer"| SU
+    SU --> KM{{"UploadKindModal<br/>book or paper?"}}
+    KM -->|Cancel| X["close · pendingFile = null"]
+    KM -->|DocKind| Q{pendingFile?}
+    Q -->|null| FP[native file picker] --> HU["handleFileUpload(file, kind)"]
+    Q -->|File| HU
+```
+
+What the diagram rules out: a path where a drop reaches `handleFileUpload` without passing through
+the chooser, and a path where a dropped file is uploaded *and* the picker opens.
+
+⚠ **The drop handler must consume `e.dataTransfer` synchronously.** It reads the first PDF (by MIME
+type or `.pdf` extension) inside `onDrop` before any state update; the `DataTransfer` is neutered
+once the event handler returns, so a file plucked out later — for example after the modal
+resolves — is already gone.
+
+`pendingFile` is cleared on **both** exits from the modal: consumed on choose, discarded on cancel.
+A file left there would be silently uploaded by the *next* click-initiated upload instead of the
+one the user picked. **[untested]** — no test covers the upload entry path.
+
+### Then the upload itself
+
+`handleFileUpload(file, kind)`:
 
 1. Sets `uploadingFile`, switches to `route='processing'`.
 2. Calls `uploadPaper(file)`. Gets back `{id, status:'processing'}`.
