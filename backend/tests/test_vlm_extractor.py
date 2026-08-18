@@ -117,6 +117,53 @@ def test_call_vlm_page_survives_unparseable_content():
     assert vlm_client.call_vlm_page(b"\x89PNG", "gemma4:31b", _resp("sorry, I cannot")) == []
 
 
+def test_crop_prefers_the_real_embedded_image_over_the_models_bbox(tmp_path):
+    """A VLM guesses bounding boxes; the PDF states them exactly.
+
+    Observed on "Attention Is All You Need": the model's bbox for Figure 1 was
+    far enough off that the saved crop was mostly whitespace with the diagram
+    sliced off at the edge. PyMuPDF reports the embedded image's true rect, so
+    that must win whenever the page actually has one.
+    """
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    # A real embedded raster, placed well away from the bogus bbox below.
+    img = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 80, 120), 0)
+    img.set_rect(img.irect, (255, 0, 0))
+    page.insert_image(fitz.Rect(200, 100, 280, 220), pixmap=img)
+    p = tmp_path / "fig.pdf"
+    doc.save(p); doc.close()
+
+    d2 = fitz.open(p)
+    dest = tmp_path / "out.png"
+    # Deliberately wrong bbox — the kind of thing the model actually returns.
+    assert vlm_client._crop_figure(d2, 0, [10, 10, 60, 700], dpi=150, dest=dest)
+    out = fitz.Pixmap(dest)
+    d2.close()
+
+    scale = 150 / 72.0
+    exp_w = int(80 * scale)   # the image is 80pt wide
+    exp_h = int(120 * scale)
+    assert abs(out.width - exp_w) <= 4, f"cropped {out.width}px wide, expected ~{exp_w}"
+    assert abs(out.height - exp_h) <= 4, f"cropped {out.height}px tall, expected ~{exp_h}"
+
+
+def test_crop_falls_back_to_bbox_when_page_has_no_embedded_image(tmp_path):
+    """Vector-only figures have no image rect, so the model's bbox is all we have."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.draw_rect(fitz.Rect(100, 100, 200, 200), color=(0, 0, 0))
+    p = tmp_path / "vec.pdf"
+    doc.save(p); doc.close()
+
+    d2 = fitz.open(p)
+    dest = tmp_path / "out2.png"
+    assert vlm_client._crop_figure(d2, 0, [0, 0, 300, 300], dpi=72, dest=dest)
+    out = fitz.Pixmap(dest)
+    d2.close()
+    assert abs(out.width - 300) <= 4 and abs(out.height - 300) <= 4
+
+
 def test_extract_via_vlm_writes_content_list_and_crops(tmp_path):
     pdf = _make_pdf(tmp_path)                     # 2-page PDF from Task 2 helper
     out = tmp_path / "out"

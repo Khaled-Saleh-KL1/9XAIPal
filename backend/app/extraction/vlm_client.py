@@ -107,20 +107,70 @@ def call_vlm_page(png: bytes, model: str, client: httpx.Client) -> list[dict]:
         return []
     return [_normalize_block(b) for b in blocks if isinstance(b, dict) and b.get("type")]
 
+def _embedded_image_rects(page, dpi: int) -> list:
+    """Pixel rects of raster images embedded in the page, at `dpi`.
+
+    The PDF states these exactly, whereas a VLM only guesses bounding boxes —
+    and guesses them badly enough to crop a figure down to whitespace.
+    """
+    scale = dpi / 72.0                        # PDF points -> pixels
+    rects = []
+    try:
+        for img in page.get_images(full=True):
+            for r in page.get_image_rects(img[0]):
+                ir = fitz.IRect(int(r.x0 * scale), int(r.y0 * scale),
+                                int(r.x1 * scale), int(r.y1 * scale))
+                if ir.width >= 4 and ir.height >= 4:
+                    rects.append(ir)
+    except Exception:                          # pragma: no cover - defensive
+        pass
+    return rects
+
+
+def _area(r) -> int:
+    return max(0, r.width) * max(0, r.height)
+
+
+def _choose_crop_rect(page, bbox, dpi: int, pix):
+    """Where to actually cut the figure from. None means 'use the whole page'.
+
+    Order of trust: the PDF's own image geometry, then the model's bbox, then
+    the whole page.
+    """
+    page_rect = fitz.IRect(0, 0, pix.width, pix.height)
+
+    guess = None
+    try:
+        x0, y0, x1, y1 = (int(v) for v in bbox)
+        cand = fitz.IRect(x0, y0, x1, y1) & page_rect
+        if not cand.is_empty and cand.width >= 4 and cand.height >= 4:
+            guess = cand
+    except (ValueError, TypeError):
+        guess = None                           # missing/malformed bbox
+
+    embedded = _embedded_image_rects(page, dpi)
+    if embedded:
+        # With several images on a page, the model's guess still tells us WHICH
+        # one it meant, even though its coordinates are unreliable.
+        if guess is not None:
+            overlapping = [r for r in embedded if not (r & guess).is_empty]
+            if overlapping:
+                return max(overlapping, key=lambda r: _area(r & guess))
+        return max(embedded, key=_area)
+
+    return guess                               # vector-only figure, or nothing
+
+
 def _crop_figure(doc, page_idx: int, bbox, dpi: int, dest: Path) -> bool:
     try:
         page = doc[page_idx]
         pix = page.get_pixmap(dpi=dpi)
-        crop = pix                          # default: whole page (missing/bad bbox)
-        try:
-            x0, y0, x1, y1 = (int(v) for v in bbox)
-            irect = fitz.IRect(x0, y0, x1, y1) & fitz.IRect(0, 0, pix.width, pix.height)
-            if not irect.is_empty and irect.width >= 4 and irect.height >= 4:
-                target = fitz.Pixmap(pix.colorspace, irect, pix.alpha)
-                target.copy(pix, irect)
-                crop = target
-        except (ValueError, TypeError):
-            pass                             # missing/malformed bbox -> whole page
+        crop = pix                             # default: whole page
+        irect = _choose_crop_rect(page, bbox, dpi, pix)
+        if irect is not None:
+            target = fitz.Pixmap(pix.colorspace, irect, pix.alpha)
+            target.copy(pix, irect)
+            crop = target
         crop.save(dest)
         return True
     except Exception as e:
