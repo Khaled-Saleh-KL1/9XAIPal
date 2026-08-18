@@ -11,6 +11,15 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def _ollama_headers() -> dict:
+    """Headers for native Ollama endpoints; adds Bearer auth when a key is set."""
+    headers = {}
+    if settings.ollama_api_key:
+        headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
+    return headers
+
+
 # Cache of requested-tag → resolved installed tag. Ollama's installed model set
 # doesn't change during a run, so resolving once avoids a `GET /api/tags` round
 # trip before *every* chat call (there are 2–3 chat calls per /ask).
@@ -28,7 +37,9 @@ async def _resolve_model_tag(client: httpx.AsyncClient, requested: str) -> str:
     if cached:
         return cached
     try:
-        resp = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=5.0)
+        resp = await client.get(
+            f"{settings.ollama_base_url}/api/tags", timeout=5.0, headers=_ollama_headers()
+        )
         resp.raise_for_status()
         installed = [m.get("name", "") for m in resp.json().get("models", [])]
     except Exception as e:
@@ -90,7 +101,7 @@ async def chat(
             "options": options,
         }
         try:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=_ollama_headers())
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
@@ -144,7 +155,7 @@ async def stream_chat(
             "options": options,
         }
         try:
-            async with client.stream("POST", url, json=payload) as response:
+            async with client.stream("POST", url, json=payload, headers=_ollama_headers()) as response:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", "replace")[:500]
                     logger.error(f"Ollama stream HTTP {response.status_code}: {body}")
@@ -197,7 +208,7 @@ async def generate(
     timeout = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=_ollama_headers())
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
@@ -217,7 +228,9 @@ async def is_available() -> bool:
     """Check if Ollama is reachable."""
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.ollama_base_url}/api/tags")
+            resp = await client.get(
+                f"{settings.ollama_base_url}/api/tags", headers=_ollama_headers()
+            )
             return resp.status_code == 200
     except Exception:
         return False
@@ -240,7 +253,7 @@ def _resolve_model_tag_sync(requested: str) -> str:
 
     try:
         with httpx.Client(timeout=10.0) as client:
-            resp = client.get(f"{settings.ollama_base_url}/api/tags")
+            resp = client.get(f"{settings.ollama_base_url}/api/tags", headers=_ollama_headers())
             resp.raise_for_status()
             installed = [m.get("name", "") for m in resp.json().get("models", [])]
     except Exception as e:
@@ -292,7 +305,7 @@ def chat_sync(
 
     with httpx.Client(timeout=300.0) as client:  # 5 minutes per section is generous
         try:
-            response = client.post(url, json=payload)
+            response = client.post(url, json=payload, headers=_ollama_headers())
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]

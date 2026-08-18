@@ -61,7 +61,9 @@ async def list_chat_models() -> dict:
     if await resolver.ollama_reachable():
         try:
             async with httpx.AsyncClient(timeout=6.0) as client:
-                resp = await client.get(f"{settings.ollama_base_url}/api/tags")
+                resp = await client.get(
+                    f"{settings.ollama_base_url}/api/tags", headers=resolver._ollama_headers()
+                )
                 resp.raise_for_status()
                 for entry in resp.json().get("models", []):
                     name = entry.get("name") or ""

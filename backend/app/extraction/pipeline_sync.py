@@ -9,7 +9,9 @@ from sqlalchemy import text, Table, MetaData, Column, String, Integer, JSON, ins
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PG_UUID
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.paths import extracted_dir
 from app.extraction.mineru_client import (
     extract_pdf_sync,
     find_markdown_output,
@@ -25,6 +27,7 @@ from app.extraction.chunker import (
 from app.extraction.assets import move_asset_to_storage
 from app.extraction.glyph_repair import repair_chunks
 from app.extraction.jobs import JobStatus
+from app.extraction.vlm_client import extract_via_vlm
 
 logger = get_logger(__name__)
 
@@ -245,6 +248,29 @@ def clean_slate_sync(session: Session, document_id: UUID) -> None:
     )
 
 
+def resolve_extractor(pdf_path: Path, output_dir: Path) -> tuple[Path, str]:
+    """Route extraction by EXTRACTOR_PROVIDER; returns ``(output_dir, extractor_name)``.
+
+    ``extractor_name`` is persisted to ``documents.extractor`` by the caller so
+    the UI can label the document (e.g. "Processed by MinerU" vs "Processed by
+    PyMuPDF (fallback)" vs "Processed by VLM").
+
+    "mineru"/"pymupdf" (the default) keep the existing MinerU-client path — it
+    already honors ALLOW_PYMUPDF_FALLBACK and reports which of the two it
+    actually used. extract_pdf_sync derives its own output dir from a
+    document_id string (``extracted_dir() / document_id``), so we recover that
+    id from ``output_dir.name`` — the caller builds ``output_dir`` the same way.
+
+    "vlm" routes to the Qwen3-VL extractor instead, which takes the output dir
+    directly; there is no fallback distinction there, so the extractor name is
+    always "vlm".
+    """
+    provider = (settings.extractor_provider or "mineru").lower()
+    if provider == "vlm":
+        return extract_via_vlm(pdf_path, output_dir), "vlm"
+    return extract_pdf_sync(pdf_path, output_dir.name)
+
+
 def run_pipeline_sync(
     session: Session,
     *,
@@ -254,11 +280,12 @@ def run_pipeline_sync(
 ) -> None:
     """Full extraction pipeline executed synchronously within a single transaction wrapper."""
     try:
-        # Step 1: Extract with MinerU
+        # Step 1: Extract with the configured extractor (EXTRACTOR_PROVIDER)
         update_job_status_sync(session, job_id, JobStatus.EXTRACTING)
         session.commit()
 
-        output_dir, extractor = extract_pdf_sync(pdf_path, str(document_id))
+        output_dir = extracted_dir() / str(document_id)
+        output_dir, extractor = resolve_extractor(pdf_path, output_dir)
         # Persist which extractor produced the artifacts so the UI can label
         # the document (e.g. "Processed by MinerU" vs "Processed by PyMuPDF (fallback)").
         try:

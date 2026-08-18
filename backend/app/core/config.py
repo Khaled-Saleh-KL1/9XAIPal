@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # can take hours, so this defaults high. Lower it to fail fast on small docs.
     mineru_timeout_sec: int = 14400  # 4 hours
 
+    # ── PDF extractor selection ─────────────────────────────────────────────
+    # "mineru" (default, local high-quality), "vlm" (cloud Qwen3-VL via Ollama
+    # Cloud — no torch/MinerU needed), or "pymupdf" (plain text fallback).
+    extractor_provider: str = "mineru"
+    extractor_vlm_model: str = "qwen3-vl:235b-cloud"  # confirm exact cloud tag; configurable
+    extractor_vlm_dpi: int = 180
+    extractor_vlm_max_pages: int = 0        # 0 = unlimited; guardrail for credit use
+    extractor_vlm_concurrency: int = 3      # bounded to respect Ollama Cloud rate limits
+
     # ── LLM provider ────────────────────────────────────────────────────────
     # Which API answers questions. "auto" (default): use Ollama when it is
     # reachable at OLLAMA_BASE_URL, otherwise fall back to the first cloud
@@ -112,6 +121,8 @@ class Settings(BaseSettings):
 
     # Ollama (local default backend; model names live in .env)
     ollama_base_url: str = "http://localhost:11434"
+    # Optional API key for hosted/protected Ollama endpoints (leave empty for local).
+    ollama_api_key: str = ""
     chat_model: str = "gemma4:26b"
     # Vision model for figure descriptions / image questions. Empty = reuse
     # chat_model (set it only when a separate multimodal model should handle
