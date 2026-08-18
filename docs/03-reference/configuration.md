@@ -7,8 +7,9 @@
 > **Does not own:** how the provider chain resolves ([ai-backend.md](../02-architecture/ai-backend.md)),
 > how to bring the stack up ([setup.md](../01-orientation/setup.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-25 against
-> [`app/core/config.py`](../../backend/app/core/config.py) (`main`, 9b75500)
+> **Status:** current · **Last verified:** the paper-agent keys 2026-08-18 by running the
+> command below against [`app/core/config.py`](../../backend/app/core/config.py) (`8fb153b`);
+> every other key 2026-07-25 (`main`, 9b75500)
 > **Verify with:** `python -c "from app.core.config import settings; print(settings.model_dump())"`
 > **Volatile:** the whole file mirrors `config.py` — re-verify on any change to that file.
 
@@ -126,10 +127,12 @@ How a question is answered when there are no embeddings. Detail:
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `WHOLE_PAPER_MAX_TOKENS` | `120000` | Stuff the entire document into the prompt when `SUM(chunks.token_count)` is at or below this. Above it, the agent falls back to an iterative `SEARCH`/`READ` loop. ⚠ `token_count` is a `len/4` heuristic that undercounts math and tables — leave headroom below the model's real window. |
+| `PAPER_WHOLE_DOCUMENT_CONTEXT` | `False` | Whether a note may be answered by stuffing the **entire** paper into the prompt. Off by default: the model gets the anchor, its neighbours and the contents index, and pulls the rest with `SECTION`/`SEARCH`/`READ`. ⚠ Turning this on reverts to pre-2026-08-18 behavior for any paper under the ceiling below. |
+| `WHOLE_PAPER_MAX_TOKENS` | `120000` | The ceiling that applies **only when the key above is `True`**: stuff the document when `SUM(chunks.token_count)` is at or below this. ⚠ `token_count` is a `len/4` heuristic that undercounts math and tables — leave headroom below the model's real window. |
 | `PAPER_AGENT_MAX_STEPS` | `4` | Tool rounds before the model is forced to answer with what it has. |
-| `PAPER_AGENT_READ_MAX_CHUNKS` | `40` | Ceiling on one `READ` range, so a greedy request cannot blow the context window. Enforced in SQL. |
+| `PAPER_AGENT_READ_MAX_CHUNKS` | `40` | Ceiling on one `READ` or `SECTION` range, so a greedy request cannot blow the context window. Enforced in SQL. |
 | `PAPER_AGENT_SEARCH_LIMIT` | `8` | Ceiling on hits returned by one `SEARCH`. |
+| `PAPER_AGENT_MAP_STRIDE` | `12` | Only used when a paper has **no detected headings**: sample every Nth block as a stand-in contents index, so the model still gets a map. |
 
 ## Paper-only mode
 

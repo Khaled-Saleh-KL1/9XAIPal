@@ -14,7 +14,9 @@
 > [runtime-topology.md](../01-orientation/runtime-topology.md) — ports and processes ·
 > [database-schema.md](../03-reference/database-schema.md) — tables and columns.
 >
-> **Status:** current · **Reflects code as of:** 2026-07-25 (`main`, 9b75500)
+> **Status:** current · **Reflects code as of:** §1 and §6b 2026-08-18 against
+> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) (`8fb153b`); everything else
+> 2026-07-25 (`main`, 9b75500)
 
 ---
 
@@ -32,9 +34,10 @@ Three halves:
 2. **Reading** — two readers, chosen by `doc_kind`. A **paper** renders as a continuous article
    with a note margin either side. A **book** keeps the chapter-by-chapter reveal reader and its
    chat pane.
-3. **Asking** — for papers, anchored **margin notes** answered by the paper agent: the whole
-   document in context when it fits, otherwise an agentic `SEARCH`/`READ` loop over chunks. For
-   books, the routed `/ask` orchestrator with its four context sources.
+3. **Asking** — for papers, anchored **margin notes** answered by the paper agent from the
+   highlighted passage plus the paper's contents index, with an agentic
+   `SECTION`/`SEARCH`/`READ` loop for whatever else it needs. For books, the routed `/ask`
+   orchestrator with its four context sources.
 
 **Why local-first:** privacy (papers and chats never leave the machine), latency (LLM and vector
 search colocated with the data), cost (no per-token billing). The price is the cold-start latency
@@ -71,9 +74,9 @@ provider or adopt [the Exa + Firecrawl plan](../plans/exa-firecrawl-research-sta
 │                                                                           │
 │   api/v1/endpoints  →  services  →  database/repositories  →  raw SQL     │
 │         │                  │                                              │
-│         │                  ├─► chat/paper_agent      extraction/pipeline │
-│         │                  │     ├ whole-doc stuffing (dispatched to      │
-│         │                  │     └ SEARCH / READ loop  Celery, not run    │
+│         │                  ├─► chat/paper_agent      extraction/pipeline  │
+│         │                  │     ├ anchor + contents  (dispatched to      │
+│         │                  │     └ SECTION/SEARCH/READ Celery, not run    │
 │         │                  │                           inline)            │
 │         │                  └─► chat/orchestrator                          │
 │         │                        ├ guardrail                              │
@@ -118,7 +121,7 @@ flowchart TD
     subgraph BE["FastAPI :8000"]
         EP --> SVC[services]
         SVC --> REPO[database/repositories<br/>raw SQL → dicts]
-        SVC --> PA[chat/paper_agent<br/>whole-doc · SEARCH/READ]
+        SVC --> PA[chat/paper_agent<br/>anchor + contents<br/>SECTION · SEARCH · READ]
         SVC --> ORCH[chat/orchestrator]
         ORCH --> RT{{router<br/>LOCAL·GLOBAL·OVERVIEW·EXTERNAL}}
         EP -->|".delay()"| Q[(Redis)]
@@ -214,8 +217,9 @@ Falsifiable claims. Each is a bug if violated.
    has no chain at all — it is complete once chunked.
 4. `/ask` records the chosen route, the router's reason, the model, and latency for **every**
    call — `ask_traces` has one row per assistant turn.
-4b. A note records the model that answered it and whether the whole paper fit in context
-   (`retrieval_mode`), so two answers to the same question are always attributable.
+4b. A note records the model that answered it and how it was grounded (`retrieval_mode` —
+   `agent` by default, `whole` only when whole-document context is switched on), so two answers to
+   the same question are always attributable.
 5. The app works with no cloud service configured, provided Ollama is running.
 6. Conversation compaction fires at ≥ 5 user turns, so context never grows unbounded.
 7. Sub-threads isolate tangents via `parent_turn_id` and are deliberately paper-free.
@@ -237,14 +241,18 @@ Everything after the HTTP 201 runs in a Celery worker; the API never blocks on e
 
 Two paths that share only the LLM client.
 
-**Papers → the paper agent** (`/notes`). `anchor + question → whole-document stuffing OR an
-agentic SEARCH/READ loop → streamed answer → persist to paper_notes`. No router, no guardrail, no
+**Papers → the paper agent** (`/notes`). `anchor + question + the paper's contents index → an
+agentic SECTION/SEARCH/READ loop → answer → persist to paper_notes`. No router, no guardrail, no
 compaction, no embeddings.
 
 | Mode | When | Cost |
 | --- | --- | --- |
-| `whole` | `SUM(token_count) <= WHOLE_PAPER_MAX_TOKENS` | One call, large prompt |
-| `agent` | Above that | Up to `PAPER_AGENT_MAX_STEPS` tool rounds, then an answer |
+| `agent` | **the default, at every paper size** | Up to `PAPER_AGENT_MAX_STEPS` tool rounds, then an answer |
+| `whole` | `PAPER_WHOLE_DOCUMENT_CONTEXT=true` **and** `SUM(token_count) <= WHOLE_PAPER_MAX_TOKENS` | One call, large prompt |
+
+⚠ The paper itself is not in the prompt on the default path — the model gets the anchored passage
+and the heading spine, and fetches the rest. Size stopped being the deciding factor on 2026-08-18;
+see [chat-and-ask.md](chat-and-ask.md#the-paper-is-not-in-the-prompt).
 
 **Books → the orchestrator** (`/ask`). `guardrail + router (concurrent) → context retrieval →
 multimodal prompt → LLM → citations → persist + trace → maybe compact`. Four context sources,

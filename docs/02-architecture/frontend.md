@@ -8,8 +8,10 @@
 > **Status:** current · **Last verified:** 2026-08-18 against
 > [`frontend/src/App.tsx`](../../frontend/src/App.tsx) and
 > [`views/LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) (`main`, 79903be).
-> The ArticleReader sections below were last verified 2026-07-28 against
-> [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) (`main`, 5471870).
+> The ArticleReader's anchoring and table sections were verified 2026-08-18 against
+> [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) and
+> [`views/ArticleBlock.tsx`](../../frontend/src/views/ArticleBlock.tsx) (`8fb153b`); its
+> remaining sections 2026-07-28 (`main`, 5471870).
 > **Verify with:** `cd frontend && npm run build` (runs `tsc` first)
 
 Vite + React + Tailwind, no router library — a tiny state machine in
@@ -172,10 +174,20 @@ empty so centring holds), `inline` (below that, cards fall into normal flow unde
 | `text` | Drag-select inside a block → an "Ask" pill appears at the selection. |
 | `figure` | Hover a figure → "Ask about this figure". |
 | `equation` | Hover a formula → "Ask about this equation". |
+| `table` | Hover a table → "Ask about this table" — **or drag-select inside it**, which is promoted to the whole table. |
 | `block` | Press `A` or the Ask button with nothing selected → anchors to the block at the top of the viewport. |
 
-Figures and equations need an explicit affordance because neither can be drag-selected — one is an
-image, the other a tree of KaTeX spans that selects into gibberish.
+Figures, equations and tables need an explicit affordance because none of them can be
+drag-selected usefully — one is an image, one a tree of KaTeX spans that selects into gibberish,
+and the third selects into cell values stripped of the header and row label that give them meaning.
+
+⚠ **A selection inside a table does not produce a `text` anchor.**
+[`ArticleReader.tsx::openComposerFromSelection`](../../frontend/src/views/ArticleReader.tsx) looks
+up the block behind the selection and, if it is a table, hands the whole table over instead. The
+quote "8.4 12.1 91.2 7B" is not a worse quote than usual — it is unanswerable in a way that looks
+answerable, which is the failure mode worth code to prevent. Both the ask composer and the
+personal-note composer apply the rule; a table anchor carries the table's transcription as its
+quote and the MinerU crop as its image, exactly like an equation.
 
 ⚠ Every block carries `data-seq` and `data-chunk-id`. That is how a selection is traced back to a
 chunk and how a card finds the element to sit beside. Do not remove them.
@@ -211,12 +223,39 @@ watches `$\mathcal{P` type itself out and then snap into a symbol.
 | `heading` | `article-h1/2/3` by `heading_path` depth. |
 | `figure` | Centred image + caption, with a hover ask button. |
 | `math` | Centred KaTeX, horizontally scrollable, with a hover ask button. |
-| `table` | Real `<table>` from `table_json`, falling back to markdown. |
+| `table` | Real `<table>` from `table_json`, falling back to markdown — inside its own scroll box, with a hover ask button. See below. |
 | `code` | Fenced monospace block. |
 | `footnote` | Quiet side note with a rule. |
 | default | Serif prose at 20px/1.72. |
 
 Memoised — without it every keystroke in the composer would re-render the entire paper.
+
+#### Tables get their own scroll box
+
+A paper's tables are the one part of it that is genuinely not the width of the prose column.
+
+| | Before | Now |
+| --- | --- | --- |
+| Wrapper | `overflow-x: auto` | `.article-table-scroll`: `overflow: auto`, `max-height: 70vh` |
+| Table width | `width: 100%` | `width: max-content; min-width: 100%` |
+| Header row | scrolls away | `position: sticky; top: 0` |
+| Cue that there is more | none | styled scrollbar + edge shadows |
+
+⚠ **`overflow-x: auto` and `width: 100%` cannot both be true and mean anything.** The old pair
+never scrolled a single pixel: `100%` told the table to fit, so it always fit, and it bought that
+fit by crushing `Params (B)` into four stacked letters. Width has to come from the content before
+overflow means anything.
+
+Two landmines in the CSS, both in [`index.css`](../../frontend/src/index.css):
+
+- **Body cells must stay transparent.** The edge shadows are painted on the scroller's own
+  background using the `local`/`scroll` background-attachment pair, so an opaque `td` sits on top
+  of them and the cue silently disappears. Only `th` gets a fill, and it needs one for the
+  unrelated reason that it is sticky.
+- **A stuck `th` keeps its background and loses its borders.** With `border-collapse: collapse` the
+  cell borders belong to the table's paint layer, which is not sticky, so they scroll away and
+  leave the header floating with rows cut flush against its text. The header's separators are
+  therefore drawn as `box-shadow: inset`, which travels with the cell.
 
 ### The margin's scarce resource, and decks
 

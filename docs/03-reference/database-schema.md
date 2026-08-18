@@ -7,7 +7,9 @@
 > means in flow ([overview.md](../02-architecture/overview.md)).
 >
 > **Status:** current · **Last verified:** 2026-07-28 against
-> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 5471870)
+> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 5471870). The
+> `paper_notes` anchor and retrieval columns were re-read 2026-08-18 (`8fb153b`) — against the
+> file, **not** against a live database.
 > **Verify with:** `\d+ <table>` in psql — the live database is authoritative
 >
 > ⚠ One FK deviates from the pattern: `conversation_turns.document_id` is `ON DELETE SET NULL`,
@@ -280,13 +282,13 @@ surface notes in the chat-history endpoints.
 | `document_id`          | `UUID`        | FK → `documents.id` cascade.                              |
 | `anchor_chunk_id`      | `UUID`        | FK → `chunks.id` **SET NULL**. A convenience, not the anchor. |
 | `anchor_sequence_id`   | `INTEGER`     | **The durable anchor.** What the margin positions by.      |
-| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `block` (no selection — anchored to what was in view). |
+| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `table` (the whole table, including when the reader selected inside it) / `block` (no selection — anchored to what was in view). |
 | `anchor_quote`         | `TEXT`        | The exact highlighted text; re-located in the DOM to repaint the highlight. For an equation, its LaTeX. |
 | `anchor_image_path`    | `TEXT`        | Relative path under `images/` for figure and equation anchors. |
 | `question`             | `TEXT`        |                                                            |
 | `answer`               | `TEXT`        | `''` until generation completes — a failed call leaves a visible, retryable card. |
 | `cited_sequence_ids`   | `INTEGER[]`   | Blocks the answer referenced via `[[42]]` markers; renders as jump chips. |
-| `retrieval_mode`       | `TEXT`        | `whole` (paper fit in context) or `agent` (SEARCH/READ loop ran). |
+| `retrieval_mode`       | `TEXT`        | `agent` (the default: anchor + contents index, with a SECTION/SEARCH/READ loop available) or `whole` (the whole paper was in the prompt — only reachable with `PAPER_WHOLE_DOCUMENT_CONTEXT`). |
 | `model`                | `TEXT`        | What the provider reported answering.                      |
 | `requested_model`      | `TEXT`        | What the reader picked. Authoritative for follow-ups.      |
 | `margin_side`          | `TEXT`        | `right` (default) or `left`.                               |

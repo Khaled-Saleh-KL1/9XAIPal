@@ -6,7 +6,10 @@
 > **Does not own:** why a route behaves as it does ([chat-and-ask.md](../02-architecture/chat-and-ask.md)).
 >
 > **Status:** current · **Last verified:** 2026-07-28 against
-> [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870)
+> [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870). The note anchor
+> payload was re-read 2026-08-18 against
+> [`endpoints/notes.py`](../../backend/app/api/v1/endpoints/notes.py) (`8fb153b`) — **not**
+> against live OpenAPI, which was not running.
 > **Verify with:** `http://localhost:8000/docs` (live OpenAPI, always authoritative)
 
 All endpoints live under the prefix **`/api/v1`** and are registered in
@@ -325,7 +328,7 @@ margin lays them out in.
   {
     "id": "<uuid>",
     "anchor_sequence_id": <int>, "anchor_chunk_id": "<uuid>|null",
-    "anchor_kind": "text|figure|equation|block",
+    "anchor_kind": "text|figure|equation|table|block",
     "anchor_quote": "<the highlighted passage>|null",
     "anchor_image_path": "<doc_id>/<file>|null",
     "question": "...", "answer": "...",

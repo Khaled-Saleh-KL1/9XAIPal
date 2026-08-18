@@ -11,9 +11,10 @@
 > [api.md](../03-reference/api.md) — request and response shapes ·
 > [database-schema.md](../03-reference/database-schema.md) — `paper_notes`, `conversation_turns`.
 >
-> **Status:** current · **Last verified:** 2026-07-25 against
-> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) and
-> [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py) (`main`, 9b75500)
+> **Status:** current · **Last verified:** Part 1 on 2026-08-18 against
+> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) (`8fb153b`); Part 2 on
+> 2026-07-25 against [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py)
+> (`main`, 9b75500)
 > **Verify with:** the `NOTE[...]` and `ASK[stepN]` log lines emitted on every question
 > **Volatile:** the EXTERNAL section — the provider is being replaced.
 
@@ -25,7 +26,7 @@ There are now two, and they share nothing but the LLM client.
 | --- | --- | --- |
 | Serves | the article reader's margin notes | books, and any remaining `/ask` caller |
 | Source | [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) | [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py) |
-| Retrieval | whole-document stuffing, or `SEARCH`/`READ` over chunks | LOCAL / GLOBAL / OVERVIEW / EXTERNAL |
+| Retrieval | the anchor + the contents index, then `SECTION`/`SEARCH`/`READ` over chunks | LOCAL / GLOBAL / OVERVIEW / EXTERNAL |
 | Needs embeddings | ✗ | ✅ for GLOBAL |
 | Router | ✗ | ✅ |
 | Guardrail | ✗ | ✅ |
@@ -41,50 +42,69 @@ so there is nothing to compact. Each omission removes a model call from the crit
 
 # Part 1 — The paper agent (`/notes`)
 
-## Strategy is chosen by size
+## The paper is not in the prompt
+
+A note is a question about one passage. The model gets that passage, its neighbours, and the
+paper's **contents** — the heading spine, every entry carrying the block number it starts at.
+Everything else it has to go and get.
+
+⚠ **This reverses the old default.** Until 2026-08-18 a paper under `WHOLE_PAPER_MAX_TOKENS` was
+stuffed into the prompt whole, and only a paper too large for that got tools. Whole-document
+stuffing is now opt-in via `PAPER_WHOLE_DOCUMENT_CONTEXT` (default `False`) — a paper that merely
+*fits* is not a reason to spend the context window on it.
+
+**What makes the omission safe is the contents index, not the tools.** A model that cannot see the
+document but can see its shape knows what exists and can name the section it wants; a model with
+neither has only guesses at the paper's vocabulary and no way to tell a gap in its knowledge from a
+gap in the paper.
 
 ```text
                         note asked
                              │
+                  ┌──────────┴──────────┐
+                  │ PAPER_WHOLE_        │  default: False
+                  │ DOCUMENT_CONTEXT    │
+                  │ and paper fits?     │
+                  └──────────┬──────────┘
+              yes            │            no
+          ┌──────────────────┘            └──────────────────┐
+          ▼                                                  ▼
+    ── whole ──                                       ── agent ──
+  every block in the prompt          the anchor + surrounding blocks
+  one streamed call                  + PAPER CONTENTS (the index)
+          │                                                  │
+          │                                    ┌─────────────┴─────────────┐
+          │                                    │  up to PAPER_AGENT_       │
+          │                                    │  MAX_STEPS rounds         │
+          │                                    │                           │
+          │                                    │  model emits <tool>       │
+          │                                    │   SECTION: <seq>          │
+          │                                    │   SEARCH: <terms>         │
+          │                                    │   READ: <a>-<b>           │
+          │                                    │  backend executes,        │
+          │                                    │  feeds results back       │
+          │                                    └─────────────┬─────────────┘
+          │                                                  ▼
+          │                                   rounds spent → forced answer
+          └──────────────────┬───────────────────────────────┘
                              ▼
-              SUM(chunks.token_count) for the paper
-                             │
-          ┌──────────────────┴──────────────────┐
-   <= WHOLE_PAPER_MAX_TOKENS          > WHOLE_PAPER_MAX_TOKENS
-          │                                     │
-          ▼                                     ▼
-    ── whole ──                          ── agent ──
-  every block in the prompt        outline + anchor in the prompt
-  one streamed call                        │
-          │                    ┌───────────┴───────────┐
-          │                    │  up to PAPER_AGENT_   │
-          │                    │  MAX_STEPS rounds     │
-          │                    │                       │
-          │                    │  model emits <tool>   │
-          │                    │   SEARCH: <terms>     │
-          │                    │   READ: <a>-<b>       │
-          │                    │  backend executes,    │
-          │                    │  feeds results back   │
-          │                    └───────────┬───────────┘
-          │                                ▼
-          │                    rounds spent → forced answer
-          └────────────────┬───────────────┘
-                           ▼
-              answer + [[42]] block markers
-                           ▼
-              cited_sequence_ids → jump chips
+                answer + [[42]] block markers
+                             ▼
+                cited_sequence_ids → jump chips
 ```
+
+### (rendered)
 
 ```mermaid
 %%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
 flowchart TD
-    N["note asked<br/>(anchor + question)"] --> SZ{"paper tokens<br/>&lt;= WHOLE_PAPER_MAX_TOKENS?"}
-    SZ -->|yes| W["whole:<br/>every block in the prompt"]
-    SZ -->|no| A["agent:<br/>outline + anchor only"]
+    N["note asked<br/>(anchor + question)"] --> SZ{"PAPER_WHOLE_DOCUMENT_CONTEXT<br/>and paper fits?"}
+    SZ -->|"yes (opt-in)"| W["whole:<br/>every block in the prompt"]
+    SZ -->|"no (default)"| A["agent:<br/>anchor + neighbours<br/>+ PAPER CONTENTS"]
     A --> T{"model emits &lt;tool&gt;?"}
-    T -->|"SEARCH / READ"| X["execute against chunks<br/>feed observations back"]
+    T -->|"SECTION / SEARCH / READ"| X["execute against chunks<br/>feed observations back"]
     X --> T
-    T -->|no, or rounds spent| ANS
+    T -->|"no, or rounds spent"| ANS
     W --> ANS["streamed answer<br/>with [[seq]] markers"]
     ANS --> C["cited_sequence_ids<br/>→ jump chips"]
 
@@ -92,12 +112,43 @@ flowchart TD
     class W,A,X,ANS owned
 ```
 
+The diagram rules out one thing worth naming: there is no size check on the default path. A
+one-page paper and a 90-page one take the same route, and the only thing `WHOLE_PAPER_MAX_TOKENS`
+still does is cap the opt-in branch.
+
+⚠ **The answer does not stream on the default path when the model answers without a tool.** The
+first call is a non-streamed probe, because the reply may turn out to be a tool block and streaming
+`<tool>SEARCH: …` into the margin would be nonsense on screen. Generation time is unchanged; only
+the reveal is — [`lib/pacer.ts`](../../frontend/src/lib/pacer.ts) still paints it at a readable
+rate. Streaming returns for the forced final answer after a tool round.
+
 ## The tools
 
 | Tool | Syntax | Backed by |
 | --- | --- | --- |
+| `SECTION` | `SECTION: 31` | the contents entry at that `sequence_id`, expanded to its whole section |
 | `SEARCH` | `SEARCH: reference sliding window attention` | Postgres full-text **plus** a literal `ILIKE` substring pass |
 | `READ` | `READ: 40-52` | `chunks` in that `sequence_id` range, capped in SQL |
+
+`SECTION` is the tool that makes the index usable: it takes a number the model read off the
+contents and returns everything under that heading, down to the next heading of the same or higher
+level. Asking for a chapter gets its subsections; asking for a subsection gets only itself.
+Resolution is [`paper_agent.py::_section_range`](../../backend/app/chat/paper_agent.py), and it
+reads the already-loaded chunk list rather than going back to the database.
+
+⚠ **A block number that is not a heading resolves to the section containing it** rather than
+failing. Models routinely pass a `SEARCH` hit to `SECTION` to mean "give me the rest of whatever
+this was in", and that is both what they want and the only useful thing to do with the number.
+
+⚠ **The `SECTION` parser is deliberately loose** — `SECTION: [[31]] Method` works. Models echo the
+contents line they are following, brackets and title included, and a strict `SECTION:\s*(\d+)$`
+throws the call away, which reads to the reader as the index quietly not working.
+
+⚠ **A paper with no detected headings has no index, so one is synthesised** — every Nth block,
+sampled by `PAPER_AGENT_MAP_STRIDE`, labelled as a sample rather than a table of contents
+([`_format_block_map`](../../backend/app/chat/paper_agent.py)). Without it such a paper loses the
+index *and* the document in one move: nothing to browse and nothing in the prompt, leaving a wrong
+guess at the vocabulary as a dead end.
 
 ⚠ **The tools are a text protocol, not provider tool-calling.** This app fans out to Ollama and
 five OpenAI-compatible clouds whose tool-calling support and schemas differ; a fenced block every
@@ -112,6 +163,23 @@ full-text hits on the one term that matters.
 ⚠ The two search legs run **sequentially, not gathered**. An `AsyncSession` is a single connection
 in a single greenlet context; concurrent statements on it are unsupported and fail under the wrong
 interleaving. Both legs are indexed lookups measured in single-digit milliseconds.
+
+## What the anchor tells the model
+
+`anchor.kind` changes the instruction the model is given, not just the text it sees
+([`paper_agent.py::_format_anchor`](../../backend/app/chat/paper_agent.py)):
+
+| Kind | The model is told | Quote carries |
+| --- | --- | --- |
+| `text` | the reader highlighted this passage; answer about it specifically | the highlighted text |
+| `figure` | the image is attached — look at it | the caption |
+| `equation` | explain what it says and what each symbol means; **trust the attached crop over the transcription** | its LaTeX |
+| `table` | this is the whole table, not one cell; **trust the crop over the transcription**, and read the caption for what the columns mean | its recovered table body |
+| `block` | the reader is reading around this point | nothing |
+
+⚠ Both `equation` and `table` say to trust the image over the text, for the same reason: MinerU's
+transcription is machine-generated. For a table it specifically loses merged cells, spanning
+headers, and footnote markers — the parts that decide what a number means.
 
 ## Citations
 
