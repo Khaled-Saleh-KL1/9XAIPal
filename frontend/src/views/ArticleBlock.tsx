@@ -174,17 +174,35 @@ function ArticleBlockImpl({
      * a trackpad is unreachable by keyboard, and this one can hold the numbers
      * the whole paper is about.
      */
-    const body = json?.headers && json?.rows ? (
+    /**
+     * ⚠ `table_json.headers` is routinely EMPTY on real papers, and the header
+     * row arrives as `rows[0]` instead.
+     *
+     * MinerU emits `<table><tr><td>…` with no `<thead>`, so the parser that
+     * fills `table_json` has nothing to put in `headers`. Rendering that
+     * literally gives an empty `<thead>` and a header row that behaves like
+     * data: not bold, not tinted, and — since the sticky rule applies to `th`
+     * — scrolling a long table loses the column names entirely, which is the
+     * exact failure the scroll box exists to prevent.
+     *
+     * A first row promoted in error costs one row of bold text. A header that
+     * scrolls away costs the reader the meaning of every number below it.
+     */
+    const rows = json?.rows ?? [];
+    const headerCells = json?.headers?.length ? json.headers : rows[0];
+    const bodyRows = json?.headers?.length ? rows : rows.slice(1);
+
+    const body = headerCells?.length ? (
       <table>
         <thead>
           <tr>
-            {json.headers.map((h, i) => (
+            {headerCells.map((h, i) => (
               <th key={i}><InlineMd>{h}</InlineMd></th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {json.rows.map((row, ri) => (
+          {bodyRows.map((row, ri) => (
             <tr key={ri}>
               {row.map((cell, ci) => (
                 <td key={ci}><InlineMd>{cell}</InlineMd></td>
