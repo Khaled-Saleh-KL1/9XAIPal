@@ -21,8 +21,19 @@
 {$CADDY_SITE_ADDRESS} {
 	encode gzip
 
-	# API first — more specific than the catch-all file server below.
-	handle /api/* {
+	# Everything the API owns must be matched BEFORE the SPA catch-all below,
+	# or it silently returns index.html with HTTP 200 — which looks like a
+	# success to curl and like a broken image to a browser.
+	#
+	# /static/* is not optional: the API mounts figure crops, extracted page
+	# images and the original PDFs under /static/{images,extracted,assets}
+	# (see app/main.py), and the SPA references them with same-origin relative
+	# URLs. Without this, every figure in a paper renders as a broken image.
+	# One `path` with several values — they are OR'd. Separate `path` lines
+	# inside a named matcher would be AND'ed instead, which no request can
+	# ever satisfy, and every one of these would fall through to the SPA.
+	@api path /api/* /static/* /openapi.json /docs* /redoc*
+	handle @api {
 		reverse_proxy api:8000 {
 			flush_interval -1
 		}
