@@ -116,6 +116,13 @@ jobs:
               -f docker-compose.oracle.yml \
               -f docker-compose.micro.yml \
               up -d --build --remove-orphans
+            # The Caddyfile is a bind mount, so compose does NOT recreate caddy
+            # when only its contents change — a routing change would silently
+            # never take effect (this shipped a broken /static/* once already).
+            # Reload explicitly; fall back to a restart if the reload fails.
+            sudo docker compose -f docker-compose.oracle.yml -f docker-compose.micro.yml \
+              exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile \
+              || sudo docker restart 9xaipal-caddy
             sudo docker image prune -f >/dev/null 2>&1 || true
           REMOTE
 
@@ -129,15 +136,21 @@ jobs:
           for i in $(seq 1 30); do
             api=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/api/v1/health" || echo 000)
             app=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/" || echo 000)
-            echo "attempt $i: api=$api app=$app"
-            if [ "$api" = "200" ] && [ "$app" = "200" ]; then
+            # Assert the SPA catch-all is NOT shadowing API-owned paths. A bare
+            # status code is not enough: when /static/* falls through to the SPA
+            # it still answers 200, just with text/html instead of the asset.
+            # Check the CONTENT TYPE of an API-owned path instead.
+            ctype=$(curl -s -o /dev/null -w '%{content_type}' --max-time 15 "$URL/openapi.json" || echo none)
+            echo "attempt $i: api=$api app=$app openapi_type=$ctype"
+            case "$ctype" in *json*) routing_ok=1 ;; *) routing_ok=0 ;; esac
+            if [ "$api" = "200" ] && [ "$app" = "200" ] && [ "$routing_ok" = "1" ]; then
               echo "Deployed: $URL"
               curl -s --max-time 15 "$URL/api/v1/health"; echo
               exit 0
             fi
             sleep 10
           done
-          echo "::error::Deploy finished but $URL is not healthy"
+          echo "::error::Deploy finished but $URL is not healthy (or the SPA catch-all is shadowing API routes)"
           exit 1
 
       - name: Clean up key

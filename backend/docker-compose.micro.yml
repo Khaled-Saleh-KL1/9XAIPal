@@ -79,10 +79,15 @@ services:
     environment:
       DB_POOL_SIZE: 2
       DB_MAX_OVERFLOW: 2
-      # Rasterising PDF pages is the one genuinely local, memory-hungry step.
-      # Keep VLM calls serial and cap page size so a big paper cannot spike RSS.
+      # Rasterising PDF pages is the one genuinely local, memory-hungry step,
+      # so keep VLM calls serial. DPI stays HIGH deliberately: measured against
+      # the real Table 3 of "Attention Is All You Need" on 2026-08-18, 150 and
+      # 220 DPI both placed the (B) row values under the wrong column, while
+      # 300 DPI read them correctly. Extraction quality is worth the extra
+      # megabytes and the slower page — the box has 6 GB of swap and the AI
+      # work is remote anyway.
       EXTRACTOR_VLM_CONCURRENCY: 1
-      EXTRACTOR_VLM_DPI: 150
+      EXTRACTOR_VLM_DPI: 300
       # Recycle the worker process regularly so any leak is bounded.
       CELERYD_MAX_TASKS_PER_CHILD: 4
 
