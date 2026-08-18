@@ -18,7 +18,19 @@ PAGE_PROMPT = (
     '{"type":"equation","text":"$$ latex $$"}\n'
     '{"type":"table","table_body":"<table>...</table>","table_caption":["..."]}\n'
     '{"type":"image","bbox":[x0,y0,x1,y1],"img_caption":["..."]}  (bbox in PIXELS of this image)\n'
-    "Drop running headers, footers, and page numbers. Output JSON only."
+    "Drop running headers, footers, and page numbers.\n"
+    # Both rules below come from observed failures on real papers, not theory.
+    # Ablation tables leave most cells blank (a blank means "same as the base
+    # row"), and the model was collapsing those blanks — shifting values into
+    # the neighbouring column, e.g. reporting d_k figures under h.
+    "TABLES: emit every column for every row, in order. A visually blank cell "
+    "MUST be an empty <td></td> — never skip it and never shift a value into a "
+    "neighbouring column. Blank cells are meaningful: they mean 'unchanged from "
+    "the row above'. Count the header columns and give every row that many cells.\n"
+    # Long paragraphs were being cut mid-sentence, silently losing text.
+    "TEXT: transcribe each paragraph in full, to its final punctuation. Never "
+    "truncate, summarise, or end a block mid-sentence.\n"
+    "Output JSON only."
 )
 
 def render_pages(pdf_path: Path, dpi: int) -> list[bytes]:
