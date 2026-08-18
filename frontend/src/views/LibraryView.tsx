@@ -9,7 +9,9 @@ import { listPapers, deletePaper, type PaperMeta } from '../api';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
-  onUpload: () => void;
+  /** Called with the dropped file when the source is a drag-and-drop, and with
+   *  nothing when the user clicked (the file is chosen later, in a picker). */
+  onUpload: (file?: File) => void;
   onOpenRawFiles: () => void;
   layout: LibraryLayout;
   setLayout: (v: LibraryLayout) => void;
@@ -129,7 +131,12 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setOver(false);
-    onUpload();
+    // Carry the dropped file through to the upload flow. Without this the drop
+    // falls back to the click path, which asks the user to find the file again.
+    const file = Array.from(e.dataTransfer?.files ?? []).find(
+      (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'),
+    );
+    onUpload(file);
   };
 
   return (
@@ -195,7 +202,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
             onDragOver={(e) => { e.preventDefault(); setOver(true); }}
             onDragLeave={() => setOver(false)}
             onDrop={onDrop}
-            onClick={onUpload}
+            onClick={() => onUpload()}
             className={`dropzone${over ? ' is-over' : ''} cursor-pointer rounded-xl px-7 py-5 flex items-center gap-6`}
             style={{ background: over ? undefined : 'var(--bg-2)' }}
           >
