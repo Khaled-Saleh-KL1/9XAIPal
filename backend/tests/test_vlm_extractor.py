@@ -235,3 +235,76 @@ def test_resolve_extractor_uses_mineru_by_default(tmp_path, monkeypatch):
     assert called["mineru"] == (tmp_path / "x.pdf", "o")   # document_id derived from output_dir.name
     assert out_dir == fake_out
     assert extractor == "mineru"
+
+
+def test_unparseable_page_falls_back_to_pymupdf_text(tmp_path, monkeypatch):
+    """A page the VLM cannot parse must NOT silently vanish from the document.
+
+    call_vlm_page() swallows json.JSONDecodeError and returns [] (so one bad
+    page cannot fail the whole document). But extract_via_vlm's fallback was
+    written as `except Exception` around that call — and a function that
+    returns instead of raising never triggers an except block. The documented
+    "caller falls back to PyMuPDF text" was therefore dead code, and the page
+    contributed nothing at all.
+
+    Measured cost on the live corpus: RoFormer lost pages 3 and 7, and
+    "Attention Is All You Need" lost pages 2, 6 and 7 — taking its entire
+    Introduction, Background and Table 1 with them, with nothing logged as an
+    error and no gap visible in the output.
+    """
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((72, 72), "Recoverable sentence on the unparseable page.")
+    pdf = tmp_path / "doc.pdf"
+    doc.save(pdf); doc.close()
+
+    # Every page comes back empty, as an unparseable VLM reply would.
+    monkeypatch.setattr(vlm_client, "call_vlm_page", lambda *a, **k: [])
+
+    out = tmp_path / "out"
+    out.mkdir()
+    vlm_client.extract_via_vlm(pdf, out)
+    content = json.loads((out / "content_list.json").read_text())
+
+    assert content, "page produced no blocks at all — content was silently dropped"
+    assert any("Recoverable sentence" in (b.get("text") or "") for b in content), \
+        f"PyMuPDF fallback text missing from blocks: {content}"
+
+
+def test_blank_page_does_not_invent_content(tmp_path, monkeypatch):
+    """The fallback keys off an empty block list, so a genuinely blank page
+    must stay empty rather than emitting a spurious empty text block."""
+    doc = fitz.open()
+    doc.new_page(width=612, height=792)          # no text at all
+    pdf = tmp_path / "blank.pdf"
+    doc.save(pdf); doc.close()
+
+    monkeypatch.setattr(vlm_client, "call_vlm_page", lambda *a, **k: [])
+
+    out = tmp_path / "out"
+    out.mkdir()
+    vlm_client.extract_via_vlm(pdf, out)
+    content = json.loads((out / "content_list.json").read_text())
+    assert content == []
+
+
+def test_page_that_parses_normally_is_not_second_guessed(tmp_path, monkeypatch):
+    """A page the VLM handled fine must use the VLM blocks, not the fallback."""
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((72, 72), "Raw pdf text that should NOT be used.")
+    pdf = tmp_path / "ok.pdf"
+    doc.save(pdf); doc.close()
+
+    monkeypatch.setattr(
+        vlm_client, "call_vlm_page",
+        lambda *a, **k: [{"type": "text", "text": "VLM structured output"}],
+    )
+
+    out = tmp_path / "out"
+    out.mkdir()
+    vlm_client.extract_via_vlm(pdf, out)
+    content = json.loads((out / "content_list.json").read_text())
+
+    assert len(content) == 1
+    assert content[0]["text"] == "VLM structured output"

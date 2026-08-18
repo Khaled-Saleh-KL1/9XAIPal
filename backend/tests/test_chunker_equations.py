@@ -8,6 +8,8 @@ docs/issues or the PR this file ships with for the katex-error span chain.
 import json
 import re
 
+import pytest
+
 from app.extraction.chunker import (
     _split_equation_fences,
     _strip_latex_tag,
@@ -143,3 +145,48 @@ def test_equation_aligned_block_with_trailing_label_end_to_end(tmp_path):
     assert "$$" not in inner and "$" not in inner
     assert "\\begin{aligned}" in inner and "\\end{aligned}" in inner
     assert "37" in md
+
+
+# ── \eqno(N): the other equation-numbering syntax the VLM emits ─────────────
+
+def test_strip_latex_tag_also_handles_eqno_parens():
+    r"""KaTeX implements \tag{} (amsmath) but has no \eqno primitive at all.
+
+    Plain TeX numbers equations with \eqno(1); the VLM emits that form for
+    roughly half the equations in both live papers. Left in place it reaches
+    KaTeX verbatim and blows up the whole formula, exactly like the doubled
+    fence did.
+    """
+    body, tag = _strip_latex_tag(r"E = mc^2 \eqno(1)")
+    assert body == "E = mc^2"
+    assert tag == "1"
+
+
+def test_strip_latex_tag_eqno_braces_form():
+    body, tag = _strip_latex_tag(r"E = mc^2 \eqno{14}")
+    assert body == "E = mc^2"
+    assert tag == "14"
+
+
+def test_strip_latex_tag_leaves_eqno_mid_formula_alone():
+    r"""Only a TRAILING number is the equation label; anything else is content."""
+    raw = r"\text{eqno} = 5"
+    body, tag = _strip_latex_tag(raw)
+    assert body == raw and tag is None
+
+
+@pytest.mark.parametrize("raw,expected_label", [
+    (r"$$\text{Attention}(Q,K,V) = \text{softmax}(QK^T)V \eqno(1)$$", "1"),
+    (r"$$f_{\Theta,q}(x_m, m) = R^d_{\Theta,m} W_q x_m \eqno(14)$$", "14"),
+])
+def test_equation_with_eqno_renders_as_single_clean_fence(tmp_path, raw, expected_label):
+    """End-to-end: the real seq=32/52 shape from the live RoFormer document."""
+    entries = [{"type": "equation", "text": raw, "page_idx": 3}]
+    chunks = create_chunks_from_content_list(_write_content_list(tmp_path, entries))
+
+    md = chunks[0]["markdown"]
+    assert md.count("$$") == 2
+    inner = md.split("$$")[1]
+    assert "\\eqno" not in inner, f"raw \\eqno survived into the math body: {inner!r}"
+    assert "$" not in inner
+    assert expected_label in md

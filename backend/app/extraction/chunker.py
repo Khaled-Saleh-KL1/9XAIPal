@@ -561,49 +561,137 @@ def _split_text_around_display_math(text: str) -> list[tuple[str, str]]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _SimpleTableParser(HTMLParser):
-    """Lightweight HTML table parser that extracts headers and rows."""
+    """Lightweight HTML table parser that extracts headers and rows.
+
+    Handles ``colspan``: a cell that spans N columns occupies N slots, so
+    every row keeps the same width and no value drifts into a neighbouring
+    column. Papers lean on spans constantly — "Attention Is All You Need"
+    Table 2 has a two-row header where BLEU and Training Cost each span two
+    columns. Ignoring the attribute flattened that into 8 header strings for
+    a 5-column table, so `num_cols` matched no row and the frontend fell back
+    to raw markdown instead of rendering a real table.
+
+    ``rowspan`` is tracked across rows: a cell spanning two rows still owns
+    its column in the next one, so the following row's cells start at the
+    right column instead of shifting left. Table 2's ``<th rowspan="2">Model``
+    is exactly this — without it the second header row's EN-DE/EN-FR labels
+    slide one column left and every header ends up merged with the wrong
+    group.
+    """
 
     def __init__(self):
         super().__init__()
-        self.headers: list[str] = []
         self.rows: list[list[str]] = []
-        self._current_row: list[str] = []
+        self._header_rows: list[list[str]] = []
+        # Cells of the row being parsed, as (text, colspan, rowspan).
+        self._current_cells: list[tuple[str, int, int]] = []
         self._current_cell: list[str] = []
-        self._in_header = False
+        self._row_has_header = False
         self._in_cell = False
+        self._colspan_n = 1
+        self._rowspan_n = 1
+        # column index -> (text, rows still to fill) carried from earlier rows
+        self._pending: dict[int, tuple[str, int]] = {}
+
+    @staticmethod
+    def _span_attr(attrs, name: str) -> int:
+        for attr, value in attrs or ():
+            if attr == name:
+                try:
+                    # Clamp: a malformed span="999" must not explode the table.
+                    return max(1, min(int(str(value).strip()), 64))
+                except (TypeError, ValueError):
+                    return 1
+        return 1
 
     def handle_starttag(self, tag, attrs):
         if tag in ("th", "td"):
             self._in_cell = True
             self._current_cell = []
+            self._colspan_n = self._span_attr(attrs, "colspan")
+            self._rowspan_n = self._span_attr(attrs, "rowspan")
             if tag == "th":
-                self._in_header = True
+                self._row_has_header = True
         elif tag == "tr":
-            self._current_row = []
+            self._current_cells = []
+            self._row_has_header = False
+
+    def _assemble_row(self) -> list[str]:
+        """Lay this row's cells out into real column positions.
+
+        Columns still occupied by a rowspan from an earlier row are filled
+        first, so the row's own cells land after them rather than on top.
+        """
+        out: list[str] = []
+        queue = list(self._current_cells)
+        col = 0
+        while queue or col in self._pending:
+            carried = self._pending.get(col)
+            if carried is not None:
+                text, remaining = carried
+                out.append(text)
+                if remaining > 1:
+                    self._pending[col] = (text, remaining - 1)
+                else:
+                    del self._pending[col]
+                col += 1
+                continue
+            text, colspan, rowspan = queue.pop(0)
+            for _ in range(colspan):
+                out.append(text)
+                if rowspan > 1:
+                    self._pending[col] = (text, rowspan - 1)
+                col += 1
+        return out
 
     def handle_endtag(self, tag):
         if tag in ("th", "td") and self._in_cell:
             cell_text = " ".join(self._current_cell).strip()
-            if self._in_header:
-                self.headers.append(cell_text)
-            else:
-                self._current_row.append(cell_text)
+            self._current_cells.append((cell_text, self._colspan_n, self._rowspan_n))
             self._in_cell = False
-            self._in_header = False
-        elif tag == "tr" and self._current_row:
-            self.rows.append(self._current_row)
-            self._current_row = []
+            self._colspan_n = 1
+            self._rowspan_n = 1
+        elif tag == "tr" and self._current_cells:
+            row = self._assemble_row()
+            if self._row_has_header:
+                self._header_rows.append(row)
+            else:
+                self.rows.append(row)
+            self._current_cells = []
+            self._row_has_header = False
 
     def handle_data(self, data):
         if self._in_cell:
             self._current_cell.append(data.strip())
 
+    @property
+    def headers(self) -> list[str]:
+        """Header rows merged column-wise into one label per column.
+
+        A two-row header becomes "BLEU EN-DE" rather than "BLEU" and "EN-DE"
+        landing in separate columns. Duplicates from a colspan repeat are
+        collapsed so a spanned label is not repeated within its own column.
+        """
+        if not self._header_rows:
+            return []
+        width = max(len(r) for r in self._header_rows)
+        merged: list[str] = []
+        for col in range(width):
+            parts: list[str] = []
+            for row in self._header_rows:
+                cell = row[col] if col < len(row) else ""
+                if cell and cell not in parts:
+                    parts.append(cell)
+            merged.append(" ".join(parts))
+        return merged
+
     def get_result(self) -> dict:
+        headers = self.headers
         return {
-            "headers": self.headers,
+            "headers": headers,
             "rows": self.rows,
             "num_rows": len(self.rows),
-            "num_cols": len(self.headers) or (len(self.rows[0]) if self.rows else 0),
+            "num_cols": len(headers) or (len(self.rows[0]) if self.rows else 0),
         }
 
 
@@ -711,15 +799,28 @@ _DROP_TYPES = {"page_number", "header", "footer"}
 _FOOTNOTE_TYPES = {"page_footnote", "aside_text"}
 
 
+# Equation numbering the renderer cannot handle, in the two forms upstream
+# actually produces:
+#   \tag{1}   amsmath — MinerU's form. KaTeX supports it ONLY with amsmath.
+#   \eqno(1)  plain TeX — the VLM's form. KaTeX has no \eqno primitive at all,
+#             so leaving it in throws and the whole formula renders as raw red
+#             source. Seen on 6 equations across both live papers, including
+#             Attention's central softmax(QK^T/sqrt(d_k))V.
+# Both are anchored to the END of the string: only a trailing number is the
+# equation label, anything earlier is content.
+_EQ_LABEL_RE = re.compile(r"\\(?:tag|eqno)\s*[({]([^)}]+)[)}]\s*$")
+
+
 def _strip_latex_tag(latex: str) -> tuple[str, Optional[str]]:
-    """Pull a trailing ``\\tag{N}`` off a LaTeX string.
+    """Pull a trailing equation number off a LaTeX string.
 
     MinerU emits Attention's display equation as
-    ``\\mathrm{Attention}(Q,K,V) = … \\sqrt{d_k})V\\tag{1}``. KaTeX renders
-    ``\\tag`` only with amsmath loaded, so we strip it and re-attach as a
-    visible label after the formula so it survives in every renderer.
+    ``\\mathrm{Attention}(Q,K,V) = … \\sqrt{d_k})V\\tag{1}``; the VLM emits the
+    same idea as ``… \\eqno(1)``. Neither renders reliably in KaTeX, so we
+    strip whichever is present and re-attach the number as a visible label
+    after the formula, where it survives in every renderer.
     """
-    m = re.search(r"\\tag\s*\{([^}]+)\}\s*$", latex)
+    m = _EQ_LABEL_RE.search(latex)
     if not m:
         return latex, None
     return latex[: m.start()].rstrip(), m.group(1).strip()
