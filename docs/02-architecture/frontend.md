@@ -252,6 +252,13 @@ Two landmines in the CSS, both in [`index.css`](../../frontend/src/index.css):
   background using the `local`/`scroll` background-attachment pair, so an opaque `td` sits on top
   of them and the cue silently disappears. Only `th` gets a fill, and it needs one for the
   unrelated reason that it is sticky.
+- **`table_json.headers` is routinely empty, and the header row arrives as `rows[0]`.** MinerU
+  emits `<table><tr><td>…` with no `<thead>`, so the parser has nothing to put in `headers` — all
+  eight tables in the 47-page sample paper come back that way. The renderer promotes `rows[0]`
+  when `headers` is empty; without it the sticky rule pins an empty `<thead>` and a long table
+  scrolls its column names away, which is the failure the box exists to prevent. Fixed in the
+  renderer rather than the chunker deliberately: `table_json` mirrors what MinerU emitted, and a
+  chunker change would only reach papers re-ingested afterwards.
 - **A stuck `th` keeps its background and loses its borders.** With `border-collapse: collapse` the
   cell borders belong to the table's paint layer, which is not sticky, so they scroll away and
   leave the header floating with rows cut flush against its text. The header's separators are
