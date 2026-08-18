@@ -1,0 +1,136 @@
+name: Deploy
+
+# Ships main to the Oracle VM that serves https://9xai.duckdns.org.
+#
+# Vercel's own Git integration already redeploys 9xaipal.vercel.app on merge,
+# but that is NOT the whole app: the VM serves the SPA as well (some networks
+# block *.vercel.app by TLS SNI), and it is the only place the backend runs.
+# Without this workflow a merged PR leaves the live site unchanged and silent.
+#
+# Triggered by CI finishing successfully on main rather than by `push`, so we
+# never deploy a commit whose tests failed. workflow_run always uses the
+# workflow file from the default branch, which is why this must live on main.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  # Manual re-deploy (e.g. after changing a secret or rolling back).
+  workflow_dispatch:
+
+# Never let two deploys touch the box at once; queue instead of cancelling, so
+# an in-flight `docker compose up` is not killed half-way.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy to VM
+    runs-on: ubuntu-latest
+    # workflow_dispatch has no workflow_run context, hence the second clause.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    environment:
+      name: production
+      url: https://9xai.duckdns.org
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For workflow_run, check out the commit CI actually validated —
+          # not whatever main happens to point at now.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      # ── Build the SPA that Caddy serves ────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # VITE_API_BASE_URL is baked in at build time. It must be set even though
+      # the SPA is served from the same origin: with an empty origin the app
+      # treats itself as having no backend (anywhere but localhost) and renders
+      # a "no backend connected" notice instead of calling /api.
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ${{ secrets.DEPLOY_PUBLIC_URL }}
+        run: npm run build
+
+      # ── Reach the VM ───────────────────────────────────────────────────
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Ship the built SPA. --delete removes files from older builds so stale
+      # hashed assets do not accumulate on a 96 GB disk forever.
+      - name: Upload SPA
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          rsync -az --delete -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            frontend/dist/ "$USER@$HOST:~/9XAIPal/backend/frontend-dist/"
+
+      # ── Update and restart the stack ───────────────────────────────────
+      # reset --hard (not pull) so the VM always matches origin/main exactly,
+      # including any manual edits made on the box during earlier debugging.
+      # backend/.env is gitignored, so credentials on the VM survive this.
+      - name: Deploy backend
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$USER@$HOST" bash -euo pipefail <<'REMOTE'
+            cd ~/9XAIPal
+            git fetch --depth 1 origin main
+            git checkout -B main origin/main
+            git reset --hard origin/main
+            cd backend
+            sudo docker compose \
+              -f docker-compose.oracle.yml \
+              -f docker-compose.micro.yml \
+              up -d --build --remove-orphans
+            sudo docker image prune -f >/dev/null 2>&1 || true
+          REMOTE
+
+      # ── Prove it actually works ────────────────────────────────────────
+      # A deploy that silently serves a broken app is worse than a failed one,
+      # so fail the job unless the live URL answers.
+      - name: Health check
+        env:
+          URL: ${{ secrets.DEPLOY_PUBLIC_URL }}
+        run: |
+          for i in $(seq 1 30); do
+            api=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/api/v1/health" || echo 000)
+            app=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/" || echo 000)
+            echo "attempt $i: api=$api app=$app"
+            if [ "$api" = "200" ] && [ "$app" = "200" ]; then
+              echo "Deployed: $URL"
+              curl -s --max-time 15 "$URL/api/v1/health"; echo
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Deploy finished but $URL is not healthy"
+          exit 1
+
+      - name: Clean up key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
