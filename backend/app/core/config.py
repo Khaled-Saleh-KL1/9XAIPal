@@ -174,9 +174,21 @@ class Settings(BaseSettings):
         return self.ingest_profile.strip().lower() == "fast"
 
     # ── Paper agent (answering without embeddings) ──────────────────────────
-    # Stuff the ENTIRE document into the prompt when its measured token count
-    # is at or below this. Above it, the agent falls back to an iterative
-    # SEARCH/READ loop over chunks.
+    # Whether a note may be answered by stuffing the ENTIRE paper into the
+    # prompt.
+    #
+    # ⚠ Default False, and that default is the product decision. A note is a
+    # question about one passage the reader is pointing at; handing the model
+    # forty pages of unrelated prose buys nothing, costs the whole prompt, and
+    # measurably dilutes the answer — the model starts describing the paper
+    # instead of the sentence. The anchored path gives it the quote, its
+    # neighbours, and the paper's contents index, and lets it pull the rest
+    # itself with SEARCH / READ / SECTION.
+    #
+    # Set True to restore the old behavior for papers under
+    # whole_paper_max_tokens.
+    paper_whole_document_context: bool = False
+    # The ceiling that applies when the setting above is True.
     # ⚠ token_count is len(plain_text)/4 — a character heuristic that
     # undercounts math and tables badly. Leave headroom below the real window.
     whole_paper_max_tokens: int = 120_000
@@ -188,6 +200,9 @@ class Settings(BaseSettings):
     paper_agent_read_max_chunks: int = 40
     # Ceiling on how many chunks a single SEARCH may return as hits.
     paper_agent_search_limit: int = 8
+    # How many blocks the contents index falls back to sampling when a paper
+    # has no detected headings at all, so the model still gets a map of it.
+    paper_agent_map_stride: int = 12
 
     # ── Paper-only mode ─────────────────────────────────────────────────────
     # Skip the embedding pass for documents small enough to fit whole in the
