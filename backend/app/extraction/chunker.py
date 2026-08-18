@@ -725,6 +725,35 @@ def _strip_latex_tag(latex: str) -> tuple[str, Optional[str]]:
     return latex[: m.start()].rstrip(), m.group(1).strip()
 
 
+def _split_equation_fences(raw: str) -> tuple[str, str]:
+    """Peel a leading/trailing ``$$`` off equation text, wherever they fall.
+
+    MinerU emits equations already fenced. The VLM extractor's own prompt
+    tells it to answer the same way — but unlike MinerU it often appends the
+    equation number as bare text right after the closing fence instead of
+    using ``\\tag{}``, e.g. ``$$E=mc^2$$ (35)``. The previous fence-strip only
+    fired when the string BOTH started AND ended with ``$$``, which any
+    trailing text fails, so nothing was stripped. The caller then wrapped
+    that already-fenced string in another ``$$...$$``, doubling the fences.
+    remark-math only peels the outer pair, so KaTeX received a math body that
+    still contained a literal inner ``$$`` — invalid TeX (``Can't use
+    function '$' in math mode``) — and rendered the raw source in red instead
+    of the formula.
+
+    Returns ``(body, trailing)``: the fenced content with its ``$$``
+    removed (or the whole string, if it was never fenced), and whatever
+    followed the closing fence, trimmed. An opening fence with no closer is
+    left untouched rather than guessed at.
+    """
+    s = raw.strip()
+    if not s.startswith("$$"):
+        return s, ""
+    close = s.find("$$", 2)
+    if close == -1:
+        return s, ""
+    return s[2:close].strip(), s[close + 2:].strip()
+
+
 def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
     """Build typed chunks from MinerU's content_list.json.
 
@@ -783,16 +812,23 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
             continue
 
         if etype == "equation":
-            # MinerU produces the full LaTeX wrapped in $$..$$ already; we just
-            # peel the fences, strip any \tag{N}, and re-emit canonically.
+            # MinerU (and the VLM extractor, per its own prompt) produce the
+            # full LaTeX already wrapped in $$..$$; peel those fences
+            # wherever the closing one actually falls (not only when it's the
+            # very last two characters — see _split_equation_fences), strip
+            # any \tag{N}, fold in a bare trailing equation number the same
+            # way, and re-emit canonically as a SINGLE fence pair.
             raw = (entry.get("text") or "").strip()
-            body = raw
-            if body.startswith("$$") and body.endswith("$$"):
-                body = body[2:-2].strip()
+            body, trailing = _split_equation_fences(raw)
             body, tag = _strip_latex_tag(body)
-            label_suffix = f" \\quad ({tag})" if tag else ""
+            # A bare "(35)" left after the closing fence is the model's
+            # equation-number footer, not \tag{} but meaning the same thing.
+            # Strip stray "$" defensively — the one substring guaranteed to
+            # break KaTeX again if it ever leaked through here too.
+            label = tag or (trailing.replace("$", "") or None)
+            label_suffix = f" \\quad ({label})" if label else ""
             md = f"$$\n{body}{label_suffix}\n$$"
-            plain = body + (f" ({tag})" if tag else "")
+            plain = body + (f" ({label})" if label else "")
             # MinerU also crops a bitmap of the typeset equation. The chunk
             # still renders from LaTeX (sharp, themeable, selectable), but the
             # crop is linked so a question about a formula can hand the model
