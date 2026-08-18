@@ -269,9 +269,12 @@ CREATE TABLE IF NOT EXISTS paper_notes (
     anchor_chunk_id UUID REFERENCES chunks(id) ON DELETE SET NULL,
     anchor_sequence_id INTEGER NOT NULL,
 
-    -- 'text'   the reader highlighted a passage, held in anchor_quote
-    -- 'figure' the reader picked a figure, located by anchor_image_path
-    -- 'block'  no selection, so the note hangs off the block in view
+    -- 'text'     the reader highlighted a passage, held in anchor_quote
+    -- 'figure'   the reader picked a figure, located by anchor_image_path
+    -- 'equation' the reader picked a math block: quote is its LaTeX, image its crop
+    -- 'table'    the reader picked a whole table: quote is its transcription,
+    --            image its crop (a selection inside a table is promoted to this)
+    -- 'block'    no selection, so the note hangs off the block in view
     -- (no semicolons in these comments: the migration runner splits on them)
     anchor_kind TEXT NOT NULL DEFAULT 'text',
     anchor_quote TEXT,

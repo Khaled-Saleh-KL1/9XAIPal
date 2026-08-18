@@ -26,6 +26,10 @@
      that already has both. */
   --deck:          oklch(0.54  0.13 268);
   --deck-soft:     oklch(0.94  0.035 268);
+  /* Edge shadow marking "this box scrolls further". Dark mode needs a deeper
+     one: the same 10% black that reads as a shadow on paper is invisible
+     against a near-black page. */
+  --scroll-cue:    rgba(0, 0, 0, 0.14);
 }
 
 .dark {
@@ -45,6 +49,7 @@
   --ok-soft:       oklch(0.28  0.05 150);
   --deck:          oklch(0.73  0.11 270);
   --deck-soft:     oklch(0.28  0.05 270);
+  --scroll-cue:    rgba(0, 0, 0, 0.55);
 }
 
 html, body, #root {
@@ -804,21 +809,123 @@ body {
 }
 .article-math:hover .article-math-ask { opacity: 1; transform: translateY(0); }
 .article-math-ask:hover { border-color: var(--accent); color: var(--accent); }
-.article-table { overflow-x: auto; }
-.article-table table {
-  width: 100%;
+/* ── Tables: their own scroll box, not a squeezed-to-fit grid ──────────────
+   A paper's tables are the one part of it that is genuinely not the width of
+   the prose column. The old rule — overflow-x on the wrapper, width:100% on
+   the table — could never scroll: the table always fit, because 100% told it
+   to, and it bought that fit by crushing "Params (B)" into four stacked
+   letters. Here the table takes its natural width and the box scrolls under
+   it. Vertical scroll too, with the header row pinned, so a long table stays
+   readable without the column names sliding off the top. */
+.article-table { position: relative; }
+.article-table-scroll {
+  overflow: auto;
+  max-height: 70vh;
+  /* Room for the horizontal bar so it never sits on top of the last row. */
+  padding-bottom: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  /* The scroll cue: the two radial gradients are painted against the viewport
+     (`scroll`) while the two flat ones ride with the content (`local`), so an
+     edge shadow appears only on the side that still has content behind it and
+     fades out as you reach the end. Cells must be opaque for this to read —
+     see the background on th/td below. */
+  background:
+    linear-gradient(to right, var(--bg) 30%, transparent) left center / 28px 100% no-repeat local,
+    linear-gradient(to left,  var(--bg) 30%, transparent) right center / 28px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--scroll-cue), transparent) left center / 14px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--scroll-cue), transparent) right center / 14px 100% no-repeat scroll,
+    var(--bg);
+  /* ⚠ Both of these are load-bearing on macOS, where scrollbars are overlays
+     that fade out when the pointer stops. A table the reader cannot tell is
+     scrollable is a table they read the first four columns of and believe to
+     be the whole thing. Firefox takes scrollbar-*; WebKit and Blink take the
+     pseudo-element below, and declaring it at all opts that engine out of
+     overlay scrollbars for this element. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.article-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.article-table-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.article-table-scroll::-webkit-scrollbar-track {
+  background: var(--bg-2);
+  border-radius: 999px;
+}
+.article-table-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid var(--bg-2);
+  border-radius: 999px;
+}
+.article-table-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+.article-table-scroll::-webkit-scrollbar-corner { background: var(--bg-2); }
+
+.article-table .article-table-scroll table {
+  /* max-content, floored at the column width: a narrow table still fills the
+     measure, a wide one keeps its real proportions and scrolls. */
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 15px;
   line-height: 1.5;
+  margin: 0;
+  border: 0;
 }
-.article-table th,
-.article-table td {
+.article-table .article-table-scroll th,
+.article-table .article-table-scroll td {
   border: 1px solid var(--border);
   padding: 10px 14px;
   text-align: left;
   vertical-align: top;
+  /* A cell of prose in a table of numbers would otherwise stretch the table to
+     the width of its longest sentence and make every scroll a long one. */
+  max-width: 42ch;
 }
-.article-table th { background: var(--bg-2); font-weight: 600; }
+/* ⚠ Body cells stay transparent. The edge shadows above are painted on the
+   scroller's own background, so an opaque cell sits on top of them and the cue
+   silently disappears — which is how this was written the first time. Only the
+   header needs a fill, and it needs one for a different reason: it is sticky,
+   and rows would otherwise scroll visibly through it. */
+.article-table .article-table-scroll th {
+  background: var(--bg-2);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* ⚠ A stuck header keeps its background but loses its borders: with
+     border-collapse the cell borders belong to the table's paint layer, which
+     is not sticky, so they scroll away and leave the header floating with rows
+     cut off flush against its text. An inset shadow is drawn by the cell
+     itself, so it travels — right edge for the column separators, bottom edge
+     for the line under the header. */
+  box-shadow: inset -1px 0 0 var(--border), inset 0 -1px 0 var(--border-strong);
+}
+
+/* The ask affordance, matching the figure and equation ones: quiet until the
+   pointer is on the thing it acts on. Sits outside the scroll box so panning
+   the table never moves it out of reach. */
+.article-table-ask {
+  position: absolute;
+  right: 0;
+  bottom: -10px;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.article-table:hover .article-table-ask,
+.article-table-ask:focus-visible { opacity: 1; transform: translateY(0); }
+.article-table-ask:hover { border-color: var(--accent); color: var(--accent); }
 .article-code .md-body { font-size: 14px; }
 .article-footnote {
   font-size: 14px;

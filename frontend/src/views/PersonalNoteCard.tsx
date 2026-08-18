@@ -181,7 +181,7 @@ export function PersonalNoteCard({
 export interface PersonalComposerTarget {
   sequenceId: number;
   chunkId: string | null;
-  kind: 'text' | 'figure' | 'equation' | 'block';
+  kind: 'text' | 'figure' | 'equation' | 'table' | 'block';
   quote: string | null;
   imageUrl: string | null;
   marginSide: 'left' | 'right';
@@ -215,12 +215,17 @@ export function PersonalNoteComposer({
     onSubmit(text);
   };
 
-  const isMedia = target.kind === 'figure' || target.kind === 'equation';
+  // A table is media too: its own transcription is the wrong thing to quote
+  // back at the reader, and the crop is what they were actually looking at.
+  const isMedia =
+    target.kind === 'figure' || target.kind === 'equation' || target.kind === 'table';
   const label =
     target.kind === 'figure'
       ? 'On this figure'
       : target.kind === 'equation'
       ? 'On this equation'
+      : target.kind === 'table'
+      ? 'On this table'
       : target.quote
       ? `“${target.quote}”`
       : 'On this passage';

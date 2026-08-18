@@ -13,7 +13,7 @@ import type { ModelCatalog } from '../api';
 export interface ComposerTarget {
   sequenceId: number;
   chunkId: string | null;
-  kind: 'text' | 'figure' | 'equation' | 'block';
+  kind: 'text' | 'figure' | 'equation' | 'table' | 'block';
   quote: string | null;
   imageUrl: string | null;
   /** Which margin the composer (and the resulting note) sits in. */
@@ -58,12 +58,18 @@ export function AskComposer({
     setQuestion('');
   };
 
-  const isMedia = target.kind === 'figure' || target.kind === 'equation';
+  // A table is media: the quote carried to the model is its transcription,
+  // which is a wall of pipes and would be unreadable echoed back here. The
+  // reader gets the crop and a label, exactly as they do for a figure.
+  const isMedia =
+    target.kind === 'figure' || target.kind === 'equation' || target.kind === 'table';
   const label =
     target.kind === 'figure'
       ? 'On this figure'
       : target.kind === 'equation'
       ? 'On this equation'
+      : target.kind === 'table'
+      ? 'On this table'
       : target.quote
       ? `“${target.quote}”`
       : 'On this passage';

@@ -809,6 +809,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     const t = block.structural_type;
     if (t === 'figure') return `${ref} · figure`;
     if (t === 'math') return `${ref} · equation`;
+    if (t === 'table') return `${ref} · table${block.plain_text ? ` · ${truncate(block.plain_text.replace(/\s+/g, ' ').trim(), 44)}` : ''}`;
     const text = (block.plain_text || block.content_markdown || '').replace(/\s+/g, ' ').trim();
     if (!text) return ref;
     return `${ref} · “${truncate(text, 60)}”`;
@@ -818,6 +819,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     const t = block.structural_type;
     if (t === 'figure') return 'figure';
     if (t === 'math') return 'equation';
+    if (t === 'table') return 'table';
     if (t === 'heading' || t === 'paragraph' || t === 'text') return 'text';
     return 'block';
   };
@@ -949,12 +951,61 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     [groups, layout],
   );
 
+  /**
+   * Blocks by sequence id.
+   *
+   * A selection knows only which element it landed in; deciding what that
+   * element *is* — and therefore whether the ask should be about a passage or
+   * about a whole table — needs the block behind it.
+   */
+  const blockBySeq = useMemo(() => {
+    const map = new Map<number, DocBlock>();
+    for (const b of doc?.blocks ?? []) map.set(b.sequence_order, b);
+    return map;
+  }, [doc]);
+
+  const openComposerForBlock = useCallback(
+    (block: DocBlock, kind: 'figure' | 'equation' | 'table') => {
+      setComposer({
+        sequenceId: block.sequence_order,
+        chunkId: block.id,
+        kind,
+        // For an equation and a table the "quote" is the machine transcription
+        // — LaTeX, or the recovered table body — which the agent is told to
+        // treat as fallible next to the attached crop. A figure has only its
+        // caption to offer.
+        quote: kind === 'figure'
+          ? block.plain_text || null
+          : block.content_markdown || block.plain_text || null,
+        imageUrl: block.image_url,
+        marginSide: suggestSide(block.sequence_order),
+      });
+    },
+    [suggestSide],
+  );
+
   const openComposerFromSelection = useCallback(() => {
     const article = articleRef.current;
     if (!article) return;
     const cap = captureSelection(article);
     setPill(null);
     if (!cap) return;
+    /**
+     * ⚠ A selection inside a table asks about the whole table.
+     *
+     * Dragging across a table yields text like "8.4 12.1 91.2 7B" — the cells
+     * the pointer crossed, stripped of the header that says which metric each
+     * one is and the row label that says which model. As a quote it is
+     * unanswerable, and worse, it is unanswerable in a way that looks
+     * answerable. A table is one unit, like a figure: the crop goes to the
+     * model, and the reader asks about the thing they were looking at.
+     */
+    const block = blockBySeq.get(cap.sequenceId);
+    if (block?.structural_type === 'table') {
+      openComposerForBlock(block, 'table');
+      window.getSelection()?.removeAllRanges();
+      return;
+    }
     setComposer({
       sequenceId: cap.sequenceId,
       chunkId: cap.chunkId,
@@ -964,7 +1015,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
       marginSide: suggestSide(cap.sequenceId),
     });
     window.getSelection()?.removeAllRanges();
-  }, [suggestSide]);
+  }, [suggestSide, blockBySeq, openComposerForBlock]);
 
   const openPersonalComposerFromSelection = useCallback(() => {
     const article = articleRef.current;
@@ -972,16 +1023,20 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     const cap = captureSelection(article);
     setPill(null);
     if (!cap) return;
+    // Same rule as asking: a note written against three loose cell values is
+    // a note that means nothing when you come back to it.
+    const block = blockBySeq.get(cap.sequenceId);
+    const isTable = block?.structural_type === 'table';
     setPersonalComposer({
       sequenceId: cap.sequenceId,
       chunkId: cap.chunkId,
-      kind: 'text',
-      quote: cap.quote,
-      imageUrl: null,
+      kind: isTable ? 'table' : 'text',
+      quote: isTable ? block!.plain_text || null : cap.quote,
+      imageUrl: isTable ? block!.image_url : null,
       marginSide: suggestSide(cap.sequenceId),
     });
     window.getSelection()?.removeAllRanges();
-  }, [suggestSide]);
+  }, [suggestSide, blockBySeq]);
 
   const bookmarkFromSelection = useCallback(() => {
     const article = articleRef.current;
@@ -992,24 +1047,6 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     toggleBookmarkAt(cap.sequenceId);
     window.getSelection()?.removeAllRanges();
   }, [toggleBookmarkAt]);
-
-  const openComposerForBlock = useCallback(
-    (block: DocBlock, kind: 'figure' | 'equation') => {
-      setComposer({
-        sequenceId: block.sequence_order,
-        chunkId: block.id,
-        kind,
-        // For an equation the "quote" is its LaTeX, which the agent is told to
-        // treat as a fallible transcription of the attached crop.
-        quote: kind === 'equation'
-          ? block.content_markdown || null
-          : block.plain_text || null,
-        imageUrl: block.image_url,
-        marginSide: suggestSide(block.sequence_order),
-      });
-    },
-    [suggestSide],
-  );
 
   /** Anchor to whatever block is nearest the top of the viewport. */
   const openComposerAtViewport = useCallback(() => {
@@ -1094,7 +1131,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   // ── Asking ──────────────────────────────────────────────────────────────
   const runNote = useCallback(
     async (draft: PendingNote, anchor: {
-      kind: 'text' | 'figure' | 'equation' | 'block';
+      kind: 'text' | 'figure' | 'equation' | 'table' | 'block';
       sequence_id: number;
       chunk_id: string | null;
       quote: string | null;
@@ -1232,6 +1269,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         anchorSequenceId: composer.sequenceId,
         anchorKind: composer.kind,
         quote: composer.quote,
+        imageUrl: composer.imageUrl,
         question,
         answer: '',
         status: null,
@@ -1263,6 +1301,9 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         anchorSequenceId: parent.anchor_sequence_id,
         anchorKind: parent.anchor_kind,
         quote: parent.anchor_quote,
+        imageUrl: parent.anchor_image_path
+          ? `/static/images/${parent.anchor_image_path}`
+          : null,
         question,
         answer: '',
         status: null,
@@ -1444,11 +1485,11 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
               onRetry={() => {
                 const retry = { ...p, error: null, answer: '', status: null };
                 void runNote(retry, {
-                  kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'block',
+                  kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'table' | 'block',
                   sequence_id: p.anchorSequenceId,
                   chunk_id: null,
                   quote: p.quote,
-                  image_url: null,
+                  image_url: p.imageUrl,
                 });
               }}
               onDismiss={() =>

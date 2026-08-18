@@ -23,6 +23,14 @@ export interface PendingNote {
   anchorSequenceId: number;
   anchorKind: string;
   quote: string | null;
+  /**
+   * The anchor's image, when it has one (figure, equation crop, table crop).
+   *
+   * ⚠ Carried here only so a retry can send it again. The prompt for those
+   * kinds tells the model to trust the attached crop over the transcription,
+   * so retrying without it asks the model to trust an image that is not there.
+   */
+  imageUrl: string | null;
   question: string;
   answer: string;
   status: string | null;
@@ -116,6 +124,10 @@ function Quote({ kind, quote }: { kind: string; quote: string | null }) {
   }
   if (kind === 'equation') {
     return <div className="note-quote note-quote-figure">On this equation</div>;
+  }
+  if (kind === 'table') {
+    // Never the quote: a table's quote is its whole transcription.
+    return <div className="note-quote note-quote-figure">On this table</div>;
   }
   if (!quote) {
     return <div className="note-quote note-quote-figure">On this passage</div>;

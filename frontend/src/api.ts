@@ -221,7 +221,7 @@ export async function getFullDocument(paperId: string): Promise<FullDocument> {
 
 // ── Notes (anchored margin annotations) ──────────────────────────────────────
 
-export type AnchorKind = 'text' | 'figure' | 'equation' | 'block';
+export type AnchorKind = 'text' | 'figure' | 'equation' | 'table' | 'block';
 export type MarginSide = 'left' | 'right';
 
 // ── Model catalog ────────────────────────────────────────────────────────────
@@ -723,7 +723,7 @@ export interface WireBookmark {
   id: string;
   sequence_id: number;
   snippet: string | null;
-  kind: 'text' | 'figure' | 'equation' | 'block';
+  kind: 'text' | 'figure' | 'equation' | 'table' | 'block';
   page: number | null;
   progress: number;
   label: string | null;

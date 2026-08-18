@@ -52,6 +52,7 @@ function plainPreview(markdown: string): string {
 function anchorLabel(kind: string, quote: string | null): string | null {
   if (kind === 'figure') return 'On a figure';
   if (kind === 'equation') return 'On an equation';
+  if (kind === 'table') return 'On a table';
   return quote;
 }
 
