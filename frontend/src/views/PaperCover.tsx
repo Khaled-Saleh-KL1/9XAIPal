@@ -14,18 +14,26 @@ import { getCoverUrl } from '../api';
  * ⚠ It also renders a placeholder while a paper is still processing. The PDF
  * is on disk from the moment of upload so a cover *would* render, but a card
  * that is visibly mid-extraction should not look finished.
+ *
+ * `showTitle` burns the paper's title into the bottom of the cover, like a
+ * book jacket, so a grid of covers is identifiable by sight rather than by
+ * reading the caption under each one. Off by default — the small row/picker
+ * thumbnails have no room for legible overlaid text, so only the library
+ * grid card turns it on.
  */
 export function PaperCover({
   paperId,
   title,
   ready,
   className = '',
+  showTitle = false,
 }: {
   paperId: string;
   title: string;
   /** False while the paper is still being processed. */
   ready: boolean;
   className?: string;
+  showTitle?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
 
@@ -46,6 +54,11 @@ export function PaperCover({
         decoding="async"
         onError={() => setFailed(true)}
       />
+      {showTitle && !failed && (
+        <div className="paper-cover-title-scrim" aria-hidden="true">
+          <span className="paper-cover-title-text">{title}</span>
+        </div>
+      )}
     </div>
   );
 }

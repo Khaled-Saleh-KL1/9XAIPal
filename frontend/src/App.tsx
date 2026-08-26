@@ -17,21 +17,9 @@ const PdfViewer = lazy(() =>
 );
 import { uploadPaper, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
 import { displayTitle } from './lib/titles';
-
-// Mirrors the mapping used inside LibraryView so deep-linked papers carry the
-// same status/job_status fields the cards expect.
-const STAGE_PROGRESS: Record<string, number> = {
-  queued: 0.06,
-  extracting: 0.3,
-  chunking: 0.55,
-  embedding: 0.78,
-  summarizing: 0.92,
-  complete: 1,
-  failed: 0,
-};
+import { stageProgress } from './lib/progress';
 
 function metaToPaper(m: PaperMeta): Paper {
-  const stage = (m.job_status || m.status || '').toLowerCase();
   return {
     id: m.id,
     title: displayTitle(m),
@@ -39,7 +27,7 @@ function metaToPaper(m: PaperMeta): Paper {
     venue: '',
     pages: m.page_count || 0,
     added: new Date(m.created_at).toLocaleDateString(),
-    progress: m.status === 'complete' ? 1 : (STAGE_PROGRESS[stage] ?? 0.08),
+    progress: stageProgress(m.status, m.job_status),
     rawStatus: m.status,
     jobStatus: m.job_status ?? null,
     tags: [],
@@ -89,8 +77,9 @@ export function App() {
   >('queued');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadExtractor, setUploadExtractor] = useState<string | null>(null);
-  // The overlay shows a different step list per kind: a paper is done at
-  // chunking, a book continues through embedding and summarization.
+  // `kind` only changes reading navigation (chapters vs linear) and the
+  // overlay's completion copy — every document runs the same backend
+  // pipeline (see ProcessingOverlay's header comment).
   const [uploadKind, setUploadKind] = useState<DocKind>('paper');
   const [layout, setLayout] = useState<LibraryLayout>('grid');
   // When set, the "Book or Research paper?" chooser is open.
