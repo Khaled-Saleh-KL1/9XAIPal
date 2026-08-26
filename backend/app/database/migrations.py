@@ -84,6 +84,41 @@ async def _ensure_recent_columns() -> None:
         # A reader-chosen display name for a paper, overriding the uploaded
         # filename. NULL means "no override" — the filename still shows.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS title TEXT",
+        # The desk. Created here as well as in schema.sql because the
+        # split-on-semicolon runner can leave a CREATE TABLE unapplied, and
+        # every ALTER below would then fail against a table that never existed.
+        """CREATE TABLE IF NOT EXISTS studies (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            name TEXT NOT NULL,
+            description TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+        """CREATE TABLE IF NOT EXISTS study_papers (
+            study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+            document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL DEFAULT 0,
+            added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (study_id, document_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS sticky_notes (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            body TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT 'yellow',
+            pinned BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+        """CREATE TABLE IF NOT EXISTS sticky_note_papers (
+            sticky_id UUID NOT NULL REFERENCES sticky_notes(id) ON DELETE CASCADE,
+            document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            PRIMARY KEY (sticky_id, document_id)
+        )""",
+        # Which study's chat a turn belongs to. NULL = the library-wide chat,
+        # which is a real scope rather than a missing value.
+        "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS study_id UUID REFERENCES studies(id) ON DELETE CASCADE",
+        # The tool trail behind an assistant turn, same shape as paper_notes.
+        "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS agent_steps JSONB",
         # Nested sub-threads for tangents (paper-free focus mode inside threads).
         # Main chat turns keep parent_turn_id = NULL. Sub-thread turns point to their parent.
         "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS parent_turn_id UUID REFERENCES conversation_turns(id) ON DELETE CASCADE",

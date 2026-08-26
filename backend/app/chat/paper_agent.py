@@ -52,14 +52,27 @@ from typing import AsyncIterator, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.chat.agent_tools import (
+    THINK_RE,
+    TOOL_BLOCK_RE,
+    WEB_RE,
+    format_block,
+    format_blocks,
+    format_search_results,
+    read_range,
+    run_search,
+    run_web,
+    section_range,
+    step_event,
+    stream_answer,
+    strip_tool_block,
+)
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.database.pgvector import search_chunks_fulltext
 from app.database.repositories import chunks as chunk_repo
 from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
 from app.search import web as web_search
-from app.search.ranking import rank_results
 
 logger = get_logger(__name__)
 
@@ -168,24 +181,6 @@ rather than assuming the paper is silent on it."""
 # Block formatting
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _format_block(chunk: dict) -> str:
-    """One chunk as a numbered block the model can cite by number."""
-    seq = chunk["sequence_id"]
-    kind = chunk.get("chunk_type") or "text"
-    body = (chunk.get("markdown") or chunk.get("plain_text") or "").strip()
-    page = chunk.get("page_start")
-    head = f"[[{seq}]]"
-    if kind != "text":
-        head += f" ({kind})"
-    if page is not None:
-        head += f" (p{page})"
-    return f"{head}\n{body}"
-
-
-def _format_blocks(chunks: list[dict]) -> str:
-    return "\n\n".join(_format_block(c) for c in chunks)
-
-
 def _format_contents(chunks: list[dict]) -> str:
     """The paper's index: every heading, indented by depth, with its block number.
 
@@ -286,7 +281,7 @@ def _format_anchor(anchor: dict, window: list[dict]) -> str:
             "tour the reader did not ask for."
         )
         if window:
-            parts.append("HOW THE PAPER OPENS:\n" + _format_blocks(window))
+            parts.append("HOW THE PAPER OPENS:\n" + format_blocks(window))
         return "\n\n".join(parts)
     elif quote:
         parts.append("THE READER HIGHLIGHTED THIS PASSAGE:\n“" + quote + "”")
@@ -294,7 +289,7 @@ def _format_anchor(anchor: dict, window: list[dict]) -> str:
         parts.append("The reader is currently reading around this point in the paper.")
 
     if window:
-        parts.append("SURROUNDING TEXT:\n" + _format_blocks(window))
+        parts.append("SURROUNDING TEXT:\n" + format_blocks(window))
     return "\n\n".join(parts)
 
 
@@ -315,13 +310,10 @@ def _format_thread(thread: list[dict]) -> str:
 # Tool protocol
 # ─────────────────────────────────────────────────────────────────────────────
 
-_TOOL_BLOCK_RE = re.compile(r"<tool>(.*?)(?:</tool>|$)", re.DOTALL | re.IGNORECASE)
 _SEARCH_RE = re.compile(r"^\s*SEARCH:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 _READ_RE = re.compile(r"^\s*READ:\s*(\d+)\s*(?:-|–|to)\s*(\d+)\s*$", re.IGNORECASE | re.MULTILINE)
-_WEB_RE = re.compile(r"^\s*WEB:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 # The model's own one-line reason for this round, shown to the reader above the
 # fetches it triggered. Not a tool: it executes nothing and costs no round.
-_THINK_RE = re.compile(r"^\s*THINK:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 # ⚠ Tolerant of "SECTION: [[31]]" and "SECTION: 31 Method". Models echo the
 # contents line they are following, brackets and title included, and a strict
 # ^\s*SECTION:\s*(\d+)$ throws the call away — which reads to the reader as the
@@ -339,17 +331,17 @@ def _parse_tool_calls(reply: str) -> dict:
     carries no execution — it is the rationale line the reader sees.
     """
     empty = {"think": None, "sections": [], "searches": [], "reads": [], "webs": []}
-    match = _TOOL_BLOCK_RE.search(reply)
+    match = TOOL_BLOCK_RE.search(reply)
     if not match:
         return empty
     body = match.group(1)
-    thinks = [t.strip() for t in _THINK_RE.findall(body) if t.strip()]
+    thinks = [t.strip() for t in THINK_RE.findall(body) if t.strip()]
     return {
         "think": thinks[0] if thinks else None,
         "sections": [int(n) for n in _SECTION_RE.findall(body)][:3],
         "searches": [q.strip() for q in _SEARCH_RE.findall(body) if q.strip()][:3],
         "reads": [(int(a), int(b)) for a, b in _READ_RE.findall(body)][:3],
-        "webs": [q.strip() for q in _WEB_RE.findall(body) if q.strip()][:2],
+        "webs": [q.strip() for q in WEB_RE.findall(body) if q.strip()][:2],
     }
 
 
@@ -358,145 +350,6 @@ def _has_calls(calls: dict) -> bool:
     return bool(
         calls["sections"] or calls["searches"] or calls["reads"] or calls["webs"]
     )
-
-
-def _section_range(chunks: list[dict], seq: int) -> Optional[tuple[int, int, str]]:
-    """Resolve a contents entry to the block range of the section it names.
-
-    A section runs from its heading to the block before the next heading of the
-    same or higher level — so asking for a chapter gets its subsections too,
-    and asking for a subsection gets only itself.
-
-    ⚠ A block number that is not a heading resolves to the section CONTAINING
-    it rather than failing. Models routinely pass a SEARCH hit to SECTION to
-    mean "give me the rest of whatever this was in", and that reading is both
-    what they want and the only useful thing to do with the number.
-    """
-    headings = [
-        (c["sequence_id"], len(c.get("heading_path") or []) or 1, (c.get("plain_text") or "").strip())
-        for c in chunks
-        if c.get("chunk_type") == "heading"
-    ]
-    if not headings:
-        return None
-
-    start_i = None
-    for i, (h_seq, _, _) in enumerate(headings):
-        if h_seq == seq:
-            start_i = i
-            break
-        if h_seq < seq:
-            start_i = i  # keep the last heading at or before seq
-    if start_i is None:
-        return None
-
-    h_seq, h_level, title = headings[start_i]
-    last_seq = max((c["sequence_id"] or 0) for c in chunks)
-    end = last_seq
-    for next_seq, next_level, _ in headings[start_i + 1:]:
-        if next_level <= h_level:
-            end = next_seq - 1
-            break
-    return h_seq, end, title
-
-
-def _strip_tool_block(reply: str) -> str:
-    """Remove a trailing tool block from text being used as a final answer."""
-    return _TOOL_BLOCK_RE.sub("", reply).strip()
-
-
-async def _run_search(
-    session: AsyncSession, document_id: UUID, query: str
-) -> list[dict]:
-    """Full-text search plus a literal substring pass, de-duplicated.
-
-    The substring leg is not redundant: ``to_tsvector`` drops single Greek
-    letters, equation numbers, and symbol subscripts entirely, so a reader
-    asking "why is τ so small here" gets zero full-text hits on the one term
-    that matters.
-    """
-    limit = settings.paper_agent_search_limit
-
-    # ⚠ Sequential, not gathered. An AsyncSession is a single connection with a
-    # single greenlet context: running two statements on it concurrently is
-    # explicitly unsupported and raises under the wrong interleaving. Both legs
-    # are indexed lookups measured in single-digit milliseconds, so the
-    # concurrency would buy nothing worth that failure mode.
-    legs: list[list[dict]] = []
-    for run in (
-        lambda: search_chunks_fulltext(session, query, limit=limit, document_id=document_id),
-        lambda: chunk_repo.search_chunks_substring(session, document_id, query, limit=limit),
-    ):
-        try:
-            legs.append(await run())
-        except Exception as e:
-            logger.warning("paper_agent search leg failed: %s", e)
-
-    hits: list[dict] = []
-    seen: set = set()
-    for leg in legs:
-        for row in leg:
-            seq = row.get("sequence_id")
-            if seq in seen:
-                continue
-            seen.add(seq)
-            hits.append(row)
-    hits.sort(key=lambda r: r.get("sequence_id") or 0)
-    return hits[:limit]
-
-
-def _format_search_results(query: str, hits: list[dict]) -> str:
-    if not hits:
-        return f'SEARCH "{query}" — no blocks matched.'
-    lines = [f'SEARCH "{query}" — {len(hits)} block(s):']
-    for h in hits:
-        snippet = " ".join((h.get("plain_text") or "").split())[:280]
-        lines.append(f"  [[{h['sequence_id']}]] {snippet}")
-    return "\n".join(lines)
-
-
-async def _read_range(
-    session: AsyncSession, document_id: UUID, start: int, end: int, label: str
-) -> tuple[str, list[int]]:
-    """Fetch a block range and format it as one observation."""
-    cap = settings.paper_agent_read_max_chunks
-    rows = await chunk_repo.get_chunks_in_range(session, document_id, start, end, cap)
-    if not rows:
-        return f"{label} — no blocks in that range.", []
-    truncated = (
-        f" (truncated to the first {cap} blocks)" if len(rows) >= cap else ""
-    )
-    return (
-        f"{label}{truncated}:\n" + _format_blocks(rows),
-        [r["sequence_id"] for r in rows],
-    )
-
-
-async def _run_web(query: str) -> tuple[str, list[dict]]:
-    """Search the public web; return the observation text and the sources.
-
-    ⚠ The one tool that leaves the machine. Failures degrade to an explicit
-    "nothing came back" observation rather than an exception: a dead search
-    provider must cost the round, not the answer.
-    """
-    limit = settings.paper_agent_web_limit
-    try:
-        raw = await web_search.search(query, limit=limit)
-    except Exception as e:
-        logger.warning("paper_agent WEB leg failed: %s", e)
-        raw = []
-    hits = rank_results(raw, max_results=limit)
-    if not hits:
-        return f'WEB "{query}" — no results (or the search provider is down).', []
-    lines = [f'WEB "{query}" — {len(hits)} result(s). These are OUTSIDE the paper:']
-    for h in hits:
-        snippet = " ".join((h.get("snippet") or "").split())[:400]
-        lines.append(f"  · {h.get('title') or h.get('url')} <{h.get('url')}>\n    {snippet}")
-    sources = [
-        {"title": h.get("title") or h.get("url") or "", "url": h.get("url") or ""}
-        for h in hits
-    ]
-    return "\n".join(lines), sources
 
 
 def _plan(calls: dict) -> list[dict]:
@@ -531,7 +384,7 @@ def _pending_label(chunks: list[dict], call: dict) -> str:
     """
     tool = call["tool"]
     if tool == "SECTION":
-        resolved = _section_range(chunks, call["seq"])
+        resolved = section_range(chunks, call["seq"])
         return f"Reading “{resolved[2]}”" if resolved else f"Looking up block {call['seq']}"
     if tool == "READ":
         return f"Reading blocks {call['start']}–{call['end']}"
@@ -559,7 +412,7 @@ async def _run_call(
     out["sources"] = []
 
     if tool == "SECTION":
-        resolved = _section_range(chunks, call["seq"])
+        resolved = section_range(chunks, call["seq"])
         if not resolved:
             out["observation"] = (
                 f"SECTION {call['seq']} — no heading at or before that block. "
@@ -569,7 +422,7 @@ async def _run_call(
             out["result"] = "no section there"
             return out
         start, end, title = resolved
-        text, seqs = await _read_range(
+        text, seqs = await read_range(
             session, document_id, start, end,
             f'SECTION {call["seq"]} — "{title}" ({start}-{end})',
         )
@@ -581,7 +434,7 @@ async def _run_call(
 
     if tool == "READ":
         start, end = call["start"], call["end"]
-        text, seqs = await _read_range(
+        text, seqs = await read_range(
             session, document_id, start, end, f"READ {start}-{end}"
         )
         out["observation"] = text
@@ -591,41 +444,19 @@ async def _run_call(
         return out
 
     if tool == "SEARCH":
-        hits = await _run_search(session, document_id, call["arg"])
-        out["observation"] = _format_search_results(call["arg"], hits)
+        hits = await run_search(session, document_id, call["arg"])
+        out["observation"] = format_search_results(call["arg"], hits)
         out["label"] = f"Searched the paper for “{call['arg']}”"
         out["result"] = f"{len(hits)} matching blocks" if hits else "no matches"
         out["seqs"] = [h["sequence_id"] for h in hits]
         return out
 
-    text, sources = await _run_web(call["arg"])
+    text, sources = await run_web(call["arg"])
     out["observation"] = text
     out["label"] = f"Searched the web for “{call['arg']}”"
     out["result"] = f"{len(sources)} sources" if sources else "nothing came back"
     out["sources"] = sources
     return out
-
-
-def _step_event(step_id: str, n: int, call: dict, *, state: str, think: Optional[str]) -> dict:
-    """One row of the trail the reader watches being built.
-
-    ⚠ The observation is deliberately NOT in here. It is the raw blocks the
-    model reads — thousands of characters per call — and streaming it to the
-    browser would ship the whole paper to a card that renders one line of it.
-    """
-    return {
-        "type": "step",
-        "id": step_id,
-        "n": n,
-        "tool": call["tool"],
-        "arg": call.get("arg", ""),
-        "state": state,
-        "think": think,
-        "label": call.get("label") or "",
-        "result": call.get("result") or "",
-        "seqs": call.get("seqs") or [],
-        "sources": call.get("sources") or [],
-    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -748,7 +579,7 @@ async def answer_paper_question(
         parts = [anchor_block]
         if thread_block:
             parts.append(thread_block)
-        parts.append("THE COMPLETE PAPER:\n" + _format_blocks(chunks))
+        parts.append("THE COMPLETE PAPER:\n" + format_blocks(chunks))
         messages = build_multimodal_messages(
             question,
             system=_WHOLE_SYSTEM,
@@ -806,7 +637,7 @@ async def answer_paper_question(
         calls = _parse_tool_calls(reply)
 
         if not _has_calls(calls):
-            answer = _strip_tool_block(reply)
+            answer = strip_tool_block(reply)
             if answer:
                 # It answered instead of calling a tool. Emit what it wrote
                 # rather than paying for an identical second generation.
@@ -829,7 +660,7 @@ async def answer_paper_question(
         plan = _plan(calls)
         for i, call in enumerate(plan):
             call["label"] = _pending_label(chunks, call)
-            yield _step_event(
+            yield step_event(
                 f"s{step}-{i}", step + 1, call,
                 state="running", think=calls["think"] if i == 0 else None,
             )
@@ -838,7 +669,7 @@ async def answer_paper_question(
         for i, call in enumerate(plan):
             done_call = await _run_call(session, document_id, chunks, call)
             observations.append(done_call["observation"])
-            event = _step_event(
+            event = step_event(
                 f"s{step}-{i}", step + 1, done_call,
                 state="done", think=calls["think"] if i == 0 else None,
             )
@@ -877,14 +708,19 @@ async def _stream_answer(
     model: Optional[str] = None,
     steps: Optional[list[dict]] = None,
 ) -> AsyncIterator[dict]:
-    """Stream one generation and close it out with a done event."""
+    """Stream one generation and close it out with a done event.
+
+    ⚠ Goes through ``agent_tools.stream_answer`` rather than the LLM client
+    directly, so a tool block the model emits on this turn — which it is told
+    it cannot call — never reaches the reader. See that function.
+    """
     answer = ""
     answered_by = ""
-    async for event in llm_client.stream_chat(messages, temperature=0.3, model=model):
+    async for event in stream_answer(messages, model=model, temperature=0.3):
         if event["type"] == "token":
-            yield {"type": "token", "text": event["text"]}
+            yield event
         else:
-            answer = event.get("content") or ""
+            answer = event.get("answer") or ""
             answered_by = event.get("model") or ""
     yield {
         "type": "done",

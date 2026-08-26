@@ -11,15 +11,15 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "9XAIPal"
+    app_name: str = "ScholarFlow"
     debug: bool = False
 
     # PostgreSQL
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "9xaipal"
-    postgres_user: str = "9xaipal"
-    postgres_password: str = "9xaipal_dev_password"
+    postgres_db: str = "scholarflow"
+    postgres_user: str = "scholarflow"
+    postgres_password: str = "scholarflow_dev_password"
 
     @property
     def database_url(self) -> str:
@@ -216,6 +216,16 @@ class Settings(BaseSettings):
     # normally title, authors, and abstract. The contents index says what
     # exists; this says what the paper claims to be about.
     paper_agent_opening_blocks: int = 6
+
+    # ── Study agent (answering across a group of papers) ────────────────────
+    # Tool rounds a desk question gets. Higher than either paper-agent budget
+    # because the first round or two are usually spent working out WHICH papers
+    # the question turns on, before any of them has been read.
+    study_agent_max_steps: int = 8
+    # Ceiling on papers one study may hold. The index is headings only, so the
+    # prompt cost is modest, but every paper is a full chunk load per question —
+    # this is a guard against a study of the entire library.
+    study_max_papers: int = 24
 
     # ── Paper-only mode ─────────────────────────────────────────────────────
     # Skip the embedding pass for documents small enough to fit whole in the

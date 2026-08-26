@@ -1,4 +1,4 @@
--- 9XAIPal Database Schema
+-- ScholarFlow Database Schema
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -96,6 +96,64 @@ CREATE TABLE IF NOT EXISTS chunk_assets (
 
 CREATE INDEX IF NOT EXISTS idx_chunk_assets_chunk_id ON chunk_assets(chunk_id);
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- The desk: studies, their chats, and sticky notes
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- A named group of papers that scopes an answer.
+--
+-- A study is the unit of "what may this question be answered from". It is
+-- deliberately NOT a folder: a paper can sit in several studies at once, and
+-- removing it from one takes nothing away from the library.
+CREATE TABLE IF NOT EXISTS studies (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Membership. Ordered by position so the study's paper numbering (P1, P2, …)
+-- that the agent cites by is stable across requests -- a citation the reader
+-- saw yesterday must still point at the same paper today.
+CREATE TABLE IF NOT EXISTS study_papers (
+    study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (study_id, document_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_papers_document ON study_papers (document_id);
+
+-- A note the reader wants to keep in front of them, independent of where in a
+-- paper it came from -- or of any paper at all.
+--
+-- ⚠ Deliberately not personal_notes. A personal note is anchored to a block in
+-- one document and lives in that document's margin. A sticky has no anchor, may
+-- name several papers or none, and lives on the desk. Sharing a table would
+-- give every sticky an anchor_sequence_id that means nothing.
+CREATE TABLE IF NOT EXISTS sticky_notes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    body TEXT NOT NULL DEFAULT '',
+    -- One of a small named set the UI maps to CSS variables, not a hex value.
+    -- A stored hex would not survive the light/dark switch.
+    color TEXT NOT NULL DEFAULT 'yellow',
+    pinned BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Which papers a sticky is about. Zero rows = a note about nothing in
+-- particular, which is a first-class case: it shows on every desk.
+CREATE TABLE IF NOT EXISTS sticky_note_papers (
+    sticky_id UUID NOT NULL REFERENCES sticky_notes(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    PRIMARY KEY (sticky_id, document_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sticky_note_papers_document ON sticky_note_papers (document_id);
+
 -- Conversation turns
 -- Supports the nested sub-thread feature (tangents without polluting the main paper chat).
 -- Main linear chat turns have parent_turn_id IS NULL.
@@ -112,6 +170,15 @@ CREATE TABLE IF NOT EXISTS conversation_turns (
     model TEXT,
     citations JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Which study's chat this turn belongs to.
+    -- NULL means the library-wide chat -- the scope that sees every paper.
+    -- That is a real scope, not a missing value, so it is not an error state.
+    study_id UUID REFERENCES studies(id) ON DELETE CASCADE,
+
+    -- The trail of tool calls behind an assistant turn, same shape as
+    -- paper_notes.agent_steps. See docs/02-architecture/chat-and-ask.md.
+    agent_steps JSONB,
 
     -- NULL for all turns that belong to the main linear chat for a conversation_id.
     -- Non-NULL points to the parent turn this message is a reply to (supports
