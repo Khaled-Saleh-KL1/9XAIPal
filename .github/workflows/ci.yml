@@ -79,6 +79,8 @@ jobs:
 
     # Real Postgres with pgvector — the tests apply migrations (schema.sql
     # creates the vector + uuid-ossp extensions) and exercise pgvector queries.
+    # Real Redis — session storage + the auth rate limiter (app/core/auth.py,
+    # app/api/deps.py) need an actual server, not a mock.
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -93,6 +95,15 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     env:
       POSTGRES_HOST: localhost
@@ -100,6 +111,13 @@ jobs:
       POSTGRES_USER: 9xaipal
       POSTGRES_PASSWORD: 9xaipal_dev_password
       POSTGRES_DB: 9xaipal_test
+      REDIS_URL: redis://localhost:6379/0
+      # Session cookies are Secure by default (settings.debug controls this —
+      # see app/api/v1/endpoints/auth.py); the test client talks plain HTTP,
+      # and a browser-correct cookie jar withholds a Secure cookie from a
+      # non-HTTPS request, so auth tests need this the same way a local
+      # non-TLS dev server would.
+      DEBUG: "true"
       # One test resolves an embedding provider (the actual HTTP call is mocked);
       # pin to Ollama so resolution succeeds offline with no API key or network.
       EMBEDDING_PROVIDER: ollama
