@@ -138,6 +138,15 @@ async def get_query_embedding(query: str) -> list[float]:
     return await get_embedding(query)
 
 
+# Background ingestion, not a live request a user is staring at — so it's
+# better to wait than to fail fast. Measured directly on a 6-core deployment:
+# a batch that normally takes ~1-2s took 46.8s while MinerU extraction (a
+# separate, CPU-heavy celery task) was running concurrently and pegging 4+
+# cores. 120s wasn't a safe margin above that — cost real documents getting
+# permanently stuck at "embedding" after exhausting their retries.
+_SYNC_EMBED_TIMEOUT_S = 300.0
+
+
 def _embed_one_sync(
     client: "httpx.Client", url: str, model: str, text: str, target: EmbeddingTarget
 ) -> list[float] | None:
@@ -168,7 +177,7 @@ def get_embeddings_batch_sync(texts: list[str]) -> list[list[float]]:
     if target.provider != "ollama":
         url = f"{target.base_url}/embeddings"
         try:
-            with httpx.Client(timeout=120.0) as client:
+            with httpx.Client(timeout=_SYNC_EMBED_TIMEOUT_S) as client:
                 response = client.post(url, json=_cloud_payload(texts, target), headers=_cloud_headers(target))
                 response.raise_for_status()
                 data = response.json()
@@ -183,7 +192,7 @@ def get_embeddings_batch_sync(texts: list[str]) -> list[list[float]]:
     url = f"{target.base_url}/api/embed"
     model = target.model
 
-    with httpx.Client(timeout=120.0) as client:
+    with httpx.Client(timeout=_SYNC_EMBED_TIMEOUT_S) as client:
         # Fast path: the whole batch in one request.
         try:
             r = client.post(
