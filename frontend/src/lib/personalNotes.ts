@@ -39,7 +39,7 @@ export interface PersonalBookmark {
   /** First ~60 chars of the bookmarked block, cached for display. */
   snippet?: string;
   /** Block kind at the bookmark — lets us label it "on figure" / "on equation". */
-  kind?: 'text' | 'figure' | 'equation' | 'block';
+  kind?: 'text' | 'figure' | 'equation' | 'table' | 'block';
   /** Page number where the bookmark lives, when known. */
   page?: number | null;
   /** Optional name the reader gave this mark. */

@@ -43,10 +43,11 @@ interface Props {
   bookmarkTitle: string | null;
   /**
    * Open the composer on a block that cannot be reached by highlighting.
-   * Figures are images, and a KaTeX equation is a tree of spans that drag-
-   * selects into gibberish — both need an explicit affordance.
+   * Figures are images, a KaTeX equation is a tree of spans that drag-selects
+   * into gibberish, and a table drag-selects into a column of orphaned cell
+   * values with no header attached — all three need an explicit affordance.
    */
-  onAsk: (block: DocBlock, kind: 'figure' | 'equation') => void;
+  onAsk: (block: DocBlock, kind: 'figure' | 'equation' | 'table') => void;
   /** Clicking the ribbon lifts the bookmark off this block. */
   onClearBookmark: (seq: number) => void;
   registerRef: (seq: number, el: HTMLElement | null) => void;
@@ -158,38 +159,84 @@ function ArticleBlockImpl({
 
   if (block.structural_type === 'table') {
     const json = block.table_json;
-    if (json?.headers && json?.rows) {
-      return (
-        <section {...common}>
-          {ribbon}
-          <div className="article-table">
-            <table>
-              <thead>
-                <tr>
-                  {json.headers.map((h, i) => (
-                    <th key={i}><InlineMd>{h}</InlineMd></th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {json.rows.map((row, ri) => (
-                  <tr key={ri}>
-                    {row.map((cell, ci) => (
-                      <td key={ci}><InlineMd>{cell}</InlineMd></td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      );
-    }
+    /**
+     * A table is a unit, and it gets its own scroll box.
+     *
+     * A results table is routinely wider than a column of prose — ten model
+     * variants across six metrics does not fit, and the previous
+     * `width: 100%` made it *fit anyway* by crushing every column until the
+     * headers wrapped one letter per line. The box below scrolls instead: the
+     * table lays out at its natural width and the reader pans it, the way they
+     * would in the PDF. Vertical too, so a fifty-row table does not push the
+     * rest of the paper off screen.
+     *
+     * `tabIndex` is not decoration — a scroll container that only responds to
+     * a trackpad is unreachable by keyboard, and this one can hold the numbers
+     * the whole paper is about.
+     */
+    /**
+     * ⚠ `table_json.headers` is routinely EMPTY on real papers, and the header
+     * row arrives as `rows[0]` instead.
+     *
+     * MinerU emits `<table><tr><td>…` with no `<thead>`, so the parser that
+     * fills `table_json` has nothing to put in `headers`. Rendering that
+     * literally gives an empty `<thead>` and a header row that behaves like
+     * data: not bold, not tinted, and — since the sticky rule applies to `th`
+     * — scrolling a long table loses the column names entirely, which is the
+     * exact failure the scroll box exists to prevent.
+     *
+     * A first row promoted in error costs one row of bold text. A header that
+     * scrolls away costs the reader the meaning of every number below it.
+     */
+    const rows = json?.rows ?? [];
+    const headerCells = json?.headers?.length ? json.headers : rows[0];
+    const bodyRows = json?.headers?.length ? rows : rows.slice(1);
+
+    const body = headerCells?.length ? (
+      <table>
+        <thead>
+          <tr>
+            {headerCells.map((h, i) => (
+              <th key={i}><InlineMd>{h}</InlineMd></th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {bodyRows.map((row, ri) => (
+            <tr key={ri}>
+              {row.map((cell, ci) => (
+                <td key={ci}><InlineMd>{cell}</InlineMd></td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    ) : (
+      // MinerU recovered no structure, so this is its raw <table> HTML or a
+      // markdown grid. Same scroller either way — the CSS targets the <table>.
+      <Md>{block.content_markdown}</Md>
+    );
+
     return (
       <section {...common}>
         {ribbon}
         <div className="article-table">
-          <Md>{block.content_markdown}</Md>
+          <div
+            className="article-table-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label={block.plain_text ? `Table: ${block.plain_text}` : 'Table'}
+          >
+            {body}
+          </div>
+          <button
+            type="button"
+            className="article-table-ask"
+            onClick={() => onAsk(block, 'table')}
+            title="Ask about this table"
+          >
+            Ask about this table
+          </button>
         </div>
       </section>
     );

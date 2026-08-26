@@ -44,6 +44,21 @@ async def count_documents(session: AsyncSession) -> int:
     return await doc_repo.count_documents(session)
 
 
+async def rename_document(
+    session: AsyncSession, document_id: UUID, title: Optional[str]
+) -> Optional[dict]:
+    """Rename a document and return its fresh row, or None if it is gone.
+
+    An empty or whitespace-only title clears the override rather than storing
+    a blank one: a paper whose name renders as nothing is worse than one still
+    called by its filename.
+    """
+    clean = (title or "").strip() or None
+    if not await doc_repo.set_document_title(session, document_id, clean):
+        return None
+    return await doc_repo.get_document(session, document_id)
+
+
 async def delete_document(session: AsyncSession, document_id: UUID) -> Optional[dict]:
     """Delete a document row (cascades to chunks, embeddings, assets, turns).
 

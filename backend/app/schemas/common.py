@@ -22,5 +22,10 @@ class HealthResponse(BaseModel):
     status: str
     database: str
     ollama: Optional[str] = None
+    # Health of whichever web-search provider is active, and its name.
+    web_search: Optional[str] = None
+    web_search_provider: Optional[str] = None
+    # ⚠ Deprecated alias for `web_search`, kept so older clients keep parsing.
+    # It carries the ACTIVE provider's status, not SearXNG's specifically.
     searxng: Optional[str] = None
 

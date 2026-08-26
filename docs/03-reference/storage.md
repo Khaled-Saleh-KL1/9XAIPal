@@ -5,7 +5,8 @@
 > **Owns:** the storage-root layout and the disk-path ↔ static-URL mapping.
 > **Does not own:** `STORAGE_ROOT` configuration ([configuration.md](configuration.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-25 against
+> **Status:** current · **Last verified:** `covers/` 2026-08-26 (rendered and served against a
+> live paper); the rest 2026-07-25 against
 > [`core/paths.py`](../../backend/app/core/paths.py) and
 > [`main.py`](../../backend/app/main.py)
 > **Verify with:** `ls -R backend/app/storage`
@@ -29,6 +30,7 @@ subdirectories are created at startup by `ensure_storage_dirs()`.
 │   ├── <doc_id>/<asset_uuid>.png
 │   └── research/<conv_id>/...   # research-agent images
 ├── assets/            # raw PDF copies for download (<doc_id>.pdf)
+├── covers/            # first-page thumbnails (<doc_id>.jpg) — a cache, not user data
 └── logs/              # reserved
 ```
 
@@ -53,6 +55,18 @@ properties:
 
 ### `images/research/<conv_id>/...`
 Images saved by the research agent during iterative research loops.
+
+### `covers/<doc_id>.jpg`
+The paper's first page, ~480px wide, rendered by PyMuPDF on the first
+`GET /papers/{id}/cover` and reused after that.
+
+⚠ **Derived, not user data.** Every file here regenerates from the PDF in
+`assets/`, so deleting the directory costs one render per paper and nothing
+else. It is the one directory safe to `rm -rf` to reclaim space.
+
+⚠ Never invalidated: keyed by document id alone, because a document's first
+page cannot change — re-extraction and re-chunking rewrite derived text, never
+the source PDF. Deleting the paper deletes its cover.
 
 ### `assets/<doc_id>.pdf`
 A second copy of the upload, keyed by document ID so URLs are

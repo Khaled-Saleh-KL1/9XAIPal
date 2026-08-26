@@ -32,6 +32,8 @@ export interface PaperMeta {
   id: string;
   filename: string;
   original_filename: string;
+  /** Reader-chosen display name. null = no override, fall back to the filename. */
+  title?: string | null;
   file_size_bytes: number | null;
   page_count: number | null;
   status: string;
@@ -244,7 +246,20 @@ export async function getFullDocument(paperId: string): Promise<FullDocument> {
 
 // ── Notes (anchored margin annotations) ──────────────────────────────────────
 
-export type AnchorKind = 'text' | 'figure' | 'equation' | 'block';
+/**
+ * What a note hangs off.
+ *
+ * `document` is the holistic level — the question is about the paper as a
+ * whole, asked from the assistant panel rather than from a selection. The
+ * server derives the note's `scope` from this, so the two can never disagree.
+ */
+export type AnchorKind =
+  | 'text'
+  | 'figure'
+  | 'equation'
+  | 'table'
+  | 'block'
+  | 'document';
 export type MarginSide = 'left' | 'right';
 
 // ── Model catalog ────────────────────────────────────────────────────────────
@@ -277,6 +292,38 @@ export interface NoteAnchor {
   image_url?: string | null;
 }
 
+/** A source the agent found on the web, listed under its WEB step. */
+export interface AgentSource {
+  title: string;
+  url: string;
+}
+
+/**
+ * One tool call the agent made, as the reader sees it.
+ *
+ * Arrives twice while streaming — `running` when the agent announces the call
+ * and `done` when it returns — keyed by `id` so the row updates in place.
+ * The observation itself (the blocks the model actually read) is deliberately
+ * not here: it is thousands of characters the card renders one line of.
+ */
+export interface AgentStep {
+  id: string;
+  /** Which tool round this call belonged to, 1-based. */
+  n: number;
+  /** `NOTE` is a write, not a fetch — it pins to a board. */
+  tool: 'SECTION' | 'SEARCH' | 'READ' | 'WEB' | 'NOTE';
+  arg: string;
+  state: 'running' | 'done';
+  /** The model's own one-line reason, on the first call of each round. */
+  think: string | null;
+  label: string;
+  /** A short summary of what came back ("12 blocks · ¶31–¶48"). */
+  result: string;
+  /** Block numbers this call pulled in, so the reader can jump to them. */
+  seqs: number[];
+  sources: AgentSource[];
+}
+
 export interface PaperNote {
   id: string;
   anchor_sequence_id: number;
@@ -288,6 +335,10 @@ export interface PaperNote {
   answer: string;
   cited_sequence_ids: number[];
   retrieval_mode: string | null;
+  /** 'anchor' = a margin card. 'document' = asked about the whole paper. */
+  scope: 'anchor' | 'document';
+  /** How the answer was reached. Empty for notes written before this existed. */
+  agent_steps: AgentStep[];
   /** What the provider reported answering. Shown on the card. */
   model: string | null;
   /** What the reader picked. Follow-ups inherit this, never override it. */
@@ -326,8 +377,10 @@ export async function deleteNote(paperId: string, noteId: string): Promise<void>
 export interface NoteStreamHandlers {
   /** The note row exists — render the card now, before any answer arrives. */
   onCreated: (noteId: string) => void;
-  /** What the agent is doing ("Searching: …", "Reading blocks 40–52"). */
+  /** The phase the agent is in ("Reading the passage…", "Writing the answer…"). */
   onStatus: (message: string) => void;
+  /** One tool call, announced then completed. Upsert by `step.id`. */
+  onStep: (step: AgentStep) => void;
   /** Answer text, token by token. */
   onToken: (text: string) => void;
 }
@@ -338,6 +391,7 @@ export interface NoteResult {
   model: string;
   retrieval_mode: string | null;
   cited_sequence_ids: number[];
+  agent_steps: AgentStep[];
 }
 
 /**
@@ -400,6 +454,9 @@ export async function askNoteStream(
       case 'status':
         handlers.onStatus(String(ev.message ?? ''));
         break;
+      case 'step':
+        handlers.onStep(ev as unknown as AgentStep);
+        break;
       case 'token':
         handlers.onToken(String(ev.text ?? ''));
         break;
@@ -413,6 +470,7 @@ export async function askNoteStream(
           model: String(ev.model ?? ''),
           retrieval_mode: (ev.retrieval_mode as string) ?? null,
           cited_sequence_ids: (ev.cited_sequence_ids as number[]) || [],
+          agent_steps: (ev.agent_steps as AgentStep[]) || [],
         };
         break;
     }
@@ -473,6 +531,35 @@ export async function getPaper(paperId: string): Promise<PaperMeta> {
 }
 
 /** Delete a paper (DB cascade + on-disk cleanup) — 204 on success. */
+/**
+ * Rename a paper.
+ *
+ * Sets a display title used everywhere a name is shown. Passing an empty
+ * string clears it and restores the uploaded filename — the server treats
+ * blank as "no override" rather than storing an empty name.
+ */
+export async function renamePaper(paperId: string, title: string): Promise<PaperMeta> {
+  const res = await fetch(`${BASE}/papers/${paperId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title.trim() || null }),
+  });
+  if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * URL of a paper's first-page thumbnail.
+ *
+ * ⚠ Served as 204 No Content when the page cannot be rendered, which an
+ * <img> reports as a load error — so every caller needs an onError fallback.
+ * A 404 would be worse: the library requests one per card, and a console full
+ * of them makes a working library look broken.
+ */
+export function getCoverUrl(paperId: string): string {
+  return `${BASE}/papers/${paperId}/cover`;
+}
+
 export async function deletePaper(paperId: string): Promise<void> {
   const res = await fetch(`${BASE}/papers/${paperId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
@@ -746,7 +833,7 @@ export interface WireBookmark {
   id: string;
   sequence_id: number;
   snippet: string | null;
-  kind: 'text' | 'figure' | 'equation' | 'block';
+  kind: 'text' | 'figure' | 'equation' | 'table' | 'block';
   page: number | null;
   progress: number;
   label: string | null;
@@ -895,4 +982,309 @@ export async function putDecks(paperId: string, decks: WireDeck[]): Promise<Wire
   });
   if (!res.ok) throw new Error(`Deck save failed: ${res.status}`);
   return (await res.json()).decks || [];
+}
+
+// ── The desk: studies, their chats, and sticky notes ─────────────────────────
+
+/**
+ * The path segment that means "every paper" rather than a saved group.
+ *
+ * ⚠ A real scope, not a null. The server stores `study_id IS NULL` for its
+ * turns, and both are the library-wide chat — treating either as "unset" loses
+ * the reader's main conversation.
+ */
+export const LIBRARY_SCOPE = 'library';
+
+export interface Study {
+  id: string;
+  name: string;
+  description: string | null;
+  paper_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** A paper as the desk sees it: identity, and the P-number the agent cites it by. */
+export interface StudyPaper {
+  id: string;
+  title: string;
+  page_count: number | null;
+  status: string;
+  paper: number;
+}
+
+/** One `[[P2:41]]` an answer used, resolved to something openable. */
+export interface StudyCitation {
+  paper: number;
+  document_id: string;
+  label: string;
+  sequence_id: number;
+}
+
+export interface StudyTurn {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  model: string | null;
+  cited: StudyCitation[];
+  agent_steps: AgentStep[];
+  created_at: string | null;
+}
+
+export async function listStudies(): Promise<Study[]> {
+  const res = await fetch(`${BASE}/studies`);
+  if (!res.ok) throw new Error(`Studies fetch failed: ${res.status}`);
+  return (await res.json()).studies || [];
+}
+
+export async function getStudy(
+  studyId: string,
+): Promise<{ study: Study; papers: StudyPaper[] }> {
+  const res = await fetch(`${BASE}/studies/${studyId}`);
+  if (!res.ok) throw new Error(`Study fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function createStudy(name: string): Promise<Study> {
+  const res = await fetch(`${BASE}/studies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Could not create the study (${res.status})`);
+  return res.json();
+}
+
+export async function renameStudy(studyId: string, name: string): Promise<Study> {
+  const res = await fetch(`${BASE}/studies/${studyId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteStudy(studyId: string): Promise<void> {
+  const res = await fetch(`${BASE}/studies/${studyId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`Delete failed: ${res.status}`);
+}
+
+/**
+ * Replace a study's papers. List order sets citation order.
+ *
+ * ⚠ Whole-collection on purpose: the P-numbers the reader is looking at come
+ * from this order, so a partial update could repoint citations already on screen.
+ */
+export async function setStudyPapers(
+  studyId: string,
+  documentIds: string[],
+): Promise<StudyPaper[]> {
+  const res = await fetch(`${BASE}/studies/${studyId}/papers`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ document_ids: documentIds }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { detail = (await res.json())?.detail || detail; } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+  return (await res.json()).papers || [];
+}
+
+export async function getStudyChat(studyId: string): Promise<StudyTurn[]> {
+  const res = await fetch(`${BASE}/studies/${studyId}/chat`);
+  if (!res.ok) throw new Error(`Chat fetch failed: ${res.status}`);
+  return (await res.json()).turns || [];
+}
+
+export async function clearStudyChat(studyId: string): Promise<void> {
+  const res = await fetch(`${BASE}/studies/${studyId}/chat`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`Clear failed: ${res.status}`);
+}
+
+export interface StudyStreamHandlers {
+  onStatus: (message: string) => void;
+  onStep: (step: AgentStep) => void;
+  onToken: (text: string) => void;
+}
+
+export interface StudyResult {
+  turn_id: string;
+  answer: string;
+  model: string;
+  cited: StudyCitation[];
+  agent_steps: AgentStep[];
+}
+
+/**
+ * Ask the study a question. Same SSE shapes as `askNoteStream`, so the trail
+ * component renders both.
+ */
+export async function askStudyStream(
+  studyId: string,
+  question: string,
+  handlers: StudyStreamHandlers,
+  model?: string | null,
+  signal?: AbortSignal,
+): Promise<StudyResult> {
+  const res = await fetch(`${BASE}/studies/${studyId}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ question, model: model ?? null }),
+  });
+  if (!res.ok || !res.body) {
+    let detail = `HTTP ${res.status}`;
+    try { detail = (await res.json())?.detail || detail; } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let result: StudyResult | null = null;
+  let streamError: string | null = null;
+
+  const handleEvent = (raw: string) => {
+    let ev: Record<string, unknown>;
+    try { ev = JSON.parse(raw); } catch { return; }
+    switch (ev.type) {
+      case 'status':
+        handlers.onStatus(String(ev.message ?? ''));
+        break;
+      case 'step':
+        handlers.onStep(ev as unknown as AgentStep);
+        break;
+      case 'token':
+        handlers.onToken(String(ev.text ?? ''));
+        break;
+      case 'error':
+        streamError = String(ev.detail || 'Could not answer that');
+        break;
+      case 'done':
+        result = {
+          turn_id: String(ev.turn_id ?? ''),
+          answer: String(ev.answer ?? ''),
+          model: String(ev.model ?? ''),
+          cited: (ev.cited as StudyCitation[]) || [],
+          agent_steps: (ev.agent_steps as AgentStep[]) || [],
+        };
+        break;
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data:')) handleEvent(line.slice(5).trim());
+      }
+    }
+  }
+
+  if (streamError) throw new Error(streamError);
+  if (!result) throw new Error('The answer stream ended unexpectedly');
+  return result;
+}
+
+// ── Sticky notes: two boards ─────────────────────────────────────────────────
+
+export type StickyColor = 'yellow' | 'blue' | 'green' | 'pink' | 'orange' | 'plain';
+
+/**
+ * Which board a note lives on.
+ *
+ * ⚠ `board` is not redundant with `scope`. `scope: 'library'` already means the
+ * library-wide *chat*, so without the board a note beside that chat and a note
+ * on the universal board would be the same thing.
+ */
+export type StickyBoard = 'chat' | 'universal';
+
+export interface Sticky {
+  id: string;
+  body: string;
+  color: StickyColor;
+  pinned: boolean;
+  board: StickyBoard;
+  /** Study id, or `library`. Meaningless when `board === 'universal'`. */
+  scope: string;
+  /** Who wrote it. Assistant notes are badged and an edit cannot launder that. */
+  origin: 'user' | 'assistant';
+  author_model: string | null;
+  /** Papers this note references, if any. */
+  papers: { document_id: string; label: string }[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** One board's notes, pinned first then newest. */
+export async function listStickies(
+  board: StickyBoard,
+  scope?: string,
+): Promise<Sticky[]> {
+  const qs = new URLSearchParams({ board });
+  if (board === 'chat') qs.set('scope', scope || LIBRARY_SCOPE);
+  const res = await fetch(`${BASE}/stickies?${qs}`);
+  if (!res.ok) throw new Error(`Notes fetch failed: ${res.status}`);
+  return (await res.json()).stickies || [];
+}
+
+export async function createSticky(input: {
+  body?: string;
+  color?: StickyColor;
+  pinned?: boolean;
+  board: StickyBoard;
+  scope?: string;
+  document_ids?: string[];
+}): Promise<Sticky> {
+  const res = await fetch(`${BASE}/stickies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`Could not create the note (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Edit a note, or move it between boards.
+ *
+ * ⚠ Send `board` **and** `scope` together to move one. `board` alone is not
+ * enough: `scope: 'library'` is a real destination, not "unset".
+ *
+ * ⚠ `origin` is not patchable. A note the assistant wrote stays badged as the
+ * assistant's however often it is edited — the badge records where the claim
+ * came from, and an edit that launders it makes the badge worthless.
+ */
+export async function updateSticky(
+  stickyId: string,
+  patch: {
+    body?: string;
+    color?: StickyColor;
+    pinned?: boolean;
+    board?: StickyBoard;
+    scope?: string;
+    document_ids?: string[];
+  },
+): Promise<Sticky> {
+  const res = await fetch(`${BASE}/stickies/${stickyId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Save failed: ${res.status}`);
+  return res.json();
+}
+
+/** ⚠ Reader-only. The assistant writes and edits notes but never removes one. */
+export async function deleteSticky(stickyId: string): Promise<void> {
+  const res = await fetch(`${BASE}/stickies/${stickyId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`Delete failed: ${res.status}`);
 }

@@ -5,15 +5,21 @@
 > **Owns:** client-side state and view behavior.
 > **Does not own:** endpoint contracts ([api.md](../03-reference/api.md)).
 >
-> **Status:** current · **Last verified:** 2026-08-18 against
-> [`frontend/src/App.tsx`](../../frontend/src/App.tsx) and
-> [`views/LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) (`main`, 79903be).
-> The ArticleReader sections below were last verified 2026-07-28 against
-> [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) (`main`, 5471870).
+> **Status:** current · **Last verified:** the library, the desk, and the agent trail 2026-08-26,
+> driven in a real browser against a live backend;
+> [`frontend/src/App.tsx`](../../frontend/src/App.tsx) 2026-08-18 (`main`, 79903be).
+> The ArticleReader's anchoring and table sections were verified 2026-08-18 against
+> [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) and
+> [`views/ArticleBlock.tsx`](../../frontend/src/views/ArticleBlock.tsx) (`8fb153b`); its
+> remaining sections 2026-07-28 (`main`, 5471870).
 > **Verify with:** `cd frontend && npm run build` (runs `tsc` first)
+> **Cross-engine:** layout regressions here have been WebKit-only twice. Check
+> Safari, or drive it headlessly — `npx playwright install webkit`, then load
+> the page and assert no element reports more than one client rect
+> (`el.getClientRects().length > 1` means it fragmented).
 
 Vite + React + Tailwind, no router library — a tiny state machine in
-[App.tsx](../../frontend/src/App.tsx) toggles between four views.
+[App.tsx](../../frontend/src/App.tsx) toggles between five views.
 
 ## Two readers, chosen by `doc_kind`
 
@@ -31,7 +37,7 @@ Nothing on the paper path mounts `ChatPane`.
 ## Top-level state ([App.tsx](../../frontend/src/App.tsx))
 
 ```ts
-type Route = 'library' | 'processing' | 'reading' | 'pdf-viewer';
+type Route = 'library' | 'processing' | 'reading' | 'pdf-viewer' | 'desk';
 ```
 
 Held in `useState<Route>`:
@@ -40,6 +46,7 @@ Held in `useState<Route>`:
 - **`processing`** → `<LibraryView>` underneath + `<ProcessingOverlay>` on top.
 - **`reading`** → `<ReadingView>` (dispatches to `<ArticleReader>` or `<BookReadingView>`).
 - **`pdf-viewer`** → reserved for an in-browser PDF viewer.
+- **`desk`** → `<DeskView>`. Deep-linkable per scope: `#/desk`, `#/desk/<studyId>`.
 
 `App.tsx` also owns:
 - `activePaper` — the `Paper` currently open in `ReadingView`.
@@ -76,13 +83,49 @@ All functions throw on non-`2xx`.
 
 ## LibraryView ([views/LibraryView.tsx](../../frontend/src/views/LibraryView.tsx))
 
-Renders a paper grid/list. On mount, calls `listPapers()`. Features:
+A shelf, not a table. Every card leads with the paper's own first page, because at ten papers a
+filename tells them apart and at fifty it does not — and the filenames here are routinely arXiv
+ids. On mount, calls `listPapers()`. Features:
+
 - Drag-and-drop and click-to-upload dropzone. Both call the same `onUpload` prop; a drop
   passes the dropped `File`, a click passes nothing. See
   [Upload + processing](#upload--processing-apptsx).
+- **Cover thumbnails** — [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) renders
+  `GET /papers/{id}/cover`, the first page as a JPEG, rendered server-side on first request.
+- **Inline rename** — the pencil on hover swaps the title for an input. Enter commits, Escape
+  reverts, blur commits.
 - Local search (substring match over title and authors).
 - Local sort cycle: `recent → title → pages`.
-- Two layouts: grid (cards) and list (rows).
+- Two layouts: grid (cards) and list (rows). Both share `CardActions` and the cover.
+
+### Renaming
+
+`PATCH /papers/{id}` sets `documents.title`, a display name that overrides the filename.
+[`lib/titles.ts::displayTitle`](../../frontend/src/lib/titles.ts) is the single resolver — a
+rename wins, else the filename minus `.pdf` — and every surface that shows a name uses it.
+
+⚠ **A rename never touches disk.** `filename` is the on-disk key every storage path is built from,
+and `original_filename` is what `/raw` serves the download as. Renaming those to match a label
+would break both. The Raw files panel therefore still lists real filenames, correctly.
+
+⚠ **The library poll is paused while a rename is open.** The poll replaces the whole paper list
+every 2.5–10s; a tick landing mid-edit would blow away the input being typed in
+(`renamingRef` in [LibraryView.tsx](../../frontend/src/views/LibraryView.tsx)).
+
+⚠ **The card's open target is an inner `div`, not the `<article>`.** Rename and delete are real
+buttons, and a button nested inside something that is itself `role="button"` is invalid — assistive
+tech announces the card as one control named "… 17p · read Rename this paper Delete this paper".
+Keeping the actions as siblings of the open target yields three correctly-named controls.
+
+### Covers
+
+| Concern | Decision |
+| --- | --- |
+| When rendered | Lazily, on first `GET /cover` — never at ingestion. Ingestion is already the slow path the reader waits on, and a cover is worth nothing until the library is looked at. Papers ingested before covers existed get them for free. |
+| Cache | `storage/covers/<id>.jpg`, keyed by document id alone. A document's first page cannot change — re-extraction rewrites derived text, never the source PDF — so there is no invalidation problem. |
+| Missing | The endpoint answers **204, not 404**. The grid asks for one cover per card; a wall of 404s makes a working library look broken. `<img>` reports 204 as a load error, so `PaperCover` must keep its `onError` fallback. |
+| Aspect | Fixed `1 / 1.294` with `object-position: top`. A Letter page and an A4 page are different shapes, and rows of mismatched heights read as a broken layout; cropping from the bottom keeps the title and authors. |
+| Off the event loop | `run_in_threadpool` — rasterising is 50–200ms of CPU in a native extension, and the grid requests every cover at once. |
 
 ## Upload + processing ([App.tsx](../../frontend/src/App.tsx))
 
@@ -172,10 +215,21 @@ empty so centring holds), `inline` (below that, cards fall into normal flow unde
 | `text` | Drag-select inside a block → an "Ask" pill appears at the selection. |
 | `figure` | Hover a figure → "Ask about this figure". |
 | `equation` | Hover a formula → "Ask about this equation". |
-| `block` | Press `A` or the Ask button with nothing selected → anchors to the block at the top of the viewport. |
+| `table` | Hover a table → "Ask about this table" — **or drag-select inside it**, which is promoted to the whole table. |
+| `block` | Press `A` with nothing selected → anchors to the block at the top of the viewport. |
+| `document` | Open the panel (the one bottom-left button, or `P`) → not anchored at all. See [The assistant panel](#the-assistant-panel-the-holistic-level). |
 
-Figures and equations need an explicit affordance because neither can be drag-selected — one is an
-image, the other a tree of KaTeX spans that selects into gibberish.
+Figures, equations and tables need an explicit affordance because none of them can be
+drag-selected usefully — one is an image, one a tree of KaTeX spans that selects into gibberish,
+and the third selects into cell values stripped of the header and row label that give them meaning.
+
+⚠ **A selection inside a table does not produce a `text` anchor.**
+[`ArticleReader.tsx::openComposerFromSelection`](../../frontend/src/views/ArticleReader.tsx) looks
+up the block behind the selection and, if it is a table, hands the whole table over instead. The
+quote "8.4 12.1 91.2 7B" is not a worse quote than usual — it is unanswerable in a way that looks
+answerable, which is the failure mode worth code to prevent. Both the ask composer and the
+personal-note composer apply the rule; a table anchor carries the table's transcription as its
+quote and the MinerU crop as its image, exactly like an equation.
 
 ⚠ Every block carries `data-seq` and `data-chunk-id`. That is how a selection is traced back to a
 chunk and how a card finds the element to sit beside. Do not remove them.
@@ -211,12 +265,46 @@ watches `$\mathcal{P` type itself out and then snap into a symbol.
 | `heading` | `article-h1/2/3` by `heading_path` depth. |
 | `figure` | Centred image + caption, with a hover ask button. |
 | `math` | Centred KaTeX, horizontally scrollable, with a hover ask button. |
-| `table` | Real `<table>` from `table_json`, falling back to markdown. |
+| `table` | Real `<table>` from `table_json`, falling back to markdown — inside its own scroll box, with a hover ask button. See below. |
 | `code` | Fenced monospace block. |
 | `footnote` | Quiet side note with a rule. |
 | default | Serif prose at 20px/1.72. |
 
 Memoised — without it every keystroke in the composer would re-render the entire paper.
+
+#### Tables get their own scroll box
+
+A paper's tables are the one part of it that is genuinely not the width of the prose column.
+
+| | Before | Now |
+| --- | --- | --- |
+| Wrapper | `overflow-x: auto` | `.article-table-scroll`: `overflow: auto`, `max-height: 70vh` |
+| Table width | `width: 100%` | `width: max-content; min-width: 100%` |
+| Header row | scrolls away | `position: sticky; top: 0` |
+| Cue that there is more | none | styled scrollbar + edge shadows |
+
+⚠ **`overflow-x: auto` and `width: 100%` cannot both be true and mean anything.** The old pair
+never scrolled a single pixel: `100%` told the table to fit, so it always fit, and it bought that
+fit by crushing `Params (B)` into four stacked letters. Width has to come from the content before
+overflow means anything.
+
+Two landmines in the CSS, both in [`index.css`](../../frontend/src/index.css):
+
+- **Body cells must stay transparent.** The edge shadows are painted on the scroller's own
+  background using the `local`/`scroll` background-attachment pair, so an opaque `td` sits on top
+  of them and the cue silently disappears. Only `th` gets a fill, and it needs one for the
+  unrelated reason that it is sticky.
+- **`table_json.headers` is routinely empty, and the header row arrives as `rows[0]`.** MinerU
+  emits `<table><tr><td>…` with no `<thead>`, so the parser has nothing to put in `headers` — all
+  eight tables in the 47-page sample paper come back that way. The renderer promotes `rows[0]`
+  when `headers` is empty; without it the sticky rule pins an empty `<thead>` and a long table
+  scrolls its column names away, which is the failure the box exists to prevent. Fixed in the
+  renderer rather than the chunker deliberately: `table_json` mirrors what MinerU emitted, and a
+  chunker change would only reach papers re-ingested afterwards.
+- **A stuck `th` keeps its background and loses its borders.** With `border-collapse: collapse` the
+  cell borders belong to the table's paint layer, which is not sticky, so they scroll away and
+  leave the header floating with rows cut flush against its text. The header's separators are
+  therefore drawn as `box-shadow: inset`, which travels with the cell.
 
 ### The margin's scarce resource, and decks
 
@@ -292,11 +380,84 @@ Several per paper. Three surfaces, one state:
 frame to keep those surfaces honest, and blocks are laid out monotonically, so a scan meant one
 `getBoundingClientRect` per block per frame — several hundred forced reflows on a long paper.
 
+### Leaving for the desk
+
+The one button in the bottom-left corner (or `P`) **navigates** to
+[the desk](#the-desk-viewsdeskviewtsx). It does not open anything here.
+
+⚠ It has been three things in three iterations, and the reasons are worth keeping. First an "Ask"
+and a "Note" button, both anchoring to whatever block happened to be at the top of the viewport — a
+worse version of what highlighting already does, offered more prominently. Then one button opening
+a docked panel. Now a door: a question about the paper as a whole, or about several papers, is not
+something you do *on top of* a document you are reading. Passage-level work belongs entirely to the
+selection pill and the `A` / `N` keys.
+
+⚠ **The scope it hands over is a study containing this paper — only if there is exactly one.** Two
+or more is ambiguous, and guessing between them is worse than landing on the library scope with the
+studies rail right there.
+
+⚠ **`scope='document'` notes still render in the reader's Marginalia index.** The panel that created
+them is gone and nothing makes new ones, but they belong to this paper, and dropping them from the
+index would make them unreachable rather than merely relocated. `ArticleReader` derives
+`marginNotes` (`scope !== 'document'`) for the gutter and folds both into `marginaliaRows`.
+
+```text
+                    ┌───────────────── one /notes fetch ─────────────────┐
+                    │                                                    │
+              scope='anchor'                                    scope='document'
+                    │                                                    │
+              groupNotes()                                        groupNotes()
+                    │                                                    │
+           ┌────────┴────────┐                                           │
+      gutter left      gutter right                          Marginalia index only
+      (positioned by anchor_sequence_id)                     (no gutter card, no composer)
+```
+
+### The agent trail ([views/AgentTrail.tsx](../../frontend/src/views/AgentTrail.tsx))
+
+What the model fetched before it answered, rendered from the `step` SSE events and from
+`note.agent_steps` on reload. Protocol and field meanings:
+[chat-and-ask.md § The trail](chat-and-ask.md#the-trail--every-fetch-is-reported-not-just-logged).
+
+| State | Behaviour |
+| --- | --- |
+| Streaming (`live`) | Always expanded, no toggle. The trail **is** the progress indicator; collapsing it leaves a blank card. |
+| Saved | Collapsed behind one line — "How this was answered · 2 from the paper · 1 from the web". |
+
+⚠ **Upsert by `step.id`, never append** (`onStep` in `ArticleReader.tsx::runNote`). Each call
+arrives twice, `running` then `done`; appending renders every fetch as two rows, the first spinning
+forever.
+
+⚠ **The trail stays up while the answer types itself out.** Collapsing it on the first token would
+snatch away the record of the fetches at the exact moment they become checkable.
+
+⚠ **A `WEB` step is coloured differently from the paper tools** (`--deck`, not `--accent`). Whether
+an answer drew on anything outside the paper is the one distinction worth seeing without reading.
+
 ### The Marginalia panel
 
 [`MarginaliaPanel.tsx`](../../frontend/src/views/MarginaliaPanel.tsx) — Contents, Bookmarks and
 Notes behind one search, replacing the headings-only overlay. Structure, marks and annotations are
 the same question asked three ways.
+
+⚠ **Contents nests by the paper's own numbering, not by `heading_path`.** MinerU's `text_level`
+distinguishes the document title from everything else and stops, so `heading_path` is depth 2 for
+`3 Training data` *and* for `3.1 ARC task formulation` — a contents list built from it renders as
+one flat column, which is what the reader saw. `level` now comes from
+[`services/outline.py::heading_level`](../../backend/app/services/outline.py), which reads the
+numeric prefix and falls back to `heading_path` for unnumbered headings.
+
+⚠ **Depth is a CSS custom property, not a class per level.** It was
+`outline-l${min(level, 4)}` against four hand-written rules, which silently flattened anything
+deeper — a paper numbering `2.1.1.1` drew it level with `2.1.1`. One `calc()` off `--depth` handles
+any depth, and the step and the rail offset are the only two numbers involved, so they cannot drift
+apart the way four hand-written pairs could. Still capped at 6, but the cap is now about a 300px
+panel running out of room rather than about how many rules someone wrote.
+
+⚠ **The guide rails are what make it readable, not the indent.** At an 18px step a third-level
+heading is 40px in, and in a 300px panel that reads as a ragged left edge rather than a hierarchy.
+A 1px rule per level, coloured `--accent` on the current section, does the work the indent alone
+cannot.
 
 ### Personal state and its migration
 
@@ -318,6 +479,163 @@ once:
 Writes are optimistic with rollback, **except creating a personal note**, which waits for the
 server. A card rendered under a temporary id cannot be dragged into a deck — deck membership is a
 foreign key. The composer keeps its draft until the save lands, so a failure loses nothing typed.
+
+## The desk ([views/DeskView.tsx](../../frontend/src/views/DeskView.tsx))
+
+A page, not a panel. Behaviour and the agent behind it:
+[chat-and-ask.md § Part 1b](chat-and-ask.md#part-1b--the-study-agent-the-desk).
+
+⚠ **It is a place to work on papers without opening them.** That is why it is a route rather than
+an overlay on the reader: an overlay implies the document underneath is the subject, and here it is
+not. The reader's corner button became a door to it.
+
+Three columns, each answering a different question:
+
+```text
+┌─────────────────┬───────────────────────────────────┬──────────────────┐
+│ what am I       │ what do they say?                 │ what do I think? │
+│ working on?     │                                   │                  │
+│                 │  ┌ user bubble ────────── right ┐ │  ┌ sticky ────┐  │
+│  Studies        │  └──────────────────────────────┘ │  │ any paper  │  │
+│   Whole library │                                   │  └────────────┘  │
+│   Reasoning…  3 │  ▸ How this was answered · 5      │  ┌ sticky ────┐  │
+│                 │  answer, full measure             │  │ P1         │  │
+│  In this study  │   …recurrent state [P1:35]        │  └────────────┘  │
+│   P1 BDH-CQ     │        └── click → the block,     │                  │
+│   P2 Kimi K3    │            inline, in place       │                  │
+│   P3 OCR        │                                   │                  │
+│                 │  READ FROM  P1 · P2 · P3          │                  │
+│  Rename Delete  ├───────────────────────────────────┤                  │
+│                 │  composer + model picker          │                  │
+└─────────────────┴───────────────────────────────────┴──────────────────┘
+     rail                    chat (elastic)                  board
+```
+
+### (rendered)
+
+```mermaid
+%%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
+flowchart LR
+    subgraph DeskView
+        RAIL["rail<br/>studies · papers"] -->|"setScope"| ST[["scope<br/>studyId | 'library'"]]
+        ST --> CHAT["StudyChat<br/>transcript"]
+        ST --> BOARD["StickyBoard"]
+        CHAT -->|"askStudyStream"| API(["/studies/{scope}/chat/stream"])
+        API -->|"step · token"| CHAT
+        CHAT --> CITE["CitationRef<br/>[[P2:41]]"]
+        CITE -->|"getChunk"| BLK([one block, inline])
+        CITE -.->|"open in reader"| RD([ArticleReader at ¶41])
+    end
+    classDef owned stroke:#3b82f6,stroke-width:2px
+    class RAIL,CHAT,BOARD,CITE owned
+```
+
+What to notice: the citation has two exits and the reader is the *optional* one. Everything the
+desk promises rests on the inline path being enough most of the time.
+
+⚠ **The chat's elastic column is the only one that grows.** A rail that widens with the window just
+holds more whitespace; below 1180px the board folds away first, because notes are a companion to
+the chat and the chat is what stops being usable when squeezed.
+
+### Citations that open where they sit
+
+[`CitationRef.tsx`](../../frontend/src/views/CitationRef.tsx) fetches one block on first expand and
+keeps it. A study answer routinely carries a dozen citations, and prefetching all of them would be
+a dozen requests for text that mostly never gets opened.
+
+⚠ **The markers become links before markdown runs, not fragments around it**
+([`StudyChat.tsx::withCitationLinks`](../../frontend/src/views/StudyChat.tsx)). Splitting the answer
+on its markers and rendering each fragment separately makes every fragment its own block: a citation
+mid-sentence then breaks the paragraph in two and strands the rest of the sentence — including a
+lone trailing full stop — on its own line. A `components.a` override swaps the link for the chip
+with the paragraph intact.
+
+⚠ **The peek is built from `<span>`s with `display: block`.** It renders inside a `<p>`, and a
+`<div>` there is invalid HTML that React will not nest cleanly.
+
+⚠ **A citation into a paper the study no longer holds renders struck-through, not as a button.** A
+dead control that looks like evidence is worse than one that says it is gone.
+
+### Two pages
+
+The desk is two routes behind one bar: `#/desk/<scope>` (studies) and
+`#/desk/notes` (the universal board). `notes` is not a valid study id, so the
+two cannot collide in the hash.
+
+### Notes, and who wrote them
+
+Two boards, and the distinction is not cosmetic:
+
+| | chat board | universal board |
+| --- | --- | --- |
+| Where | a strip beside the transcript | its own page |
+| Scoped to | one conversation (`board='chat'` + `study_id`) | nothing |
+| Component | [`StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx) | [`NoteWall.tsx`](../../frontend/src/views/NoteWall.tsx) |
+| Layout | a list | a wall — tacked, tilted, masonry |
+
+⚠ **`board` is not redundant with `scope`.** `scope: 'library'` already means
+the library-wide *chat*, so without the board a note beside that chat and a note
+on the universal board would be the same row.
+
+⚠ **The tilt on the wall is derived from the note's id, never random.** A
+`Math.random()` rotation re-rolls on every render — every keystroke in the
+filter box would make the whole wall twitch. Same id, same angle, forever.
+
+⚠ **The wall is a CSS grid, not multi-column — and that is the whole point.**
+It was `columns: 260px` for the masonry. Multi-column *fragments* its children:
+a note taller than the remaining column height is split, and the remainder is
+re-drawn at the top of the next column, pin and dashed border and all.
+`display: inline-block` is the usual charm against that and **it is not enough
+in WebKit** — the reported symptom was exactly this, two orphaned note-bottoms
+with their own pins stranded under the board. Grid items never fragment, in any
+engine. The cost is the masonry: rows are ragged rather than packed, which for a
+corkboard is not a loss. Do not "restore" the columns without a WebKit test.
+
+⚠ **The clipped-note fade comes from a measurement, not a selector.** It was
+`:has(> :nth-child(3))` — fade when the body has three or more blocks — which is
+wrong for the common case, because a long note is usually one long paragraph. It
+clamped with a hard cut mid-line and nothing to say why. `StickyNote` measures
+`scrollHeight` against `clientHeight` and sets `.is-clipped`; a `ResizeObserver`
+re-measures, because a note that fits at first paint can overflow once the serif
+face swaps in.
+
+⚠ **An assistant note is marked twice over**: a dashed border (the one border
+treatment nothing else in the app uses, legible before anything is read) and a
+badge naming the model. Drawn from `origin`, which the API refuses to patch — an
+edit cannot launder a note into looking like the reader's own.
+
+⚠ **Delete is the reader's alone**, and it is armed rather than instant. A note
+can be a week-old thought, and the assistant cannot recreate one it was never
+asked to write again.
+
+### Hiding the chat's notes
+
+The strip folds to a 38px rail, not to `display: none`. Collapsed is not the
+same as empty, so the rail still shows the count — the difference between "put
+away" and "gone". The state is in `localStorage`: a reader who hid it wants it
+hidden tomorrow.
+
+### Choosing a study's papers ([views/PaperPicker.tsx](../../frontend/src/views/PaperPicker.tsx))
+
+⚠ **Order is not decoration here.** Answers cite `[[P2:41]]`, and the number
+comes from this list's order. So the dialog has two halves — what is in the
+study, in order and re-orderable, and what else the library holds. The flat
+checkbox list it replaced hid both facts: you could not see the numbering at all,
+and could not tell chosen from unchosen without reading every box.
+
+⚠ **Membership is held locally and written on Save.** It is a whole-collection
+write, so a live request per checkbox would be one round trip per click *and*
+would renumber the study under the reader mid-edit.
+
+⚠ Covers, not titles alone. The reason the library grew thumbnails applies twice
+over here: a study is assembled by recognising papers, and half of them are
+still called `2607.24653v2`.
+
+### Autoscroll
+
+The transcript follows the newest turn **only when the reader is already at the bottom** (within
+120px). A long answer streaming in while they are reading an earlier turn must not drag the view
+away from what they are looking at.
 
 ## ChatPane ([views/ChatPane.tsx](../../frontend/src/views/ChatPane.tsx))
 
@@ -362,6 +680,16 @@ figures in LOCAL and GLOBAL responses.
   told apart by **shape and colour, not by a border tint** — a margin card is read peripherally.
 - [`views/AskComposer.tsx`](../../frontend/src/views/AskComposer.tsx) — the composer that opens on
   an anchor. Owns the model picker; never touches the network.
+- [`views/DeskView.tsx`](../../frontend/src/views/DeskView.tsx) — the desk page.
+- [`views/AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx) — the tool calls behind an
+  answer, live and after the fact. Shared by margin notes and the desk.
+- [`views/StudyChat.tsx`](../../frontend/src/views/StudyChat.tsx) — the desk's transcript.
+- [`views/StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx) — the reader's own notes.
+- [`views/CitationRef.tsx`](../../frontend/src/views/CitationRef.tsx) — a `[[P2:41]]` that opens
+  in place.
+- [`views/PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) — a paper's first page, with the
+  placeholder that must survive a 204.
+- [`lib/titles.ts`](../../frontend/src/lib/titles.ts) — the one resolver for a paper's display name.
 - [`components/Icons.tsx`](../../frontend/src/components/Icons.tsx) — inline SVG icons.
 - [`components/LogoMark.tsx`](../../frontend/src/components/LogoMark.tsx) — the 9XAIPal wordmark.
 

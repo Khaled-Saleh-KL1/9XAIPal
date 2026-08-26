@@ -100,6 +100,29 @@ async def update_document_status(
     )
 
 
+async def set_document_title(
+    session: AsyncSession, document_id: UUID, title: Optional[str]
+) -> bool:
+    """Set (or clear) a document's display title.
+
+    ``None`` clears the override so the UI falls back to original_filename.
+    Returns False when no such document exists, so the endpoint can 404 rather
+    than silently reporting a rename that touched nothing.
+    """
+    result = cast(
+        CursorResult[tuple[()]],
+        await session.execute(
+            text("""
+                UPDATE documents
+                SET title = :title, updated_at = NOW()
+                WHERE id = :id
+            """),
+            {"id": document_id, "title": title},
+        ),
+    )
+    return (result.rowcount or 0) > 0
+
+
 async def delete_document(session: AsyncSession, document_id: UUID) -> bool:
     """Delete a document (cascades to chunks, embeddings, assets)."""
     result = cast(

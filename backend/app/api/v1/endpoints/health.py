@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from app.schemas.common import HealthResponse
 from app.llm.client import is_available as llm_available
-from app.search.searxng_client import is_available as searxng_available
+from app.search.web import active_provider, is_available as web_search_available
 from app.database.connection import verify_connection
 
 router = APIRouter()
@@ -23,8 +23,9 @@ async def health_check():
     # LLM provider (Ollama or the configured cloud API)
     ollama_status = "ok" if await llm_available() else "unavailable"
 
-    # SearXNG
-    searxng_status = "ok" if await searxng_available() else "unavailable"
+    # Web search — whichever provider is active (Tavily or SearXNG).
+    provider = active_provider()
+    web_status = "ok" if await web_search_available() else "unavailable"
 
     overall = "ok" if db_status == "ok" else "degraded"
 
@@ -32,6 +33,11 @@ async def health_check():
         status=overall,
         database=db_status,
         ollama=ollama_status,
-        searxng=searxng_status,
+        web_search=web_status,
+        web_search_provider=provider,
+        # ⚠ Kept so existing clients and scripts reading `searxng` do not break.
+        # It now reports the ACTIVE provider's health, which is only about
+        # SearXNG when SearXNG is the one running.
+        searxng=web_status,
     )
 

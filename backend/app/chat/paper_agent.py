@@ -1,20 +1,41 @@
 """Answering a paper question without embeddings.
 
-Two strategies, chosen by size:
+The default is **agent** — the anchored path. The model is handed exactly three
+things: what the reader pointed at, the blocks immediately around it, and the
+paper's CONTENTS index (its heading spine, each entry carrying the block number
+it starts at). Everything else it must go and get, with four tools it drives
+itself:
 
-1. **whole** — the paper fits inside WHOLE_PAPER_MAX_TOKENS, so every block is
-   put in the prompt and the model answers in one pass. Nothing is retrieved,
-   ranked, or summarized: the model sees exactly what the reader sees.
+    SEARCH: <terms>      full-text + literal substring search over chunks
+    SECTION: <seq>       the whole section a contents entry names
+    READ: <start>-<end>  the actual markdown of a sequence range
+    WEB: <terms>         the public internet, when the paper cannot answer
 
-2. **agent** — the paper is too large to stuff, so the model is handed a map
-   (the heading outline), the anchor the reader is looking at, and two tools it
-   drives itself until it has enough:
+It loops until it stops asking for tools or PAPER_AGENT_MAX_STEPS is spent,
+then answers.
 
-       SEARCH: <terms>      full-text + literal substring search over chunks
-       READ: <start>-<end>  the actual markdown of a sequence range
+⚠ **Every tool round is reported to the reader, not just logged.** The loop
+emits a ``step`` event per call — what it asked for, why it says it asked, and
+what came back — and the trail is persisted on the note. An agent that silently
+disappears for twenty seconds and returns a confident paragraph is
+indistinguishable from one that hallucinated; showing the fetches is what makes
+the difference legible. See ``_step_event``.
 
-   It loops until it stops asking for tools or PAPER_AGENT_MAX_STEPS is spent,
-   then answers.
+⚠ **WEB is the one tool that leaves the machine.** Only the query string goes
+out — never paper text, chunks, or the reader's question verbatim unless the
+model chooses to send it as the query. It is offered only when a web-search
+provider is configured (``app.search.web.is_configured``).
+
+⚠ **The paper is not in the prompt, and that is the point.** A note is a
+question about one passage. Stuffing forty pages of unrelated prose behind it
+costs the entire context window and dilutes the answer — the model drifts into
+summarizing the paper instead of reading the sentence. The contents index is
+what makes the omission safe: the model can always see the *shape* of the
+document, so it knows what exists and can name the section it wants.
+
+The old **whole** strategy — every block in one prompt when the paper fits
+inside WHOLE_PAPER_MAX_TOKENS — survives behind
+``PAPER_WHOLE_DOCUMENT_CONTEXT``, off by default.
 
 ⚠ The tools are a TEXT protocol, not provider tool-calling. This app's LLM
 client fans out to Ollama and five OpenAI-compatible clouds whose tool-calling
@@ -31,12 +52,28 @@ from typing import AsyncIterator, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.chat.agent_tools import (
+    THINK_RE,
+    TOOL_BLOCK_RE,
+    WEB_RE,
+    format_block,
+    format_blocks,
+    format_search_results,
+    read_range,
+    run_search,
+    run_web,
+    section_range,
+    step_event,
+    stream_answer,
+    strip_tool_block,
+)
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.database.pgvector import search_chunks_fulltext
 from app.database.repositories import chunks as chunk_repo
 from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
+from app.search import web as web_search
+from app.services.outline import indent_for
 
 logger = get_logger(__name__)
 
@@ -70,60 +107,135 @@ There is nothing else to look up — answer from what is here."""
 
 _AGENT_SYSTEM = _BASE_ROLE + """
 
-This paper is too large to show you at once. You have its heading outline and \
-the passage the user is looking at. To see more, emit a tool block and nothing \
-else — no explanation, no partial answer:
+You have not been given the paper. You have been given the passage the user is \
+pointing at, the blocks around it, and the paper's CONTENTS — its index, every \
+heading with the block number it starts at.
+
+Answer a question the passage genuinely settles straight from the passage. \
+Otherwise go and get what you are missing — a term defined earlier, a number \
+reported in a results table, a symbol introduced in another section, the \
+method a claim rests on. The contents tell you where to look, and fetching \
+the right section is always better than hedging about what the paper "likely" \
+says. Prefer one precise fetch over three vague ones.
+
+To use a tool, emit a tool block and nothing else — no explanation outside the \
+block, no partial answer:
 
 <tool>
-SEARCH: reference sliding window attention
-READ: 40-52
+THINK: the passage cites the training mixture but does not list it
+SECTION: 31
+SEARCH: sliding window attention
+READ: 40-52{web_example}
 </tool>
 
-- SEARCH finds blocks containing terms anywhere in the paper. One query per \
-line, up to three lines. Use the paper's own vocabulary.
-- READ returns the full text of a block range. Ranges come from the outline or \
-from SEARCH results.
-- You may emit several lines in one block; they all run before you are called \
-again.
+- THINK is one short line saying why you are fetching. The reader sees it, so \
+write it for them: "checking what τ was set to", not "invoking SEARCH". One \
+per block, optional but expected.
+- SECTION takes a block number FROM THE CONTENTS and returns that entire \
+section, down to the next heading of the same or higher level. This is the \
+cheapest way to follow the index: name the section you want rather than \
+guessing a range. A number that is not a heading returns the section \
+containing it, so a SEARCH hit can be handed straight to SECTION.
+- SEARCH finds blocks containing terms anywhere in the paper. Use the paper's \
+own vocabulary.
+- READ returns a block range verbatim. Use it for ranges you got from SEARCH \
+hits, or to widen around a block you already have.{web_help}
+- Up to three lines of each. Every line in one block runs before you are \
+called again.
 
 You get up to {max_steps} rounds of tools. When you have what you need — or \
 when you are told you have no rounds left — write the answer instead of a tool \
-block. Do not mention the tools, the rounds, or this process to the user."""
+block. Do not mention the tools, the contents, the rounds, or this process to \
+the user: they can already see what you fetched."""
+
+# Appended to _AGENT_SYSTEM only when a web-search provider is configured. Kept
+# out of the base string so a machine with no provider is never told about a
+# tool whose calls would silently return nothing — a model that believes it can
+# check the internet and gets empty results every time stops trusting its own
+# observations and starts guessing.
+_WEB_HELP = """
+- WEB searches the public internet. Use it ONLY for what the paper cannot \
+answer by construction: what a cited work actually did, what a term means in \
+the wider field, whether a claim has been superseded. Never use it for \
+something this paper states — that is what SECTION and SEARCH are for.
+- Attribute a web-sourced claim IN THE SENTENCE — "the ConceptARC benchmark \
+introduced it as…", "reported elsewhere as…". The [[n]] markers are block \
+numbers in THIS paper and nothing else: never write [[WEB]], [[source]], or a \
+marker round anything that is not a block number. The reader is already shown \
+every page you opened, so the marker would be noise even if it rendered."""
+
+_WEB_EXAMPLE = "\nWEB: Longformer dilated attention results"
+
+# The forced final turn. The tool instructions are gone — there is nothing left
+# to call — but so is _WHOLE_SYSTEM's claim to hold the complete paper, which
+# was never true on this path and invites the model to assert that something is
+# absent from a paper it only ever saw fragments of.
+_ANSWER_SYSTEM = _BASE_ROLE + """
+
+You are answering from the passage the user pointed at plus whatever you \
+gathered. You cannot look anything else up. Answer from what is in front of \
+you, and if it does not settle the question, say which part is unsettled \
+rather than assuming the paper is silent on it."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Block formatting
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _format_block(chunk: dict) -> str:
-    """One chunk as a numbered block the model can cite by number."""
-    seq = chunk["sequence_id"]
-    kind = chunk.get("chunk_type") or "text"
-    body = (chunk.get("markdown") or chunk.get("plain_text") or "").strip()
-    page = chunk.get("page_start")
-    head = f"[[{seq}]]"
-    if kind != "text":
-        head += f" ({kind})"
-    if page is not None:
-        head += f" (p{page})"
-    return f"{head}\n{body}"
+def _format_contents(chunks: list[dict]) -> str:
+    """The paper's index: every heading, indented by depth, with its block number.
 
-
-def _format_blocks(chunks: list[dict]) -> str:
-    return "\n\n".join(_format_block(c) for c in chunks)
-
-
-def _format_outline(chunks: list[dict]) -> str:
-    """The heading spine, as the model's map of a paper it cannot fully see."""
+    This is the whole reason the paper itself can stay out of the prompt. The
+    model always knows the shape of the document — what sections exist and
+    where each one starts — so "I was not shown that" is a lookup rather than a
+    guess, and SECTION turns an index entry straight into text.
+    """
     lines = []
     for c in chunks:
         if c.get("chunk_type") != "heading":
             continue
-        depth = len(c.get("heading_path") or []) or 1
         title = (c.get("plain_text") or "").strip()
         if title:
-            lines.append(f"{'  ' * (depth - 1)}[[{c['sequence_id']}]] {title}")
-    return "\n".join(lines) if lines else "(this paper has no detected headings)"
+            # ⚠ Indent from the paper's own numbering, not heading_path — the
+            # extractor flattens every section to the same depth, so an index
+            # built from it hands the model a flat list and hides which
+            # subsection belongs to which section.
+            lines.append(
+                f"{indent_for(title, len(c.get('heading_path') or []))}"
+                f"[[{c['sequence_id']}]] {title}"
+            )
+    if lines:
+        return "\n".join(lines)
+    return _format_block_map(chunks)
+
+
+def _format_block_map(chunks: list[dict]) -> str:
+    """Fallback index for a paper MinerU found no headings in.
+
+    ⚠ Without this, a heading-less paper loses the index *and* the paper in one
+    move: nothing to browse and nothing in the prompt, leaving SEARCH as the
+    only way in and a wrong guess at the vocabulary as a dead end. Sampling
+    every Nth block gives a coarse map of the same shape — where in the
+    document each idea sits — at a fraction of the tokens.
+    """
+    stride = max(1, settings.paper_agent_map_stride)
+    lines = []
+    for i, c in enumerate(chunks):
+        if i % stride and (c.get("chunk_type") or "text") == "text":
+            continue
+        text = " ".join((c.get("plain_text") or "").split())[:90]
+        if not text:
+            continue
+        kind = c.get("chunk_type") or "text"
+        label = f" ({kind})" if kind != "text" else ""
+        lines.append(f"[[{c['sequence_id']}]]{label} {text}…")
+    if not lines:
+        return "(this paper has no readable text)"
+    return (
+        "(no headings were detected in this paper, so this is a sample of its "
+        "blocks rather than a table of contents — SECTION will not work here, "
+        "use SEARCH and READ)\n" + "\n".join(lines)
+    )
 
 
 def _format_anchor(anchor: dict, window: list[dict]) -> str:
@@ -149,13 +261,42 @@ def _format_anchor(anchor: dict, window: list[dict]) -> str:
         )
         if quote:
             parts.append(f"Its LaTeX transcription: {quote}")
+    elif kind == "table":
+        parts.append(
+            "THE READER IS ASKING ABOUT A TABLE — the whole table, not one "
+            "cell. A crop of it as typeset in the paper is attached. Trust the "
+            "image over the transcription below if they disagree: the "
+            "transcription is machine-generated and loses merged cells, "
+            "spanning headers, and footnote markers. Read the caption and the "
+            "surrounding text for what the columns mean before reading numbers "
+            "off it."
+        )
+        if quote:
+            parts.append(f"Its transcription:\n{quote}")
+    elif kind == "document":
+        # The holistic level: asked from the panel, not from a passage. There is
+        # no anchor to read "in context of", so the model is told the opposite
+        # of the anchored instruction — range over the whole paper rather than
+        # answering about one place in it.
+        parts.append(
+            "THE READER IS ASKING ABOUT THE PAPER AS A WHOLE, not about any "
+            "one passage. Nothing is highlighted. Answer at the level of the "
+            "paper: its argument, its method, its results, how its parts fit "
+            "together. Use the contents to decide which sections the question "
+            "actually turns on and fetch those — do not answer from the "
+            "opening blocks alone, and do not pad with a section-by-section "
+            "tour the reader did not ask for."
+        )
+        if window:
+            parts.append("HOW THE PAPER OPENS:\n" + format_blocks(window))
+        return "\n\n".join(parts)
     elif quote:
         parts.append("THE READER HIGHLIGHTED THIS PASSAGE:\n“" + quote + "”")
     else:
         parts.append("The reader is currently reading around this point in the paper.")
 
     if window:
-        parts.append("SURROUNDING TEXT:\n" + _format_blocks(window))
+        parts.append("SURROUNDING TEXT:\n" + format_blocks(window))
     return "\n\n".join(parts)
 
 
@@ -176,116 +317,153 @@ def _format_thread(thread: list[dict]) -> str:
 # Tool protocol
 # ─────────────────────────────────────────────────────────────────────────────
 
-_TOOL_BLOCK_RE = re.compile(r"<tool>(.*?)(?:</tool>|$)", re.DOTALL | re.IGNORECASE)
 _SEARCH_RE = re.compile(r"^\s*SEARCH:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 _READ_RE = re.compile(r"^\s*READ:\s*(\d+)\s*(?:-|–|to)\s*(\d+)\s*$", re.IGNORECASE | re.MULTILINE)
+# The model's own one-line reason for this round, shown to the reader above the
+# fetches it triggered. Not a tool: it executes nothing and costs no round.
+# ⚠ Tolerant of "SECTION: [[31]]" and "SECTION: 31 Method". Models echo the
+# contents line they are following, brackets and title included, and a strict
+# ^\s*SECTION:\s*(\d+)$ throws the call away — which reads to the reader as the
+# index quietly not working.
+_SECTION_RE = re.compile(r"^\s*SECTION:\s*\[*\s*(\d+)", re.IGNORECASE | re.MULTILINE)
 
 
-def _parse_tool_calls(reply: str) -> tuple[list[str], list[tuple[int, int]]]:
-    """Pull SEARCH / READ calls out of a model reply.
+def _parse_tool_calls(reply: str) -> dict:
+    """Pull THINK / SECTION / SEARCH / READ / WEB out of a model reply.
 
     Only looks inside a <tool> block. A model that mentions "SEARCH:" while
     explaining something in prose must not accidentally trigger a round trip.
+
+    Returns ``{"think", "sections", "searches", "reads", "webs"}``. ``think``
+    carries no execution — it is the rationale line the reader sees.
     """
-    match = _TOOL_BLOCK_RE.search(reply)
+    empty = {"think": None, "sections": [], "searches": [], "reads": [], "webs": []}
+    match = TOOL_BLOCK_RE.search(reply)
     if not match:
-        return [], []
+        return empty
     body = match.group(1)
-    searches = [q.strip() for q in _SEARCH_RE.findall(body) if q.strip()][:3]
-    reads = [(int(a), int(b)) for a, b in _READ_RE.findall(body)][:3]
-    return searches, reads
+    thinks = [t.strip() for t in THINK_RE.findall(body) if t.strip()]
+    return {
+        "think": thinks[0] if thinks else None,
+        "sections": [int(n) for n in _SECTION_RE.findall(body)][:3],
+        "searches": [q.strip() for q in _SEARCH_RE.findall(body) if q.strip()][:3],
+        "reads": [(int(a), int(b)) for a, b in _READ_RE.findall(body)][:3],
+        "webs": [q.strip() for q in WEB_RE.findall(body) if q.strip()][:2],
+    }
 
 
-def _strip_tool_block(reply: str) -> str:
-    """Remove a trailing tool block from text being used as a final answer."""
-    return _TOOL_BLOCK_RE.sub("", reply).strip()
+def _has_calls(calls: dict) -> bool:
+    """Whether anything in this block actually executes. THINK alone does not."""
+    return bool(
+        calls["sections"] or calls["searches"] or calls["reads"] or calls["webs"]
+    )
 
 
-async def _run_search(
-    session: AsyncSession, document_id: UUID, query: str
-) -> list[dict]:
-    """Full-text search plus a literal substring pass, de-duplicated.
+def _plan(calls: dict) -> list[dict]:
+    """Flatten one parsed tool block into the ordered list of calls to run.
 
-    The substring leg is not redundant: ``to_tsvector`` drops single Greek
-    letters, equation numbers, and symbol subscripts entirely, so a reader
-    asking "why is τ so small here" gets zero full-text hits on the one term
-    that matters.
+    Order is deliberate and not the order the model wrote them in: SECTION and
+    READ are local index lookups measured in milliseconds, SEARCH is two
+    indexed queries, WEB is a network round trip. Running the cheap ones first
+    means the reader watches the trail fill in immediately instead of staring
+    at one pending web row while three instant fetches wait behind it.
     """
-    limit = settings.paper_agent_search_limit
-
-    # ⚠ Sequential, not gathered. An AsyncSession is a single connection with a
-    # single greenlet context: running two statements on it concurrently is
-    # explicitly unsupported and raises under the wrong interleaving. Both legs
-    # are indexed lookups measured in single-digit milliseconds, so the
-    # concurrency would buy nothing worth that failure mode.
-    legs: list[list[dict]] = []
-    for run in (
-        lambda: search_chunks_fulltext(session, query, limit=limit, document_id=document_id),
-        lambda: chunk_repo.search_chunks_substring(session, document_id, query, limit=limit),
-    ):
-        try:
-            legs.append(await run())
-        except Exception as e:
-            logger.warning("paper_agent search leg failed: %s", e)
-
-    hits: list[dict] = []
-    seen: set = set()
-    for leg in legs:
-        for row in leg:
-            seq = row.get("sequence_id")
-            if seq in seen:
-                continue
-            seen.add(seq)
-            hits.append(row)
-    hits.sort(key=lambda r: r.get("sequence_id") or 0)
-    return hits[:limit]
-
-
-def _format_search_results(query: str, hits: list[dict]) -> str:
-    if not hits:
-        return f'SEARCH "{query}" — no blocks matched.'
-    lines = [f'SEARCH "{query}" — {len(hits)} block(s):']
-    for h in hits:
-        snippet = " ".join((h.get("plain_text") or "").split())[:280]
-        lines.append(f"  [[{h['sequence_id']}]] {snippet}")
-    return "\n".join(lines)
-
-
-async def _run_tools(
-    session: AsyncSession,
-    document_id: UUID,
-    searches: list[str],
-    reads: list[tuple[int, int]],
-) -> tuple[str, list[int]]:
-    """Execute the requested tools; return the observation text and seen seqs."""
-    observations: list[str] = []
-    seen_seqs: list[int] = []
-
-    for query in searches:
-        hits = await _run_search(session, document_id, query)
-        observations.append(_format_search_results(query, hits))
-        seen_seqs.extend(h["sequence_id"] for h in hits)
-
-    for start, end in reads:
+    plan: list[dict] = []
+    for seq in calls["sections"]:
+        plan.append({"tool": "SECTION", "arg": str(seq), "seq": seq})
+    for start, end in calls["reads"]:
         if end < start:
             start, end = end, start
-        rows = await chunk_repo.get_chunks_in_range(
-            session, document_id, start, end, settings.paper_agent_read_max_chunks
-        )
-        if not rows:
-            observations.append(f"READ {start}-{end} — no blocks in that range.")
-            continue
-        truncated = (
-            f" (truncated to the first {settings.paper_agent_read_max_chunks} blocks)"
-            if len(rows) >= settings.paper_agent_read_max_chunks
-            else ""
-        )
-        observations.append(
-            f"READ {start}-{end}{truncated}:\n" + _format_blocks(rows)
-        )
-        seen_seqs.extend(r["sequence_id"] for r in rows)
+        plan.append({"tool": "READ", "arg": f"{start}-{end}", "start": start, "end": end})
+    for query in calls["searches"]:
+        plan.append({"tool": "SEARCH", "arg": query})
+    for query in calls["webs"]:
+        plan.append({"tool": "WEB", "arg": query})
+    return plan
 
-    return "\n\n".join(observations), seen_seqs
+
+def _pending_label(chunks: list[dict], call: dict) -> str:
+    """What to show the reader while a call is in flight.
+
+    SECTION resolves its title here rather than after the fetch so the running
+    row already says *which* section — "Reading “4 Training data”" is a status
+    the reader can evaluate, "Reading block 31" is one they cannot.
+    """
+    tool = call["tool"]
+    if tool == "SECTION":
+        resolved = section_range(chunks, call["seq"])
+        return f"Reading “{resolved[2]}”" if resolved else f"Looking up block {call['seq']}"
+    if tool == "READ":
+        return f"Reading blocks {call['start']}–{call['end']}"
+    if tool == "SEARCH":
+        return f"Searching the paper for “{call['arg']}”"
+    return f"Searching the web for “{call['arg']}”"
+
+
+async def _run_call(
+    session: AsyncSession,
+    document_id: UUID,
+    chunks: list[dict],
+    call: dict,
+) -> dict:
+    """Execute one planned call and return it filled in.
+
+    The returned dict carries both what the reader sees (``label``, ``result``,
+    ``seqs``, ``sources``) and what the model sees (``observation``). They are
+    different by design: the model needs the blocks, the reader needs to know
+    that a section was read and which one.
+    """
+    tool = call["tool"]
+    out = dict(call)
+    out["seqs"] = []
+    out["sources"] = []
+
+    if tool == "SECTION":
+        resolved = section_range(chunks, call["seq"])
+        if not resolved:
+            out["observation"] = (
+                f"SECTION {call['seq']} — no heading at or before that block. "
+                f"Use READ with an explicit range instead."
+            )
+            out["label"] = f"Looking up block {call['seq']}"
+            out["result"] = "no section there"
+            return out
+        start, end, title = resolved
+        text, seqs = await read_range(
+            session, document_id, start, end,
+            f'SECTION {call["seq"]} — "{title}" ({start}-{end})',
+        )
+        out["observation"] = text
+        out["label"] = f"Read “{title}”"
+        out["result"] = f"{len(seqs)} blocks · ¶{start}–¶{end}" if seqs else "empty section"
+        out["seqs"] = seqs
+        return out
+
+    if tool == "READ":
+        start, end = call["start"], call["end"]
+        text, seqs = await read_range(
+            session, document_id, start, end, f"READ {start}-{end}"
+        )
+        out["observation"] = text
+        out["label"] = f"Read blocks {start}–{end}"
+        out["result"] = f"{len(seqs)} blocks" if seqs else "nothing in that range"
+        out["seqs"] = seqs
+        return out
+
+    if tool == "SEARCH":
+        hits = await run_search(session, document_id, call["arg"])
+        out["observation"] = format_search_results(call["arg"], hits)
+        out["label"] = f"Searched the paper for “{call['arg']}”"
+        out["result"] = f"{len(hits)} matching blocks" if hits else "no matches"
+        out["seqs"] = [h["sequence_id"] for h in hits]
+        return out
+
+    text, sources = await run_web(call["arg"])
+    out["observation"] = text
+    out["label"] = f"Searched the web for “{call['arg']}”"
+    out["result"] = f"{len(sources)} sources" if sources else "nothing came back"
+    out["sources"] = sources
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -325,18 +503,32 @@ async def answer_paper_question(
     thread: Optional[list[dict]] = None,
     image_paths: Optional[list[str]] = None,
     model: Optional[str] = None,
+    max_steps: Optional[int] = None,
+    allow_web: bool = True,
 ) -> AsyncIterator[dict]:
     """Answer one anchored question, streaming.
 
     Yields:
-      {"type": "status",  "message": str}   what the agent is doing right now
+      {"type": "status",  "message": str}   the phase the agent is in
+      {"type": "step",    ...}              one tool call, twice: running → done
       {"type": "token",   "text": str}      answer text as it generates
-      {"type": "done",    "answer", "model", "retrieval_mode", "cited"}
+      {"type": "done",    "answer", "model", "retrieval_mode", "cited", "steps"}
 
-    ``anchor`` is {kind, sequence_id, quote, image_path}. ``thread`` is the
-    earlier Q+A at this anchor (for follow-ups). ``model`` overrides the
-    configured default, so two notes can put the same question to different
-    models and be compared side by side.
+    ``anchor`` is {kind, sequence_id, quote, image_path}; ``kind`` may be
+    ``document`` for a question about the paper as a whole rather than a
+    passage in it. ``thread`` is the earlier Q+A at this anchor (for
+    follow-ups). ``model`` overrides the configured default, so two notes can
+    put the same question to different models and be compared side by side.
+    ``max_steps`` overrides PAPER_AGENT_MAX_STEPS — a holistic question ranges
+    over the whole paper and needs more rounds than a margin note does.
+    ``allow_web`` withholds the WEB tool even when a provider is configured.
+
+    ⚠ The anchored path answers from a non-streamed probe when the model
+    replies without calling a tool, so the answer lands whole rather than
+    typing itself out. That is the price of a text tool protocol: a reply may
+    turn out to be a tool block, and streaming one to the margin would put
+    "<tool>SEARCH: …" on screen. Generation time is unchanged — only the
+    reveal is.
     """
     chunks = await chunk_repo.get_all_document_chunks(session, document_id)
     if not chunks:
@@ -346,34 +538,55 @@ async def answer_paper_question(
             "model": "",
             "retrieval_mode": "empty",
             "cited": [],
+            "steps": [],
         }
         return
 
+    anchor_kind = anchor.get("kind") or "block"
     anchor_seq = int(anchor.get("sequence_id") or 0)
-    window = [
-        c for c in chunks
-        if abs((c["sequence_id"] or 0) - anchor_seq) <= settings.local_context_window
-    ]
+    if anchor_kind == "document":
+        # No anchor to sit beside, so the "window" is the paper's opening —
+        # title and abstract — as orientation the contents index cannot give.
+        window = chunks[: settings.paper_agent_opening_blocks]
+    else:
+        window = [
+            c for c in chunks
+            if abs((c["sequence_id"] or 0) - anchor_seq) <= settings.local_context_window
+        ]
 
     total_tokens = sum(int(c.get("token_count") or 0) for c in chunks)
-    fits_whole = total_tokens <= settings.whole_paper_max_tokens
+    # ⚠ Size is no longer the only gate. Whole-document stuffing is opt-in:
+    # a note asks about one passage, and a paper that merely *fits* is not a
+    # reason to spend the context window on it. See PAPER_WHOLE_DOCUMENT_CONTEXT.
+    #
+    # ⚠ And it never applies to a holistic question. Stuffing forty pages to
+    # answer "what does this paper actually claim?" is the case the opt-in was
+    # written against: the model summarises what it was handed instead of
+    # deciding which sections the question turns on and reading those.
+    fits_whole = (
+        settings.paper_whole_document_context
+        and anchor_kind != "document"
+        and total_tokens <= settings.whole_paper_max_tokens
+    )
 
     thread_block = _format_thread(thread or [])
     anchor_block = _format_anchor(anchor, window)
+    web_on = allow_web and web_search.is_configured()
 
     logger.info(
-        "NOTE[start] doc=%s blocks=%d tokens=%d mode=%s anchor_seq=%d model=%s",
+        "NOTE[start] doc=%s blocks=%d tokens=%d mode=%s anchor=%s/%d web=%s model=%s",
         document_id, len(chunks), total_tokens,
-        "whole" if fits_whole else "agent", anchor_seq, model or "(default)",
+        "whole" if fits_whole else "agent", anchor_kind, anchor_seq,
+        web_search.active_provider() if web_on else "off", model or "(default)",
     )
 
-    # ── Strategy 1: the whole paper fits. Show the model everything. ─────────
+    # ── Strategy 1 (opt-in): show the model the entire paper. ───────────────
     if fits_whole:
         yield {"type": "status", "message": "Reading the whole paper…"}
         parts = [anchor_block]
         if thread_block:
             parts.append(thread_block)
-        parts.append("THE COMPLETE PAPER:\n" + _format_blocks(chunks))
+        parts.append("THE COMPLETE PAPER:\n" + format_blocks(chunks))
         messages = build_multimodal_messages(
             question,
             system=_WHOLE_SYSTEM,
@@ -384,18 +597,31 @@ async def answer_paper_question(
             yield event
         return
 
-    # ── Strategy 2: too large. Let the model go looking. ─────────────────────
-    max_steps = settings.paper_agent_max_steps
+    # ── Strategy 2 (default): the anchor, the contents, and the tools. ──────
+    yield {
+        "type": "status",
+        "message": "Reading the paper…" if anchor_kind == "document" else "Reading the passage…",
+    }
+    rounds = max_steps or settings.paper_agent_max_steps
+    system = _AGENT_SYSTEM.format(
+        max_steps=rounds,
+        web_help=_WEB_HELP if web_on else "",
+        web_example=_WEB_EXAMPLE if web_on else "",
+    )
     base_parts = [
         anchor_block,
-        "PAPER OUTLINE (block numbers you can READ):\n" + _format_outline(chunks),
+        "PAPER CONTENTS (SECTION takes any of these block numbers):\n"
+        + _format_contents(chunks),
     ]
     if thread_block:
         base_parts.insert(1, thread_block)
     gathered: list[str] = []
+    # The reader-facing record of every call, in order. Returned on `done` and
+    # persisted with the note, so reopening it still shows how it was answered.
+    trail: list[dict] = []
 
-    for step in range(max_steps):
-        remaining = max_steps - step
+    for step in range(rounds):
+        remaining = rounds - step
         parts = list(base_parts)
         if gathered:
             parts.append("WHAT YOU HAVE GATHERED SO FAR:\n\n" + "\n\n".join(gathered))
@@ -406,7 +632,7 @@ async def answer_paper_question(
         )
         messages = build_multimodal_messages(
             question,
-            system=_AGENT_SYSTEM.format(max_steps=max_steps),
+            system=system,
             context_text="\n\n---\n\n".join(parts),
             image_paths=image_paths or None,
         )
@@ -415,10 +641,10 @@ async def answer_paper_question(
         # and streaming a tool block to the reader would be nonsense on screen.
         result = await llm_client.chat(messages, temperature=0.3, model=model)
         reply = result.get("content") or ""
-        searches, reads = _parse_tool_calls(reply)
+        calls = _parse_tool_calls(reply)
 
-        if not searches and not reads:
-            answer = _strip_tool_block(reply)
+        if not _has_calls(calls):
+            answer = strip_tool_block(reply)
             if answer:
                 # It answered instead of calling a tool. Emit what it wrote
                 # rather than paying for an identical second generation.
@@ -429,20 +655,39 @@ async def answer_paper_question(
                     "model": result.get("model", ""),
                     "retrieval_mode": "agent",
                     "cited": cited_sequences(answer),
+                    "steps": trail,
                 }
                 return
             break
 
-        for query in searches:
-            yield {"type": "status", "message": f"Searching: {query}"}
-        for start, end in reads:
-            yield {"type": "status", "message": f"Reading blocks {start}–{end}"}
+        # Announce every call in this round before running any of them, so the
+        # reader sees the whole plan at once rather than one row at a time.
+        # ⚠ The rationale rides on the FIRST row only: it explains the round,
+        # and repeating it on each of three fetches reads as three reasons.
+        plan = _plan(calls)
+        for i, call in enumerate(plan):
+            call["label"] = _pending_label(chunks, call)
+            yield step_event(
+                f"s{step}-{i}", step + 1, call,
+                state="running", think=calls["think"] if i == 0 else None,
+            )
 
-        observation, _ = await _run_tools(session, document_id, searches, reads)
+        observations: list[str] = []
+        for i, call in enumerate(plan):
+            done_call = await _run_call(session, document_id, chunks, call)
+            observations.append(done_call["observation"])
+            event = step_event(
+                f"s{step}-{i}", step + 1, done_call,
+                state="done", think=calls["think"] if i == 0 else None,
+            )
+            trail.append({k: v for k, v in event.items() if k != "type"})
+            yield event
+
+        observation = "\n\n".join(o for o in observations if o)
         gathered.append(observation or "(the tools returned nothing)")
         logger.info(
-            "NOTE[agent] step=%d searches=%d reads=%d observation_chars=%d",
-            step + 1, len(searches), len(reads), len(observation),
+            "NOTE[agent] step=%d calls=%s observation_chars=%d",
+            step + 1, [c["tool"] for c in plan], len(observation),
         )
 
     # Rounds exhausted (or a tool block came back empty): force the answer.
@@ -453,25 +698,36 @@ async def answer_paper_question(
     parts.append("You have no tool rounds left. Answer now with what you have.")
     messages = build_multimodal_messages(
         question,
-        system=_WHOLE_SYSTEM,  # no tool instructions — nothing left to call
+        system=_ANSWER_SYSTEM,  # no tool instructions — nothing left to call
         context_text="\n\n---\n\n".join(parts),
         image_paths=image_paths or None,
     )
-    async for event in _stream_answer(messages, retrieval_mode="agent", model=model):
+    async for event in _stream_answer(
+        messages, retrieval_mode="agent", model=model, steps=trail
+    ):
         yield event
 
 
 async def _stream_answer(
-    messages: list[dict], *, retrieval_mode: str, model: Optional[str] = None
+    messages: list[dict],
+    *,
+    retrieval_mode: str,
+    model: Optional[str] = None,
+    steps: Optional[list[dict]] = None,
 ) -> AsyncIterator[dict]:
-    """Stream one generation and close it out with a done event."""
+    """Stream one generation and close it out with a done event.
+
+    ⚠ Goes through ``agent_tools.stream_answer`` rather than the LLM client
+    directly, so a tool block the model emits on this turn — which it is told
+    it cannot call — never reaches the reader. See that function.
+    """
     answer = ""
     answered_by = ""
-    async for event in llm_client.stream_chat(messages, temperature=0.3, model=model):
+    async for event in stream_answer(messages, model=model, temperature=0.3):
         if event["type"] == "token":
-            yield {"type": "token", "text": event["text"]}
+            yield event
         else:
-            answer = event.get("content") or ""
+            answer = event.get("answer") or ""
             answered_by = event.get("model") or ""
     yield {
         "type": "done",
@@ -479,4 +735,5 @@ async def _stream_answer(
         "model": answered_by or (model or ""),
         "retrieval_mode": retrieval_mode,
         "cited": cited_sequences(answer),
+        "steps": steps or [],
     }

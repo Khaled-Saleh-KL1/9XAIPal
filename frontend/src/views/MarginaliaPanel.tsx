@@ -52,6 +52,7 @@ function plainPreview(markdown: string): string {
 function anchorLabel(kind: string, quote: string | null): string | null {
   if (kind === 'figure') return 'On a figure';
   if (kind === 'equation') return 'On an equation';
+  if (kind === 'table') return 'On a table';
   return quote;
 }
 
@@ -207,18 +208,37 @@ export function MarginaliaPanel({
             shownOutline.length === 0 ? (
               <p className="marg-empty">No headings match.</p>
             ) : (
-              shownOutline.map((entry) => (
-                <button
-                  key={entry.sequence_order}
-                  type="button"
-                  className={`marg-row outline-l${Math.min(entry.level, 3)}${
-                    entry.sequence_order === currentSeq ? ' is-current' : ''
-                  }`}
-                  onClick={() => go(entry.sequence_order)}
-                >
-                  <span className="marg-row-text">{entry.text}</span>
-                </button>
-              ))
+              shownOutline.map((entry) => {
+                /**
+                 * Depth as a custom property, not a class per level.
+                 *
+                 * ⚠ It was `outline-l${min(level, 4)}` against four hand-written
+                 * rules, which silently flattened anything deeper — a paper
+                 * numbering "2.1.1.1" rendered it level with "2.1.1". One
+                 * calc() handles any depth.
+                 *
+                 * ⚠ Still capped, at 6: the cap is now about the panel being
+                 * 300px wide, not about how many rules were written. Past that
+                 * the text has nowhere left to go.
+                 */
+                const depth = Math.min(Math.max(entry.level, 1), 6);
+                return (
+                  <button
+                    key={entry.sequence_order}
+                    type="button"
+                    className={[
+                      'marg-row outline-row',
+                      depth > 1 ? 'is-nested' : '',
+                      depth >= 3 ? 'is-deep' : '',
+                      entry.sequence_order === currentSeq ? 'is-current' : '',
+                    ].filter(Boolean).join(' ')}
+                    style={{ '--depth': depth } as React.CSSProperties}
+                    onClick={() => go(entry.sequence_order)}
+                  >
+                    <span className="marg-row-text">{entry.text}</span>
+                  </button>
+                );
+              })
             )
           )}
 

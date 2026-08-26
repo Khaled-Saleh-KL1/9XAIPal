@@ -98,21 +98,33 @@ The application code is more mature than the tooling around it. These are the ch
   Celery). `[historical]` The async in-process `BackgroundTasks` + `asyncio.Queue` design was
   replaced by Celery; the async pipeline survives as a fast path. One of them should go.
 - **Naming is inconsistent across the repo** — the directory is `ScholarFlow`, everything inside
-  (README, database, containers, volumes) says `9XAIPal`. A rename must move
-  `POSTGRES_DB`, container names, and volume names together.
+  (README, database, containers, volumes) says `9XAIPal`. ⚠ Before "fixing" it: the Celery app name
+  is part of the task name on the wire, so renaming it desynchronises the API from the worker.
+  Tried on a fork — the API dispatched `<newname>.process_ingestion`, the worker still registered
+  `9xaipal.process_ingestion`, and Celery **discarded the message**. A live ingestion sat at
+  "queued · 0%" indefinitely with nothing in the UI to suggest the task was gone. If it is renamed,
+  `POSTGRES_DB`, the role, container names, volume names and the Celery app all have to move
+  together, and `api` + `celery_worker` must be recreated in the same step.
 
 ## Planned direction
 
-- `[planned]` **Replace SearXNG with Exa + Firecrawl** — semantic search plus real page reading,
-  so the research agent stops synthesizing from 280-character snippets. Full design:
-  [plans/exa-firecrawl-research-stack.md](plans/exa-firecrawl-research-stack.md).
+- ~~**Replace SearXNG with Exa + Firecrawl**~~ — **superseded 2026-08-26** by **Tavily**, which
+  returns ranked, already-extracted page text in one call rather than assembling it from two
+  vendors. Providers now dispatch through
+  [`app/search/web.py`](../backend/app/search/web.py); SearXNG remains as the local-only option.
+  Original design, never implemented:
+  [archive/2026-08-26/exa-firecrawl-research-stack.md](archive/2026-08-26/exa-firecrawl-research-stack.md).
 - ~~**Paper-only mode**~~ — **superseded 2026-07-25** by `INGEST_PROFILE=fast`, which skips the
   whole post-chunking chain for papers rather than embeddings alone, and answers at question time
   via [`chat/paper_agent.py`](../backend/app/chat/paper_agent.py). The `PAPER_ONLY_*` settings
   still govern `INGEST_PROFILE=full` and books. Original design:
   [plans/paper-only-embedding-skip.md](plans/paper-only-embedding-skip.md).
 - `[planned]` **Alembic** for schema evolution, replacing best-effort `schema.sql` application.
-- `[planned]` Cross-paper GLOBAL search across the whole library.
+- ~~**Cross-paper questions**~~ — **shipped 2026-08-26** as the desk. A *study* (a named group of
+  papers, or the whole library) scopes a chat answered by
+  [`chat/study_agent.py`](../backend/app/chat/study_agent.py); citations are `[[P2:41]]` and expand
+  inline. Still open underneath it: the study index is heading spines only, so a paper MinerU found
+  no headings in can be searched but not browsed.
 - ~~Second PDF extractor (PaddleOCR-VL)~~ — **evaluated and rejected 2026-07-25.** MinerU 3.4.4
   produced correct two-column reading order with zero inversions and zero fragmented equations on
   the backend this app already uses; the premise did not reproduce. Measured results:

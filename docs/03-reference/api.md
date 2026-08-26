@@ -6,7 +6,10 @@
 > **Does not own:** why a route behaves as it does ([chat-and-ask.md](../02-architecture/chat-and-ask.md)).
 >
 > **Status:** current · **Last verified:** 2026-07-28 against
-> [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870)
+> [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870). The note anchor
+> payload was re-read 2026-08-18 against
+> [`endpoints/notes.py`](../../backend/app/api/v1/endpoints/notes.py) (`8fb153b`) — **not**
+> against live OpenAPI, which was not running.
 > **Verify with:** `http://localhost:8000/docs` (live OpenAPI, always authoritative)
 
 All endpoints live under the prefix **`/api/v1`** and are registered in
@@ -19,6 +22,8 @@ GET    /papers
 GET    /papers/{paper_id}
 GET    /papers/{paper_id}/progress
 GET    /papers/{paper_id}/raw
+GET    /papers/{paper_id}/cover
+PATCH  /papers/{paper_id}
 DELETE /papers/{paper_id}
 POST   /papers/{paper_id}/rechunk
 POST   /papers/{paper_id}/reextract
@@ -45,6 +50,21 @@ PATCH  /papers/{paper_id}/personal-notes/{note_id}
 DELETE /papers/{paper_id}/personal-notes/{note_id}
 GET    /papers/{paper_id}/decks
 PUT    /papers/{paper_id}/decks
+
+GET    /studies
+POST   /studies
+GET    /studies/{study_id}
+PATCH  /studies/{study_id}
+DELETE /studies/{study_id}
+PUT    /studies/{study_id}/papers
+GET    /studies/{study_id}/chat
+POST   /studies/{study_id}/chat/stream
+DELETE /studies/{study_id}/chat
+
+GET    /stickies
+POST   /stickies
+PATCH  /stickies/{sticky_id}
+DELETE /stickies/{sticky_id}
 POST   /papers/{paper_id}/ask
 POST   /papers/{paper_id}/ask/stream
 GET    /papers/{paper_id}/chat
@@ -74,12 +94,23 @@ Source: [endpoints/health.py](../../backend/app/api/v1/endpoints/health.py).
   "status": "ok" | "degraded",
   "database": "ok" | "unavailable",
   "ollama":   "ok" | "unavailable",
+  "web_search": "ok" | "unavailable",
+  "web_search_provider": "tavily" | "searxng" | "none",
   "searxng":  "ok" | "unavailable"
 }
 ```
 
-Probes the DB, Ollama (`/api/tags`), and SearXNG. Overall `status` is
+Probes the DB, Ollama (`/api/tags`), and the active web-search provider. Overall `status` is
 `degraded` if the database is unavailable.
+
+⚠ `searxng` is a **deprecated alias for `web_search`**, kept so older clients keep parsing. It
+carries the *active* provider's status — it says nothing about SearXNG specifically unless SearXNG
+is the one running.
+
+⚠ **`web_search` does not prove a Tavily key works.** Tavily exposes no health endpoint, so the
+only way to verify a key is to spend a search credit, and this endpoint is the container
+healthcheck polled every 30 seconds. On `tavily` the field means "a key is configured"; a bad key
+surfaces as a logged `401` on the first real search.
 
 ---
 
@@ -136,6 +167,7 @@ Response:
   id: UUID,
   filename: string,                   // storage-side uuid
   original_filename: string,
+  title: string | null,               // reader-chosen name; null = use original_filename
   file_size_bytes: number | null,
   page_count: number | null,
   status: "queued" | "extracting" | "chunking" | "embedding" | "complete" | "failed",
@@ -170,6 +202,37 @@ The frontend's polling endpoint during ingestion.
 Streams the original uploaded PDF as `application/pdf`, with
 `Content-Disposition` honoring the original filename. Falls back from
 `assets/<id>.pdf` to `documents/<filename>` if needed.
+
+### `PATCH /papers/{paper_id}`
+
+Rename a paper. Body `{"title": "<name>" | null}` → the updated `DocumentResponse`.
+`404 DocumentNotFound` if it does not exist.
+
+A blank or whitespace-only title **clears** the override rather than storing an empty name, so the
+UI falls back to `original_filename`.
+
+⚠ **This renames the row, never the file.** `filename` is the on-disk key that `documents/`,
+`extracted/`, `images/` and every chunk asset path are built from, and `original_filename` is what
+`GET /raw` serves the download as. Renaming either to match a label would break both.
+
+### `GET /papers/{paper_id}/cover`
+
+The paper's first page as `image/jpeg`, ~480px wide, `Cache-Control: public, max-age=86400`.
+Rendered with PyMuPDF on first request and cached at `storage/covers/<id>.jpg`.
+
+| Status | When |
+| --- | --- |
+| `200` | The cover exists or was just rendered. |
+| `204` | No source PDF, or the first page would not rasterise. |
+| `404` | No such paper. |
+
+⚠ **204, not 404, for a missing cover.** The library requests one per card; a wall of 404s makes a
+working library look broken. ⚠ A browser reports 204 to `<img>` as a **load error**, so every
+client needs an `onError` placeholder — see
+[`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx).
+
+⚠ The cache is keyed by document id alone and is never invalidated. A document's first page cannot
+change: re-extraction and re-chunking rewrite derived text, never the source PDF.
 
 ### `DELETE /papers/{paper_id}`
 
@@ -317,19 +380,28 @@ sub-threads.
 
 ### `GET /papers/{paper_id}/notes`
 
-Every note on the paper, ordered by `anchor_sequence_id` then `created_at` — the same order the
-margin lays them out in.
+Every note on the paper — **both scopes** — ordered by `anchor_sequence_id` then `created_at`,
+the same order the margin lays them out in. The client splits them: `scope='anchor'` renders in the
+gutter, `scope='document'` in the assistant panel.
+
+⚠ A `scope='document'` note carries the first block's `anchor_sequence_id` because the column is
+`NOT NULL`. Nothing positions by it; do not sort or place these by anchor.
+
+⚠ `agent_steps` is `[]` for notes created before 2026-08-26, and for any note the model answered
+without calling a tool. Both are correct, not missing data.
 
 ```json
 {"notes": [
   {
     "id": "<uuid>",
+    "scope": "anchor" | "document",
     "anchor_sequence_id": <int>, "anchor_chunk_id": "<uuid>|null",
-    "anchor_kind": "text|figure|equation|block",
+    "anchor_kind": "text|figure|equation|table|block|document",
     "anchor_quote": "<the highlighted passage>|null",
     "anchor_image_path": "<doc_id>/<file>|null",
     "question": "...", "answer": "...",
     "cited_sequence_ids": [<int>],
+    "agent_steps": [AgentStep],
     "retrieval_mode": "whole" | "agent" | null,
     "model": "<what the provider reported>|null",
     "requested_model": "<what the reader picked>|null",
@@ -348,7 +420,7 @@ Create a note and stream its answer as Server-Sent Events.
 {
   "question": "why is tau so small here?",
   "anchor": {
-    "kind": "text|figure|equation|block",
+    "kind": "text|figure|equation|table|block|document",
     "sequence_id": <int>,
     "chunk_id": "<uuid>|null",
     "quote": "<selected text, or a figure caption / equation LaTeX>|null",
@@ -365,10 +437,34 @@ Event types, one JSON object per `data:` line:
 | Event | Payload | Meaning |
 | --- | --- | --- |
 | `created` | `note_id` | The row exists — render the card now. |
-| `status` | `message` | What the agent is doing (`Searching: …`, `Reading blocks 40–52`). |
+| `status` | `message` | The phase (`Reading the passage…`, `Writing the answer…`). |
+| `step` | see below | One tool call. Arrives **twice** per call. |
 | `token` | `text` | Answer text as it generates. |
-| `done` | `note_id`, `answer`, `model`, `retrieval_mode`, `cited_sequence_ids` | Final state. |
+| `done` | `note_id`, `answer`, `model`, `retrieval_mode`, `cited_sequence_ids`, `agent_steps` | Final state. |
 | `error` | `detail` | Generation failed; the row survives with an empty answer. |
+
+`AgentStep`:
+
+```ts
+{
+  id: string,          // "s{round}-{index}" — stable across the running/done pair
+  n: number,           // which tool round, 1-based
+  tool: "SECTION" | "SEARCH" | "READ" | "WEB",
+  arg: string,         // what was asked for
+  state: "running" | "done",
+  think: string | null,   // the model's stated reason; first call of the round only
+  label: string,          // "Read “4.2 Training mixture”"
+  result: string,         // "2 blocks · ¶47–¶48" — empty while running
+  seqs: number[],         // block numbers pulled in
+  sources: { title: string, url: string }[]   // WEB only
+}
+```
+
+⚠ **Upsert by `id`, never append.** Every call is announced as `running` before it executes and
+re-sent as `done` after. Appending renders each fetch as two rows, the first spinning forever.
+
+⚠ **The observation is never sent.** The raw blocks the model reads — thousands of characters per
+call — stay server-side and go only into the next prompt. `result` and `seqs` are the summary.
 
 ⚠ Three fields in the request are **advisory and can be overridden by the server**:
 
@@ -379,7 +475,15 @@ Event types, one JSON object per `data:` line:
   parent's `requested_model`. A thread that switched models halfway would destroy the comparison
   the picker exists for.
 - `margin_side` defaults to whichever margin is less crowded near the anchor; a follow-up inherits
-  its parent's side.
+  its parent's side. It is forced to `right` for `scope='document'`, which is never in a gutter.
+
+⚠ **`scope` is not a request field.** The server derives it: `anchor.kind === 'document'` →
+`scope='document'`, everything else → `'anchor'`. A follow-up inherits its parent's. Accepting both
+would allow rows (`kind='document', scope='anchor'`) that no surface can place.
+
+⚠ **A holistic question gets more tool rounds** — `PAPER_AGENT_HOLISTIC_MAX_STEPS` (6) rather than
+`PAPER_AGENT_MAX_STEPS` (4) — and whole-document stuffing is disabled for it regardless of
+`PAPER_WHOLE_DOCUMENT_CONTEXT`.
 
 ### `PATCH /papers/{paper_id}/notes/{note_id}/margin`
 
@@ -487,6 +591,122 @@ The server reduces the submitted arrangement before storing it, and returns the 
 | A member listed in two decks | Kept by the first deck; dropped from the rest. |
 | A deck left with fewer than two members | Dropped entirely. |
 | `top` beyond the surviving member count | Clamped. |
+
+---
+
+## Studies
+
+Source: [endpoints/studies.py](../../backend/app/api/v1/endpoints/studies.py). Behaviour:
+[chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b--the-study-agent-the-desk).
+
+A **study** is a named group of papers that scopes an answer. Its chat lives in
+`conversation_turns` — the same table the book chat uses — because a desk conversation is a rolling
+transcript with follow-ups, not a standalone Q+A.
+
+⚠ **`library` is a valid `{study_id}`.** It means the library-wide scope: every finished paper, no
+group. Every endpoint below accepts it; `study_id IS NULL` on the turn rows says the same thing in
+the database. `PATCH` and `DELETE` do not — there is no row to change.
+
+### `GET /studies`
+
+```json
+{"studies": [{"id", "name", "description", "paper_count", "created_at", "updated_at"}]}
+```
+
+### `POST /studies`
+
+Body `{"name": "…", "description": "…"|null}` → the study. `201`.
+
+### `GET /studies/{study_id}`
+
+The study and its papers, **in citation order**.
+
+```json
+{
+  "study": {"id", "name", "description", "paper_count", ...},
+  "papers": [{"id", "title", "page_count", "status", "paper": 1}]
+}
+```
+
+`paper` is the `P<n>` the agent cites this paper by. For `library` the study block is synthetic
+(`id: "library"`, no timestamps) and cannot be renamed.
+
+### `PUT /studies/{study_id}/papers`
+
+Body `{"document_ids": [...]}` → `{"papers": [...]}`. **Replaces** membership; list order sets
+citation order.
+
+⚠ Whole-collection, like decks. The P-numbers the reader is looking at come from this order, so a
+partial update could repoint citations already on screen.
+
+⚠ `400` past `STUDY_MAX_PAPERS` (24). Every paper is loaded on every question.
+
+### `GET /studies/{study_id}/chat`
+
+```json
+{"turns": [{
+  "id", "role": "user"|"assistant", "content", "model",
+  "cited": [{"paper": 2, "document_id", "label", "sequence_id": 41}],
+  "agent_steps": [AgentStep],
+  "created_at"
+}]}
+```
+
+### `POST /studies/{study_id}/chat/stream`
+
+Body `{"question": "…", "model": null}`. SSE, **the same event shapes as the note stream** —
+`created` (carrying `turn_id`), `status`, `step`, `token`, `done`, `error` — so one client
+component renders both. `done` carries `turn_id`, `answer`, `model`, `cited`, `agent_steps`.
+
+⚠ The user's turn is stored **before** generation, so a failed model call still leaves the question
+in the transcript.
+
+### `DELETE /studies/{study_id}/chat`
+
+`204`. Clears the scope's transcript. The papers and the sticky notes stay.
+
+---
+
+## Sticky notes
+
+Source: [endpoints/stickies.py](../../backend/app/api/v1/endpoints/stickies.py).
+
+Two boards. `board=chat` is the strip beside one conversation, keyed by `scope`
+(a study id or `library`); `board=universal` is the standalone board.
+
+⚠ **`board` is not redundant with `scope`.** `scope=library` already means the
+library-wide *chat*, so without the board a note beside that chat and a note on
+the universal board would be the same row.
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /stickies?board=universal` | The standalone board, pinned first then newest. |
+| `GET /stickies?board=chat&scope=<studyId\|library>` | That conversation's strip. |
+| `POST /stickies` | Body `{body?, color?, pinned?, board, scope?, document_ids?}` → the note. `201`. |
+| `PATCH /stickies/{id}` | Body `{body?, color?, pinned?, board?, scope?, document_ids?}`. Omitted fields are left alone. |
+| `DELETE /stickies/{id}` | `204`. **Reader-only** — see below. |
+
+```json
+{"id", "body", "color": "yellow|blue|green|pink|orange|plain", "pinned": false,
+ "board": "chat|universal", "scope": "<studyId>|library",
+ "origin": "user|assistant", "author_model": "gemma4:31b-cloud"|null,
+ "papers": [{"document_id", "label"}], "created_at", "updated_at"}
+```
+
+⚠ **Send `board` AND `scope` together to move a note.** `board` alone is not
+enough: `scope=library` is a real destination, not "not supplied".
+
+⚠ **`origin` cannot be set or patched.** `POST` forces `user`, so no client can
+forge an assistant note; the assistant writes its own by calling the repository
+from `study_agent`. And an edit never launders one — the badge records where the
+claim came from, not who typed last.
+
+⚠ **Only the reader deletes.** That is structural, not a check here: there is no
+delete tool in the agent's parser, and `study_agent` does not import
+`sticky_repo.delete_sticky`. This endpoint is what the UI's × calls.
+
+⚠ `color` is a name, not a hex value. The UI maps it to CSS variables so a note
+reads as paper in both themes; a stored hex is a glare in the dark one.
 
 ---
 

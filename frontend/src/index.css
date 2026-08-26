@@ -26,6 +26,10 @@
      that already has both. */
   --deck:          oklch(0.54  0.13 268);
   --deck-soft:     oklch(0.94  0.035 268);
+  /* Edge shadow marking "this box scrolls further". Dark mode needs a deeper
+     one: the same 10% black that reads as a shadow on paper is invisible
+     against a near-black page. */
+  --scroll-cue:    rgba(0, 0, 0, 0.14);
 }
 
 .dark {
@@ -45,6 +49,7 @@
   --ok-soft:       oklch(0.28  0.05 150);
   --deck:          oklch(0.73  0.11 270);
   --deck-soft:     oklch(0.28  0.05 270);
+  --scroll-cue:    rgba(0, 0, 0, 0.55);
 }
 
 html, body, #root {
@@ -59,6 +64,245 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+
+/* ── Library ────────────────────────────────────────────────────────────
+   A shelf, not a table. Every card leads with the paper's own first page,
+   because at ten papers a filename is enough to tell them apart and at fifty
+   it is not — and the filenames in this library are frequently arXiv ids.
+   The rename control exists for the same reason from the other direction. */
+.lib-grid {
+  display: grid;
+  /* auto-fill, not a fixed 3-up: the grid is the same shape on a laptop and
+     on a wide monitor, just denser. */
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 20px;
+}
+
+.paper-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  text-align: left;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+/* The open target fills the card, so the whole surface is clickable while the
+   rename/delete buttons stay siblings rather than nested controls. */
+.paper-open {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  cursor: pointer;
+  outline: none;
+}
+.paper-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 14px 34px -22px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+}
+/* Focus is drawn on the card, not on the inner target, so the ring follows the
+   border radius and does not cut across the cover. */
+.paper-card:has(.paper-open:focus-visible) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Hover lift is a "click me" cue, and the card being renamed is not clickable. */
+.paper-card.is-renaming,
+.paper-card.is-renaming:hover {
+  cursor: default;
+  transform: none;
+  border-color: var(--accent);
+}
+
+/* The cover. A fixed aspect ratio keeps the grid on a baseline whatever the
+   page geometry — a Letter page and an A4 one are different shapes, and rows
+   of mismatched heights read as a broken layout rather than as real paper. */
+.paper-cover {
+  position: relative;
+  aspect-ratio: 1 / 1.294;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+.paper-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Top-anchored: a paper's title and authors are in the first third of the
+     page, so cropping from the bottom keeps the identifying part. */
+  object-position: top center;
+  display: block;
+}
+.paper-cover.is-blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      transparent 0 7px,
+      color-mix(in oklab, var(--border), transparent 55%) 7px 8px
+    ),
+    var(--bg-3);
+}
+/* Row layout: the same cover, shrunk to a spine-width chip. */
+.paper-cover.is-thumb {
+  width: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  aspect-ratio: 1 / 1.294;
+}
+
+.paper-body { padding: 13px 14px 12px; display: flex; flex-direction: column; gap: 7px; flex: 1; }
+.paper-head { display: flex; align-items: flex-start; gap: 8px; }
+.paper-title {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 15.5px;
+  line-height: 1.25;
+  letter-spacing: -0.008em;
+  color: var(--fg);
+  /* Two lines then ellipsis: enough for a real paper title, bounded so one
+     long name cannot make its card twice the height of its neighbours. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+.paper-title-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 15.5px;
+  line-height: 1.25;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 7px;
+  outline: none;
+}
+
+.paper-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.paper-dot { opacity: 0.4; }
+.paper-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.paper-foot { display: flex; align-items: center; gap: 9px; margin-top: auto; padding-top: 4px; }
+.paper-status {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Rename and delete. Hidden until the card is hovered or something inside it
+   has focus — the second condition is what makes them reachable by keyboard
+   at all, since a control revealed only by a pointer cannot be tabbed to. */
+.paper-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.paper-card:hover .paper-actions,
+.paper-card:focus-within .paper-actions,
+.paper-row:hover .paper-actions,
+.paper-row:focus-within .paper-actions { opacity: 1; }
+.paper-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--fg-2);
+  background: color-mix(in oklch, var(--bg), transparent 12%);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.paper-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.paper-actions button.is-danger:hover { border-color: #c0392b; color: #c0392b; }
+
+/* Row layout keeps the same anatomy at one line per paper. */
+.lib-rows {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-2);
+}
+.paper-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.paper-row + .paper-row { border-top: 1px solid var(--border); }
+.paper-row:hover { background: var(--bg-3); }
+.paper-row.is-renaming { cursor: default; background: var(--bg-3); }
+/* Room for the absolutely-positioned actions so they never sit on the status. */
+.paper-row .paper-actions { top: 50%; transform: translateY(-50%); right: 12px; }
+.paper-row:hover .w-28,
+.paper-row:focus-within .w-28 { visibility: hidden; }
+.paper-row-title {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.paper-row .paper-meta { margin-top: 2px; }
+
+/* Loading placeholders in the real card shape, so the grid does not jump. */
+.paper-card.is-skeleton { cursor: default; pointer-events: none; }
+.paper-card.is-skeleton:hover { transform: none; box-shadow: none; border-color: var(--border); }
+.skeleton-line {
+  height: 11px;
+  border-radius: 4px;
+  background: var(--bg-3);
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+.lib-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 9px 13px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: #c0392b;
+  background: var(--bg-2);
+  border: 1px solid #c0392b;
+}
+.lib-notice button { margin-left: auto; font-size: 15px; line-height: 1; color: inherit; opacity: 0.7; }
+.lib-notice button:hover { opacity: 1; }
 
 /* ── Scrollbars ─────────────────────────────────────────────── */
 .thin-scroll::-webkit-scrollbar          { width: 10px; height: 10px; }
@@ -586,10 +830,37 @@ body {
 }
 .marg-cta:hover { border-color: var(--accent); color: var(--accent); }
 /* Heading depth, shared with the old outline naming. */
-.outline-l1 .marg-row-text { font-size: 15px; }
-.outline-l2 { padding-left: 26px; }
-.outline-l3 { padding-left: 44px; }
-.outline-l3 .marg-row-text { font-size: 13px; color: var(--muted); }
+/* Contents nesting, at any depth.
+   Depth comes from the paper's own numbering — see backend services/outline.py
+   for why heading_path cannot supply it.
+
+   ⚠ One calc() rather than a rule per level. It was `.outline-l1` … `.outline-l4`,
+   which flattened anything deeper: a paper numbering "2.1.1.1" drew it level
+   with "2.1.1". The step and the rail offset are the only two numbers here, so
+   they cannot drift apart the way four hand-written pairs did.
+
+   ⚠ The rail is what makes the nesting readable, not the indent. At an 18px
+   step a third-level heading is 40px into a 300px panel, which reads as a
+   ragged left edge rather than as a hierarchy. */
+.outline-row:not(.is-nested) .marg-row-text { font-size: 15px; }
+.outline-row.is-nested {
+  position: relative;
+  /* depth 2 → 22px, 3 → 40px, 4 → 58px, and onward at the same step. */
+  padding-left: calc(var(--depth, 1) * 18px - 14px);
+}
+.outline-row.is-deep .marg-row-text { font-size: 13px; color: var(--muted); }
+.outline-row.is-nested::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  /* 12px to the left of the text, whatever the depth. */
+  left: calc(var(--depth, 1) * 18px - 26px);
+  width: 1px;
+  background: var(--border);
+}
+/* The current section keeps its rail visible against the highlight. */
+.marg-row.is-current::before { background: var(--accent); }
 
 /* ── Scroll region + two-column layout ───────────────────────── */
 .reader-scroll {
@@ -804,21 +1075,123 @@ body {
 }
 .article-math:hover .article-math-ask { opacity: 1; transform: translateY(0); }
 .article-math-ask:hover { border-color: var(--accent); color: var(--accent); }
-.article-table { overflow-x: auto; }
-.article-table table {
-  width: 100%;
+/* ── Tables: their own scroll box, not a squeezed-to-fit grid ──────────────
+   A paper's tables are the one part of it that is genuinely not the width of
+   the prose column. The old rule — overflow-x on the wrapper, width:100% on
+   the table — could never scroll: the table always fit, because 100% told it
+   to, and it bought that fit by crushing "Params (B)" into four stacked
+   letters. Here the table takes its natural width and the box scrolls under
+   it. Vertical scroll too, with the header row pinned, so a long table stays
+   readable without the column names sliding off the top. */
+.article-table { position: relative; }
+.article-table-scroll {
+  overflow: auto;
+  max-height: 70vh;
+  /* Room for the horizontal bar so it never sits on top of the last row. */
+  padding-bottom: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  /* The scroll cue: the two radial gradients are painted against the viewport
+     (`scroll`) while the two flat ones ride with the content (`local`), so an
+     edge shadow appears only on the side that still has content behind it and
+     fades out as you reach the end. Cells must be opaque for this to read —
+     see the background on th/td below. */
+  background:
+    linear-gradient(to right, var(--bg) 30%, transparent) left center / 28px 100% no-repeat local,
+    linear-gradient(to left,  var(--bg) 30%, transparent) right center / 28px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--scroll-cue), transparent) left center / 14px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--scroll-cue), transparent) right center / 14px 100% no-repeat scroll,
+    var(--bg);
+  /* ⚠ Both of these are load-bearing on macOS, where scrollbars are overlays
+     that fade out when the pointer stops. A table the reader cannot tell is
+     scrollable is a table they read the first four columns of and believe to
+     be the whole thing. Firefox takes scrollbar-*; WebKit and Blink take the
+     pseudo-element below, and declaring it at all opts that engine out of
+     overlay scrollbars for this element. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.article-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.article-table-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.article-table-scroll::-webkit-scrollbar-track {
+  background: var(--bg-2);
+  border-radius: 999px;
+}
+.article-table-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid var(--bg-2);
+  border-radius: 999px;
+}
+.article-table-scroll::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+.article-table-scroll::-webkit-scrollbar-corner { background: var(--bg-2); }
+
+.article-table .article-table-scroll table {
+  /* max-content, floored at the column width: a narrow table still fills the
+     measure, a wide one keeps its real proportions and scrolls. */
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 15px;
   line-height: 1.5;
+  margin: 0;
+  border: 0;
 }
-.article-table th,
-.article-table td {
+.article-table .article-table-scroll th,
+.article-table .article-table-scroll td {
   border: 1px solid var(--border);
   padding: 10px 14px;
   text-align: left;
   vertical-align: top;
+  /* A cell of prose in a table of numbers would otherwise stretch the table to
+     the width of its longest sentence and make every scroll a long one. */
+  max-width: 42ch;
 }
-.article-table th { background: var(--bg-2); font-weight: 600; }
+/* ⚠ Body cells stay transparent. The edge shadows above are painted on the
+   scroller's own background, so an opaque cell sits on top of them and the cue
+   silently disappears — which is how this was written the first time. Only the
+   header needs a fill, and it needs one for a different reason: it is sticky,
+   and rows would otherwise scroll visibly through it. */
+.article-table .article-table-scroll th {
+  background: var(--bg-2);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* ⚠ A stuck header keeps its background but loses its borders: with
+     border-collapse the cell borders belong to the table's paint layer, which
+     is not sticky, so they scroll away and leave the header floating with rows
+     cut off flush against its text. An inset shadow is drawn by the cell
+     itself, so it travels — right edge for the column separators, bottom edge
+     for the line under the header. */
+  box-shadow: inset -1px 0 0 var(--border), inset 0 -1px 0 var(--border-strong);
+}
+
+/* The ask affordance, matching the figure and equation ones: quiet until the
+   pointer is on the thing it acts on. Sits outside the scroll box so panning
+   the table never moves it out of reach. */
+.article-table-ask {
+  position: absolute;
+  right: 0;
+  bottom: -10px;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 140ms ease, transform 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.article-table:hover .article-table-ask,
+.article-table-ask:focus-visible { opacity: 1; transform: translateY(0); }
+.article-table-ask:hover { border-color: var(--accent); color: var(--accent); }
 .article-code .md-body { font-size: 14px; }
 .article-footnote {
   font-size: 14px;
@@ -1287,8 +1660,243 @@ body {
   transition: border-color 140ms ease, color 140ms ease, transform 140ms ease;
 }
 .ask-fab:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
-.note-fab { border-color: color-mix(in oklab, var(--ok), var(--border-strong) 40%); }
-.note-fab:hover { border-color: var(--ok); color: var(--ok); }
+
+/* The one corner control. Reads as a mode switch rather than an action: it
+   toggles a surface, and the filled state says that surface is open. */
+.panel-fab { display: flex; align-items: center; gap: 8px; }
+.panel-fab-glyph { font-size: 11px; opacity: 0.65; }
+.panel-fab:hover .panel-fab-glyph { opacity: 1; }
+.panel-fab.is-on {
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  background: var(--accent);
+}
+.panel-fab.is-on .panel-fab-glyph { opacity: 1; }
+.panel-fab-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--muted);
+}
+.panel-fab.is-on .panel-fab-count {
+  background: color-mix(in oklab, var(--accent-fg), transparent 78%);
+  color: var(--accent-fg);
+}
+
+/* ── The agent trail ─────────────────────────────────────────────────────
+   What the model fetched before it answered. Live it is the progress
+   indicator; afterwards it is the audit trail, collapsed behind one line so
+   the answer keeps the top of the card. */
+.agent-trail { margin-top: 10px; }
+.trail-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--faint);
+  padding: 3px 0;
+  transition: color 140ms ease;
+}
+.trail-toggle:hover { color: var(--muted); }
+.trail-caret { font-size: 8px; }
+.trail-count { margin-left: auto; opacity: 0.8; }
+
+.trail-steps {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 9px;
+  /* One continuous rule down the left: the calls are a sequence, and a border
+     per row would read as four unrelated boxes. */
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.trail-step { position: relative; padding-left: 10px; }
+.trail-think {
+  font-size: 11.5px;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.trail-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+.trail-glyph {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+/* A web fetch is the one that left the machine, so it is the one that gets a
+   different colour — the reader should be able to see at a glance whether an
+   answer drew on anything outside the paper. */
+.trail-step.tool-web .trail-glyph { color: var(--deck); }
+.trail-label { min-width: 0; overflow-wrap: anywhere; }
+.trail-result {
+  margin-left: auto;
+  padding-left: 8px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.trail-step.is-running .trail-label { color: var(--muted); }
+.trail-spinner {
+  margin-left: auto;
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+
+.trail-seqs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.trail-seq {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.trail-seq:hover { border-color: var(--accent); color: var(--accent); }
+.trail-more {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--faint);
+  align-self: center;
+}
+.trail-sources { list-style: none; margin: 5px 0 0; padding: 0; }
+.trail-sources li { margin-top: 2px; }
+.trail-sources a {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--deck);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── The assistant panel (the holistic level) ────────────────────────────
+   Docked LEFT, because the button that opens it is in the bottom-left corner
+   and a panel that flies in from the opposite side of the screen to the
+   control that summoned it reads as a different thing appearing. */
+.asst-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: color-mix(in oklch, var(--fg), transparent 88%);
+  animation: marg-fade 140ms ease;
+}
+.asst-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(440px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: 24px 0 60px -30px rgba(0, 0, 0, 0.35);
+  animation: asst-slide 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes asst-slide {
+  from { transform: translateX(-16px); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+.asst-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.asst-tabs { display: flex; gap: 4px; flex: 1; min-width: 0; }
+.asst-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  transition: background 140ms ease, color 140ms ease;
+}
+.asst-tab:hover { background: var(--bg-2); color: var(--fg-2); }
+.asst-tab.is-on { background: var(--bg-3); color: var(--fg); }
+.asst-soon {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--faint);
+}
+.asst-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* Cards here are laid out by flow, not by the gutter's absolute slots — the
+   card keeps its own `position: relative` (its spine is drawn against it). */
+.asst-list .note-card { width: auto; }
+.asst-empty {
+  padding: 26px 20px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.asst-empty p + p { margin-top: 10px; }
+.asst-empty-lead {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 17px;
+  line-height: 1.3;
+  color: var(--fg);
+}
+.asst-composer {
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.asst-composer textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 11px;
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.asst-composer textarea:focus { border-color: var(--accent); }
+.asst-composer textarea::placeholder { color: var(--faint); }
 
 .reader-notice {
   max-width: 680px;
@@ -1589,3 +2197,948 @@ body {
   .layout-right-only .note-slot,
   .layout-both .note-slot { transition: none; }
 }
+
+/* ── The desk ────────────────────────────────────────────────────────────
+   A page, not an overlay. Three columns answering three different questions:
+   what am I working on (rail) · what do they say (chat) · what do I think
+   (board). The chat is the hero and gets the elastic column; the other two
+   are fixed, because a rail that grows with the window just holds more
+   whitespace. */
+.desk {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+.desk-bar {
+  flex-shrink: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg), var(--bg-2) 50%);
+}
+.desk-bar-title {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 16px;
+  color: var(--fg);
+}
+.desk-bar-sub {
+  font-size: 11.5px;
+  color: var(--faint);
+  border-left: 1px solid var(--border);
+  padding-left: 12px;
+}
+.desk-notice { margin: 10px 18px 0; }
+
+.desk-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 300px;
+}
+/* Hidden is a narrow rail, not display:none. The reader has to be able to get
+   it back, and a collapsed strip that still shows a count is the difference
+   between "put away" and "gone". */
+.desk-grid.is-board-hidden { grid-template-columns: 250px minmax(0, 1fr) 38px; }
+@media (max-width: 1180px) {
+  /* The board folds away first: notes are a companion to the chat, and the
+     chat is unusable below a certain width. */
+  .desk-grid { grid-template-columns: 220px minmax(0, 1fr); }
+  .board { display: none; }
+}
+@media (max-width: 820px) {
+  .desk-grid { grid-template-columns: minmax(0, 1fr); }
+  .rail { display: none; }
+}
+
+/* ── Rail: scopes and their papers ── */
+.rail {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 14px 10px 20px;
+  background: var(--bg-2);
+}
+.rail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 8px;
+}
+.rail-head-papers { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.rail-head h2 {
+  flex: 1;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+.rail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--fg-2);
+  transition: background 120ms ease, color 120ms ease;
+}
+.rail-row:hover { background: var(--bg-3); color: var(--fg); }
+.rail-row.is-on { background: var(--bg); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+.rail-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-row-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--faint);
+}
+.rail-hint { padding: 4px 9px; }
+.rail-picker {
+  margin: 4px 4px 10px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.rail-paper { display: flex; align-items: center; gap: 2px; }
+.rail-paper-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  text-align: left;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--fg-2);
+}
+.rail-paper-open:hover { background: var(--bg-3); color: var(--fg); }
+/* The P-number is the identifier the answers cite, so it reads as a label
+   rather than as decoration. */
+.rail-paper-num {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.rail-paper-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-paper-drop {
+  opacity: 0;
+  width: 20px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.rail-paper:hover .rail-paper-drop { opacity: 1; }
+.rail-paper-drop:hover { color: #c0392b; }
+.rail-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 16px;
+  padding: 12px 6px 0;
+  border-top: 1px solid var(--border);
+}
+.rail-actions button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg);
+}
+.rail-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.rail-actions button.is-danger:hover { border-color: #c0392b; color: #c0392b; }
+.rail-rename {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+
+/* ── Chat ── */
+.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.chat-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 26px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.chat-head-title { flex: 1; min-width: 0; }
+.chat-head-title h2 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-head-sub {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--faint);
+}
+.chat-clear {
+  font-size: 11.5px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.chat-clear:hover { border-color: #c0392b; color: #c0392b; }
+
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 26px 8px; }
+.chat-empty { max-width: 60ch; margin: 6vh auto 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
+.chat-empty p + p { margin-top: 10px; }
+.chat-empty-lead {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 22px;
+  line-height: 1.25;
+  color: var(--fg);
+}
+.chat-openers { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
+.chat-openers button {
+  text-align: left;
+  font-size: 12.5px;
+  padding: 9px 13px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.chat-openers button:hover { border-color: var(--accent); color: var(--accent); }
+
+.msg { max-width: 74ch; margin: 0 auto 22px; }
+/* The reader's own words sit right and tight; an answer is a document and
+   runs the full measure. Mirroring both would make the transcript read as two
+   columns of equal weight, which it is not. */
+.msg.is-user { display: flex; justify-content: flex-end; }
+.msg.is-user .msg-body {
+  max-width: 80%;
+  padding: 9px 14px;
+  border-radius: 14px 14px 3px 14px;
+  background: var(--accent-soft);
+  color: var(--fg);
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.msg.is-assistant .msg-body { font-size: 14px; line-height: 1.68; color: var(--fg-2); }
+.msg.is-assistant .msg-body h3 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 16px;
+  color: var(--fg);
+  margin: 1.3em 0 0.4em;
+}
+.msg.is-assistant .msg-body p + p { margin-top: 0.85em; }
+.msg.is-assistant .msg-body ul,
+.msg.is-assistant .msg-body ol { padding-left: 1.3em; margin: 0.6em 0; }
+.msg.is-assistant .msg-body li { margin: 0.3em 0; }
+.msg-meta { display: flex; align-items: center; gap: 8px; }
+.msg-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.msg-sources-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+.msg-source {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-composer {
+  flex-shrink: 0;
+  padding: 12px 26px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.chat-composer textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 11px 13px;
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.chat-composer textarea:focus { border-color: var(--accent); }
+.chat-composer textarea:disabled { opacity: 0.55; }
+.chat-composer textarea::placeholder { color: var(--faint); }
+.chat-composer-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.chat-composer-row .model-picker { margin-top: 0; flex: 1; max-width: 260px; }
+.chat-send {
+  margin-left: auto;
+  font-size: 12.5px;
+  padding: 7px 18px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  transition: opacity 140ms ease;
+}
+.chat-send:disabled { opacity: 0.4; }
+
+/* ── Citations that open where they sit ──────────────────────────────────
+   The reason the desk can claim to serve reading without opening papers: a
+   claim is checkable at the point it is made. */
+.cite-wrap { position: relative; }
+.cite-group { display: inline-flex; gap: 3px; margin: 0 2px; vertical-align: baseline; }
+.cite-chip {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--accent-soft), transparent 45%);
+  color: var(--accent);
+  white-space: nowrap;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.cite-chip:hover { border-color: var(--accent); }
+.cite-chip.is-open { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.cite-dead {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  color: var(--faint);
+  text-decoration: line-through;
+}
+.cite-peek {
+  display: block;
+  margin: 8px 0 12px;
+  padding: 11px 14px;
+  border-radius: 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--fg-2);
+}
+.cite-peek-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.cite-peek-src {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cite-peek-open { margin-left: auto; font-size: 10.5px; color: var(--accent); white-space: nowrap; }
+.cite-peek-body { display: block; }
+.cite-peek-body p { margin: 0; }
+.cite-peek-body p + p { margin-top: 0.6em; }
+.cite-peek-muted { color: var(--faint); }
+.cite-peek-error { color: #c0392b; }
+
+/* ── Sticky board ── */
+.board {
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-2);
+}
+.board-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.board-head h2 {
+  flex: 1;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+.board-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg);
+  font-size: 14px;
+  line-height: 1;
+}
+.board-add:hover { border-color: var(--accent); color: var(--accent); }
+.board-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.board-empty { padding: 20px 8px; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.board-empty p + p { margin-top: 8px; }
+
+.sticky {
+  --tone: var(--bg-3);
+  border-radius: 9px;
+  padding: 8px 10px 9px;
+  background: var(--tone);
+  border: 1px solid color-mix(in oklab, var(--tone), var(--fg) 12%);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg);
+}
+/* Colour-mixed against the page rather than fixed hex: a sticky has to read as
+   paper in both themes, and a literal #fff8b8 is a glare in the dark one. */
+.sticky.tone-yellow { --tone: color-mix(in oklab, oklch(0.88 0.13 95), var(--bg) 62%); }
+.sticky.tone-blue   { --tone: color-mix(in oklab, oklch(0.80 0.11 240), var(--bg) 62%); }
+.sticky.tone-green  { --tone: color-mix(in oklab, var(--ok), var(--bg) 66%); }
+.sticky.tone-pink   { --tone: color-mix(in oklab, oklch(0.80 0.13 350), var(--bg) 62%); }
+.sticky.tone-plain  { --tone: var(--bg-3); }
+.sticky.is-pinned { box-shadow: 0 4px 16px -8px rgba(0, 0, 0, 0.5); }
+.sticky.tone-orange { --tone: color-mix(in oklab, oklch(0.78 0.15 55), var(--bg) 60%); }
+
+/* An assistant note is legible as one before the badge is read: a dashed edge
+   is the one border treatment nothing else in the app uses. */
+.sticky.is-ai {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--fg), transparent 55%);
+}
+.sticky-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 2px 6px 2px 5px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--fg), transparent 88%);
+  color: color-mix(in oklab, var(--fg), transparent 25%);
+  white-space: nowrap;
+}
+.sticky-badge svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+.sticky-badge svg .eye { fill: currentColor; stroke: none; }
+.sticky-drop.is-armed {
+  opacity: 1;
+  color: #c0392b;
+  font-weight: 700;
+}
+
+.sticky-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.sticky-pin {
+  display: flex;
+  color: var(--faint);
+  opacity: 0.55;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.sticky-pin svg { fill: currentColor; }
+.sticky-pin:hover { opacity: 1; }
+.sticky-pin.is-on { opacity: 1; color: var(--accent); }
+.sticky-colors { display: flex; gap: 3px; margin-left: auto; opacity: 0; transition: opacity 140ms ease; }
+.sticky:hover .sticky-colors, .sticky:focus-within .sticky-colors { opacity: 1; }
+.sticky-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--fg), transparent 78%);
+  background: var(--tone);
+}
+.sticky-swatch.tone-yellow { --tone: oklch(0.88 0.13 95); }
+.sticky-swatch.tone-blue   { --tone: oklch(0.80 0.11 240); }
+.sticky-swatch.tone-green  { --tone: oklch(0.72 0.13 150); }
+.sticky-swatch.tone-pink   { --tone: oklch(0.80 0.13 350); }
+.sticky-swatch.tone-plain  { --tone: var(--bg-3); }
+.sticky-swatch.is-on { outline: 1.5px solid var(--fg); outline-offset: 1px; }
+.sticky-drop { font-size: 14px; line-height: 1; color: var(--faint); opacity: 0; transition: opacity 140ms ease; }
+.sticky:hover .sticky-drop { opacity: 1; }
+.sticky-drop:hover { color: #c0392b; }
+
+.sticky-body { cursor: text; min-height: 20px; }
+.sticky-body p { margin: 0; }
+.sticky-body p + p { margin-top: 0.5em; }
+.sticky-placeholder { color: color-mix(in oklab, var(--fg), transparent 55%); font-style: italic; }
+.sticky-input {
+  width: 100%;
+  min-height: 62px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg);
+  background: color-mix(in oklab, var(--bg), transparent 30%);
+  border: 1px solid color-mix(in oklab, var(--fg), transparent 82%);
+  border-radius: 6px;
+  padding: 6px 8px;
+  outline: none;
+}
+/* ⚠ min-width:0 and the overflow rules are load-bearing. A paper label is a
+   full paper title, and a flex/grid child defaults to min-width:auto — so
+   without this the chip pushes past the note's own edge instead of ellipsing. */
+.sticky-foot { margin-top: 7px; display: flex; min-width: 0; }
+.sticky-scope {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--fg), transparent 80%);
+  color: color-mix(in oklab, var(--fg), transparent 35%);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sticky-scope:hover { color: var(--fg); }
+.sticky-scope-list {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in oklab, var(--fg), transparent 85%);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sticky-scope-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--fg-2);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.sticky-scope-row input { margin-top: 2px; flex-shrink: 0; accent-color: var(--accent); }
+.sticky-scope-clear {
+  margin-top: 4px;
+  align-self: flex-start;
+  font-size: 10.5px;
+  color: var(--accent);
+}
+
+
+/* ── The universal board ─────────────────────────────────────────────────
+   A wall, not a list. The chat strip is a list because it sits beside a
+   transcript and has to stay narrow; this is the whole page, and the point is
+   seeing everything at once — which is a spatial task, so the notes are laid
+   out spatially. */
+.wall { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.wall-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 26px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.wall-head-title { min-width: 0; }
+.wall-head-title h2 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.wall-search {
+  margin-left: auto;
+  width: min(280px, 30vw);
+  font-size: 12.5px;
+  padding: 6px 11px;
+  border-radius: 7px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.wall-search:focus { border-color: var(--accent); }
+.wall-search::placeholder { color: var(--faint); }
+.wall-filters {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+}
+.wall-filter {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.wall-filter.is-on { background: var(--bg); color: var(--fg); }
+.wall-add {
+  font-size: 12.5px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  white-space: nowrap;
+}
+
+/* The board surface. A woven tint rather than a photographic cork texture:
+   the app is a paper-and-ink palette, and a literal corkboard image would be
+   the one thing on screen pretending to be a photograph. */
+.wall-surface {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 26px;
+  background:
+    repeating-linear-gradient(45deg,
+      color-mix(in oklab, var(--bg-3), transparent 55%) 0 2px,
+      transparent 2px 5px),
+    repeating-linear-gradient(-45deg,
+      color-mix(in oklab, var(--bg-3), transparent 65%) 0 2px,
+      transparent 2px 5px),
+    var(--bg-2);
+}
+.wall-empty { max-width: 56ch; margin: 8vh auto 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
+.wall-empty p + p { margin-top: 10px; }
+
+/* ⚠ **A grid, not CSS multi-column — and that is the whole point.**
+   This was `columns: 260px` for the masonry. Multi-column FRAGMENTS its
+   children: a note taller than the remaining column height is split, and the
+   remainder is re-drawn at the top of the next column — pin, dashed border and
+   all. `display: inline-block` is the usual charm against that and it is not
+   enough in WebKit, where the reported symptom was exactly this: two orphaned
+   note-bottoms with their own pins stranded under the board.
+
+   Grid items never fragment, in any engine. The cost is the masonry: rows are
+   ragged rather than tightly packed. For a corkboard that is not a loss — a
+   real one is not masonry either — and it is a deterministic layout instead of
+   one that depends on how a browser handles a break. Do not "restore" the
+   columns without a WebKit test. */
+.wall-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 22px 18px;
+  /* Each note keeps its own height; stretching them to the row would undo the
+     scrap-of-paper look the tilt and the tack are doing. */
+  align-items: start;
+}
+.wall-grid .sticky {
+  padding: 16px 14px 12px;
+  font-size: 13px;
+  box-shadow: 0 10px 22px -14px rgba(0, 0, 0, 0.55);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+.wall-grid .sticky:hover {
+  /* Straighten on hover: the tilt is charm at rest and friction while reading. */
+  transform: rotate(0deg) translateY(-2px) !important;
+  box-shadow: 0 16px 30px -16px rgba(0, 0, 0, 0.6);
+  z-index: 2;
+  position: relative;
+}
+/* A long note is allowed to be long, but not to own the row. Clamped, and
+   clicking it opens the editor where the whole thing is visible. */
+.wall-grid .sticky-body {
+  min-height: 34px;
+  max-height: 300px;
+  overflow: hidden;
+  position: relative;
+}
+/* Fade only where there is actually more below.
+   ⚠ `.is-clipped` is set by StickyNote from a real measurement, not by a CSS
+   heuristic. The heuristic here was ":has(> :nth-child(3))" — fade when the
+   body has three or more blocks — and it is wrong for the common case, because
+   a long note is usually ONE long paragraph. It clamped with a hard cut through
+   the middle of a line and nothing to say why.
+   ⚠ The gradient uses black/transparent, not a colour token. A mask reads the
+   ALPHA channel; feeding it `var(--tone)` worked only because the token happens
+   to be opaque, and would stop the day one of them gained alpha. */
+.wall-grid .sticky-body.is-clipped {
+  -webkit-mask-image: linear-gradient(#000 0 78%, transparent 100%);
+  mask-image: linear-gradient(#000 0 78%, transparent 100%);
+}
+/* A clipped note says so, so the cut reads as "there is more" rather than as a
+   rendering fault. */
+.wall-grid .sticky-body.is-clipped::after {
+  content: 'more…';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: color-mix(in oklab, var(--fg), transparent 45%);
+}
+.wall-grid .sticky-foot { max-width: 100%; }
+
+/* The tack. Drawn, not an image — it has to sit correctly in both themes. */
+.sticky-tack {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  width: 13px;
+  height: 13px;
+  margin-left: -6.5px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 35% 32%,
+      color-mix(in oklab, #fff, transparent 35%) 0 22%,
+      transparent 23%),
+    var(--accent);
+  box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.5);
+}
+.sticky.is-tacked { position: relative; }
+
+/* ── The chat strip, folded away ── */
+.board.is-collapsed {
+  padding: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.board-reopen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 0;
+  color: var(--muted);
+  transition: color 140ms ease, background 140ms ease;
+}
+.board-reopen:hover { color: var(--fg); background: var(--bg-3); }
+.board-reopen-glyph { font-size: 15px; line-height: 1; }
+.board-reopen-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  writing-mode: vertical-rl;
+}
+.board-reopen-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.board-hide {
+  font-size: 15px;
+  line-height: 1;
+  width: 20px;
+  color: var(--faint);
+}
+.board-hide:hover { color: var(--fg); }
+
+/* ── Desk tabs ── */
+.desk-tabs { display: flex; gap: 2px; margin-left: 10px; }
+.desk-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 7px;
+  color: var(--muted);
+  transition: background 140ms ease, color 140ms ease;
+}
+.desk-tab:hover { background: var(--bg-3); color: var(--fg-2); }
+.desk-tab.is-on { background: var(--bg-3); color: var(--fg); }
+
+/* ── The paper picker ─────────────────────────────────────────────────────
+   Two halves, because there are two facts to see: what is in the study and in
+   what order (the citation numbering), and what else the library holds. A flat
+   checkbox list showed neither. */
+.picker-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 24px;
+  background: color-mix(in oklch, var(--fg), transparent 82%);
+  backdrop-filter: blur(3px);
+  animation: marg-fade 140ms ease;
+}
+.picker {
+  width: min(880px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.picker-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.picker-head h2 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 18px;
+  color: var(--fg);
+}
+.picker-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.picker-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 720px) { .picker-body { grid-template-columns: 1fr; } }
+.picker-col {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+.picker-col + .picker-col { border-left: 1px solid var(--border); background: var(--bg-2); }
+.picker-col-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.picker-col-head h3 {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+.picker-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--muted);
+}
+.picker-clear { margin-left: auto; font-size: 11px; color: var(--muted); }
+.picker-clear:hover { color: var(--accent); }
+.picker-hint { padding: 6px 2px; }
+.picker-search {
+  width: 100%;
+  font-size: 12.5px;
+  padding: 7px 11px;
+  margin-bottom: 10px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  outline: none;
+}
+.picker-search:focus { border-color: var(--accent); }
+.picker-chosen, .picker-available { list-style: none; margin: 0; padding: 0; }
+.picker-chosen li, .picker-available li { margin-bottom: 5px; }
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  color: var(--fg-2);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.picker-available .picker-row:hover { border-color: var(--accent); background: var(--bg); }
+.picker-row.is-chosen { background: var(--bg-2); border-color: var(--border); }
+.picker-col + .picker-col .picker-row.is-chosen { background: var(--bg); }
+.picker-num {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--accent);
+  width: 18px;
+  flex-shrink: 0;
+}
+.picker-row .paper-cover.is-thumb { width: 26px; }
+.picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-warn { color: var(--faint); font-size: 11px; }
+.picker-plus { color: var(--muted); font-size: 15px; line-height: 1; }
+.picker-order { display: flex; flex-direction: column; gap: 1px; }
+.picker-order button {
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--muted);
+}
+.picker-order button:hover:not(:disabled) { color: var(--accent); background: var(--bg-3); }
+.picker-order button:disabled { opacity: 0.25; }
+.picker-drop { font-size: 14px; line-height: 1; color: var(--faint); padding: 0 2px; }
+.picker-drop:hover { color: #c0392b; }
+.picker-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.picker-foot-note {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--faint);
+  margin-right: auto;
+}
+.picker-cancel {
+  font-size: 12.5px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.picker-cancel:hover { color: var(--fg); }
+.rail-choose {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg);
+}
+.rail-choose:hover { border-color: var(--accent); color: var(--accent); }
+.rail-order-hint { margin-top: 8px; font-size: 10.5px; line-height: 1.45; }

@@ -43,6 +43,8 @@ import {
   getFullDocument,
   listModels,
   listNotes,
+  getStudy,
+  listStudies,
   moveNote as moveNoteApi,
   putDecks,
   updatePersonalNote as updatePersonalNoteApi,
@@ -153,15 +155,63 @@ function stackDecks(
   return pruneDecks(next);
 }
 
+/**
+ * Flatten a flat note list into threads: each root note plus its follow-ups.
+ *
+ * ⚠ The rootOf walk is guarded against cycles. parent_note_id is a foreign key
+ * the server sets, so a cycle should be impossible — but "should be" is doing
+ * a lot of work for a loop that renders the reader's margin, and an infinite
+ * one hangs the tab rather than dropping a card.
+ */
+function groupNotes(notes: PaperNote[]): NoteGroup[] {
+  const byId = new Map(notes.map((n) => [n.id, n]));
+  const rootOf = (n: PaperNote): PaperNote => {
+    let cur = n;
+    const guard = new Set<string>();
+    while (cur.parent_note_id && byId.has(cur.parent_note_id) && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      cur = byId.get(cur.parent_note_id)!;
+    }
+    return cur;
+  };
+  const map = new Map<string, NoteGroup>();
+  for (const n of notes) {
+    if (n.parent_note_id) continue;
+    map.set(n.id, { root: n, replies: [] });
+  }
+  for (const n of notes) {
+    if (!n.parent_note_id) continue;
+    const group = map.get(rootOf(n).id);
+    if (group) group.replies.push(n);
+  }
+  return [...map.values()].sort(
+    (a, b) =>
+      a.root.anchor_sequence_id - b.root.anchor_sequence_id ||
+      (a.root.created_at || '').localeCompare(b.root.created_at || ''),
+  );
+}
+
 let clientIdSeq = 0;
 
 interface Props {
   paperId: string;
   fallbackTitle: string;
+  /** A block the desk asked us to open at. Consumed once, then cleared. */
+  jumpToSequence?: number | null;
+  onJumped?: () => void;
+  /** Leave for the desk — the cross-paper surface this reader's panel became. */
+  onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
 }
 
-export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
+export function ArticleReader({
+  paperId,
+  fallbackTitle,
+  jumpToSequence = null,
+  onJumped,
+  onOpenDesk,
+  onBack,
+}: Props) {
   const [doc, setDoc] = useState<FullDocument | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notes, setNotes] = useState<PaperNote[]>([]);
@@ -178,6 +228,17 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   const [tintedBlocks, setTintedBlocks] = useState<Set<number>>(new Set());
   const [progress, setProgress] = useState(0);
   const [panel, setPanel] = useState<'contents' | 'bookmarks' | 'notes' | null>(null);
+  /**
+   * Which desk scope this paper's corner button opens.
+   *
+   * A study containing this paper if there is exactly one — that is almost
+   * always the context the reader wants back. Two or more is ambiguous, and
+   * guessing between them is worse than landing on the library scope with the
+   * studies rail right there.
+   */
+  const [deskScope, setDeskScope] = useState<string | null>(null);
+  const deskScopeRef = useRef<string | null>(null);
+  deskScopeRef.current = deskScope;
   const [layout, setLayout] = useState<Layout>(() => layoutFor(window.innerWidth));
   const wideEnough = layout !== 'inline';
 
@@ -380,34 +441,63 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // Which study to hand the corner button, and where to land if the desk sent
+  // us to a specific block.
+  useEffect(() => {
+    let alive = true;
+    listStudies()
+      .then(async (all) => {
+        const holding = [];
+        for (const st of all) {
+          const detail = await getStudy(st.id).catch(() => null);
+          if (detail?.papers.some((x) => x.id === paperId)) holding.push(st.id);
+        }
+        if (alive) setDeskScope(holding.length === 1 ? holding[0] : null);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [paperId]);
+
+  /**
+   * Scroll to the block the desk cited.
+   *
+   * ⚠ Waits for `doc` — the block elements do not exist until the article has
+   * rendered, and a jump fired on mount silently does nothing. `onJumped`
+   * clears it in App so a later re-render cannot yank the reader back.
+   */
+  useEffect(() => {
+    if (jumpToSequence == null || !doc) return;
+    const t = setTimeout(() => {
+      jumpToRef.current(jumpToSequence);
+      onJumped?.();
+    }, 120);
+    return () => clearTimeout(t);
+  }, [jumpToSequence, doc, onJumped]);
+
   // ── Notes grouped into threads: a root plus its follow-ups ──────────────
-  const groups = useMemo<NoteGroup[]>(() => {
-    const byId = new Map(notes.map((n) => [n.id, n]));
-    const rootOf = (n: PaperNote): PaperNote => {
-      let cur = n;
-      const guard = new Set<string>();
-      while (cur.parent_note_id && byId.has(cur.parent_note_id) && !guard.has(cur.id)) {
-        guard.add(cur.id);
-        cur = byId.get(cur.parent_note_id)!;
-      }
-      return cur;
-    };
-    const map = new Map<string, NoteGroup>();
-    for (const n of notes) {
-      if (n.parent_note_id) continue;
-      map.set(n.id, { root: n, replies: [] });
-    }
-    for (const n of notes) {
-      if (!n.parent_note_id) continue;
-      const group = map.get(rootOf(n).id);
-      if (group) group.replies.push(n);
-    }
-    return [...map.values()].sort(
-      (a, b) =>
-        a.root.anchor_sequence_id - b.root.anchor_sequence_id ||
-        (a.root.created_at || '').localeCompare(b.root.created_at || ''),
-    );
-  }, [notes]);
+  //
+  // ⚠ Split by scope FIRST. Anchored notes belong in the gutter beside their
+  // passage; whole-paper notes belong in the assistant panel. They share a
+  // table and an endpoint but never a surface, and a document-scope note
+  // carries the first block's sequence id only to satisfy a NOT NULL column —
+  // laid out in the margin it would pile onto the paper's title.
+  const marginNotes = useMemo(
+    () => notes.filter((n) => n.scope !== 'document'),
+    [notes],
+  );
+  const paperNotes_ = useMemo(
+    () => notes.filter((n) => n.scope === 'document'),
+    [notes],
+  );
+
+  const groups = useMemo<NoteGroup[]>(() => groupNotes(marginNotes), [marginNotes]);
+  const holisticGroups = useMemo<NoteGroup[]>(() => groupNotes(paperNotes_), [paperNotes_]);
+
+  // The gutter lays out anchored pending cards; the panel owns its own.
+  const marginPending = useMemo(
+    () => pending.filter((p) => p.scope !== 'document'),
+    [pending],
+  );
 
   // ── Decks ───────────────────────────────────────────────────────────────
   //
@@ -615,7 +705,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         seq: g.root.anchor_sequence_id,
       });
     }
-    for (const p of pending) {
+    for (const p of marginPending) {
       bySide[sideOf(p.marginSide)].push({ key: p.clientId, seq: p.anchorSequenceId });
     }
     if (composer) {
@@ -656,7 +746,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     }
   }, [
     groups,
-    pending,
+    marginPending,
     composer,
     personalComposer,
     personalNotes,
@@ -713,7 +803,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     requestLayout,
     wideEnough,
     groups.length,
-    pending.length,
+    marginPending.length,
     composer,
     personalNotes.length,
     personalComposer,
@@ -809,6 +899,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     const t = block.structural_type;
     if (t === 'figure') return `${ref} · figure`;
     if (t === 'math') return `${ref} · equation`;
+    if (t === 'table') return `${ref} · table${block.plain_text ? ` · ${truncate(block.plain_text.replace(/\s+/g, ' ').trim(), 44)}` : ''}`;
     const text = (block.plain_text || block.content_markdown || '').replace(/\s+/g, ' ').trim();
     if (!text) return ref;
     return `${ref} · “${truncate(text, 60)}”`;
@@ -818,6 +909,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     const t = block.structural_type;
     if (t === 'figure') return 'figure';
     if (t === 'math') return 'equation';
+    if (t === 'table') return 'table';
     if (t === 'heading' || t === 'paragraph' || t === 'text') return 'text';
     return 'block';
   };
@@ -949,12 +1041,61 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     [groups, layout],
   );
 
+  /**
+   * Blocks by sequence id.
+   *
+   * A selection knows only which element it landed in; deciding what that
+   * element *is* — and therefore whether the ask should be about a passage or
+   * about a whole table — needs the block behind it.
+   */
+  const blockBySeq = useMemo(() => {
+    const map = new Map<number, DocBlock>();
+    for (const b of doc?.blocks ?? []) map.set(b.sequence_order, b);
+    return map;
+  }, [doc]);
+
+  const openComposerForBlock = useCallback(
+    (block: DocBlock, kind: 'figure' | 'equation' | 'table') => {
+      setComposer({
+        sequenceId: block.sequence_order,
+        chunkId: block.id,
+        kind,
+        // For an equation and a table the "quote" is the machine transcription
+        // — LaTeX, or the recovered table body — which the agent is told to
+        // treat as fallible next to the attached crop. A figure has only its
+        // caption to offer.
+        quote: kind === 'figure'
+          ? block.plain_text || null
+          : block.content_markdown || block.plain_text || null,
+        imageUrl: block.image_url,
+        marginSide: suggestSide(block.sequence_order),
+      });
+    },
+    [suggestSide],
+  );
+
   const openComposerFromSelection = useCallback(() => {
     const article = articleRef.current;
     if (!article) return;
     const cap = captureSelection(article);
     setPill(null);
     if (!cap) return;
+    /**
+     * ⚠ A selection inside a table asks about the whole table.
+     *
+     * Dragging across a table yields text like "8.4 12.1 91.2 7B" — the cells
+     * the pointer crossed, stripped of the header that says which metric each
+     * one is and the row label that says which model. As a quote it is
+     * unanswerable, and worse, it is unanswerable in a way that looks
+     * answerable. A table is one unit, like a figure: the crop goes to the
+     * model, and the reader asks about the thing they were looking at.
+     */
+    const block = blockBySeq.get(cap.sequenceId);
+    if (block?.structural_type === 'table') {
+      openComposerForBlock(block, 'table');
+      window.getSelection()?.removeAllRanges();
+      return;
+    }
     setComposer({
       sequenceId: cap.sequenceId,
       chunkId: cap.chunkId,
@@ -964,7 +1105,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
       marginSide: suggestSide(cap.sequenceId),
     });
     window.getSelection()?.removeAllRanges();
-  }, [suggestSide]);
+  }, [suggestSide, blockBySeq, openComposerForBlock]);
 
   const openPersonalComposerFromSelection = useCallback(() => {
     const article = articleRef.current;
@@ -972,16 +1113,20 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     const cap = captureSelection(article);
     setPill(null);
     if (!cap) return;
+    // Same rule as asking: a note written against three loose cell values is
+    // a note that means nothing when you come back to it.
+    const block = blockBySeq.get(cap.sequenceId);
+    const isTable = block?.structural_type === 'table';
     setPersonalComposer({
       sequenceId: cap.sequenceId,
       chunkId: cap.chunkId,
-      kind: 'text',
-      quote: cap.quote,
-      imageUrl: null,
+      kind: isTable ? 'table' : 'text',
+      quote: isTable ? block!.plain_text || null : cap.quote,
+      imageUrl: isTable ? block!.image_url : null,
       marginSide: suggestSide(cap.sequenceId),
     });
     window.getSelection()?.removeAllRanges();
-  }, [suggestSide]);
+  }, [suggestSide, blockBySeq]);
 
   const bookmarkFromSelection = useCallback(() => {
     const article = articleRef.current;
@@ -992,24 +1137,6 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     toggleBookmarkAt(cap.sequenceId);
     window.getSelection()?.removeAllRanges();
   }, [toggleBookmarkAt]);
-
-  const openComposerForBlock = useCallback(
-    (block: DocBlock, kind: 'figure' | 'equation') => {
-      setComposer({
-        sequenceId: block.sequence_order,
-        chunkId: block.id,
-        kind,
-        // For an equation the "quote" is its LaTeX, which the agent is told to
-        // treat as a fallible transcription of the attached crop.
-        quote: kind === 'equation'
-          ? block.content_markdown || null
-          : block.plain_text || null,
-        imageUrl: block.image_url,
-        marginSide: suggestSide(block.sequence_order),
-      });
-    },
-    [suggestSide],
-  );
 
   /** Anchor to whatever block is nearest the top of the viewport. */
   const openComposerAtViewport = useCallback(() => {
@@ -1074,6 +1201,10 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         e.preventDefault();
         setPanel((p) => (p ? null : 'contents'));
       }
+      if (e.key === 'p') {
+        e.preventDefault();
+        onOpenDesk?.(deskScopeRef.current ?? 'library');
+      }
       if (e.key === 'Escape') {
         setComposer(null);
         setPersonalComposer(null);
@@ -1094,7 +1225,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   // ── Asking ──────────────────────────────────────────────────────────────
   const runNote = useCallback(
     async (draft: PendingNote, anchor: {
-      kind: 'text' | 'figure' | 'equation' | 'block';
+      kind: 'text' | 'figure' | 'equation' | 'table' | 'block' | 'document';
       sequence_id: number;
       chunk_id: string | null;
       quote: string | null;
@@ -1120,6 +1251,22 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
           {
             onCreated: (noteId) => patch((p) => ({ ...p, noteId })),
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
+            // ⚠ Upsert by id, never append. Every call arrives twice —
+            // `running` when the agent announces it, `done` when it returns —
+            // and appending would show each fetch as two rows, the first one
+            // spinning forever.
+            // ⚠ Clear the status line as well. Once a fetch is on screen the
+            // trail IS the activity indicator, and the phase message that
+            // preceded it would otherwise sit under finished rows still
+            // claiming to be what is happening now.
+            onStep: (step) =>
+              patch((p) => ({
+                ...p,
+                status: null,
+                steps: p.steps.some((s) => s.id === step.id)
+                  ? p.steps.map((s) => (s.id === step.id ? step : s))
+                  : [...p.steps, step],
+              })),
             onToken: (text) => pacer.push(text),
           },
           undefined,
@@ -1232,11 +1379,14 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         anchorSequenceId: composer.sequenceId,
         anchorKind: composer.kind,
         quote: composer.quote,
+        imageUrl: composer.imageUrl,
         question,
         answer: '',
         status: null,
+        steps: [],
         error: null,
         parentNoteId: null,
+        scope: 'anchor',
         marginSide: composer.marginSide,
         model: model || null,
       };
@@ -1263,11 +1413,18 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         anchorSequenceId: parent.anchor_sequence_id,
         anchorKind: parent.anchor_kind,
         quote: parent.anchor_quote,
+        imageUrl: parent.anchor_image_path
+          ? `/static/images/${parent.anchor_image_path}`
+          : null,
         question,
         answer: '',
         status: null,
+        steps: [],
         error: null,
         parentNoteId,
+        // A follow-up belongs to the same surface as its parent — a follow-up
+        // to a whole-paper question stays in the panel.
+        scope: parent.scope,
         // A follow-up joins its parent's card, so it must share its margin.
         marginSide: parent.margin_side || 'right',
         // Shown while it streams. The server independently enforces this from
@@ -1364,9 +1521,13 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   // note saved on the left is still reachable on a narrow window.
   const canFlip = layout === 'both';
 
+  // ⚠ `groups` (margin) AND `holisticGroups` (whole-paper). The desk is where
+  // new whole-paper questions are asked now, but notes from before that move
+  // still belong to this paper, and dropping them from the index would make
+  // them unreachable rather than merely relocated.
   const marginaliaRows = useMemo(
-    () => buildMarginaliaRows(groups, personalNotes, decks),
-    [groups, personalNotes, decks],
+    () => buildMarginaliaRows([...groups, ...holisticGroups], personalNotes, decks),
+    [groups, holisticGroups, personalNotes, decks],
   );
 
   /** Where each bookmark sits along the paper, 0..1, for the progress rail. */
@@ -1430,7 +1591,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
           </div>
         ))}
 
-      {pending
+      {marginPending
         .filter((p) => sideOf(p.marginSide) === side)
         .map((p) => (
           <div
@@ -1442,13 +1603,13 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
               note={p}
               onJump={jumpTo}
               onRetry={() => {
-                const retry = { ...p, error: null, answer: '', status: null };
+                const retry = { ...p, error: null, answer: '', status: null, steps: [] };
                 void runNote(retry, {
-                  kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'block',
+                  kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'table' | 'block',
                   sequence_id: p.anchorSequenceId,
                   chunk_id: null,
                   quote: p.quote,
-                  image_url: null,
+                  image_url: p.imageUrl,
                 });
               }}
               onDismiss={() =>
@@ -1748,21 +1909,26 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         )}
       </div>
 
-      {!composer && !personalComposer && (
+      {/* One button, one meaning — and it now leaves.
+          ⚠ It replaced an "Ask" and a "Note" button that both anchored to
+          whatever block happened to be at the top of the viewport, and then a
+          panel that overlaid the article. Neither was right: a question about
+          the paper as a whole, or about several papers, is not a thing you do
+          *on top of* a document you are reading. It is its own place, so the
+          corner is now a door to the desk rather than a drawer. Passage-level
+          work stays here, on the selection pill and the A / N keys. */}
+      {!composer && !personalComposer && onOpenDesk && (
         <div className="reader-fabs">
           <button
-            className="ask-fab note-fab"
-            onClick={openPersonalComposerAtViewport}
-            title="Add your own note (N)"
+            className="ask-fab panel-fab"
+            onClick={() => onOpenDesk(deskScope ?? 'library')}
+            title="Open the desk — ask across this paper and others (P)"
           >
-            Note
-          </button>
-          <button
-            className="ask-fab"
-            onClick={openComposerAtViewport}
-            title="Ask about what you're reading (A)"
-          >
-            Ask
+            <span className="panel-fab-glyph" aria-hidden="true">◈</span>
+            Desk
+            {holisticGroups.length > 0 && (
+              <span className="panel-fab-count">{holisticGroups.length}</span>
+            )}
           </button>
         </div>
       )}

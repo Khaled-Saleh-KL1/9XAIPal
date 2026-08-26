@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
+import { displayTitle as paperDisplayTitle } from '../lib/titles';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { ChatPane } from './ChatPane';
@@ -505,7 +506,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
     }
   }, [paperId]);
 
-  const displayTitle = meta?.original_filename?.replace(/\.pdf$/i, '') || paper.title;
+  const displayTitle = meta ? paperDisplayTitle(meta) : paper.title;
   const displayPages = meta?.page_count ?? paper.pages ?? 0;
   const status = meta?.status ?? 'queued';
   const isReady = status === 'complete';

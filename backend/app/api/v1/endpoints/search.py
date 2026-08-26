@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.services.retrieval import search_chunks
-from app.search.searxng_client import search as web_search
+from app.search.web import search as web_search
 from app.search.ranking import rank_results
 
 router = APIRouter()
@@ -31,7 +31,7 @@ async def external_search(
     q: str = Query(..., description="Search query"),
     limit: int = 5,
 ):
-    """Search the web via SearXNG."""
+    """Search the web via the configured provider (Tavily or SearXNG)."""
     raw = await web_search(q, limit=limit)
     ranked = rank_results(raw, max_results=limit)
     return {"results": ranked, "query": q, "total": len(ranked)}
