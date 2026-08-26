@@ -1,39 +1,41 @@
-# 9XAIPal — Oracle Cloud "Always Free" ARM VM deployment
+# 9XAIPal — production VM deployment
 # ---------------------------------------------------------------------------
-# A self-contained stack for a fresh Oracle VM (4 ARM cores / 24 GB RAM /
-# 200 GB disk). It runs the WHOLE backend — API + Celery worker + Postgres +
-# Redis + SearXNG — on one box, so the app is "entirely on the web" and does
-# NOT depend on your local machine.
+# A self-contained stack for the production server. It runs the WHOLE
+# backend — API + Celery worker + Postgres + Redis + SearXNG — on one box, so
+# the app is "entirely on the web" and does NOT depend on your local machine.
 #
 # Key differences from docker-compose.yml (local dev):
 #   • EXTRACTOR_PROVIDER=vlm  → PDF extraction uses a CLOUD VLM (gemma4:31b on
 #     Ollama Cloud) instead of the local MinerU/torch pipeline. Both app
 #     services build from `Dockerfile.oracle`, which installs
 #     requirements.oracle.txt (requirements.txt without `mineru[core]`) — so
-#     no torch/OpenCV wheels and no 5 GB model download on the ARM box.
+#     no torch/OpenCV wheels and no multi-GB model download on the box.
 #   • OLLAMA_BASE_URL=https://ollama.com + OLLAMA_API_KEY → chat AND vision
 #     both run on Ollama Cloud with gemma4:31b (it is multimodal).
 #     NOTE: qwen3-vl:235b was RETIRED by Ollama on 2026-06-16.
-#   • EMBEDDINGS DO NOT run on Ollama: this account's key returns
-#     "unauthorized" for every embedding model, so EMBEDDING_PROVIDER is
-#     pinned to `gemini` (gemini-embedding-001, 1024-dim, matches
-#     VECTOR_DIMENSION exactly). Pinning matters — the "auto" chain probes
-#     Ollama first, finds ollama.com reachable, and would fail there.
-#   • SERVE_FRONTEND=false → the API does NOT serve the SPA. The UI lives on
-#     Vercel (9xaipal.vercel.app) and points here via VITE_API_BASE_URL.
+#   • EMBEDDINGS run on Ollama installed directly on this host (not Ollama
+#     Cloud — that key has no embedding access). EMBEDDING_PROVIDER is pinned
+#     to `custom` against http://host.docker.internal:11434/v1 with
+#     qwen3-embedding:0.6b (1024-dim, matches VECTOR_DIMENSION exactly).
+#     Pinning matters — the "auto" chain probes Ollama first, finds
+#     ollama.com reachable, and would fail there.
+#   • SERVE_FRONTEND=false → the API does NOT serve the SPA. The host's own
+#     nginx install (not managed by this compose file) serves the built SPA
+#     and reverse-proxies /api to this stack — see backend/nginx/9xaipal.conf.
 #   • No frontend-build / autoheal-docker-socket services (not needed here).
 #
-# Public traffic enters ONLY through the `caddy` service on 80/443, which
-# terminates TLS with a real Let's Encrypt certificate and proxies to api:8000.
-# Postgres, Redis and SearXNG are not published to the host at all.
+# Public traffic enters through the host's nginx (installed separately, not a
+# container here) on 80/443, which serves the built SPA and reverse-proxies
+# to api:8000 published on 127.0.0.1. Postgres, Redis and SearXNG are not
+# published to the host at all.
 #
 # Usage (on the VM, inside the repo's backend/ folder):
-#   cp .env.oracle .env   # set OLLAMA_API_KEY, POSTGRES_PASSWORD, CADDY_SITE_ADDRESS
-#   docker compose -f docker-compose.oracle.yml up -d --build
-#   docker compose -f docker-compose.oracle.yml logs -f api
+#   cp .env.prod .env   # set OLLAMA_API_KEY, POSTGRES_PASSWORD
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs -f api
 #
-# The Vercel frontend then needs VITE_API_BASE_URL=https://<CADDY_SITE_ADDRESS>
-# set in Vercel → Settings → Environment (build-time value → redeploy after).
+# Then point nginx (see backend/nginx/9xaipal.conf) at this box and build the
+# frontend with VITE_API_BASE_URL=https://<your-domain>.
 # ---------------------------------------------------------------------------
 
 services:
@@ -98,17 +100,17 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
-       # ── AI: everything runs on Ollama Cloud with your key ──────────────
+       # ── AI: chat/vision on Ollama Cloud, embeddings on this host's Ollama ──
       OLLAMA_BASE_URL: https://ollama.com
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:?set OLLAMA_API_KEY in .env}
-       # Embeddings run on Gemini: this Ollama key has chat+vision only.
-      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
       LLM_PROVIDER: ollama
+       # Embeddings: this Ollama Cloud key has chat+vision only, so pin
+       # embeddings to the Ollama installed directly on this host.
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-custom}
-      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://host.docker.internal:11434/v1}
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:31b}
       VLM_MODEL: ${VLM_MODEL:-gemma4:31b}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-minilm}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:0.6b}
       VECTOR_DIMENSION: ${VECTOR_DIMENSION:-1024}
       EMBED_MAX_CHARS: ${EMBED_MAX_CHARS:-3000}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
@@ -130,6 +132,9 @@ services:
     volumes:
        - ./app/storage:/data/storage
        - ./app:/app/app:ro
+    extra_hosts:
+       # Ollama runs on the host, not in this compose network.
+       - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -139,7 +144,7 @@ services:
 
   # ------------------------------------------------------------------
   # API — FastAPI backend. Does NOT serve the SPA (SERVE_FRONTEND=false);
-  # the UI is on Vercel and calls this via VITE_API_BASE_URL.
+  # the host's nginx serves the built SPA and reverse-proxies /api here.
   # ------------------------------------------------------------------
   api:
     build:
@@ -151,9 +156,9 @@ services:
        --host 0.0.0.0 --port 8000
        --workers 2
        --log-level info
-    # Bind to localhost only. Public traffic enters via Caddy (443) → api:8000
-    # on the compose network; 127.0.0.1:8000 stays available on the VM for
-    # health checks without exposing the API directly to the internet.
+    # Bind to localhost only. Public traffic enters via the host's nginx
+    # (443) → 127.0.0.1:8000; the API is never exposed directly to the
+    # internet, only reachable on the VM itself for health checks.
     ports:
        - "127.0.0.1:${API_PORT:-8000}:8000"
     environment:
@@ -163,17 +168,17 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
-       # ── AI: Ollama Cloud ───────────────────────────────────────────────
+       # ── AI: chat/vision on Ollama Cloud, embeddings on this host's Ollama ──
       OLLAMA_BASE_URL: https://ollama.com
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:?set OLLAMA_API_KEY in .env}
-       # Embeddings run on Gemini: this Ollama key has chat+vision only.
-      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
       LLM_PROVIDER: ollama
+       # Embeddings: this Ollama Cloud key has chat+vision only, so pin
+       # embeddings to the Ollama installed directly on this host.
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-custom}
-      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://host.docker.internal:11434/v1}
       CHAT_MODEL: ${CHAT_MODEL:-gemma4:31b}
       VLM_MODEL: ${VLM_MODEL:-gemma4:31b}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-minilm}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:0.6b}
       VECTOR_DIMENSION: ${VECTOR_DIMENSION:-1024}
       EMBED_MAX_CHARS: ${EMBED_MAX_CHARS:-3000}
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
@@ -193,14 +198,18 @@ services:
 
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
-       # UI is on Vercel, not here.
+       # nginx on the host serves the SPA and proxies /api same-origin, so
+       # CORS is normally a non-issue in production. Leave empty unless you
+       # point a second, separately-hosted frontend at this API.
       SERVE_FRONTEND: "false"
       DEBUG: "false"
-       # Allow the Vercel frontend (and any preview host) to call this API.
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://9xaipal.vercel.app}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-100}
     volumes:
        - ./app/storage:/data/storage
+    extra_hosts:
+       # Ollama runs on the host, not in this compose network.
+       - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -216,35 +225,6 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # ------------------------------------------------------------------
-  # Caddy — HTTPS reverse proxy and the ONLY public entrypoint. Fetches a
-  # real Let's Encrypt certificate for CADDY_SITE_ADDRESS (a sslip.io host
-  # that resolves to this VM's public IP) and proxies 443 → api:8000.
-  # Requires ports 80 + 443 open in the Oracle security list (ACME uses 80).
-  # ------------------------------------------------------------------
-  caddy:
-    image: caddy:2-alpine
-    container_name: 9xaipal-caddy
-    ports:
-       - "80:80"
-       - "443:443"
-    environment:
-      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:?set CADDY_SITE_ADDRESS in .env (e.g. 152-67-12-34.sslip.io)}
-    volumes:
-       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-       # The built SPA, served at / alongside the API at /api. Present so the
-       # app stays reachable on networks that block *.vercel.app by TLS SNI.
-       # Populate with:  frontend/  npm run build  ->  scp dist/ to ./frontend-dist
-       - ./frontend-dist:/srv/frontend:ro
-       - 9xaipal_caddy_data:/data
-       - 9xaipal_caddy_config:/config
-    depends_on:
-      api:
-        condition: service_started
-    restart: unless-stopped
-
 volumes:
   9xaipal_postgres_data:
   9xaipal_redis_data:
-  9xaipal_caddy_data:
-  9xaipal_caddy_config:

@@ -3,8 +3,7 @@ name: CI
 # Runs on every PR into main (the merge gate) and on pushes to main
 # (post-merge sanity check). Each job is path-gated (see the `changes` job), so
 # a PR only runs the checks for the area it touches — a docs- or frontend-only
-# PR won't wait on the backend suite. Deployment is handled by Vercel's native
-# Git integration: production on merge to main, preview URLs on each PR.
+# PR won't wait on the backend suite.
 on:
   pull_request:
     branches: [main]
@@ -64,8 +63,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Mirrors exactly what Vercel runs (package.json build = "tsc && vite build"),
-      # so a green check here means the production build will succeed.
+      # Mirrors the production build (package.json build = "tsc && vite build"),
+      # so a green check here means it will succeed.
       - name: Type-check and build
         run: npm run build
 

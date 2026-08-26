@@ -5,7 +5,7 @@ With LLM_PROVIDER=auto (the default) the chain is:
 1. Ollama — if it answers at OLLAMA_BASE_URL, use it with the CHAT_MODEL /
    VLM_MODEL / CLASSIFIER_MODEL / EMBEDDING_MODEL configured in .env.
 2. Cloud APIs, one by one — the first provider with an API key in .env wins:
-   openai → anthropic → gemini → xai → deepseek. Each uses its own
+   openai → anthropic → xai → deepseek. Each uses its own
    <PROVIDER>_CHAT_MODEL / <PROVIDER>_EMBEDDING_MODEL setting, never the
    Ollama model names.
 3. Nothing configured → NoLLMConfigured, whose message tells the user exactly
@@ -32,32 +32,31 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Default API base URLs per cloud provider. Anthropic and Gemini are their
-# official OpenAI-compatibility endpoints. LLM_BASE_URL / EMBEDDING_BASE_URL
-# override these.
+# Default API base URLs per cloud provider. Anthropic is its official
+# OpenAI-compatibility endpoint. LLM_BASE_URL / EMBEDDING_BASE_URL override
+# these.
 PROVIDER_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com/v1",
-    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
     "xai": "https://api.x.ai/v1",
     "deepseek": "https://api.deepseek.com/v1",
 }
 
-# Auto-detection order for chat. For embeddings only OpenAI and Gemini apply.
-CLOUD_PROVIDER_ORDER = ["openai", "anthropic", "gemini", "xai", "deepseek"]
-EMBEDDING_CLOUD_ORDER = ["openai", "gemini"]
+# Auto-detection order for chat. For embeddings only OpenAI applies.
+CLOUD_PROVIDER_ORDER = ["openai", "anthropic", "xai", "deepseek"]
+EMBEDDING_CLOUD_ORDER = ["openai"]
 
 NO_LLM_MESSAGE = (
     "No AI backend is configured. Put your API key or your Ollama connection in "
     "backend/.env: either start Ollama (OLLAMA_BASE_URL is {ollama_url}) or set "
-    "one of OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY, "
+    "one of OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, "
     "DEEPSEEK_API_KEY, then restart the backend."
 )
 
 NO_EMBEDDING_MESSAGE = (
     "No embedding backend is configured. Put your API key or your Ollama "
     "connection in backend/.env: either start Ollama (OLLAMA_BASE_URL is "
-    "{ollama_url}) or set OPENAI_API_KEY or GEMINI_API_KEY — Anthropic, xAI and "
+    "{ollama_url}) or set OPENAI_API_KEY — Anthropic, xAI and "
     "DeepSeek don't offer embedding APIs — then restart the backend."
 )
 

@@ -46,17 +46,15 @@ Full resolution logic: [ai-backend.md](../02-architecture/ai-backend.md).
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `auto` | `auto` = Ollama if reachable, else first cloud key in order openai → anthropic → gemini → xai → deepseek. Pin with `ollama` \| `openai` \| `anthropic` \| `gemini` \| `xai` \| `deepseek` \| `custom`. |
+| `LLM_PROVIDER` | `auto` | `auto` = Ollama if reachable, else first cloud key in order openai → anthropic → xai → deepseek. Pin with `ollama` \| `openai` \| `anthropic` \| `xai` \| `deepseek` \| `custom`. |
 | `LLM_API_KEY` | (empty) | Generic key for a pinned provider. Per-provider keys win when both are set. |
 | `LLM_BASE_URL` | (provider default) | Required for `custom`; otherwise an override (Azure, OpenRouter, vLLM). |
 | `OPENAI_API_KEY` | (empty) | |
 | `ANTHROPIC_API_KEY` | (empty) | |
-| `GEMINI_API_KEY` | (empty) | |
 | `XAI_API_KEY` | (empty) | |
-| `DEEPSEEK_API_KEY` | (empty) | |
+| `DEEPSEEK_API_KEY` | (empty) | Not active by default — held as a template until wired in via `LLM_PROVIDER=deepseek`. |
 | `OPENAI_CHAT_MODEL` | `gpt-4o` | |
 | `ANTHROPIC_CHAT_MODEL` | `claude-sonnet-4-6` | |
-| `GEMINI_CHAT_MODEL` | `gemini-2.5-flash` | |
 | `XAI_CHAT_MODEL` | `grok-4` | |
 | `DEEPSEEK_CHAT_MODEL` | `deepseek-chat` | ⚠ No vision — figure images cannot be described on this provider. |
 | `CLOUD_THINKING_MODE` | `false` | Sends `reasoning_effort: "medium"` to OpenAI-compatible reasoning models. Ignored elsewhere. |
@@ -79,10 +77,9 @@ cloud API — each cloud provider has its own `*_CHAT_MODEL` above.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `EMBEDDING_PROVIDER` | `auto` | `auto` = Ollama if reachable, else OpenAI, else Gemini (the only clouds with embedding APIs). ⚠ Pinning arms the auto-wipe: a pinned provider whose model differs from what's stored **deletes all vectors and re-embeds the library** on next start. |
-| `EMBEDDING_MODEL` | `qwen3-embedding` | Ollama embedding model. ⚠ Must be a tag that actually exists locally — a bare name with no matching tag 404s at first embed. |
+| `EMBEDDING_PROVIDER` | `auto` | `auto` = Ollama if reachable, else OpenAI (the only cloud provider here with an embedding API). ⚠ Pinning arms the auto-wipe: a pinned provider whose model differs from what's stored **deletes all vectors and re-embeds the library** on next start. |
+| `EMBEDDING_MODEL` | `qwen3-embedding:0.6b` | Ollama embedding model. ⚠ Must be a tag that actually exists locally (`ollama pull qwen3-embedding:0.6b`) — a bare name with no matching tag 404s at first embed. |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | |
-| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | |
 | `EMBEDDING_API_KEY` | (falls back to `LLM_API_KEY`) | Override only. |
 | `EMBEDDING_BASE_URL` | (falls back) | Override only. |
 | `EMBED_MAX_CHARS` | `3000` | Chars per chunk sent to the embedder. Ollama 400s on over-window input; dense tables tokenize heavily. Raise for cloud embedders. |

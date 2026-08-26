@@ -1,15 +1,15 @@
 """Embedding model wrapper: local Ollama or an OpenAI-compatible cloud API.
 
 The backend is picked by app.llm.resolver (EMBEDDING_PROVIDER=auto: Ollama
-when reachable, else OpenAI, else Gemini — the only clouds with embedding
-APIs) and pinned for the process lifetime so one library is never embedded by
-two different models within a run.
+when reachable, else OpenAI — the only cloud with an embedding API among the
+providers this app supports) and pinned for the process lifetime so one
+library is never embedded by two different models within a run.
 
 All embeddings are shaped to settings.vector_dimension before storage/search:
 larger vectors are truncated and re-normalized — valid for MRL-trained models
-(qwen3-embedding, text-embedding-3-*, gemini-embedding) — and smaller ones are
-zero-padded (padding never changes cosine similarity). Keeping the stored
-dimension ≤ 2000 is what allows the pgvector HNSW index to exist at all.
+(qwen3-embedding, text-embedding-3-*) — and smaller ones are zero-padded
+(padding never changes cosine similarity). Keeping the stored dimension
+≤ 2000 is what allows the pgvector HNSW index to exist at all.
 """
 
 import math
@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 
 # Providers whose /embeddings endpoint accepts the OpenAI `dimensions`
 # parameter (server-side MRL truncation). For others we only shape locally.
-_DIMENSIONS_PARAM_PROVIDERS = {"openai", "gemini"}
+_DIMENSIONS_PARAM_PROVIDERS = {"openai"}
 
 
 async def active_embedding_model() -> str:

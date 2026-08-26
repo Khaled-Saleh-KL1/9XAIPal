@@ -4,8 +4,8 @@
  * Base URL resolution:
  *  - Local dev: leave VITE_API_BASE_URL unset — requests stay relative
  *    ('/api/v1') and Vite proxies them to the backend on http://localhost:8000.
- *  - Hosted frontend (e.g. Vercel): set VITE_API_BASE_URL to the backend's
- *    public origin. Otherwise the static host has no /api and every call 404s.
+ *  - Hosted frontend: set VITE_API_BASE_URL to the backend's public origin.
+ *    Otherwise the static host has no /api and every call 404s.
  */
 import type { ContextType } from './types';
 

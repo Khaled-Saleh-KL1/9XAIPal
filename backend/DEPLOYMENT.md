@@ -2,7 +2,7 @@
 
 This document describes how to run the full 9XAIPal stack (API + UI + workers + infra) in containers so that **your machine acts as the server**.
 
-Ollama (the LLM/VLM/embeddings) can stay on the host, or any cloud API can take over — with `LLM_PROVIDER=auto` (default) the backend uses Ollama when it is reachable and otherwise falls back to the first cloud API key found in `.env` (OpenAI → Anthropic → Gemini → xAI → DeepSeek). See "AI Backend" below. The rest of the stack is fully containerized and async-ready for multiple concurrent users on the same machine.
+Ollama (the LLM/VLM/embeddings) can stay on the host, or any cloud API can take over — with `LLM_PROVIDER=auto` (default) the backend uses Ollama when it is reachable and otherwise falls back to the first cloud API key found in `.env` (OpenAI → Anthropic → xAI → DeepSeek). See "AI Backend" below. The rest of the stack is fully containerized and async-ready for multiple concurrent users on the same machine.
 
 ## Quick Start (Recommended for Your Machine as Server)
 
@@ -46,12 +46,12 @@ By default the containers reach your host Ollama via `host.docker.internal:11434
 `app/llm/resolver.py` auto-detects the backend on every call (`LLM_PROVIDER=auto`, default):
 
 1. **Ollama reachable** → uses it with your `CHAT_MODEL` / `VLM_MODEL` / `EMBEDDING_MODEL`.
-2. **Otherwise** → the first cloud key set in `.env`, in order: `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → `GEMINI_API_KEY` → `XAI_API_KEY` → `DEEPSEEK_API_KEY`. Each provider has its own model setting (`OPENAI_CHAT_MODEL=gpt-4o`, `ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6`, …) so Ollama tags are never sent to a cloud API.
+2. **Otherwise** → the first cloud key set in `.env`, in order: `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → `XAI_API_KEY` → `DEEPSEEK_API_KEY`. Each provider has its own model setting (`OPENAI_CHAT_MODEL=gpt-4o`, `ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6`, …) so Ollama tags are never sent to a cloud API.
 3. **Neither** → every request answers 503 with exact instructions: *"No AI backend is configured. Put your API key or your Ollama connection in backend/.env…"*.
 
-So "going cloud" is: paste one key into `.env`, `docker compose up -d api celery_worker` — done. Pin a backend explicitly with `LLM_PROVIDER=openai|anthropic|gemini|xai|deepseek|ollama|custom` if you don't want auto-detection.
+So "going cloud" is: paste one key into `.env`, `docker compose up -d api celery_worker` — done. Pin a backend explicitly with `LLM_PROVIDER=openai|anthropic|xai|deepseek|ollama|custom` if you don't want auto-detection.
 
-Embeddings follow the same chain (only OpenAI/Gemini offer embedding APIs). When you switch the embedder permanently, pin `EMBEDDING_PROVIDER=openai` (or `gemini`) — stored vectors from the old model are wiped and the whole library re-embeds automatically at the next startup (summaries/figure descriptions are cached and don't re-run). All compose services pass these variables through from `backend/.env` already.
+Embeddings follow the same chain (only OpenAI offers an embedding API among these providers). When you switch the embedder permanently, pin `EMBEDDING_PROVIDER=openai` — stored vectors from the old model are wiped and the whole library re-embeds automatically at the next startup (summaries/figure descriptions are cached and don't re-run). All compose services pass these variables through from `backend/.env` already.
 
 ## Auto-Recovery (Self-Healing Containers)
 

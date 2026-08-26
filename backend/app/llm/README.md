@@ -3,7 +3,7 @@
 ## Purpose
 
 The `llm` directory owns all model communication — local Ollama **and** cloud
-APIs (OpenAI, Anthropic, Gemini, xAI, DeepSeek). Other backend layers never
+APIs (OpenAI, Anthropic, xAI, DeepSeek). Other backend layers never
 know which backend is active or what the model is called: they call the
 client with a *role* and the resolver picks the backend and model.
 
@@ -18,7 +18,7 @@ The single decision point for "which AI backend and which model?". With
    cached 30 s). Reachable → use Ollama with `CHAT_MODEL` / `VLM_MODEL` /
    `CLASSIFIER_MODEL`.
 2. Otherwise walk the cloud keys in fixed order — OpenAI → Anthropic →
-   Gemini → xAI → DeepSeek — and use the first `*_API_KEY` that is set, with
+   xAI → DeepSeek — and use the first `*_API_KEY` that is set, with
    that provider's own model setting (`OPENAI_CHAT_MODEL`, …). Ollama tags
    are never sent to a cloud API.
 3. Otherwise raise `NoLLMConfigured` (→ HTTP 503, code `NO_LLM_CONFIGURED`)
@@ -32,9 +32,10 @@ Exposes `resolve_llm()` / `resolve_llm_sync()` returning a frozen
 `LLMTarget` (provider, key, base URL, chat/classifier/vlm models, and
 `model_for_role(role)`), plus `resolve_embedding()` / `resolve_embedding_sync()`
 returning an `EmbeddingTarget`. Embedding resolution follows the same chain
-but only OpenAI and Gemini offer embedding APIs, and the auto choice is
-**pinned per process** — vectors from different models are not comparable,
-so a mid-run Ollama hiccup must never mix models inside one library.
+but only OpenAI offers an embedding API among these providers, and the auto
+choice is **pinned per process** — vectors from different models are not
+comparable, so a mid-run Ollama hiccup must never mix models inside one
+library.
 
 ### `client.py`
 

@@ -64,11 +64,11 @@ class Settings(BaseSettings):
     # ── LLM provider ────────────────────────────────────────────────────────
     # Which API answers questions. "auto" (default): use Ollama when it is
     # reachable at OLLAMA_BASE_URL, otherwise fall back to the first cloud
-    # provider below with an API key set (openai → anthropic → gemini → xai →
+    # provider below with an API key set (openai → anthropic → xai →
     # deepseek); if neither exists, requests fail with instructions to add an
     # API key or an Ollama connection. Set explicitly to pin one backend:
-    # "ollama", "openai" (GPT), "anthropic" (Claude), "gemini" (Google),
-    # "xai" (Grok), "deepseek", or "custom" (any OpenAI-compatible endpoint).
+    # "ollama", "openai" (GPT), "anthropic" (Claude), "xai" (Grok),
+    # "deepseek", or "custom" (any OpenAI-compatible endpoint).
     llm_provider: str = "auto"
     # Generic key, used when LLM_PROVIDER is pinned explicitly. The
     # per-provider keys below also work in pinned mode and win when both set.
@@ -81,8 +81,9 @@ class Settings(BaseSettings):
     # order above) is used when Ollama is unreachable.
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    gemini_api_key: str = ""
     xai_api_key: str = ""
+    # Not active by default — set this and DEEPSEEK_CHAT_MODEL, then pin
+    # LLM_PROVIDER=deepseek, when ready to switch to it.
     deepseek_api_key: str = ""
 
     # Chat model used when each cloud provider is active. CHAT_MODEL /
@@ -90,7 +91,6 @@ class Settings(BaseSettings):
     # so switching backends never sends an Ollama tag to a cloud API.
     openai_chat_model: str = "gpt-4o"
     anthropic_chat_model: str = "claude-sonnet-4-6"
-    gemini_chat_model: str = "gemini-2.5-flash"
     xai_chat_model: str = "grok-4"
     # Note: DeepSeek models have no vision support — figure images can't be
     # described when DeepSeek is the active provider (captions still work).
@@ -100,14 +100,14 @@ class Settings(BaseSettings):
     # When True, sends ``reasoning_effort: "medium"`` to OpenAI-compatible
     # chat-completions endpoints for reasoning models (o1, o3-mini, o4-mini,
     # etc.). Only affects providers/models that support it; silently ignored
-    # for Anthropic, Gemini, xAI, DeepSeek, Ollama, and non-reasoning models.
+    # for Anthropic, xAI, DeepSeek, Ollama, and non-reasoning models.
     # Make sure your active chat model is a reasoning model before enabling.
     cloud_thinking_mode: bool = False
 
     # ── Embedding provider ──────────────────────────────────────────────────
-    # "auto" (default): Ollama when reachable, else OPENAI_API_KEY, else
-    # GEMINI_API_KEY — only OpenAI and Gemini offer embedding APIs (Anthropic/
-    # xAI/DeepSeek don't). Pin to "ollama", "openai", "gemini", or "custom"
+    # "auto" (default): Ollama when reachable, else OPENAI_API_KEY — only
+    # OpenAI offers an embedding API among the cloud providers above
+    # (Anthropic/xAI/DeepSeek don't). Pin to "ollama", "openai", or "custom"
     # (OpenAI-compatible /embeddings endpoint) to force one. Key/base-url fall
     # back to the llm_* values when left empty.
     embedding_provider: str = "auto"
@@ -117,7 +117,6 @@ class Settings(BaseSettings):
     # Embedding model used when each cloud provider is active. EMBEDDING_MODEL
     # stays reserved for Ollama (and "custom").
     openai_embedding_model: str = "text-embedding-3-small"
-    gemini_embedding_model: str = "gemini-embedding-001"
 
     # Ollama (local default backend; model names live in .env)
     ollama_base_url: str = "http://localhost:11434"
@@ -128,7 +127,7 @@ class Settings(BaseSettings):
     # chat_model (set it only when a separate multimodal model should handle
     # vision, e.g. a smaller VLM).
     vlm_model: str = ""
-    embedding_model: str = "qwen3-embedding"
+    embedding_model: str = "qwen3-embedding:0.6b"
 
     @property
     def effective_vlm_model(self) -> str:
@@ -224,7 +223,7 @@ class Settings(BaseSettings):
 
     # Stored embedding dimension. Embeddings larger than this are truncated and
     # re-normalized (valid for MRL-trained models: qwen3-embedding,
-    # text-embedding-3-*, gemini-embedding); smaller ones are zero-padded.
+    # text-embedding-3-*); smaller ones are zero-padded.
     # Keep ≤ 2000: pgvector's HNSW index has a hard 2000-dim limit, and without
     # the index every search is a brute-force scan of all embeddings.
     # Changing this triggers an automatic re-embed of the library on next start.
