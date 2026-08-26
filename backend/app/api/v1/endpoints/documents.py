@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_settings
+from app.api.deps import get_db, get_settings, get_current_user
 from app.api.errors import DocumentNotFound
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -39,6 +39,7 @@ async def upload_paper(
     kind: str = Form("paper"),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    current_user: dict = Depends(get_current_user),
 ):
     """Upload a PDF and dispatch ingestion to Celery worker.
 
@@ -85,6 +86,7 @@ async def upload_paper(
 
         doc = await doc_service.create_document(
             db,
+            user_id=current_user["id"],
             filename=filename,
             original_filename=original_name,
             file_size_bytes=len(content),
@@ -156,9 +158,10 @@ async def upload_paper(
 async def download_raw_paper(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Download the original raw PDF file."""
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -181,10 +184,11 @@ async def list_papers(
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    """List all papers in the library."""
-    docs = await doc_service.list_documents(db, limit=limit, offset=offset)
-    total = await doc_service.count_documents(db)
+    """List all papers this user owns."""
+    docs = await doc_service.list_documents(db, current_user["id"], limit=limit, offset=offset)
+    total = await doc_service.count_documents(db, current_user["id"])
     return DocumentListResponse(
         documents=[DocumentResponse(**d) for d in docs],
         total=total,
@@ -195,9 +199,10 @@ async def list_papers(
 async def get_paper(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Get paper metadata and status."""
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
     return DocumentResponse(**doc)
@@ -207,9 +212,10 @@ async def get_paper(
 async def get_paper_progress(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Get current processing status for frontend polling."""
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -248,6 +254,7 @@ async def rename_paper(
     paper_id: UUID,
     payload: RenameDocumentRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Rename a paper.
 
@@ -259,7 +266,7 @@ async def rename_paper(
     and ``original_filename`` is what /raw hands back when the reader downloads
     the PDF. Touching either to satisfy a rename would break both.
     """
-    doc = await doc_service.rename_document(db, paper_id, payload.title)
+    doc = await doc_service.rename_document(db, paper_id, current_user["id"], payload.title)
     if not doc:
         raise DocumentNotFound(str(paper_id))
     await db.commit()
@@ -270,6 +277,7 @@ async def rename_paper(
 async def get_paper_cover(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """The paper's first page as a JPEG thumbnail, rendered on first request.
 
@@ -279,7 +287,7 @@ async def get_paper_cover(
     broken; "there is nothing here" is the honest answer and the <img> falls
     back to its placeholder either way.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -306,13 +314,14 @@ async def get_paper_cover(
 async def delete_paper(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Delete a paper, its DB rows (cascade), and every on-disk artefact.
 
     Disk cleanup is best-effort: a missing file does NOT prevent the database
     row from being removed.
     """
-    deleted = await doc_service.delete_document(db, paper_id)
+    deleted = await doc_service.delete_document(db, paper_id, current_user["id"])
     if not deleted:
         raise DocumentNotFound(str(paper_id))
     await db.commit()
@@ -362,6 +371,7 @@ async def delete_paper(
 async def rechunk_paper(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Re-run the chunker on the existing extracted markdown without re-running MinerU.
 
@@ -382,7 +392,7 @@ async def rechunk_paper(
         chunks_table, chunk_assets_table,
     )
 
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -558,6 +568,7 @@ async def rechunk_paper(
 async def reextract_paper(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Wipe cached extraction artifacts and re-run the full pipeline (MinerU + chunker).
 
@@ -566,7 +577,7 @@ async def reextract_paper(
     or to migrate papers that were initially processed by the PyMuPDF fallback
     onto MinerU's higher-fidelity output.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -637,6 +648,7 @@ async def regenerate_section_summaries(
     paper_id: UUID,
     force: bool = False,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Explicitly trigger (or re-trigger) high-quality section + paper-level summarization
@@ -648,7 +660,7 @@ async def regenerate_section_summaries(
     Because this is a personal quality-first tool, the author accepts that this
     can take many minutes.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -673,6 +685,7 @@ async def regenerate_section_summaries(
 async def trigger_reading_order_reconstruction(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Trigger LLM-based reconstruction of the correct reading order for this paper.
@@ -687,7 +700,7 @@ async def trigger_reading_order_reconstruction(
     After it finishes, the reading view can switch to "AI-corrected order"
     for a much more natural D + ↓ experience.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 

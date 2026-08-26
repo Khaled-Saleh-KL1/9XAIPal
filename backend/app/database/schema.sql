@@ -3,9 +3,36 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Users
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    display_name TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- The real invariant is case-insensitive uniqueness, not byte-equality — a
+-- functional index on LOWER(email) enforces that at the DB level rather than
+-- trusting every future code path (password reset, "change email", …) to
+-- normalize case correctly before insert.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email));
+
 -- Documents table
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+
+    -- Owner. Nullable at the DB level ONLY because schema.sql is applied
+    -- idempotently to any deployment of this repo, including ones that may
+    -- already hold rows with no safe default owner — a NOT NULL add would
+    -- fail outright there. Every INSERT path in app code requires user_id as
+    -- a non-Optional argument, so in practice this is never actually NULL on
+    -- a row created after multi-user support landed.
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+
     filename TEXT NOT NULL,
     original_filename TEXT NOT NULL,
     file_size_bytes BIGINT,
@@ -51,6 +78,8 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 COMMENT ON COLUMN documents.reading_order IS 'Array of original chunk sequence_ids in LLM-corrected logical reading order. Used to fix two-column and complex layout extraction issues.';
+
+CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
 
 -- Chunks table with physical ordering
 CREATE TABLE IF NOT EXISTS chunks (
@@ -107,11 +136,16 @@ CREATE INDEX IF NOT EXISTS idx_chunk_assets_chunk_id ON chunk_assets(chunk_id);
 -- removing it from one takes nothing away from the library.
 CREATE TABLE IF NOT EXISTS studies (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    -- See the comment on documents.user_id — same nullable-at-DB,
+    -- required-in-app-code invariant.
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_studies_user_id ON studies(user_id);
 
 -- Membership. Ordered by position so the study's paper numbering (P1, P2, …)
 -- that the agent cites by is stable across requests -- a citation the reader
@@ -135,6 +169,10 @@ CREATE INDEX IF NOT EXISTS idx_study_papers_document ON study_papers (document_i
 -- give every sticky an anchor_sequence_id that means nothing.
 CREATE TABLE IF NOT EXISTS sticky_notes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    -- See the comment on documents.user_id. Required here specifically
+    -- because a sticky can exist with study_id NULL and board='universal' —
+    -- no parent row to derive ownership from transitively.
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     body TEXT NOT NULL DEFAULT '',
     -- One of a small named set the UI maps to CSS variables, not a hex value.
     -- A stored hex would not survive the light/dark switch.
@@ -170,6 +208,7 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sticky_notes_board ON sticky_notes (board, study_id);
+CREATE INDEX IF NOT EXISTS idx_sticky_notes_user_id ON sticky_notes (user_id);
 
 -- Which papers a sticky is about. Zero rows = a note about nothing in
 -- particular, which is a first-class case: it shows on every desk.
@@ -188,6 +227,10 @@ CREATE INDEX IF NOT EXISTS idx_sticky_note_papers_document ON sticky_note_papers
 -- (the branching user turn for the first continuation, or the previous turn for follow-ups).
 CREATE TABLE IF NOT EXISTS conversation_turns (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    -- See the comment on documents.user_id. Required here specifically
+    -- because the pure "ask the whole library" chat has BOTH document_id and
+    -- study_id NULL — no parent row exists to derive ownership from.
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     conversation_id UUID NOT NULL,
     document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
     role TEXT NOT NULL,
@@ -217,6 +260,9 @@ CREATE TABLE IF NOT EXISTS conversation_turns (
 
 CREATE INDEX IF NOT EXISTS idx_conversation_turns_conversation
     ON conversation_turns(conversation_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_turns_user_id
+    ON conversation_turns(user_id);
 
 -- Fast lookup for "does this turn have any children in a sub-thread?"
 -- and for recursive subtree loading.

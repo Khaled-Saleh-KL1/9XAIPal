@@ -6,6 +6,8 @@ import { ProcessingOverlay } from './views/ProcessingOverlay';
 import { ReadingView } from './views/ReadingView';
 import { RawFilesPanel } from './views/RawFilesPanel';
 import { DeskView } from './views/DeskView';
+import { AuthView } from './views/AuthView';
+import { useAuth } from './contexts/AuthContext';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
 // keeps it out of the initial bundle so the library/reading views appear
@@ -77,6 +79,7 @@ function writeHash(state: HashState) {
 }
 
 export function App() {
+  const { user, loading: authLoading } = useAuth();
   const [route, setRoute] = useState<Route>('library');
   const [activePaper, setActivePaper] = useState<Paper | null>(null);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
@@ -357,8 +360,19 @@ export function App() {
     // mid-upload returns to the library, not a half-baked processing state.
   }, [route, activePaperId, viewingPdf, deskScope, deskPage]);
 
+  // Gated below all hooks (not an early return above them) — every hook in
+  // this component must run unconditionally on every render regardless of
+  // auth state, or their call order would change between renders.
+  if (authLoading) {
+    return <div className="h-screen" style={{ background: 'var(--bg)' }} />;
+  }
+  if (!user) {
+    return <AuthView />;
+  }
+
   return (
     <>
+      <UserMenu />
       {(route === 'library' || route === 'processing') && (
         <LibraryView
           onOpenPaper={openPaper}
@@ -443,6 +457,43 @@ export function App() {
         }}
       />
     </>
+  );
+}
+
+// ── User menu ────────────────────────────────────────────────────────────────
+// A small, self-contained corner control rather than something threaded into
+// LibraryView's own header — keeps the auth retrofit from having to touch
+// that (large, unrelated) file's existing props/layout.
+
+function UserMenu() {
+  const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  if (!user) return null;
+
+  return (
+    <div className="fixed top-3 right-3 z-30">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="text-[12px] px-3 py-1.5 rounded-full"
+        style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--fg-2)' }}
+      >
+        {user.display_name || user.email}
+      </button>
+      {open && (
+        <div
+          className="mt-1 rounded-lg overflow-hidden absolute right-0"
+          style={{ background: 'var(--bg)', border: '1px solid var(--border)', boxShadow: '0 8px 24px -8px rgba(0,0,0,0.18)' }}
+        >
+          <button
+            onClick={() => { setOpen(false); void logout(); }}
+            className="text-[12px] px-4 py-2 whitespace-nowrap w-full text-left"
+            style={{ color: 'var(--fg)' }}
+          >
+            Log out
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

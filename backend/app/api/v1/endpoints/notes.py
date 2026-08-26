@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_ask_semaphore
+from app.api.deps import get_db, get_ask_semaphore, get_current_user
 from app.api.errors import DocumentNotFound, ModelUnavailable, NoLLMConfigured
 from app.chat.paper_agent import answer_paper_question
 from app.core.config import settings
@@ -129,9 +129,11 @@ def _serialize_note(n: dict) -> dict:
 
 
 @router.get("/{paper_id}/notes")
-async def list_notes(paper_id: UUID, db: AsyncSession = Depends(get_db)):
+async def list_notes(
+    paper_id: UUID, db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user)
+):
     """Every note on this paper, ordered by anchor position."""
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
     rows = await note_repo.list_notes(db, paper_id)
@@ -140,9 +142,13 @@ async def list_notes(paper_id: UUID, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/{paper_id}/notes/{note_id}", status_code=204)
 async def delete_note(
-    paper_id: UUID, note_id: UUID, db: AsyncSession = Depends(get_db)
+    paper_id: UUID, note_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Delete a note. Its follow-ups cascade with it."""
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
     note = await note_repo.get_note(db, note_id)
     if not note or note["document_id"] != paper_id:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -156,8 +162,12 @@ async def move_note(
     note_id: UUID,
     payload: MoveNoteRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Move a note to the other margin."""
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
     note = await note_repo.get_note(db, note_id)
     if not note or note["document_id"] != paper_id:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -173,6 +183,7 @@ async def create_note_stream(
     paper_id: UUID,
     payload: NoteRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Create a note and stream its answer as Server-Sent Events.
 
@@ -191,7 +202,7 @@ async def create_note_stream(
     ``Depends`` sessions before a StreamingResponse body runs, so the request
     session is already closed by the time the first token arrives.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 

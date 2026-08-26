@@ -10,8 +10,9 @@ from app.database.migrations import apply_migrations
 def _guard_destructive_db() -> None:
     """Refuse to run against a database that is not a throwaway.
 
-    Every test truncates `documents CASCADE`, which takes chunks, assets,
-    conversations, and notes with it. Pointed at the development database that
+    Every test truncates `documents`, `studies`, `sticky_notes`, `users`
+    CASCADE, which takes chunks, assets, conversations, notes, and everything
+    owned by a test user with it. Pointed at the development database that
     silently destroys the user's whole library — uploaded papers vanish from
     the UI and only the PDFs on disk survive. This has happened.
 
@@ -45,13 +46,13 @@ async def setup_and_clean_db():
 
     # Truncate tables for a clean slate
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE TABLE documents CASCADE"))
+        await conn.execute(text("TRUNCATE TABLE documents, studies, sticky_notes, users CASCADE"))
         
     yield
     
     # Optional cleanup after test
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE TABLE documents CASCADE"))
+        await conn.execute(text("TRUNCATE TABLE documents, studies, sticky_notes, users CASCADE"))
         
     # Dispose of engine connection pool to prevent "attached to a different loop" errors
     await engine.dispose()

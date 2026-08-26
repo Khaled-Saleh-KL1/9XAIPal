@@ -193,5 +193,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Shutdown
     logger.info("Shutting down 9XAIPal backend")
+    from app.core.redis import close_redis
+    await close_redis()
     await engine.dispose()
 

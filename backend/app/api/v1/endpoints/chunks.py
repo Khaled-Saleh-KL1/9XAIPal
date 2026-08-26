@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_current_user
 from app.api.errors import ChunkNotFound, DocumentNotFound
 from app.schemas.chunks import ChunkResponse, ChunkListResponse
 from app.services import chunks as chunk_service
@@ -23,9 +23,10 @@ async def list_chunks(
     limit: int = 100,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """List chunks for a paper (paginated) and report the true total."""
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -72,6 +73,7 @@ async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
 async def get_full_document(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Return every block of the paper, in reading order, in ONE response.
 
@@ -83,7 +85,7 @@ async def get_full_document(
     ``outline`` is the heading spine, which the reader uses for the section
     rail and the agent uses as its map of the document.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -152,6 +154,7 @@ async def get_chunk_after_sequence(
     paper_id: UUID,
     sequence_order: int,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Fetch the next chunk whose sequence_id is strictly greater than the given one.
 
@@ -159,6 +162,10 @@ async def get_chunk_after_sequence(
     the sequence numbers (e.g. a dropped block from an older ingest) can never
     silently truncate a paper. Pass ``0`` to get the very first chunk.
     """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
     chunk = await chunk_repo.get_next_chunk(db, paper_id, sequence_order)
     if not chunk:
         raise ChunkNotFound(f"No chunk after sequence_order={sequence_order}")
@@ -170,8 +177,13 @@ async def get_chunk_by_sequence(
     paper_id: UUID,
     sequence_order: int,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Fetch the single structural chunk at the given sequence_order."""
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
     chunk = await chunk_repo.get_chunk_by_sequence(db, paper_id, sequence_order)
     if not chunk:
         raise ChunkNotFound(f"No chunk at sequence_order={sequence_order}")
@@ -182,6 +194,7 @@ async def get_chunk_by_sequence(
 async def list_chapters(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Derive chapter boundaries from the document's top-level headings.
 
@@ -190,7 +203,7 @@ async def list_chapters(
     linearly. Each chapter is a sequence range [start_sequence, end_sequence]
     that the reader pages within.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -245,11 +258,12 @@ async def list_chapters(
 async def get_figure_descriptions(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Return all rich VLM-generated figure descriptions for a paper.
     Used by the frontend for clean, high-quality rendering of architectures and diagrams.
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 

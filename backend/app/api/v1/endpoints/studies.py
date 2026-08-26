@@ -6,9 +6,16 @@ stores — rather than a note, because a desk conversation has follow-ups and
 pronouns that need the turns before them.
 
 ⚠ **The literal path segment ``library`` is a valid study id.** It means the
-library-wide scope: every paper, no group. Routing it as a scope rather than
-404ing keeps one set of endpoints for both, and `study_id IS NULL` on the turn
-rows says the same thing in the database.
+library-wide scope: every paper the CALLER owns, no group. Routing it as a
+scope rather than 404ing keeps one set of endpoints for both, and
+`study_id IS NULL` on the turn rows says the same thing in the database.
+
+⚠ **`_resolve_scope`'s LIBRARY branch is the one place "library-wide" used to
+mean "every document in the database", not "every document this user owns".**
+That was a real cross-tenant leak once a second account existed: the desk's
+"ask the whole library" chat would cite, quote, and answer from every other
+user's private papers. It is fixed here by requiring `user_id` and filtering
+`list_documents` by it — see the call below.
 """
 
 import json
@@ -20,12 +27,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_ask_semaphore
+from app.api.deps import get_db, get_ask_semaphore, get_current_user
 from app.api.errors import ModelUnavailable, NoLLMConfigured
 from app.chat.study_agent import answer_study_question
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.connection import async_session_factory
+from app.database.repositories import documents as doc_repo
 from app.database.repositories import stickies as sticky_repo
 from app.database.repositories import studies as study_repo
 from app.llm.catalog import resolve_requested_model
@@ -111,7 +119,9 @@ def _turn(row: dict) -> dict:
     }
 
 
-async def _resolve_scope(db: AsyncSession, study_id: str) -> tuple[Optional[UUID], list[dict]]:
+async def _resolve_scope(
+    db: AsyncSession, study_id: str, user_id: UUID
+) -> tuple[Optional[UUID], list[dict]]:
     """Turn a path segment into (study_id | None, papers in citation order).
 
     ⚠ The library scope's paper order is the library's own (newest first), not
@@ -120,13 +130,13 @@ async def _resolve_scope(db: AsyncSession, study_id: str) -> tuple[Optional[UUID
     the answer that produced it.
     """
     if study_id == LIBRARY:
-        docs = await doc_service.list_documents(db, limit=settings.study_max_papers, offset=0)
+        docs = await doc_service.list_documents(db, user_id, limit=settings.study_max_papers, offset=0)
         return None, [d for d in docs if d.get("status") == "complete"]
     try:
         sid = UUID(study_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="No such study")
-    study = await study_repo.get_study(db, sid)
+    study = await study_repo.get_study(db, sid, user_id)
     if not study:
         raise HTTPException(status_code=404, detail="No such study")
     return sid, await study_repo.list_study_papers(db, sid)
@@ -135,28 +145,34 @@ async def _resolve_scope(db: AsyncSession, study_id: str) -> tuple[Optional[UUID
 # ── Studies ─────────────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_studies(db: AsyncSession = Depends(get_db)):
-    rows = await study_repo.list_studies(db)
+async def list_studies(db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    rows = await study_repo.list_studies(db, current_user["id"])
     return {"studies": [_study(r) for r in rows]}
 
 
 @router.post("", status_code=201)
-async def create_study(payload: StudyRequest, db: AsyncSession = Depends(get_db)):
+async def create_study(
+    payload: StudyRequest, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     row = await study_repo.create_study(
-        db, name=payload.name.strip(), description=payload.description
+        db, user_id=current_user["id"], name=payload.name.strip(), description=payload.description
     )
     await db.commit()
     return _study({**row, "paper_count": 0})
 
 
 @router.get("/{study_id}")
-async def get_study(study_id: str, db: AsyncSession = Depends(get_db)):
+async def get_study(
+    study_id: str, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """A study and its papers, in citation order.
 
     Answers for ``library`` too, so the client can render either scope from one
     call. The synthetic library study has no id and cannot be renamed.
     """
-    sid, papers = await _resolve_scope(db, study_id)
+    sid, papers = await _resolve_scope(db, study_id, current_user["id"])
     if sid is None:
         return {
             "study": {
@@ -169,7 +185,7 @@ async def get_study(study_id: str, db: AsyncSession = Depends(get_db)):
             },
             "papers": [_paper(d, i + 1) for i, d in enumerate(papers)],
         }
-    row = await study_repo.get_study(db, sid)
+    row = await study_repo.get_study(db, sid, current_user["id"])
     return {
         "study": _study({**row, "paper_count": len(papers)}),
         "papers": [_paper(d, i + 1) for i, d in enumerate(papers)],
@@ -178,13 +194,14 @@ async def get_study(study_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/{study_id}")
 async def rename_study(
-    study_id: UUID, payload: StudyPatch, db: AsyncSession = Depends(get_db)
+    study_id: UUID, payload: StudyPatch, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     name = payload.name.strip() if payload.name is not None else None
     if name == "":
         raise HTTPException(status_code=400, detail="A study needs a name")
     row = await study_repo.update_study(
-        db, study_id, name=name, description=payload.description
+        db, study_id, current_user["id"], name=name, description=payload.description
     )
     if not row:
         raise HTTPException(status_code=404, detail="No such study")
@@ -194,16 +211,20 @@ async def rename_study(
 
 
 @router.delete("/{study_id}", status_code=204)
-async def delete_study(study_id: UUID, db: AsyncSession = Depends(get_db)):
+async def delete_study(
+    study_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """Delete a study and its chat. The papers themselves are untouched."""
-    if not await study_repo.delete_study(db, study_id):
+    if not await study_repo.delete_study(db, study_id, current_user["id"]):
         raise HTTPException(status_code=404, detail="No such study")
     await db.commit()
 
 
 @router.put("/{study_id}/papers")
 async def set_study_papers(
-    study_id: UUID, payload: StudyPapersRequest, db: AsyncSession = Depends(get_db)
+    study_id: UUID, payload: StudyPapersRequest, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Replace the study's membership wholesale; list order sets citation order.
 
@@ -211,7 +232,7 @@ async def set_study_papers(
     reconcile ordering across two round trips, and a dropped request would
     leave a study whose P-numbers no longer match the answers already on screen.
     """
-    if not await study_repo.get_study(db, study_id):
+    if not await study_repo.get_study(db, study_id, current_user["id"]):
         raise HTTPException(status_code=404, detail="No such study")
     if len(payload.document_ids) > settings.study_max_papers:
         raise HTTPException(
@@ -222,7 +243,11 @@ async def set_study_papers(
                 "costs more than it answers."
             ),
         )
-    papers = await study_repo.set_study_papers(db, study_id, payload.document_ids)
+    # Narrow to documents this user actually owns — otherwise a study could be
+    # made to include another user's paper, and its content would then leak
+    # through this study's own (correctly user-scoped) chat.
+    owned_ids = await doc_repo.filter_owned_document_ids(db, payload.document_ids, current_user["id"])
+    papers = await study_repo.set_study_papers(db, study_id, owned_ids)
     await db.commit()
     return {"papers": [_paper(d, i + 1) for i, d in enumerate(papers)]}
 
@@ -230,22 +255,29 @@ async def set_study_papers(
 # ── The chat ────────────────────────────────────────────────────────────────
 
 @router.get("/{study_id}/chat")
-async def get_chat(study_id: str, db: AsyncSession = Depends(get_db)):
-    sid, _ = await _resolve_scope(db, study_id)
-    rows = await study_repo.list_turns(db, sid)
+async def get_chat(
+    study_id: str, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    sid, _ = await _resolve_scope(db, study_id, current_user["id"])
+    rows = await study_repo.list_turns(db, current_user["id"], sid)
     return {"turns": [_turn(r) for r in rows]}
 
 
 @router.delete("/{study_id}/chat", status_code=204)
-async def clear_chat(study_id: str, db: AsyncSession = Depends(get_db)):
-    sid, _ = await _resolve_scope(db, study_id)
-    await study_repo.clear_turns(db, sid)
+async def clear_chat(
+    study_id: str, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    sid, _ = await _resolve_scope(db, study_id, current_user["id"])
+    await study_repo.clear_turns(db, current_user["id"], sid)
     await db.commit()
 
 
 @router.post("/{study_id}/chat/stream")
 async def chat_stream(
-    study_id: str, payload: ChatRequest, db: AsyncSession = Depends(get_db)
+    study_id: str, payload: ChatRequest, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Ask the study a question and stream the answer as Server-Sent Events.
 
@@ -257,14 +289,16 @@ async def chat_stream(
     ``Depends`` sessions before a StreamingResponse body runs, so the request
     session is already closed by the time the first token arrives.
     """
-    sid, papers = await _resolve_scope(db, study_id)
+    user_id = current_user["id"]
+    sid, papers = await _resolve_scope(db, study_id, user_id)
     requested_model = resolve_requested_model(payload.model)
 
-    conversation_id = await study_repo.latest_conversation_id(db, sid) or uuid4()
-    history = await study_repo.list_turns(db, sid)
+    conversation_id = await study_repo.latest_conversation_id(db, user_id, sid) or uuid4()
+    history = await study_repo.list_turns(db, user_id, sid)
 
     user_turn = await study_repo.add_turn(
         db,
+        user_id=user_id,
         study_id=sid,
         conversation_id=conversation_id,
         role="user",
@@ -274,8 +308,8 @@ async def chat_stream(
 
     # What is already pinned, so the agent can build on it and will not re-pin
     # what it wrote last turn. Read here, while the request session is open.
-    chat_notes = await sticky_repo.list_stickies(db, board="chat", study_id=sid)
-    universal_notes = await sticky_repo.list_stickies(db, board="universal")
+    chat_notes = await sticky_repo.list_stickies(db, user_id=user_id, board="chat", study_id=sid)
+    universal_notes = await sticky_repo.list_stickies(db, user_id=user_id, board="universal")
 
     # Plain dicts, read while the request session is still open.
     papers = [dict(p) for p in papers]
@@ -294,6 +328,7 @@ async def chat_stream(
                 async with async_session_factory() as session:
                     async for event in answer_study_question(
                         session,
+                        user_id=user_id,
                         papers=papers,
                         question=payload.question,
                         history=history,
@@ -312,6 +347,7 @@ async def chat_stream(
 
                     turn = await study_repo.add_turn(
                         session,
+                        user_id=user_id,
                         study_id=sid,
                         conversation_id=conversation_id,
                         role="assistant",

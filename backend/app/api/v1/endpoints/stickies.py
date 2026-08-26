@@ -16,8 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_current_user
 from app.database.repositories import stickies as sticky_repo
+from app.database.repositories import documents as doc_repo
 
 router = APIRouter()
 
@@ -82,6 +83,7 @@ async def list_stickies(
     board: str = Query(default="universal"),
     scope: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """One board's notes, pinned first then newest.
 
@@ -90,6 +92,7 @@ async def list_stickies(
     """
     rows = await sticky_repo.list_stickies(
         db,
+        user_id=current_user["id"],
         board=board,
         study_id=_scope_to_study_id(scope) if board == "chat" else None,
     )
@@ -97,9 +100,17 @@ async def list_stickies(
 
 
 @router.post("", status_code=201)
-async def create_sticky(payload: StickyRequest, db: AsyncSession = Depends(get_db)):
+async def create_sticky(
+    payload: StickyRequest, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    # Narrow the requested document_ids to ones this user actually owns —
+    # otherwise a sticky could be made to reference (and later, via its
+    # chat's own context, leak the content of) another user's paper.
+    owned_ids = await doc_repo.filter_owned_document_ids(db, payload.document_ids, current_user["id"])
     row = await sticky_repo.create_sticky(
         db,
+        user_id=current_user["id"],
         body=payload.body,
         board=payload.board,
         study_id=_scope_to_study_id(payload.scope) if payload.board == "chat" else None,
@@ -109,7 +120,7 @@ async def create_sticky(payload: StickyRequest, db: AsyncSession = Depends(get_d
         # own by calling the repository directly, so there is no way for a
         # client to forge an assistant note.
         origin="user",
-        document_ids=payload.document_ids,
+        document_ids=owned_ids,
     )
     await db.commit()
     return _sticky(row)
@@ -117,7 +128,8 @@ async def create_sticky(payload: StickyRequest, db: AsyncSession = Depends(get_d
 
 @router.patch("/{sticky_id}")
 async def update_sticky(
-    sticky_id: UUID, payload: StickyPatch, db: AsyncSession = Depends(get_db)
+    sticky_id: UUID, payload: StickyPatch, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Edit a note, or move it between boards.
 
@@ -127,16 +139,22 @@ async def update_sticky(
     worthless.
     """
     move = payload.board is not None
+    owned_ids = (
+        await doc_repo.filter_owned_document_ids(db, payload.document_ids, current_user["id"])
+        if payload.document_ids is not None
+        else None
+    )
     row = await sticky_repo.update_sticky(
         db,
         sticky_id,
+        current_user["id"],
         body=payload.body,
         color=payload.color,
         pinned=payload.pinned,
         board=payload.board,
         study_id=_scope_to_study_id(payload.scope) if move else None,
         move_scope=move,
-        document_ids=payload.document_ids,
+        document_ids=owned_ids,
     )
     if not row:
         raise HTTPException(status_code=404, detail="No such sticky note")
@@ -145,8 +163,11 @@ async def update_sticky(
 
 
 @router.delete("/{sticky_id}", status_code=204)
-async def delete_sticky(sticky_id: UUID, db: AsyncSession = Depends(get_db)):
+async def delete_sticky(
+    sticky_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """Remove a note. **Reader-only** — the assistant has no path to this."""
-    if not await sticky_repo.delete_sticky(db, sticky_id):
+    if not await sticky_repo.delete_sticky(db, sticky_id, current_user["id"]):
         raise HTTPException(status_code=404, detail="No such sticky note")
     await db.commit()

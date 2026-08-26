@@ -215,6 +215,10 @@ services:
       DEBUG: "false"
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-100}
+      # Auth. Only the api service needs this — celery_worker never handles
+      # signup/login, and by the time a task runs, user_id is already durably
+      # stored on the documents row from upload time.
+      SIGNUP_INVITE_CODE: ${SIGNUP_INVITE_CODE:-}
     volumes:
        - ./app/storage:/data/storage
     extra_hosts:

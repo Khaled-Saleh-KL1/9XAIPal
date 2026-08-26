@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_db, get_current_user
 from app.api.errors import DocumentNotFound
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import personal as personal_repo
@@ -110,8 +110,8 @@ def _deck(d: dict) -> dict:
     }
 
 
-async def _require_document(db: AsyncSession, paper_id: UUID) -> dict:
-    doc = await doc_service.get_document(db, paper_id)
+async def _require_document(db: AsyncSession, paper_id: UUID, user_id: UUID) -> dict:
+    doc = await doc_service.get_document(db, paper_id, user_id)
     if not doc:
         raise DocumentNotFound(str(paper_id))
     return doc
@@ -121,7 +121,10 @@ async def _require_document(db: AsyncSession, paper_id: UUID) -> dict:
 
 
 @router.get("/{paper_id}/personal")
-async def get_personal_state(paper_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_personal_state(
+    paper_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
     """Bookmarks, personal notes and decks in one request.
 
     Fetched together rather than from three endpoints because decks reference
@@ -129,7 +132,7 @@ async def get_personal_state(paper_id: UUID, db: AsyncSession = Depends(get_db))
     a concurrent delete has already removed, and the reader would render a
     stack with a hole in it.
     """
-    await _require_document(db, paper_id)
+    await _require_document(db, paper_id, current_user["id"])
 
     # Membership rows vanish with their notes, so a deck can fall below two
     # cards without anyone touching the deck itself. Settle that before
@@ -151,18 +154,22 @@ async def get_personal_state(paper_id: UUID, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/{paper_id}/bookmarks")
-async def list_bookmarks(paper_id: UUID, db: AsyncSession = Depends(get_db)):
-    await _require_document(db, paper_id)
+async def list_bookmarks(
+    paper_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    await _require_document(db, paper_id, current_user["id"])
     rows = await personal_repo.list_bookmarks(db, paper_id)
     return {"bookmarks": [_bookmark(b) for b in rows]}
 
 
 @router.post("/{paper_id}/bookmarks")
 async def create_bookmark(
-    paper_id: UUID, payload: BookmarkRequest, db: AsyncSession = Depends(get_db)
+    paper_id: UUID, payload: BookmarkRequest, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Mark a block, or refresh the mark already on it."""
-    await _require_document(db, paper_id)
+    await _require_document(db, paper_id, current_user["id"])
     row = await personal_repo.upsert_bookmark(
         db,
         document_id=paper_id,
@@ -183,7 +190,13 @@ async def rename_bookmark(
     bookmark_id: UUID,
     payload: BookmarkPatch,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    # ⚠ Was missing entirely before the auth retrofit: this checked the
+    # bookmark belongs to `paper_id` from the URL, but never verified
+    # `paper_id` itself is owned by the caller — a guessed/foreign paper_id
+    # paired with its own real bookmark_id would have passed.
+    await _require_document(db, paper_id, current_user["id"])
     existing = await personal_repo.get_bookmark(db, bookmark_id)
     if not existing or existing["document_id"] != paper_id:
         raise HTTPException(status_code=404, detail="Bookmark not found")
@@ -194,8 +207,10 @@ async def rename_bookmark(
 
 @router.delete("/{paper_id}/bookmarks/{bookmark_id}", status_code=204)
 async def delete_bookmark(
-    paper_id: UUID, bookmark_id: UUID, db: AsyncSession = Depends(get_db)
+    paper_id: UUID, bookmark_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    await _require_document(db, paper_id, current_user["id"])
     existing = await personal_repo.get_bookmark(db, bookmark_id)
     if not existing or existing["document_id"] != paper_id:
         raise HTTPException(status_code=404, detail="Bookmark not found")
@@ -207,17 +222,21 @@ async def delete_bookmark(
 
 
 @router.get("/{paper_id}/personal-notes")
-async def list_personal_notes(paper_id: UUID, db: AsyncSession = Depends(get_db)):
-    await _require_document(db, paper_id)
+async def list_personal_notes(
+    paper_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    await _require_document(db, paper_id, current_user["id"])
     rows = await personal_repo.list_personal_notes(db, paper_id)
     return {"notes": [_personal_note(n) for n in rows]}
 
 
 @router.post("/{paper_id}/personal-notes")
 async def create_personal_note(
-    paper_id: UUID, payload: PersonalNoteRequest, db: AsyncSession = Depends(get_db)
+    paper_id: UUID, payload: PersonalNoteRequest, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
-    await _require_document(db, paper_id)
+    await _require_document(db, paper_id, current_user["id"])
 
     # ⚠ Resolve the chunk from the sequence id rather than accepting one from
     # the client — same rule as paper notes. Re-chunking recreates every row
@@ -244,7 +263,11 @@ async def update_personal_note(
     note_id: UUID,
     payload: PersonalNotePatch,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    # Same gap as rename_bookmark — the paper itself must be verified owned,
+    # not just that the note points at this paper_id.
+    await _require_document(db, paper_id, current_user["id"])
     existing = await personal_repo.get_personal_note(db, note_id)
     if not existing or existing["document_id"] != paper_id:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -257,8 +280,10 @@ async def update_personal_note(
 
 @router.delete("/{paper_id}/personal-notes/{note_id}", status_code=204)
 async def delete_personal_note(
-    paper_id: UUID, note_id: UUID, db: AsyncSession = Depends(get_db)
+    paper_id: UUID, note_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
+    await _require_document(db, paper_id, current_user["id"])
     existing = await personal_repo.get_personal_note(db, note_id)
     if not existing or existing["document_id"] != paper_id:
         raise HTTPException(status_code=404, detail="Note not found")
@@ -272,8 +297,11 @@ async def delete_personal_note(
 
 
 @router.get("/{paper_id}/decks")
-async def list_decks(paper_id: UUID, db: AsyncSession = Depends(get_db)):
-    await _require_document(db, paper_id)
+async def list_decks(
+    paper_id: UUID, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    await _require_document(db, paper_id, current_user["id"])
     pruned = await personal_repo.prune_thin_decks(db, paper_id)
     if pruned:
         await db.commit()
@@ -282,7 +310,8 @@ async def list_decks(paper_id: UUID, db: AsyncSession = Depends(get_db)):
 
 @router.put("/{paper_id}/decks")
 async def replace_decks(
-    paper_id: UUID, payload: DecksRequest, db: AsyncSession = Depends(get_db)
+    paper_id: UUID, payload: DecksRequest, db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Replace this paper's whole deck arrangement.
 
@@ -293,7 +322,7 @@ async def replace_decks(
     with a half-applied state between every pair, and a request dropped in the
     middle leaves a card in two decks or in none.
     """
-    await _require_document(db, paper_id)
+    await _require_document(db, paper_id, current_user["id"])
 
     # Only ownership is checked here: a member has to be a note on *this*
     # paper, which needs the database. Deduplicating members and dropping
