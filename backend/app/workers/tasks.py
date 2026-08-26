@@ -45,6 +45,26 @@ def _mark_document_and_job_complete(session, doc_uuid: UUID) -> None:
         update_job_status_sync(session, job_row["id"], JobStatus.COMPLETE)
 
 
+def _mark_document_and_job_failed(session, doc_uuid: UUID, error_message: str) -> None:
+    """Mark the document and its latest job FAILED, with a reason.
+
+    Without this, a task that exhausts its retries (celery raises
+    MaxRetriesExceededError out of self.retry()) leaves the document sitting
+    at whatever status it was mid-pipeline — 'processing'/'embedding' forever,
+    no error ever surfaced, indistinguishable from "still working" to the UI.
+    """
+    update_document_status_sync(session, doc_uuid, "failed", error_message=error_message)
+    job_row = session.execute(
+        text(
+            "SELECT id FROM ingestion_jobs WHERE document_id = :doc_id "
+            "ORDER BY created_at DESC LIMIT 1"
+        ),
+        {"doc_id": doc_uuid},
+    ).mappings().first()
+    if job_row and job_row.get("id"):
+        update_job_status_sync(session, job_row["id"], JobStatus.FAILED, error_message=error_message)
+
+
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 
 
@@ -112,8 +132,15 @@ def embed_document(self, document_id: str) -> dict:
             count = embed_document_chunks_sync(session, doc_uuid)
     except Exception as exc:
         logger.exception(f"[celery] embed_document failed document={document_id}: {exc}")
-        raise self.retry(exc=exc)
-    
+        try:
+            raise self.retry(exc=exc)
+        except MaxRetriesExceededError:
+            logger.error(f"[celery] embed_document exhausted retries for {document_id}: {exc}")
+            with sync_session() as session:
+                _mark_document_and_job_failed(session, doc_uuid, f"Embedding failed: {exc}")
+                session.commit()
+            return {"document_id": document_id, "status": "failed", "error": str(exc)}
+
     logger.info(f"[celery] embed_document done document={document_id} embedded={count}")
 
     # Fire the high-quality section summarization pass (personal quality-first mode).
