@@ -305,6 +305,28 @@ export function App() {
     // Only run on mount; further nav updates the hash via the next effect.
   }, []);
 
+  /**
+   * Follow the hash when something outside React changes it — a typed URL, a
+   * bookmark, the back button after a real navigation.
+   *
+   * ⚠ Without this the address bar and the view can disagree: changing only the
+   * fragment does not reload the page, so the SPA never learns about it and
+   * sits on whatever it was already showing. `writeHash` uses `replaceState`,
+   * so this listener never fires for our own navigation.
+   */
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = parseHash();
+      if (next.route === 'library') { setRoute('library'); return; }
+      if (next.route === 'desk') { setDeskScope(next.scope); setRoute('desk'); return; }
+      if (next.route === 'reading' && next.paperId !== activePaperId) {
+        void openPaperById(next.paperId);
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [activePaperId, openPaperById]);
+
   useEffect(() => {
     if (route === 'reading' && activePaperId) {
       writeHash({ route: 'reading', paperId: activePaperId });
