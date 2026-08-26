@@ -33,8 +33,8 @@ Everything runs locally by default. Your documents and conversations never leave
 | **Frontend** | Vite + React 19 + Tailwind CSS + KaTeX | Fast dev/build cycle, precise math rendering, responsive dark/light mode |
 | **API** | FastAPI + Pydantic v2 | Async Python backend, automatic validation, native OpenAPI docs |
 | **Database** | PostgreSQL 16 + **pgvector** | ACID document storage; native vector similarity search so no extra vector DB is needed |
-| **Embeddings** | Ollama (local) or OpenAI / Gemini (cloud) | Local-first for privacy; cloud auto-fallback when the host is offline |
-| **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Gemini / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed — no config switching |
+| **Embeddings** | Ollama (local) or OpenAI (cloud) | Local-first for privacy; cloud auto-fallback when the host is offline |
+| **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed — no config switching |
 | **PDF extraction** | **MinerU** 3.x (with PyMuPDF fallback) | State-of-the-art structural extraction: OCR, table recognition, equation → LaTeX |
 | **Background jobs** | Celery + Redis | Heavy extraction runs asynchronously so uploads never hang |
 | **Web search** | SearXNG (self-hosted metasearch) | EXTERNAL answers without sending every query to a single commercial engine. **Being replaced** by Exa (semantic search) + Firecrawl (page → clean markdown) so the research agent reads sources instead of summarising search snippets — see [the migration plan](docs/plans/exa-firecrawl-research-stack.md) |

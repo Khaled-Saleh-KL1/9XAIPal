@@ -1,5 +1,13 @@
 # Deploying 9XAIPal "entirely on the web" — Oracle Cloud Always Free + Vercel
 
+> ⚠ **Retired.** This setup (free Oracle VM + Vercel + Caddy + Gemini
+> embeddings) has been fully replaced by a new dedicated server: nginx
+> (host-installed) instead of Caddy, no Vercel, embeddings on local Ollama
+> with `qwen3-embedding:0.6b`. See `backend/docker-compose.prod.yml`,
+> `backend/.env.prod`, and `backend/nginx/9xaipal.conf`. This document is kept
+> for historical reference only and will be replaced once the new server's
+> deployment doc is written.
+
 **Goal:** run the whole app without your local machine. The backend lives on a
 free, always-on Oracle ARM VM; the UI lives on Vercel; chat and vision run on
 Ollama Cloud; embeddings run locally on the VM.

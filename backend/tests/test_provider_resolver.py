@@ -109,26 +109,26 @@ def test_pinned_cloud_provider_without_key_fails_clearly(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_resolution_matches_sync(monkeypatch):
-    monkeypatch.setattr(settings, "gemini_api_key", "AIza-test")
+    monkeypatch.setattr(settings, "xai_api_key", "xai-test")
     target = await resolver.resolve_llm(ollama_up=False)
-    assert target.provider == "gemini"
-    assert target.chat_model == settings.gemini_chat_model
+    assert target.provider == "xai"
+    assert target.chat_model == settings.xai_chat_model
 
 
 def test_embedding_auto_skips_chat_only_providers(monkeypatch):
     # Anthropic has no embeddings API: its key must NOT satisfy embeddings.
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
-    monkeypatch.setattr(settings, "gemini_api_key", "AIza-test")
+    monkeypatch.setattr(settings, "openai_api_key", "sk-oa-test")
     target = resolver.resolve_embedding_sync(ollama_up=False)
-    assert target.provider == "gemini"
-    assert target.model == settings.gemini_embedding_model
+    assert target.provider == "openai"
+    assert target.model == settings.openai_embedding_model
 
 
 def test_embedding_auto_with_nothing_configured_gives_instructions():
     with pytest.raises(NoLLMConfigured) as exc_info:
         resolver.resolve_embedding_sync(ollama_up=False)
     message = str(exc_info.value.model)
-    assert "GEMINI_API_KEY" in message
+    assert "OPENAI_API_KEY" in message
     assert "Ollama" in message
 
 

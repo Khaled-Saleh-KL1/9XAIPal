@@ -5,8 +5,8 @@ app.llm.resolver (LLM_PROVIDER=auto: Ollama when reachable, otherwise the
 first cloud API key found, otherwise a clear configure-me error) and the call
 dispatches to either local Ollama (native API — keeps tag resolution and
 keep_alive semantics) or any OpenAI-compatible cloud API. OpenAI, Anthropic,
-Google Gemini, xAI (Grok) and DeepSeek all expose the OpenAI chat-completions
-protocol, so a single HTTP implementation covers all of them; "custom" lets
+xAI (Grok) and DeepSeek all expose the OpenAI chat-completions protocol, so a
+single HTTP implementation covers all of them; "custom" lets
 the user point LLM_BASE_URL at anything else that speaks the same protocol
 (OpenRouter, vLLM, llama.cpp server, ...).
 

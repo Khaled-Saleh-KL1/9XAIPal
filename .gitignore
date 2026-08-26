@@ -81,13 +81,12 @@ samples/eval/
 backend/output
 # Playwright MCP run artifacts (screenshots, snapshots, console logs)
 .playwright-mcp/
-.vercel
 .env*
-# ...but keep the secret-free deployment templates. `.env*` above is added by
-# `vercel link`; without these negations it also swallows the checked-in
-# templates, which carry only empty placeholders.
-!backend/.env.oracle
+# ...but keep the secret-free deployment templates. `.env*` above would
+# otherwise also swallow the checked-in templates, which carry only empty
+# placeholders.
+!backend/.env.prod
 !*.env.example
 
-# Built SPA copied to the VM and served by Caddy (build artifact, not source)
+# Built SPA copied to the VM and served by nginx (build artifact, not source)
 backend/frontend-dist/

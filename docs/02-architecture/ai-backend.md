@@ -41,11 +41,9 @@ OLLAMA NAMESPACE                        CLOUD NAMESPACE
 ────────────────────────────────        ──────────────────────────────────
 CHAT_MODEL         gemma4:26b           OPENAI_CHAT_MODEL     gpt-4o
 VLM_MODEL          (→ CHAT_MODEL)       ANTHROPIC_CHAT_MODEL  claude-sonnet-4-6
-CLASSIFIER_MODEL   (→ CHAT_MODEL)       GEMINI_CHAT_MODEL     gemini-2.5-flash
-EMBEDDING_MODEL    qwen3-embedding      XAI_CHAT_MODEL        grok-4
-                                        DEEPSEEK_CHAT_MODEL   deepseek-chat  ⚠ no vision
+CLASSIFIER_MODEL   (→ CHAT_MODEL)       XAI_CHAT_MODEL        grok-4
+EMBEDDING_MODEL    qwen3-embedding:0.6b DEEPSEEK_CHAT_MODEL   deepseek-chat  ⚠ no vision
                                         OPENAI_EMBEDDING_MODEL text-embedding-3-small
-                                        GEMINI_EMBEDDING_MODEL gemini-embedding-001
 ```
 
 Because the namespaces are separate, switching to a cloud provider requires **pasting one API key
@@ -71,7 +69,7 @@ and nothing else** — your Ollama tags stay where they are and are simply not u
      │             │
      ▼             ▼
   OLLAMA      walk cloud keys in order:
-  namespace   openai → anthropic → gemini → xai → deepseek
+  namespace   openai → anthropic → xai → deepseek
                    │                          │
              first key set                 none set
                    │                          │
@@ -90,7 +88,7 @@ flowchart TD
     P -->|pinned| USE[use that provider]
     P -->|auto| PROBE{{"GET /api/tags<br/>3s timeout · 30s cache"}}
     PROBE -->|reachable| OLL[Ollama namespace<br/>CHAT_MODEL · VLM_MODEL · CLASSIFIER_MODEL]
-    PROBE -->|unreachable| CHAIN{{first key set?<br/>openai→anthropic→gemini→xai→deepseek}}
+    PROBE -->|unreachable| CHAIN{{first key set?<br/>openai→anthropic→xai→deepseek}}
     CHAIN -->|yes| CLOUD[that provider's *_CHAT_MODEL]
     CHAIN -->|no| ERR[/NoLLMConfigured<br/>503 NO_LLM_CONFIGURED/]
     OLL --> T[ollama_client.py<br/>POST /api/chat]
@@ -104,7 +102,7 @@ flowchart TD
 
 Transport differs by target: Ollama goes through
 [`ollama_client.py`](../../backend/app/llm/ollama_client.py) (`POST {base}/api/chat`); every cloud
-provider speaks the OpenAI-compatible `POST {base}/chat/completions` with a Bearer key. All five
+provider speaks the OpenAI-compatible `POST {base}/chat/completions` with a Bearer key. All four
 cloud providers therefore share one code path.
 
 ⚠ `httpx.Timeout` is `connect=10s, **read=600s**, write=10s, pool=10s`. The 10-minute read is
@@ -171,12 +169,12 @@ destroys retrieval quality — there is no error, just worse answers. Three mech
 
    | `EMBEDDING_PROVIDER` | Stored ≠ active | Action |
    | --- | --- | --- |
-   | pinned (`ollama`/`openai`/`gemini`/`custom`) | yes | ⚠ **Wipes all vectors and re-embeds the library.** Summaries and figure descriptions are prompt-hash cached and do not re-run. |
+   | pinned (`ollama`/`openai`/`custom`) | yes | ⚠ **Wipes all vectors and re-embeds the library.** Summaries and figure descriptions are prompt-hash cached and do not re-run. |
    | `auto` | yes | Loud warning only — a temporarily-down Ollama must never trigger a destructive re-embed. |
 
 3. **Dimension normalization.** Whatever the model emits is coerced to `VECTOR_DIMENSION`
    (default 1024): larger outputs are truncated and re-normalized — valid for MRL-trained models
-   like `qwen3-embedding`, `text-embedding-3-*`, and `gemini-embedding` — smaller ones are
+   like `qwen3-embedding` and `text-embedding-3-*` — smaller ones are
    zero-padded. ⚠ Keep it ≤ 2000: pgvector's HNSW index has a hard 2000-dim limit, and without the
    index every search degrades to a brute-force scan.
 

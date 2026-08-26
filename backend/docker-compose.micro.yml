@@ -1,46 +1,19 @@
-# Overlay for the Always-Free AMD micro VM (VM.Standard.E2.1.Micro:
-# 1 OCPU / ~954 MB RAM). Use ONLY together with the base file:
+# Overlay for a small/RAM-constrained VM. Use ONLY together with the base
+# file:
 #
-#   docker compose -f docker-compose.oracle.yml -f docker-compose.micro.yml up -d --build
+#   docker compose -f docker-compose.prod.yml -f docker-compose.micro.yml up -d --build
 #
-# The base file targets the 4 OCPU / 24 GB ARM box. This trims the same stack
-# to fit in under a gigabyte. It is a stopgap: the ARM A1 shape is the real
-# target and this overlay can simply be dropped once A1 capacity appears.
+# The base file targets a comfortably-sized box. This trims the same stack to
+# fit in under a gigabyte — apply it only if the production server is
+# actually this tight on RAM; drop it otherwise.
 #
 # Budget (roughly, idle): postgres ~150 MB, api ~200 MB, celery ~200 MB,
-# searxng ~180 MB, redis ~20 MB, caddy ~15 MB, OS ~200 MB. That exceeds RAM,
-# so the host MUST have swap (oracle-micro-bootstrap.sh adds 6 GB). The AI work
-# is all remote — Ollama Cloud and Gemini — so the box mostly waits on network
-# and the idle resident set pages out harmlessly.
+# searxng ~180 MB, redis ~20 MB, OS ~200 MB. That can exceed RAM on a small
+# box, so it MUST have swap. Chat/vision run on Ollama Cloud, so the box
+# mostly waits on network for those; embeddings run on the host's own Ollama
+# install (see docker-compose.prod.yml), which is NOT part of this overlay.
 
 services:
-  # ------------------------------------------------------------------
-  # Local embedding server. Chat and vision stay on Ollama Cloud; only
-  # embeddings run here.
-  #
-  # Why: this account's Ollama key returns "unauthorized" for embeddings, and
-  # Gemini's free tier caps out after ~5 batched requests (HTTP 429), which is
-  # roughly a third of ONE paper — ingestion could never finish. Embeddings are
-  # the one call made per-chunk rather than per-question, so they are exactly
-  # the workload a free quota cannot absorb. Running them locally makes them
-  # unlimited and free.
-  #
-  # all-minilm is deliberately tiny (~46 MB, 384-dim). The app zero-pads to
-  # VECTOR_DIMENSION, and zero-padding does not change cosine similarity, so
-  # retrieval stays correct. Ollama exposes an OpenAI-compatible /v1/embeddings
-  # endpoint, which is what EMBEDDING_PROVIDER=custom talks to.
-  ollama:
-    image: ollama/ollama:latest
-    container_name: 9xaipal-ollama
-    environment:
-      # One model resident, unloaded quickly — RAM is the scarce resource here.
-      OLLAMA_MAX_LOADED_MODELS: "1"
-      OLLAMA_KEEP_ALIVE: "5m"
-      OLLAMA_NUM_PARALLEL: "1"
-    volumes:
-       - 9xaipal_ollama_models:/root/.ollama
-    restart: unless-stopped
-
   postgres:
     # Defaults assume far more RAM. shared_buffers is the big one; the rest
     # keeps per-connection allocations small.
@@ -73,9 +46,6 @@ services:
       DB_MAX_OVERFLOW: 2
 
   celery_worker:
-    depends_on:
-      ollama:
-        condition: service_started
     environment:
       DB_POOL_SIZE: 2
       DB_MAX_OVERFLOW: 2
@@ -90,6 +60,3 @@ services:
       EXTRACTOR_VLM_DPI: 300
       # Recycle the worker process regularly so any leak is bounded.
       CELERYD_MAX_TASKS_PER_CHILD: 4
-
-volumes:
-  9xaipal_ollama_models:
