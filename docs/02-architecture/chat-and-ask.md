@@ -386,7 +386,12 @@ work on it. Omitting it would leave the model believing the study is smaller tha
 | `READ` | `READ: P1:40-52` | one paper's block range |
 | `SEARCH` | `SEARCH: inference cost` | **every paper in the study at once**, hits labelled by paper |
 | `WEB` | `WEB: ARC-AGI state of the art` | the public internet |
+| `NOTE` | `NOTE: P2 and P3 disagree here` | a write — pins to this chat's board |
+| `NOTE ALL` | `NOTE ALL: worth chasing later` | a write — pins to the universal board |
 | `THINK` | `THINK: P2 is the one that reports cost directly` | nothing — the reason, shown to the reader |
+
+⚠ `NOTE` is the only tool that changes something, so `_plan` runs it **last**:
+the trail then reads as "looked, then wrote" rather than the reverse.
 
 ⚠ **The P-numbers come from `study_papers.position`, and they are load-bearing.** They are how an
 answer names a paper, so re-ordering a study silently repoints every citation the reader has already
@@ -399,6 +404,85 @@ order *is* the numbering.
 ⚠ **`run_search` de-duplicates on `(document_id, sequence_id)`, not `sequence_id`.** Across a study
 every paper has a block 12; keying on the number alone silently drops every paper's hit but the
 first.
+
+## Notes: the agent reads both boards and writes to either
+
+The desk has two boards — the chat's own, and the universal one — and the agent
+sees both and can pin to both.
+
+**Reading.** Every note already pinned rides in the prompt, each labelled with
+who wrote it:
+
+```text
+NOTES ALREADY ON THE BOARDS (you can add and edit, never remove):
+  On this chat:
+    - (you wrote) P3 is the only one reporting wall-clock, as tokens/sec
+  On the universal board:
+    - (the reader wrote) Ask: does anyone report wall-clock rather than FLOPs?
+```
+
+⚠ **The authorship label is load-bearing.** Without it the model re-pins its own
+notes every few turns — it has no memory of having written them — and the reader
+ends up with the same observation five times in five colours.
+
+**Writing**, two ways, because the model reaches for both:
+
+| Where | Syntax | Board |
+| --- | --- | --- |
+| In a tool block, during a retrieval round | `NOTE: <text>` | this chat |
+| | `NOTE ALL: <text>` | universal |
+| In the final answer | `<note>…</note>` | this chat |
+| | `<note board="all">…</note>` | universal |
+
+⚠ **The `<note>` tag exists because the model invented it.** Asked to "pin a
+note", it wrote `<note>…</note>` into its answer on the first try — the forced
+final turn is told it has no tools, so a `NOTE:` line is genuinely unavailable
+there and it improvised a tag. Parsing it is meeting the model where it is;
+refusing to would leave raw XML in the reader's answer and nothing on the board.
+The tag is stripped from what the reader sees, because the text is going on the
+board and saying it twice makes the board a duplicate of the paragraph above it.
+
+⚠ **`NOTE ALL:` must be matched before `NOTE:`**, and the plain pattern must
+refuse to match it. Otherwise a universal note parses as a chat note whose body
+begins "ALL:" and lands on the wrong board.
+
+⚠ **Both exits from the loop extract notes.** The model can answer on the very
+first probe without calling a tool, and that path never touches
+`stream_answer` — so extracting only in the streamed branch left the raw tag in
+the answer exactly when the reader had asked for a note. That is how it failed
+the first time; `_pin_written_notes` is now called from both.
+
+⚠ **Notes are de-duplicated by body against the destination board**, on
+collapsed whitespace, because the second copy is usually the first one
+re-wrapped. Two per answer, hard.
+
+### The agent cannot delete a note
+
+Not a rule the model is asked to follow — a structural fact:
+
+- there is no delete tool in the parser or the plan;
+- `study_agent` does not import `sticky_repo.delete_sticky`;
+- `POST /stickies` forces `origin='user'`, so no client can forge an assistant
+  note either, and the assistant's own writes go through the repository.
+
+`DELETE /stickies/{id}` exists for the × in the UI and nothing else calls it.
+
+⚠ `origin` is not patchable. A note the assistant wrote stays badged as the
+assistant's however often the reader edits it: the badge records where the claim
+came from, not who typed last.
+
+## Repeated calls are short-circuited
+
+⚠ **Observed**: asked a broad question, the model re-requested the same three
+`SECTION`s on four consecutive rounds — twelve identical fetches, four of eight
+rounds burned making no progress. It can see the results in `WHAT YOU HAVE
+GATHERED`, but a fresh copy of the same text reads to it as confirmation rather
+than repetition.
+
+A signature set per question (`tool`, `arg`, `board`) now answers a repeat with
+"you already fetched this — ask for something else, or answer with what you
+have". `NOTE` is exempt: writing the same note twice is caught by the note
+de-dup instead, which compares against the board rather than the round.
 
 ## The forced final turn can still call a tool
 

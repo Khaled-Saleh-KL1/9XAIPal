@@ -671,28 +671,42 @@ in the transcript.
 
 Source: [endpoints/stickies.py](../../backend/app/api/v1/endpoints/stickies.py).
 
-A note the reader keeps in front of them. No anchor; zero or more papers.
+Two boards. `board=chat` is the strip beside one conversation, keyed by `scope`
+(a study id or `library`); `board=universal` is the standalone board.
 
-⚠ **Zero papers is a scope, not an incomplete row.** An unscoped note is about nothing in
-particular and shows on every desk.
+⚠ **`board` is not redundant with `scope`.** `scope=library` already means the
+library-wide *chat*, so without the board a note beside that chat and a note on
+the universal board would be the same row.
 
 | Route | Behaviour |
 | --- | --- |
-| `GET /stickies` | `{"stickies": [...]}`, pinned first then newest. Repeat `?document_id=` to narrow — the result then holds notes about those papers **plus every unscoped note**. |
-| `POST /stickies` | Body `{body?, color?, pinned?, document_ids?}` → the note. `201`. |
-| `PATCH /stickies/{id}` | Body `{body?, color?, pinned?, document_ids?}`. Omitted fields are left alone. |
-| `DELETE /stickies/{id}` | `204`. |
+| `GET /stickies?board=universal` | The standalone board, pinned first then newest. |
+| `GET /stickies?board=chat&scope=<studyId\|library>` | That conversation's strip. |
+| `POST /stickies` | Body `{body?, color?, pinned?, board, scope?, document_ids?}` → the note. `201`. |
+| `PATCH /stickies/{id}` | Body `{body?, color?, pinned?, board?, scope?, document_ids?}`. Omitted fields are left alone. |
+| `DELETE /stickies/{id}` | `204`. **Reader-only** — see below. |
 
 ```json
-{"id", "body", "color": "yellow|blue|green|pink|plain", "pinned": false,
+{"id", "body", "color": "yellow|blue|green|pink|orange|plain", "pinned": false,
+ "board": "chat|universal", "scope": "<studyId>|library",
+ "origin": "user|assistant", "author_model": "gemma4:31b-cloud"|null,
  "papers": [{"document_id", "label"}], "created_at", "updated_at"}
 ```
 
-⚠ On `PATCH`, `document_ids: []` **clears** the scope (making the note global) while omitting the
-field leaves it untouched. Collapsing the two would make "about nothing in particular" unreachable.
+⚠ **Send `board` AND `scope` together to move a note.** `board` alone is not
+enough: `scope=library` is a real destination, not "not supplied".
 
-⚠ `color` is a name, not a hex value. The UI maps it to CSS variables so a note reads as paper in
-both themes; a stored hex is a glare in the dark one.
+⚠ **`origin` cannot be set or patched.** `POST` forces `user`, so no client can
+forge an assistant note; the assistant writes its own by calling the repository
+from `study_agent`. And an edit never launders one — the badge records where the
+claim came from, not who typed last.
+
+⚠ **Only the reader deletes.** That is structural, not a check here: there is no
+delete tool in the agent's parser, and `study_agent` does not import
+`sticky_repo.delete_sticky`. This endpoint is what the UI's × calls.
+
+⚠ `color` is a name, not a hex value. The UI maps it to CSS variables so a note
+reads as paper in both themes; a stored hex is a glare in the dark one.
 
 ---
 

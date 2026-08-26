@@ -348,9 +348,24 @@ A note the reader keeps in front of them, with no anchor.
 | --- | --- | --- |
 | `sticky_notes.id` | `UUID` | PK. |
 | `sticky_notes.body` | `TEXT` | Markdown, rendered by the shared pipeline. |
-| `sticky_notes.color` | `TEXT` | `yellow` \| `blue` \| `green` \| `pink` \| `plain`. A **name**, not a hex — the UI maps it to CSS variables so it survives the light/dark switch. |
+| `sticky_notes.color` | `TEXT` | `yellow` \| `blue` \| `green` \| `pink` \| `orange` \| `plain`. A **name**, not a hex — the UI maps it to CSS variables so it survives the light/dark switch. |
 | `sticky_notes.pinned` | `BOOLEAN` | Sorts first. |
-| `sticky_note_papers` | | `(sticky_id, document_id)`, both cascade. |
+| `sticky_notes.board` | `TEXT` | `chat` (beside one conversation) or `universal` (the standalone board). |
+| `sticky_notes.study_id` | `UUID` (null) | FK → `studies.id`, **`SET NULL`**. Which chat, with NULL meaning the library-wide one. Always NULL when `board='universal'`. |
+| `sticky_notes.origin` | `TEXT` | `user` or `assistant`. Never patchable. |
+| `sticky_notes.author_model` | `TEXT` | Which model wrote an assistant note. |
+| `sticky_note_papers` | | `(sticky_id, document_id)`, both cascade. Papers a note *references*, distinct from the board it lives on. |
+
+⚠ **`board` is not redundant with `study_id`.** `study_id IS NULL` already means
+the library-wide *chat*, so without the column a note on that chat and a note on
+the universal board would be the same row.
+
+⚠ **`study_id` is `SET NULL`, not `CASCADE`.** Deleting a study must not delete
+the reader's notes — only the reader removes a note. They move to the universal
+board instead, and the delete confirmation says so.
+
+⚠ **`origin='assistant'` is written only by `study_agent`**, through the
+repository. `POST /stickies` forces `user`, so a client cannot forge one.
 
 ⚠ **Deliberately not `personal_notes`.** A personal note is anchored to a block in one document and
 lives in that document's margin; a sticky has no anchor, may name several papers or none, and lives

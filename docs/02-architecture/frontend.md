@@ -533,19 +533,67 @@ with the paragraph intact.
 ⚠ **A citation into a paper the study no longer holds renders struck-through, not as a button.** A
 dead control that looks like evidence is worse than one that says it is gone.
 
-### Sticky notes ([views/StickyBoard.tsx](../../frontend/src/views/StickyBoard.tsx))
+### Two pages
 
-⚠ **A note with no papers is the important case, not the empty one.** What a reader most wants
-pinned — a question to come back to, a suspicion about the whole field — usually belongs to no
-single paper, so those show on *every* desk and the UI says "any paper" rather than leaving the
-scope blank as if something were missing.
+The desk is two routes behind one bar: `#/desk/<scope>` (studies) and
+`#/desk/notes` (the universal board). `notes` is not a valid study id, so the
+two cannot collide in the hash.
 
-⚠ **Enter inserts a newline here**, unlike every other composer in the app. A sticky is a scrap you
-jot in several lines; sending on Enter would truncate half of them. ⌘/Ctrl+Enter commits, blur
-commits, Escape reverts.
+### Notes, and who wrote them
 
-⚠ **A new sticky starts unscoped even inside a study.** Scoping is a decision, and pre-filling it
-would quietly hide the note from every other desk.
+Two boards, and the distinction is not cosmetic:
+
+| | chat board | universal board |
+| --- | --- | --- |
+| Where | a strip beside the transcript | its own page |
+| Scoped to | one conversation (`board='chat'` + `study_id`) | nothing |
+| Component | [`StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx) | [`NoteWall.tsx`](../../frontend/src/views/NoteWall.tsx) |
+| Layout | a list | a wall — tacked, tilted, masonry |
+
+⚠ **`board` is not redundant with `scope`.** `scope: 'library'` already means
+the library-wide *chat*, so without the board a note beside that chat and a note
+on the universal board would be the same row.
+
+⚠ **The tilt on the wall is derived from the note's id, never random.** A
+`Math.random()` rotation re-rolls on every render — every keystroke in the
+filter box would make the whole wall twitch. Same id, same angle, forever.
+
+⚠ **Wall notes are `inline-block` with `width: 100%`, not `block`.** A
+column-flow child that *can* be split across a column break will be, and half a
+note at the bottom of one column with its other half at the top of the next is
+unreadable.
+
+⚠ **An assistant note is marked twice over**: a dashed border (the one border
+treatment nothing else in the app uses, legible before anything is read) and a
+badge naming the model. Drawn from `origin`, which the API refuses to patch — an
+edit cannot launder a note into looking like the reader's own.
+
+⚠ **Delete is the reader's alone**, and it is armed rather than instant. A note
+can be a week-old thought, and the assistant cannot recreate one it was never
+asked to write again.
+
+### Hiding the chat's notes
+
+The strip folds to a 38px rail, not to `display: none`. Collapsed is not the
+same as empty, so the rail still shows the count — the difference between "put
+away" and "gone". The state is in `localStorage`: a reader who hid it wants it
+hidden tomorrow.
+
+### Choosing a study's papers ([views/PaperPicker.tsx](../../frontend/src/views/PaperPicker.tsx))
+
+⚠ **Order is not decoration here.** Answers cite `[[P2:41]]`, and the number
+comes from this list's order. So the dialog has two halves — what is in the
+study, in order and re-orderable, and what else the library holds. The flat
+checkbox list it replaced hid both facts: you could not see the numbering at all,
+and could not tell chosen from unchosen without reading every box.
+
+⚠ **Membership is held locally and written on Save.** It is a whole-collection
+write, so a live request per checkbox would be one round trip per click *and*
+would renumber the study under the reader mid-edit.
+
+⚠ Covers, not titles alone. The reason the library grew thumbnails applies twice
+over here: a study is assembled by recognising papers, and half of them are
+still called `2607.24653v2`.
 
 ### Autoscroll
 
