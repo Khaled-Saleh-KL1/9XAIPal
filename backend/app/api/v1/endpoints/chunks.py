@@ -127,7 +127,11 @@ async def get_full_document(
 
     return {
         "paper_id": str(paper_id),
-        "title": (doc.get("original_filename") or "").rsplit(".", 1)[0],
+        # A rename wins over the filename here too — the reader's title bar
+        # showing "2608.09888v1" while the library shows the real name would
+        # read as two different documents.
+        "title": (doc.get("title") or "").strip()
+                 or (doc.get("original_filename") or "").rsplit(".", 1)[0],
         "doc_kind": doc.get("doc_kind"),
         "status": doc.get("status"),
         "page_count": doc.get("page_count"),

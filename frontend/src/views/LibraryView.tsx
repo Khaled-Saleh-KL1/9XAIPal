@@ -1,11 +1,13 @@
-import { useState, useEffect, useMemo, type DragEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, type DragEvent } from 'react';
 import type { Paper, LibraryLayout, SortKey } from '../types';
 import { LogoMark } from '../components/LogoMark';
 import {
   IconSearch, IconPlus, IconUpload, IconDoc,
-  IconPin, IconSort, IconGrid, IconList,
+  IconPin, IconSort, IconGrid, IconList, IconPencil, IconTrash,
 } from '../components/Icons';
-import { listPapers, deletePaper, type PaperMeta } from '../api';
+import { PaperCover } from './PaperCover';
+import { displayTitle } from '../lib/titles';
+import { listPapers, deletePaper, renamePaper, type PaperMeta } from '../api';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -39,7 +41,7 @@ function deriveProgress(m: PaperMeta): number {
 function metaToPaper(m: PaperMeta): Paper {
   return {
     id: m.id,
-    title: m.original_filename.replace('.pdf', ''),
+    title: displayTitle(m),
     authors: '',
     venue: '',
     pages: m.page_count || 0,
@@ -59,28 +61,40 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
   const [papers, setPapers] = useState<Paper[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** The paper whose title is being edited inline, if any. */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Fetch papers from backend on mount and keep polling while the view is
   // mounted (so a fresh upload appears without a reload). The poll is
   // adaptive: fast while any paper is still processing (live progress bars),
   // slow once the library is fully settled.
+  //
+  // ⚠ The poll is paused while a rename is open. It replaces the whole paper
+  // list every tick, and a tick landing mid-edit would blow away the input the
+  // reader is typing in.
+  const renamingRef = useRef<string | null>(null);
+  renamingRef.current = renaming;
+
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const tick = async () => {
       let anyProcessing = false;
-      try {
-        const metas = await listPapers();
-        if (!alive) return;
-        setPapers(metas.map(metaToPaper));
-        setLoadError(null);
-        anyProcessing = metas.some((m) => m.status !== 'complete' && m.status !== 'failed');
-      } catch (e) {
-        if (!alive) return;
-        setLoadError((e as Error).message || 'Failed to load library');
-      } finally {
-        if (alive) setLoading(false);
+      if (!renamingRef.current) {
+        try {
+          const metas = await listPapers();
+          if (!alive) return;
+          setPapers(metas.map(metaToPaper));
+          setLoadError(null);
+          anyProcessing = metas.some((m) => m.status !== 'complete' && m.status !== 'failed');
+        } catch (e) {
+          if (!alive) return;
+          setLoadError((e as Error).message || 'Failed to load library');
+        } finally {
+          if (alive) setLoading(false);
+        }
       }
       if (!alive) return;
       timer = setTimeout(tick, anyProcessing ? 2500 : 10000);
@@ -128,6 +142,31 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
     }
   };
 
+  /**
+   * Commit a rename optimistically.
+   *
+   * The card shows the new name immediately and rolls back if the write
+   * fails. Renaming is a low-stakes correction the reader will often do
+   * several of in a row, and a spinner per keystroke-and-enter would make a
+   * two-second job feel like a form submission.
+   */
+  const commitRename = async (p: Paper, next: string) => {
+    setRenaming(null);
+    const clean = next.trim();
+    if (clean === p.title) return;
+    const previous = p.title;
+    setPapers((prev) => prev.map((x) => (x.id === p.id ? { ...x, title: clean || previous } : x)));
+    try {
+      const meta = await renamePaper(p.id, clean);
+      setPapers((prev) =>
+        prev.map((x) => (x.id === p.id ? { ...x, title: displayTitle(meta) } : x)),
+      );
+    } catch (e) {
+      setPapers((prev) => prev.map((x) => (x.id === p.id ? { ...x, title: previous } : x)));
+      setNotice(`Could not rename: ${(e as Error).message}`);
+    }
+  };
+
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setOver(false);
@@ -138,6 +177,16 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
     );
     onUpload(file);
   };
+
+  const cardProps = (p: Paper) => ({
+    paper: p,
+    onOpen: () => onOpenPaper(p),
+    onDelete: () => handleDelete(p),
+    renaming: renaming === p.id,
+    onStartRename: () => setRenaming(p.id),
+    onCancelRename: () => setRenaming(null),
+    onCommitRename: (next: string) => void commitRename(p, next),
+  });
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
@@ -291,38 +340,43 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
 
       {/* ── Scrollable papers ── */}
       <main className="flex-1 min-h-0 overflow-y-auto thin-scroll">
-        <div className="max-w-[1240px] mx-auto px-8 py-5 pb-8">
+        <div className="max-w-[1240px] mx-auto px-8 py-6 pb-10">
+          {notice && (
+            <div className="lib-notice">
+              <span>{notice}</span>
+              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</button>
+            </div>
+          )}
+
           {loading ? (
-            <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
-              Loading your library…
-            </p>
+            <div className="lib-grid">
+              {/* Skeletons in the real card shape. A centred "Loading…" line
+                  makes the grid jump into existence; placeholders that are
+                  already the right size do not. */}
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="paper-card is-skeleton" aria-hidden="true">
+                  <div className="paper-cover is-blank" />
+                  <div className="paper-body">
+                    <div className="skeleton-line" style={{ width: '80%' }} />
+                    <div className="skeleton-line" style={{ width: '45%' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : loadError ? (
             <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
               Could not reach the backend ({loadError}).
             </p>
           ) : layout === 'grid' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="lib-grid">
               {filtered.map((p) => (
-                <PaperCard
-                  key={p.id}
-                  paper={p}
-                  onOpen={() => onOpenPaper(p)}
-                  onDelete={() => handleDelete(p)}
-                />
+                <PaperCard key={p.id} {...cardProps(p)} />
               ))}
             </div>
           ) : (
-            <div
-              className="rounded-xl overflow-hidden"
-              style={{ border: '1px solid var(--border)', background: 'var(--bg-2)' }}
-            >
+            <div className="lib-rows">
               {filtered.map((p) => (
-                <PaperRow
-                  key={p.id}
-                  paper={p}
-                  onOpen={() => onOpenPaper(p)}
-                  onDelete={() => handleDelete(p)}
-                />
+                <PaperRow key={p.id} {...cardProps(p)} />
               ))}
             </div>
           )}
@@ -342,85 +396,171 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
   );
 }
 
+// ── Rename control ────────────────────────────────────────────────────────────
+
+/**
+ * Edit a title in place.
+ *
+ * Inline rather than in a modal: the reader is comparing this name against the
+ * cover and the other cards around it, and a dialog covers exactly that
+ * context. Enter commits, Escape reverts, blur commits — a click elsewhere
+ * after typing a name means the name, not "discard it".
+ */
+function TitleEditor({
+  value,
+  onCommit,
+  onCancel,
+}: {
+  value: string;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={ref}
+      className="paper-title-input"
+      value={draft}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => onCommit(draft)}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          onCommit(draft);
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      placeholder="Name this paper…"
+      aria-label="Paper title"
+    />
+  );
+}
+
+interface CardProps {
+  paper: Paper;
+  onOpen: () => void;
+  onDelete: () => void;
+  renaming: boolean;
+  onStartRename: () => void;
+  onCancelRename: () => void;
+  onCommitRename: (next: string) => void;
+}
+
+/** The hover-revealed rename / delete pair, shared by both layouts. */
+function CardActions({
+  onStartRename,
+  onDelete,
+}: {
+  onStartRename: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="paper-actions">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onStartRename(); }}
+        title="Rename this paper"
+        aria-label="Rename this paper"
+      >
+        <IconPencil className="w-3.5 h-3.5" />
+      </button>
+      <button
+        type="button"
+        className="is-danger"
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        title="Delete this paper"
+        aria-label="Delete this paper"
+      >
+        <IconTrash className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
 // ── PaperCard ─────────────────────────────────────────────────────────────────
 
 function PaperCard({
   paper,
   onOpen,
   onDelete,
-}: {
-  paper: Paper;
-  onOpen: () => void;
-  onDelete: () => void;
-}) {
+  renaming,
+  onStartRename,
+  onCancelRename,
+  onCommitRename,
+}: CardProps) {
+  const processing = isProcessing(paper);
   return (
-    <div
-      onClick={onOpen}
-      className="text-left rounded-xl p-5 w-full group transition-colors cursor-pointer relative"
-      style={{
-        background: 'var(--bg-2)',
-        border: '1px solid var(--border)',
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--border-strong)')}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
-    >
-      <div className="flex items-start justify-between">
-        <div
-          className="w-9 h-11 rounded-sm flex items-center justify-center"
-          style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-        >
-          <IconDoc className="w-4 h-4" style={{ color: 'var(--muted)' }} />
-        </div>
-        <div className="flex items-center gap-2">
-          {paper.pinned && <IconPin className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />}
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            title="Delete paper"
-            aria-label="Delete paper"
-            className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] font-mono px-2 py-1 rounded"
-            style={{
-              color: '#c0392b',
-              border: '1px solid var(--border)',
-              background: 'var(--bg)',
-            }}
-          >
-            delete
-          </button>
-        </div>
-      </div>
+    <article className={`paper-card${renaming ? ' is-renaming' : ''}`}>
+      {/*
+        ⚠ The "open" target is this inner element, not the <article>.
+        Rename and delete are real buttons, and nesting a button inside
+        something that is itself role="button" is invalid: assistive tech
+        announces the card as one control whose name is every label inside it
+        ("… 17p · read Rename this paper Delete this paper"). Keeping the
+        actions as siblings of the open target leaves three separate,
+        correctly-named controls.
+
+        A card being renamed is not an open target at all — a stray click
+        inside the editor would otherwise open the reader mid-edit.
+      */}
       <div
-        className="mt-4 font-serif text-[17px] leading-[1.25] tracking-tight"
-        style={{ color: 'var(--fg)' }}
+        className="paper-open"
+        onClick={renaming ? undefined : onOpen}
+        role={renaming ? undefined : 'button'}
+        tabIndex={renaming ? undefined : 0}
+        aria-label={renaming ? undefined : `Open ${paper.title}`}
+        onKeyDown={(e) => {
+          if (renaming) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
       >
-        {paper.title}
-      </div>
-      <div className="mt-1.5 text-[12px]" style={{ color: 'var(--muted)' }}>
-        {paper.authors} · {paper.venue}
-      </div>
-      <div className="mt-4 flex items-center gap-3 text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
-        <span>{paper.pages}p</span>
-        <span className="opacity-40">·</span>
-        <span>{paper.added}</span>
-        <span className="ml-auto flex items-center gap-1 flex-wrap">
-          {paper.tags.map((t) => (
-            <span
-              key={t}
-              className="px-1.5 py-0.5 rounded"
-              style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
-            >
-              {t}
+        <PaperCover paperId={paper.id} title={paper.title} ready={!processing} />
+
+        <div className="paper-body">
+          <div className="paper-head">
+            {renaming ? (
+              <TitleEditor value={paper.title} onCommit={onCommitRename} onCancel={onCancelRename} />
+            ) : (
+              <h3 className="paper-title" title={paper.title}>{paper.title}</h3>
+            )}
+            {paper.pinned && <IconPin className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--muted)' }} />}
+          </div>
+
+          <div className="paper-meta">
+            <span>{paper.pages ? `${paper.pages}p` : '—'}</span>
+            <span className="paper-dot">·</span>
+            <span>{paper.added}</span>
+            {paper.tags.map((t) => (
+              <span key={t} className="paper-tag">{t}</span>
+            ))}
+          </div>
+
+          <div className="paper-foot">
+            <ProgressBar paper={paper} />
+            <span className="paper-status">
+              <ProgressLabel paper={paper} />
             </span>
-          ))}
-        </span>
+          </div>
+        </div>
       </div>
-      <div className="mt-4 h-px w-full" style={{ background: 'var(--border)' }} />
-      <div className="mt-3 flex items-center gap-3">
-        <ProgressBar paper={paper} />
-        <span className="text-[10.5px] font-mono tabular-nums whitespace-nowrap" style={{ color: 'var(--muted)' }}>
-          <ProgressLabel paper={paper} />
-        </span>
-      </div>
-    </div>
+
+      {!renaming && <CardActions onStartRename={onStartRename} onDelete={onDelete} />}
+    </article>
   );
 }
 
@@ -443,7 +583,7 @@ function ProgressBar({ paper }: { paper: Paper }) {
 
   return (
     <div
-      className="flex-1 h-[6px] rounded-full overflow-hidden relative"
+      className="flex-1 h-[5px] rounded-full overflow-hidden relative"
       style={{ background: 'var(--bg-3)' }}
       title={
         failed
@@ -497,50 +637,39 @@ function PaperRow({
   paper,
   onOpen,
   onDelete,
-}: {
-  paper: Paper;
-  onOpen: () => void;
-  onDelete: () => void;
-}) {
+  renaming,
+  onStartRename,
+  onCancelRename,
+  onCommitRename,
+}: CardProps) {
+  const processing = isProcessing(paper);
   return (
     <div
-      onClick={onOpen}
-      className="w-full text-left px-5 py-3.5 flex items-center gap-5 transition-colors cursor-pointer group"
-      style={{ borderTop: '1px solid var(--border)' }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-3)')}
-      onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+      onClick={renaming ? undefined : onOpen}
+      className={`paper-row${renaming ? ' is-renaming' : ''}`}
     >
-      <IconDoc className="w-4 h-4 shrink-0" style={{ color: 'var(--muted)' }} />
+      <PaperCover
+        paperId={paper.id}
+        title={paper.title}
+        ready={!processing}
+        className="is-thumb"
+      />
       <div className="flex-1 min-w-0">
-        <div
-          className="font-serif text-[15.5px] leading-tight tracking-tight truncate"
-          style={{ color: 'var(--fg)' }}
-        >
-          {paper.title}
+        {renaming ? (
+          <TitleEditor value={paper.title} onCommit={onCommitRename} onCancel={onCancelRename} />
+        ) : (
+          <div className="paper-row-title" title={paper.title}>{paper.title}</div>
+        )}
+        <div className="paper-meta">
+          <span>{paper.pages ? `${paper.pages}p` : '—'}</span>
+          <span className="paper-dot">·</span>
+          <span>{paper.added}</span>
+          {paper.tags.map((t) => (
+            <span key={t} className="paper-tag">{t}</span>
+          ))}
         </div>
-        <div className="text-[11.5px] mt-0.5 truncate" style={{ color: 'var(--muted)' }}>
-          {paper.authors} · {paper.venue}
-        </div>
       </div>
-      <div className="hidden md:flex items-center gap-1.5">
-        {paper.tags.map((t) => (
-          <span
-            key={t}
-            className="text-[10.5px] font-mono px-1.5 py-0.5 rounded"
-            style={{
-              color: 'var(--muted)',
-              background: 'var(--bg-2)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            {t}
-          </span>
-        ))}
-      </div>
-      <div className="text-[11px] font-mono tabular-nums w-10 text-right" style={{ color: 'var(--muted)' }}>
-        {paper.pages}p
-      </div>
-      <div className="w-28 flex items-center gap-2">
+      <div className="w-28 hidden sm:flex items-center gap-2">
         <ProgressBar paper={paper} />
         <span className="text-[10.5px] font-mono tabular-nums w-10 text-right whitespace-nowrap" style={{ color: 'var(--muted)' }}>
           {paper.rawStatus === 'complete'
@@ -550,22 +679,7 @@ function PaperRow({
             : <span style={{ color: 'var(--ok)' }}>{Math.round(paper.progress * 100)}%</span>}
         </span>
       </div>
-      <div className="text-[10.5px] font-mono w-14 text-right" style={{ color: 'var(--muted)' }}>
-        {paper.added}
-      </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        title="Delete paper"
-        aria-label="Delete paper"
-        className="opacity-0 group-hover:opacity-100 transition-opacity text-[11px] font-mono px-2 py-1 rounded ml-2"
-        style={{
-          color: '#c0392b',
-          border: '1px solid var(--border)',
-          background: 'var(--bg)',
-        }}
-      >
-        delete
-      </button>
+      {!renaming && <CardActions onStartRename={onStartRename} onDelete={onDelete} />}
     </div>
   );
 }

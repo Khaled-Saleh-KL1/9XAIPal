@@ -13,6 +13,7 @@ const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
 import { uploadPaper, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
+import { displayTitle } from './lib/titles';
 
 // Mirrors the mapping used inside LibraryView so deep-linked papers carry the
 // same status/job_status fields the cards expect.
@@ -30,7 +31,7 @@ function metaToPaper(m: PaperMeta): Paper {
   const stage = (m.job_status || m.status || '').toLowerCase();
   return {
     id: m.id,
-    title: m.original_filename.replace('.pdf', ''),
+    title: displayTitle(m),
     authors: '',
     venue: '',
     pages: m.page_count || 0,

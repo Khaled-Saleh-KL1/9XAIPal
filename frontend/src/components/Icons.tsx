@@ -62,3 +62,20 @@ export function IconSpinner(p: IconProps) {
     </svg>
   );
 }
+export function IconPencil(p: IconProps) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" />
+      <path d="m15 5 4 4" />
+    </svg>
+  );
+}
+export function IconTrash(p: IconProps) {
+  return (
+    <svg {...base} {...p}>
+      <path d="M4 7h16" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+      <path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
+    </svg>
+  );
+}

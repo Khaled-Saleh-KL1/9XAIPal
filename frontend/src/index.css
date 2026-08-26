@@ -65,6 +65,245 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* ── Library ────────────────────────────────────────────────────────────
+   A shelf, not a table. Every card leads with the paper's own first page,
+   because at ten papers a filename is enough to tell them apart and at fifty
+   it is not — and the filenames in this library are frequently arXiv ids.
+   The rename control exists for the same reason from the other direction. */
+.lib-grid {
+  display: grid;
+  /* auto-fill, not a fixed 3-up: the grid is the same shape on a laptop and
+     on a wide monitor, just denser. */
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 20px;
+}
+
+.paper-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  text-align: left;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+/* The open target fills the card, so the whole surface is clickable while the
+   rename/delete buttons stay siblings rather than nested controls. */
+.paper-open {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  cursor: pointer;
+  outline: none;
+}
+.paper-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 14px 34px -22px rgba(0, 0, 0, 0.4);
+  transform: translateY(-2px);
+}
+/* Focus is drawn on the card, not on the inner target, so the ring follows the
+   border radius and does not cut across the cover. */
+.paper-card:has(.paper-open:focus-visible) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Hover lift is a "click me" cue, and the card being renamed is not clickable. */
+.paper-card.is-renaming,
+.paper-card.is-renaming:hover {
+  cursor: default;
+  transform: none;
+  border-color: var(--accent);
+}
+
+/* The cover. A fixed aspect ratio keeps the grid on a baseline whatever the
+   page geometry — a Letter page and an A4 one are different shapes, and rows
+   of mismatched heights read as a broken layout rather than as real paper. */
+.paper-cover {
+  position: relative;
+  aspect-ratio: 1 / 1.294;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+.paper-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Top-anchored: a paper's title and authors are in the first third of the
+     page, so cropping from the bottom keeps the identifying part. */
+  object-position: top center;
+  display: block;
+}
+.paper-cover.is-blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      transparent 0 7px,
+      color-mix(in oklab, var(--border), transparent 55%) 7px 8px
+    ),
+    var(--bg-3);
+}
+/* Row layout: the same cover, shrunk to a spine-width chip. */
+.paper-cover.is-thumb {
+  width: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  aspect-ratio: 1 / 1.294;
+}
+
+.paper-body { padding: 13px 14px 12px; display: flex; flex-direction: column; gap: 7px; flex: 1; }
+.paper-head { display: flex; align-items: flex-start; gap: 8px; }
+.paper-title {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 15.5px;
+  line-height: 1.25;
+  letter-spacing: -0.008em;
+  color: var(--fg);
+  /* Two lines then ellipsis: enough for a real paper title, bounded so one
+     long name cannot make its card twice the height of its neighbours. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+}
+.paper-title-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 15.5px;
+  line-height: 1.25;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 7px;
+  outline: none;
+}
+
+.paper-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.paper-dot { opacity: 0.4; }
+.paper-tag {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.paper-foot { display: flex; align-items: center; gap: 9px; margin-top: auto; padding-top: 4px; }
+.paper-status {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Rename and delete. Hidden until the card is hovered or something inside it
+   has focus — the second condition is what makes them reachable by keyboard
+   at all, since a control revealed only by a pointer cannot be tabbed to. */
+.paper-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.paper-card:hover .paper-actions,
+.paper-card:focus-within .paper-actions,
+.paper-row:hover .paper-actions,
+.paper-row:focus-within .paper-actions { opacity: 1; }
+.paper-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--fg-2);
+  background: color-mix(in oklch, var(--bg), transparent 12%);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.paper-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.paper-actions button.is-danger:hover { border-color: #c0392b; color: #c0392b; }
+
+/* Row layout keeps the same anatomy at one line per paper. */
+.lib-rows {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-2);
+}
+.paper-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.paper-row + .paper-row { border-top: 1px solid var(--border); }
+.paper-row:hover { background: var(--bg-3); }
+.paper-row.is-renaming { cursor: default; background: var(--bg-3); }
+/* Room for the absolutely-positioned actions so they never sit on the status. */
+.paper-row .paper-actions { top: 50%; transform: translateY(-50%); right: 12px; }
+.paper-row:hover .w-28,
+.paper-row:focus-within .w-28 { visibility: hidden; }
+.paper-row-title {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.paper-row .paper-meta { margin-top: 2px; }
+
+/* Loading placeholders in the real card shape, so the grid does not jump. */
+.paper-card.is-skeleton { cursor: default; pointer-events: none; }
+.paper-card.is-skeleton:hover { transform: none; box-shadow: none; border-color: var(--border); }
+.skeleton-line {
+  height: 11px;
+  border-radius: 4px;
+  background: var(--bg-3);
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+.lib-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 9px 13px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: #c0392b;
+  background: var(--bg-2);
+  border: 1px solid #c0392b;
+}
+.lib-notice button { margin-left: auto; font-size: 15px; line-height: 1; color: inherit; opacity: 0.7; }
+.lib-notice button:hover { opacity: 1; }
+
 /* ── Scrollbars ─────────────────────────────────────────────── */
 .thin-scroll::-webkit-scrollbar          { width: 10px; height: 10px; }
 .thin-scroll::-webkit-scrollbar-thumb    { background: var(--border-strong); border-radius: 999px; border: 3px solid var(--bg); }

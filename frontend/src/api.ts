@@ -10,6 +10,8 @@ export interface PaperMeta {
   id: string;
   filename: string;
   original_filename: string;
+  /** Reader-chosen display name. null = no override, fall back to the filename. */
+  title?: string | null;
   file_size_bytes: number | null;
   page_count: number | null;
   status: string;
@@ -505,6 +507,35 @@ export async function getPaper(paperId: string): Promise<PaperMeta> {
 }
 
 /** Delete a paper (DB cascade + on-disk cleanup) — 204 on success. */
+/**
+ * Rename a paper.
+ *
+ * Sets a display title used everywhere a name is shown. Passing an empty
+ * string clears it and restores the uploaded filename — the server treats
+ * blank as "no override" rather than storing an empty name.
+ */
+export async function renamePaper(paperId: string, title: string): Promise<PaperMeta> {
+  const res = await fetch(`${BASE}/papers/${paperId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title.trim() || null }),
+  });
+  if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * URL of a paper's first-page thumbnail.
+ *
+ * ⚠ Served as 204 No Content when the page cannot be rendered, which an
+ * <img> reports as a load error — so every caller needs an onError fallback.
+ * A 404 would be worse: the library requests one per card, and a console full
+ * of them makes a working library look broken.
+ */
+export function getCoverUrl(paperId: string): string {
+  return `${BASE}/papers/${paperId}/cover`;
+}
+
 export async function deletePaper(paperId: string): Promise<void> {
   const res = await fetch(`${BASE}/papers/${paperId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
