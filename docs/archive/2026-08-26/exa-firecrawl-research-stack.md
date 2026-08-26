@@ -11,11 +11,19 @@
 > §10 segmentation for handoff.
 >
 > **Companions (detail):**
-> [chat-and-ask.md](../02-architecture/chat-and-ask.md) — how EXTERNAL is routed and cited ·
-> [ai-backend.md](../02-architecture/ai-backend.md) — provider resolution this plan mirrors ·
-> [configuration.md](../03-reference/configuration.md) — canonical env-var table.
+> [chat-and-ask.md](../../02-architecture/chat-and-ask.md) — how EXTERNAL is routed and cited ·
+> [ai-backend.md](../../02-architecture/ai-backend.md) — provider resolution this plan mirrors ·
+> [configuration.md](../../03-reference/configuration.md) — canonical env-var table.
 >
-> **Status:** draft · **Reflects code as of:** 2026-07-25 (`main`, ad43845)
+> **Status:** `[historical]` — **superseded, not implemented.** On 2026-08-26 the web-search path
+> was replaced with **Tavily** instead, behind the provider dispatch in
+> [`app/search/web.py`](../../../backend/app/search/web.py). Tavily returns ranked, already-extracted
+> page text in one call, which is what the two-stage Exa → Firecrawl pipeline below existed to
+> assemble from two vendors. Kept for the failure catalog (§7) and the "what never happens" analysis
+> (§8), which still describe the shape of the problem correctly.
+> See [decisions.md](../../decisions.md), entry 2026-08-26.
+>
+> **Reflects code as of:** 2026-07-25 (`main`, ad43845)
 > **Language decision:** the backend is **Python 3.11 / FastAPI** — every integration below is
 > Python (`exa-py`, `firecrawl-py`). The React frontend never calls Exa or Firecrawl directly.
 
@@ -45,10 +53,10 @@ Trace the EXTERNAL route as it exists today:
 
 | Step | Code | What actually happens |
 | --- | --- | --- |
-| Search | [`searxng_client.py::search`](../../backend/app/search/searxng_client.py) | Returns `title`, `url`, `snippet`, `source_engine`, `score` — SERP metadata only. |
-| Rank | [`ranking.py::rank_results`](../../backend/app/search/ranking.py) (L22-25) | Dedupes by URL, sorts by engine `score`, **truncates every snippet to 500 chars**. |
-| "Study" | [`research_agent.py::_study_results`](../../backend/app/chat/research_agent.py) (L211-217) | Takes `snippet[:280]` and calls it a `key_point`. That is the entire study phase. |
-| Synthesize | [`orchestrator.py`](../../backend/app/chat/orchestrator.py) | Feeds those 280-char fragments to the LLM as `RESEARCH FINDINGS`. |
+| Search | [`searxng_client.py::search`](../../../backend/app/search/searxng_client.py) | Returns `title`, `url`, `snippet`, `source_engine`, `score` — SERP metadata only. |
+| Rank | [`ranking.py::rank_results`](../../../backend/app/search/ranking.py) (L22-25) | Dedupes by URL, sorts by engine `score`, **truncates every snippet to 500 chars**. |
+| "Study" | [`research_agent.py::_study_results`](../../../backend/app/chat/research_agent.py) (L211-217) | Takes `snippet[:280]` and calls it a `key_point`. That is the entire study phase. |
+| Synthesize | [`orchestrator.py`](../../../backend/app/chat/orchestrator.py) | Feeds those 280-char fragments to the LLM as `RESEARCH FINDINGS`. |
 
 ⚠ **The landmine:** `run_research_agent` is documented as an "iterative Observe → Reason → Act
 loop" and runs up to `MAX_ITERATIONS = 3` rounds against `RESULTS_PER_SEARCH = 6` results. After
@@ -59,7 +67,7 @@ Two consequences that the guardrail and prompt engineering exist to paper over:
 
 - **Grounding is theatrical.** Citations point at URLs whose contents were never fetched, so the
   model is synthesizing from titles and blurbs while the answer presents as source-backed.
-- **The domain bias is a string hack.** [`external_context.py::rewrite_query_for_papers`](../../backend/app/chat/external_context.py)
+- **The domain bias is a string hack.** [`external_context.py::rewrite_query_for_papers`](../../../backend/app/chat/external_context.py)
   appends `"machine learning OR deep learning OR computer science"` to the query because keyword
   search cannot tell CS "transduction" from genetics "transduction". A semantic search engine
   resolves that at the embedding level and the hack becomes unnecessary.
@@ -135,7 +143,7 @@ job = await fc.batch_scrape(
 ### The division of labour, stated as an invariant
 
 > **Exa decides *what* to read. Firecrawl decides *what the text is*. Neither ever decides what
-> the answer is** — synthesis stays in [`orchestrator.py`](../../backend/app/chat/orchestrator.py)
+> the answer is** — synthesis stays in [`orchestrator.py`](../../../backend/app/chat/orchestrator.py)
 > with the resolved chat model, exactly as it is today.
 
 ---
@@ -274,7 +282,7 @@ sequenceDiagram
 | --- | --- | --- |
 | New search provider | `app/search/exa_client.py` (new) | `search()` returns the same dict keys SearXNG did: `title`, `url`, `snippet`, `source_engine`, `score` |
 | New reader | `app/search/firecrawl_client.py` (new) | Returns `{url: markdown}`; missing/failed URLs are absent, never `None`-valued |
-| Provider selection | `app/search/resolver.py` (new) | Mirrors [`llm/resolver.py`](../../backend/app/llm/resolver.py) — `auto` → Exa if key, else SearXNG if reachable, else empty |
+| Provider selection | `app/search/resolver.py` (new) | Mirrors [`llm/resolver.py`](../../../backend/app/llm/resolver.py) — `auto` → Exa if key, else SearXNG if reachable, else empty |
 | EXTERNAL assembly | `app/chat/external_context.py` (rewrite) | `build_external_context()` keeps its return shape: `{results, images, query, original_query, image_intent}` |
 | Research loop | `app/chat/research_agent.py` (`_study_results`, L201-229) | Studies full markdown; batch-scrapes once per iteration, not per query |
 | Ranking | `app/search/ranking.py` | Exa `score` is a relevance float, not a SearXNG engine score — confirm sort direction still holds |
@@ -309,9 +317,9 @@ async def is_available() -> bool: ...
 
 ## 5. Configuration
 
-Added to [`app/core/config.py`](../../backend/app/core/config.py) alongside the existing
+Added to [`app/core/config.py`](../../../backend/app/core/config.py) alongside the existing
 provider settings. Canonical table lives in
-[configuration.md](../03-reference/configuration.md); this is the delta.
+[configuration.md](../../03-reference/configuration.md); this is the delta.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
@@ -353,7 +361,7 @@ Firecrawl pricing pages before committing spend — these are structural estimat
 > research agent that scrapes three 15-page papers across three iterations can bill ~135 credits
 > for one question. Mitigations, in order of preference:
 > 1. Keep `FIRECRAWL_MAX_PAGES` low (3) and scrape only *newly seen* URLs — `sources_seen` in
->    [`research_agent.py`](../../backend/app/chat/research_agent.py) already tracks this.
+>    [`research_agent.py`](../../../backend/app/chat/research_agent.py) already tracks this.
 > 2. Prefer the arXiv **abs** page over the **pdf** URL when both are available; scrape the PDF
 >    only when the model explicitly needs methods/results depth.
 > 3. Add a per-conversation scrape counter and stop reading (not searching) past a ceiling.
@@ -380,7 +388,7 @@ the processing indicator should read *reading sources* during the scrape phase.
 | Scrape returns huge markdown | `len()` vs `RESEARCH_CONTEXT_BUDGET_CHARS` | Per-source round-robin truncation | Slightly shorter context | Raise budget if the model has room |
 | Both providers unavailable | `resolver.py` | `build_external_context` returns empty `results` | Answer is ungrounded but does not crash — matches today's SearXNG-down behavior | Configure one provider |
 
-> The guiding rule, inherited from [`llm/resolver.py`](../../backend/app/llm/resolver.py): **a
+> The guiding rule, inherited from [`llm/resolver.py`](../../../backend/app/llm/resolver.py): **a
 > missing research provider degrades the answer; it never fails the request.** LOCAL, GLOBAL, and
 > OVERVIEW routes must remain completely unaffected — they never touch this code path.
 
@@ -391,7 +399,7 @@ the processing indicator should read *reading sources* during the scrape phase.
 Negative guarantees — each is a bug if observed:
 
 1. **Exa and Firecrawl are never called on the LOCAL, GLOBAL, OVERVIEW, or OUT_OF_SCOPE routes.**
-   The local-first promise in [overview.md](../02-architecture/overview.md) survives this change:
+   The local-first promise in [overview.md](../../02-architecture/overview.md) survives this change:
    a user reading a paper and asking about it still emits zero external requests.
 2. **Firecrawl is never called on a URL Exa did not return** (or the user did not explicitly
    paste). No crawling, no link-following, no `crawl()` — `scrape`/`batch_scrape` only.
@@ -407,7 +415,7 @@ Negative guarantees — each is a bug if observed:
 
 ## 9. Known sharp edges
 
-- ⚠ **Image search has no clean equivalent.** [`searxng_client.py::search_images`](../../backend/app/search/searxng_client.py)
+- ⚠ **Image search has no clean equivalent.** [`searxng_client.py::search_images`](../../../backend/app/search/searxng_client.py)
   backs `_wants_images()` in `external_context.py` and the `local_images` persistence in
   `research_agent.py`. Neither Exa nor Firecrawl offers a SearXNG-style image search. Options,
   none free: (a) harvest `![](...)` image URLs out of the Firecrawl markdown — works well for
@@ -415,7 +423,7 @@ Negative guarantees — each is a bug if observed:
   images; (c) drop the feature. **This plan assumes (a)** and treats (b) as the fallback if image
   quality regresses. This is the one place where the migration is not a strict improvement.
 - ⚠ **`/health` response shape changes.** The `searxng` field is consumed by
-  [`api.ts::checkHealth`](../../frontend/src/api.ts). Renaming it to `research` is a breaking
+  [`api.ts::checkHealth`](../../../frontend/src/api.ts). Renaming it to `research` is a breaking
   change for any client that reads it. Prefer adding `research` and keeping `searxng` for one
   release.
 - ⚠ **Local-first is now partly rented.** SearXNG was self-hosted; Exa and Firecrawl are paid
@@ -425,7 +433,7 @@ Negative guarantees — each is a bug if observed:
   posture change and belongs in the README, not buried here.
 - **`rank_results` semantics shift.** SearXNG `score` is an engine-fusion score; Exa's is a
   relevance float. The existing `sort(key=score, reverse=True)` still works, but the 500-char
-  snippet truncation at [`ranking.py:24-25`](../../backend/app/search/ranking.py) becomes actively
+  snippet truncation at [`ranking.py:24-25`](../../../backend/app/search/ranking.py) becomes actively
   harmful once `snippet` can carry Exa's 2000-char text. Raise or remove it.
 - **`rewrite_query_for_papers` should shrink, not die.** With `category="research paper"` doing
   the domain work, the keyword-stuffing branches are noise — but the *paper-title anchoring*

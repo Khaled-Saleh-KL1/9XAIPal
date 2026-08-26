@@ -5,9 +5,9 @@
 > **Owns:** client-side state and view behavior.
 > **Does not own:** endpoint contracts ([api.md](../03-reference/api.md)).
 >
-> **Status:** current · **Last verified:** 2026-08-18 against
-> [`frontend/src/App.tsx`](../../frontend/src/App.tsx) and
-> [`views/LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) (`main`, 79903be).
+> **Status:** current · **Last verified:** the library, the assistant panel and the agent trail
+> 2026-08-26, driven in a real browser against a live backend;
+> [`frontend/src/App.tsx`](../../frontend/src/App.tsx) 2026-08-18 (`main`, 79903be).
 > The ArticleReader's anchoring and table sections were verified 2026-08-18 against
 > [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) and
 > [`views/ArticleBlock.tsx`](../../frontend/src/views/ArticleBlock.tsx) (`8fb153b`); its
@@ -78,13 +78,49 @@ All functions throw on non-`2xx`.
 
 ## LibraryView ([views/LibraryView.tsx](../../frontend/src/views/LibraryView.tsx))
 
-Renders a paper grid/list. On mount, calls `listPapers()`. Features:
+A shelf, not a table. Every card leads with the paper's own first page, because at ten papers a
+filename tells them apart and at fifty it does not — and the filenames here are routinely arXiv
+ids. On mount, calls `listPapers()`. Features:
+
 - Drag-and-drop and click-to-upload dropzone. Both call the same `onUpload` prop; a drop
   passes the dropped `File`, a click passes nothing. See
   [Upload + processing](#upload--processing-apptsx).
+- **Cover thumbnails** — [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) renders
+  `GET /papers/{id}/cover`, the first page as a JPEG, rendered server-side on first request.
+- **Inline rename** — the pencil on hover swaps the title for an input. Enter commits, Escape
+  reverts, blur commits.
 - Local search (substring match over title and authors).
 - Local sort cycle: `recent → title → pages`.
-- Two layouts: grid (cards) and list (rows).
+- Two layouts: grid (cards) and list (rows). Both share `CardActions` and the cover.
+
+### Renaming
+
+`PATCH /papers/{id}` sets `documents.title`, a display name that overrides the filename.
+[`lib/titles.ts::displayTitle`](../../frontend/src/lib/titles.ts) is the single resolver — a
+rename wins, else the filename minus `.pdf` — and every surface that shows a name uses it.
+
+⚠ **A rename never touches disk.** `filename` is the on-disk key every storage path is built from,
+and `original_filename` is what `/raw` serves the download as. Renaming those to match a label
+would break both. The Raw files panel therefore still lists real filenames, correctly.
+
+⚠ **The library poll is paused while a rename is open.** The poll replaces the whole paper list
+every 2.5–10s; a tick landing mid-edit would blow away the input being typed in
+(`renamingRef` in [LibraryView.tsx](../../frontend/src/views/LibraryView.tsx)).
+
+⚠ **The card's open target is an inner `div`, not the `<article>`.** Rename and delete are real
+buttons, and a button nested inside something that is itself `role="button"` is invalid — assistive
+tech announces the card as one control named "… 17p · read Rename this paper Delete this paper".
+Keeping the actions as siblings of the open target yields three correctly-named controls.
+
+### Covers
+
+| Concern | Decision |
+| --- | --- |
+| When rendered | Lazily, on first `GET /cover` — never at ingestion. Ingestion is already the slow path the reader waits on, and a cover is worth nothing until the library is looked at. Papers ingested before covers existed get them for free. |
+| Cache | `storage/covers/<id>.jpg`, keyed by document id alone. A document's first page cannot change — re-extraction rewrites derived text, never the source PDF — so there is no invalidation problem. |
+| Missing | The endpoint answers **204, not 404**. The grid asks for one cover per card; a wall of 404s makes a working library look broken. `<img>` reports 204 as a load error, so `PaperCover` must keep its `onError` fallback. |
+| Aspect | Fixed `1 / 1.294` with `object-position: top`. A Letter page and an A4 page are different shapes, and rows of mismatched heights read as a broken layout; cropping from the bottom keeps the title and authors. |
+| Off the event loop | `run_in_threadpool` — rasterising is 50–200ms of CPU in a native extension, and the grid requests every cover at once. |
 
 ## Upload + processing ([App.tsx](../../frontend/src/App.tsx))
 
@@ -175,7 +211,8 @@ empty so centring holds), `inline` (below that, cards fall into normal flow unde
 | `figure` | Hover a figure → "Ask about this figure". |
 | `equation` | Hover a formula → "Ask about this equation". |
 | `table` | Hover a table → "Ask about this table" — **or drag-select inside it**, which is promoted to the whole table. |
-| `block` | Press `A` or the Ask button with nothing selected → anchors to the block at the top of the viewport. |
+| `block` | Press `A` with nothing selected → anchors to the block at the top of the viewport. |
+| `document` | Open the panel (the one bottom-left button, or `P`) → not anchored at all. See [The assistant panel](#the-assistant-panel-the-holistic-level). |
 
 Figures, equations and tables need an explicit affordance because none of them can be
 drag-selected usefully — one is an image, one a tree of KaTeX spans that selects into gibberish,
@@ -338,6 +375,60 @@ Several per paper. Three surfaces, one state:
 frame to keep those surfaces honest, and blocks are laid out monotonically, so a scan meant one
 `getBoundingClientRect` per block per frame — several hundred forced reflows on a long paper.
 
+### The assistant panel (the holistic level)
+
+[`AssistantPanel.tsx`](../../frontend/src/views/AssistantPanel.tsx) — one docked surface for
+questions about the paper as a whole, opened by the single button in the bottom-left corner or `P`.
+
+⚠ **It replaced two floating buttons with one.** "Ask" and "Note" both anchored to whatever block
+happened to be at the top of the viewport — a worse version of what highlighting already does,
+offered more prominently. Passage-level work now belongs entirely to the selection pill and the
+`A` / `N` keys; the corner means exactly one thing.
+
+⚠ **Scope splits the notes before anything renders.**
+[`ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) derives `marginNotes`
+(`scope !== 'document'`) and `paperNotes_` (`scope === 'document'`) from one `notes` array, and the
+gutter's layout pass reads `marginPending`, never `pending`. A document-scope note carries the
+first block's sequence id only to satisfy a `NOT NULL` column — laid out in the margin it would
+pile onto the paper's title.
+
+```text
+                    ┌───────────────── one /notes fetch ─────────────────┐
+                    │                                                    │
+              scope='anchor'                                    scope='document'
+                    │                                                    │
+              groupNotes()                                        groupNotes()
+                    │                                                    │
+           ┌────────┴────────┐                                           │
+      gutter left      gutter right                              AssistantPanel
+      (positioned by anchor_sequence_id)                         (flow order, newest last)
+```
+
+The panel's second tab, **Across papers**, is a deliberate stub: it states what the level will be
+and routes back. The level above "this paper" is cross-paper, and leaving the tab out would make
+the panel look finished at one level.
+
+### The agent trail ([views/AgentTrail.tsx](../../frontend/src/views/AgentTrail.tsx))
+
+What the model fetched before it answered, rendered from the `step` SSE events and from
+`note.agent_steps` on reload. Protocol and field meanings:
+[chat-and-ask.md § The trail](chat-and-ask.md#the-trail--every-fetch-is-reported-not-just-logged).
+
+| State | Behaviour |
+| --- | --- |
+| Streaming (`live`) | Always expanded, no toggle. The trail **is** the progress indicator; collapsing it leaves a blank card. |
+| Saved | Collapsed behind one line — "How this was answered · 2 from the paper · 1 from the web". |
+
+⚠ **Upsert by `step.id`, never append** (`onStep` in `ArticleReader.tsx::runNote`). Each call
+arrives twice, `running` then `done`; appending renders every fetch as two rows, the first spinning
+forever.
+
+⚠ **The trail stays up while the answer types itself out.** Collapsing it on the first token would
+snatch away the record of the fetches at the exact moment they become checkable.
+
+⚠ **A `WEB` step is coloured differently from the paper tools** (`--deck`, not `--accent`). Whether
+an answer drew on anything outside the paper is the one distinction worth seeing without reading.
+
 ### The Marginalia panel
 
 [`MarginaliaPanel.tsx`](../../frontend/src/views/MarginaliaPanel.tsx) — Contents, Bookmarks and
@@ -408,6 +499,12 @@ figures in LOCAL and GLOBAL responses.
   told apart by **shape and colour, not by a border tint** — a margin card is read peripherally.
 - [`views/AskComposer.tsx`](../../frontend/src/views/AskComposer.tsx) — the composer that opens on
   an anchor. Owns the model picker; never touches the network.
+- [`views/AssistantPanel.tsx`](../../frontend/src/views/AssistantPanel.tsx) — the holistic level.
+- [`views/AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx) — the tool calls behind an
+  answer, live and after the fact.
+- [`views/PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) — a paper's first page, with the
+  placeholder that must survive a 204.
+- [`lib/titles.ts`](../../frontend/src/lib/titles.ts) — the one resolver for a paper's display name.
 - [`components/Icons.tsx`](../../frontend/src/components/Icons.tsx) — inline SVG icons.
 - [`components/LogoMark.tsx`](../../frontend/src/components/LogoMark.tsx) — the 9XAIPal wordmark.
 

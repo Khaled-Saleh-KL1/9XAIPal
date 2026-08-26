@@ -5,18 +5,19 @@
 > **Owns:** the paper agent (`/notes`), the four context routes (`/ask`), the guardrail, the
 > research agent, citation hygiene.
 > **Does not own:** which model serves each call ([ai-backend.md](ai-backend.md)), where the
-> external results come from ([plans/exa-firecrawl-research-stack.md](../plans/exa-firecrawl-research-stack.md)).
+> external results come from ([configuration.md § Web search](../03-reference/configuration.md#web-search)).
 >
 > **Companions:** [overview.md](overview.md) — system context ·
 > [api.md](../03-reference/api.md) — request and response shapes ·
 > [database-schema.md](../03-reference/database-schema.md) — `paper_notes`, `conversation_turns`.
 >
-> **Status:** current · **Last verified:** Part 1 on 2026-08-18 against
-> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) (`8fb153b`); Part 2 on
+> **Status:** current · **Last verified:** Part 1 on 2026-08-26 against
+> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) — the tool loop, the `WEB`
+> tool, and the step trail were exercised end to end against a live paper; Part 2 on
 > 2026-07-25 against [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py)
 > (`main`, 9b75500)
-> **Verify with:** the `NOTE[...]` and `ASK[stepN]` log lines emitted on every question
-> **Volatile:** the EXTERNAL section — the provider is being replaced.
+> **Verify with:** the `NOTE[...]` and `ASK[stepN]` log lines emitted on every question, and the
+> `step` SSE events on `POST /papers/{id}/notes/stream`
 
 ## Two answering paths
 
@@ -41,6 +42,34 @@ so there is nothing to compact. Each omission removes a model call from the crit
 ---
 
 # Part 1 — The paper agent (`/notes`)
+
+## Two levels of question, one agent
+
+A note's `scope` says which surface owns it. Both go through the same loop; they differ in what
+the model is handed and how many rounds it gets.
+
+| | `scope='anchor'` | `scope='document'` |
+| --- | --- | --- |
+| Asked from | a selection in the article, or `A` | the assistant panel, bottom-left, or `P` |
+| `anchor.kind` | `text` / `figure` / `equation` / `table` / `block` | `document` |
+| Model is handed | the quote + `LOCAL_CONTEXT_WINDOW` neighbours + contents | the first `PAPER_AGENT_OPENING_BLOCKS` blocks + contents |
+| Rounds | `PAPER_AGENT_MAX_STEPS` (4) | `PAPER_AGENT_HOLISTIC_MAX_STEPS` (6) |
+| Whole-document stuffing | possible, if `PAPER_WHOLE_DOCUMENT_CONTEXT` | **never** |
+| Rendered in | the margin gutter, beside its passage | the assistant panel |
+
+⚠ **`scope` is derived from `anchor.kind`, never accepted as its own field**
+([`notes.py::create_note_stream`](../../backend/app/api/v1/endpoints/notes.py)). A request saying
+`kind='document', scope='anchor'` has no coherent meaning, and accepting both would create rows no
+surface can place. A follow-up inherits its parent's scope.
+
+⚠ **A document-scope note still carries an `anchor_sequence_id`** — the paper's first block —
+because the column is `NOT NULL`. Nothing positions by it, and `_choose_margin` explicitly excludes
+these rows: they all share one sequence id, so counting them would make every note near the top of
+the paper look crowded.
+
+⚠ **Whole-document stuffing is disabled for holistic questions even when the flag is on.** "What
+does this paper claim?" is exactly the case the opt-in was written against — handed forty pages,
+the model summarises what it was given instead of deciding which sections the question turns on.
 
 ## The paper is not in the prompt
 
@@ -129,6 +158,23 @@ rate. Streaming returns for the forced final answer after a tool round.
 | `SECTION` | `SECTION: 31` | the contents entry at that `sequence_id`, expanded to its whole section |
 | `SEARCH` | `SEARCH: reference sliding window attention` | Postgres full-text **plus** a literal `ILIKE` substring pass |
 | `READ` | `READ: 40-52` | `chunks` in that `sequence_id` range, capped in SQL |
+| `WEB` | `WEB: Longformer dilated attention` | the configured provider via [`search/web.py`](../../backend/app/search/web.py) — Tavily by default |
+| `THINK` | `THINK: checking what τ was set to` | nothing. It executes no call and costs no round — it is the model's own reason for the round, shown to the reader above the fetches it triggered |
+
+⚠ **`WEB` is offered only when a provider is configured** (`web.is_configured()`), and the help
+text for it is appended to the system prompt rather than baked in. A model told it can check the
+internet, whose every check comes back empty, stops trusting its own observations and starts
+guessing — worse than never having the tool.
+
+⚠ **`WEB` is the one tool that leaves the machine.** Only the query string goes out. It is scoped
+in the prompt to what the paper cannot answer by construction — what a cited work did, what a term
+means in the wider field — and explicitly forbidden for anything the paper states.
+
+⚠ **Web claims are attributed in prose, not with a marker.** `[[n]]` means a block number in *this*
+paper; models given `WEB` will otherwise invent `[[WEB]]`, which links to nothing and renders as
+literal brackets mid-sentence. The prompt forbids it and
+[`NoteCard.tsx::withCitationLinks`](../../frontend/src/views/NoteCard.tsx) strips any marker with no
+digits in it as a backstop.
 
 `SECTION` is the tool that makes the index usable: it takes a number the model read off the
 contents and returns everything under that heading, down to the next heading of the same or higher
@@ -163,6 +209,90 @@ full-text hits on the one term that matters.
 ⚠ The two search legs run **sequentially, not gathered**. An `AsyncSession` is a single connection
 in a single greenlet context; concurrent statements on it are unsupported and fail under the wrong
 interleaving. Both legs are indexed lookups measured in single-digit milliseconds.
+
+## The trail — every fetch is reported, not just logged
+
+The agent can spend six rounds fetching before it writes a word. Without a trail that time is a
+spinner, and the answer arrives as an assertion the reader has no way to check. The loop therefore
+emits a `step` SSE event per call, the client renders them live, and the whole list is persisted to
+`paper_notes.agent_steps` so a note reopened next week still shows how it was grounded.
+
+```text
+   model emits <tool>            backend                       reader sees
+   ─────────────────             ───────                       ───────────
+   THINK: why                                                  “checking what τ was set to”
+   SECTION: 31        ──►  _plan() orders the calls
+   SEARCH: tau             cheap-first: SECTION, READ,
+   WEB: longformer         then SEARCH, then WEB
+                                    │
+                           for each call, BEFORE running:
+                             step{state:"running"}   ──────►   § Reading “4.2 Training mixture”  ⋯
+                                    │
+                           _run_call() executes it
+                                    │
+                             step{state:"done"}      ──────►   § Read “4.2 Training mixture”  → 2 blocks · ¶47–¶48
+                                    │                          ¶47  ¶48        ← jump chips
+                           observation (the raw blocks)
+                                    ▼
+                           appended to `gathered`, fed
+                           back into the next round
+                           — NEVER sent to the browser
+```
+
+### (rendered)
+
+```mermaid
+%%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
+flowchart LR
+    T["&lt;tool&gt; block<br/>THINK + calls"] --> P["_plan()<br/>cheap calls first"]
+    P --> R["step state=running<br/>(all calls at once)"]
+    R --> X["_run_call()"]
+    X --> D["step state=done<br/>+ result, seqs, sources"]
+    X --> O["observation<br/>(raw blocks)"]
+    O --> G[["gathered →<br/>next round's prompt"]]
+    D --> UI["AgentTrail.tsx<br/>upsert by step.id"]
+    D --> DB[("paper_notes.agent_steps")]
+
+    classDef owned stroke:#3b82f6,stroke-width:2px
+    classDef never stroke:#f59e0b,stroke-dasharray:4 3
+    class P,X,UI owned
+    class O,G never
+```
+
+What to notice: the two arrows out of `_run_call` never meet again. The **observation** — thousands
+of characters of raw blocks — goes only into the next prompt; the **step** — a label, a one-line
+result, the block numbers — goes only to the browser and the database. Streaming the observation
+would ship the whole paper to a card that renders one line of it.
+
+| Field | Purpose |
+| --- | --- |
+| `id` | `s{round}-{index}`. Stable across the `running` → `done` pair |
+| `n` | which tool round, 1-based |
+| `tool` | `SECTION` \| `SEARCH` \| `READ` \| `WEB` |
+| `think` | the model's stated reason, **first call of the round only** |
+| `label` | reader-facing phrasing — `Read “4.2 Training mixture”` |
+| `result` | one-line summary — `2 blocks · ¶47–¶48`, `no matches`, `4 sources` |
+| `seqs` | block numbers pulled in, rendered as jump chips (first 6) |
+| `sources` | `{title, url}` for `WEB`, rendered as links |
+
+⚠ **A step arrives twice and the client must upsert by `id`, never append.** Appending shows each
+fetch as two rows, the first spinning forever.
+
+⚠ **`think` rides on the first call of a round only.** It explains the *round*; repeated across
+three fetches it reads as three separate reasons.
+
+⚠ **`_plan()` deliberately reorders the model's calls** — `SECTION` and `READ` (millisecond index
+lookups) before `SEARCH` (two indexed queries) before `WEB` (a network round trip). The reader
+watches the trail fill in immediately instead of staring at one pending web row while three instant
+fetches queue behind it.
+
+⚠ **The trail renders *outside* the answer's `Collapsible`**
+([`NoteCard.tsx`](../../frontend/src/views/NoteCard.tsx)). A long answer is clipped at 300px behind
+a "show more"; a trail inside gets clipped with it, so the one control that says how the answer was
+grounded would be reachable only by first expanding the thing you were trying to check.
+
+⚠ **Notes written before 2026-08-26 have `agent_steps = []`** and render no trail. That is correct,
+not a bug: the trail was never captured for them, and an empty one is honest.
 
 ## What the anchor tells the model
 
@@ -313,9 +443,16 @@ If the current chunk is a figure, the model literally sees the picture.
 
 ## EXTERNAL context ([chat/external_context.py](../../backend/app/chat/external_context.py))
 
-1. Calls SearXNG with the raw prompt.
-2. Ranks results via `search/ranking.py` (dedup + scoring).
-3. Returns at most 5 results.
+1. Rewrites the query toward CS/ML (`rewrite_query_for_papers`) so an ambiguous term like
+   "transduction" does not return genetics hits.
+2. Calls [`search/web.py`](../../backend/app/search/web.py) — Tavily by default, SearXNG when
+   pinned. Never a provider module directly.
+3. Ranks results via `search/ranking.py` (dedup + scoring).
+4. Returns at most 5 results.
+
+⚠ The `categories` argument survives only for SearXNG. Tavily has no engine-group concept and
+ignores it; the domain bias those categories used to buy now comes entirely from step 1, which
+works for both providers.
 
 ## Research Agent ([chat/research_agent.py](../../backend/app/chat/research_agent.py))
 

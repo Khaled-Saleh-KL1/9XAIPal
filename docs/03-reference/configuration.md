@@ -7,8 +7,8 @@
 > **Does not own:** how the provider chain resolves ([ai-backend.md](../02-architecture/ai-backend.md)),
 > how to bring the stack up ([setup.md](../01-orientation/setup.md)).
 >
-> **Status:** current · **Last verified:** the paper-agent keys 2026-08-18 by running the
-> command below against [`app/core/config.py`](../../backend/app/core/config.py) (`8fb153b`);
+> **Status:** current · **Last verified:** the paper-agent and web-search keys 2026-08-26 by
+> running the command below against [`app/core/config.py`](../../backend/app/core/config.py);
 > every other key 2026-07-25 (`main`, 9b75500)
 > **Verify with:** `python -c "from app.core.config import settings; print(settings.model_dump())"`
 > **Volatile:** the whole file mirrors `config.py` — re-verify on any change to that file.
@@ -129,9 +129,12 @@ How a question is answered when there are no embeddings. Detail:
 | --- | --- | --- |
 | `PAPER_WHOLE_DOCUMENT_CONTEXT` | `False` | Whether a note may be answered by stuffing the **entire** paper into the prompt. Off by default: the model gets the anchor, its neighbours and the contents index, and pulls the rest with `SECTION`/`SEARCH`/`READ`. ⚠ Turning this on reverts to pre-2026-08-18 behavior for any paper under the ceiling below. |
 | `WHOLE_PAPER_MAX_TOKENS` | `120000` | The ceiling that applies **only when the key above is `True`**: stuff the document when `SUM(chunks.token_count)` is at or below this. ⚠ `token_count` is a `len/4` heuristic that undercounts math and tables — leave headroom below the model's real window. |
-| `PAPER_AGENT_MAX_STEPS` | `4` | Tool rounds before the model is forced to answer with what it has. |
+| `PAPER_AGENT_MAX_STEPS` | `4` | Tool rounds an **anchored** note gets before the model is forced to answer with what it has. |
+| `PAPER_AGENT_HOLISTIC_MAX_STEPS` | `6` | Tool rounds a **whole-paper** question gets (asked from the assistant panel). Higher because there is no anchor doing half the retrieval: the agent must find the relevant sections before it can read them. |
 | `PAPER_AGENT_READ_MAX_CHUNKS` | `40` | Ceiling on one `READ` or `SECTION` range, so a greedy request cannot blow the context window. Enforced in SQL. |
 | `PAPER_AGENT_SEARCH_LIMIT` | `8` | Ceiling on hits returned by one `SEARCH`. |
+| `PAPER_AGENT_WEB_LIMIT` | `4` | Ceiling on results returned by one `WEB` call. Small on purpose: web extracts are long, and three good sources beat eight that crowd the paper's own text out of the prompt. |
+| `PAPER_AGENT_OPENING_BLOCKS` | `6` | How many opening blocks a whole-paper question is shown as orientation — normally title, authors, abstract. Unused on the anchored path, which shows the anchor's neighbours instead. |
 | `PAPER_AGENT_MAP_STRIDE` | `12` | Only used when a paper has **no detected headings**: sample every Nth block as a stand-in contents index, so the model still gets a map. |
 
 ## Paper-only mode
@@ -166,11 +169,27 @@ in the entire existing library. The gate is measured token count.
 
 ## Web search
 
-Being replaced — see [plans/exa-firecrawl-research-stack.md](../plans/exa-firecrawl-research-stack.md).
+Serves the EXTERNAL chat route, the research agent, and the paper agent's `WEB` tool. Dispatch
+lives in [`app/search/web.py`](../../backend/app/search/web.py); every caller imports from there
+and never from a provider module.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `SEARXNG_URL` | `http://localhost:8080` | Point at an unreachable URL to disable the EXTERNAL path entirely. |
+| `WEB_SEARCH_PROVIDER` | `auto` | `auto` \| `tavily` \| `searxng` \| `none`. `auto` picks Tavily when `TAVILY_API_KEY` is set, otherwise SearXNG. `none` makes every web call return `[]` and withdraws the `WEB` tool from the paper agent. |
+| `TAVILY_API_KEY` | (empty) | Key from <https://app.tavily.com>. Free tier is 1,000 searches/month. |
+| `TAVILY_SEARCH_DEPTH` | `basic` | `basic` (1 credit, fast) or `advanced` (2 credits, deeper extraction, better recall on niche research queries). |
+| `SEARXNG_URL` | `http://localhost:8080` | The local-only alternative, served by the `searxng` compose service. Point at an unreachable URL to disable the EXTERNAL path when SearXNG is the active provider. |
+
+⚠ **The provider choice is a privacy decision, not only a quality one.** SearXNG runs inside the
+compose stack, so a query never leaves the host. Tavily is a third party and **the query string
+does** leave. Neither ever receives paper text, chunks, or chat history — callers pass a query and
+nothing else — but "nothing leaves this machine" is only literally true on `searxng`. See
+[overview.md §7](../02-architecture/overview.md#7-what-never-happens).
+
+⚠ **`/api/v1/health` does not probe Tavily.** Tavily exposes no health endpoint, so the only way to
+verify a key is to spend a search credit — and the container healthcheck polls `/health` every 30
+seconds. `health.web_search` therefore reports "a key is configured", not "the key works"; a bad key
+surfaces as a logged `401` on the first real search.
 
 ## Background jobs
 

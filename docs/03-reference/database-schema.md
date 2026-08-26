@@ -6,10 +6,12 @@
 > **Does not own:** how the schema is applied ([migrations.md](migrations.md)), what the data
 > means in flow ([overview.md](../02-architecture/overview.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-28 against
-> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 5471870). The
-> `paper_notes` anchor and retrieval columns were re-read 2026-08-18 (`8fb153b`) — against the
-> file, **not** against a live database.
+> **Status:** current · **Last verified:** `documents.title` and `paper_notes.scope` /
+> `agent_steps` on 2026-08-26 against a live database (the migration was applied and the columns
+> read back); the rest 2026-07-28 against
+> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 5471870), and the
+> `paper_notes` anchor/retrieval columns 2026-08-18 (`8fb153b`) — against the file, **not** a live
+> database.
 > **Verify with:** `\d+ <table>` in psql — the live database is authoritative
 >
 > ⚠ One FK deviates from the pattern: `conversation_turns.document_id` is `ON DELETE SET NULL`,
@@ -95,7 +97,8 @@ The library row.
 | --------------------------- | ----------- | ----------------------------------------------------- |
 | `id`                        | `UUID`      | PK, server-generated.                                 |
 | `filename`                  | `TEXT`      | The opaque `<uuid>.pdf` on disk under `documents/`.   |
-| `original_filename`         | `TEXT`      | What the user uploaded (used by `/raw`).              |
+| `original_filename`         | `TEXT`      | What the user uploaded (used by `/raw`). ⚠ Never rewritten by a rename. |
+| `title`                     | `TEXT`      | Reader-chosen display name, `NULL` = no override. Set by `PATCH /papers/{id}`. Deliberately separate from `original_filename` so the uploaded name is never lost and `/raw` still hands back a file named the way it arrived. |
 | `file_size_bytes`           | `BIGINT`    |                                                       |
 | `page_count`                | `INTEGER`   | Set by `pypdf` after pipeline completes.              |
 | `status`                    | `TEXT`      | `queued / complete / failed`.                         |
@@ -282,18 +285,25 @@ surface notes in the chat-history endpoints.
 | `document_id`          | `UUID`        | FK → `documents.id` cascade.                              |
 | `anchor_chunk_id`      | `UUID`        | FK → `chunks.id` **SET NULL**. A convenience, not the anchor. |
 | `anchor_sequence_id`   | `INTEGER`     | **The durable anchor.** What the margin positions by.      |
-| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `table` (the whole table, including when the reader selected inside it) / `block` (no selection — anchored to what was in view). |
+| `scope`                | `TEXT`        | `anchor` (default — a margin card beside a passage) or `document` (asked about the whole paper, from the assistant panel). Decides which surface renders it. |
+| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `table` (the whole table, including when the reader selected inside it) / `block` (no selection — anchored to what was in view) / `document` (the holistic level — not anchored at all). |
 | `anchor_quote`         | `TEXT`        | The exact highlighted text; re-located in the DOM to repaint the highlight. For an equation, its LaTeX. |
 | `anchor_image_path`    | `TEXT`        | Relative path under `images/` for figure and equation anchors. |
 | `question`             | `TEXT`        |                                                            |
 | `answer`               | `TEXT`        | `''` until generation completes — a failed call leaves a visible, retryable card. |
 | `cited_sequence_ids`   | `INTEGER[]`   | Blocks the answer referenced via `[[42]]` markers; renders as jump chips. |
-| `retrieval_mode`       | `TEXT`        | `agent` (the default: anchor + contents index, with a SECTION/SEARCH/READ loop available) or `whole` (the whole paper was in the prompt — only reachable with `PAPER_WHOLE_DOCUMENT_CONTEXT`). |
+| `agent_steps`          | `JSONB`       | The trail of tool calls that produced the answer — one entry per `SECTION`/`SEARCH`/`READ`/`WEB`, with what was asked for, the model's stated reason, and a one-line summary of what came back. `NULL`/`[]` for notes predating 2026-08-26 and for answers that used no tool. Shape: [api.md `AgentStep`](api.md#post-papers_paper_idnotesstream). |
+| `retrieval_mode`       | `TEXT`        | `agent` (the default: anchor + contents index, with a SECTION/SEARCH/READ/WEB loop available) or `whole` (the whole paper was in the prompt — only reachable with `PAPER_WHOLE_DOCUMENT_CONTEXT`, and never for `scope='document'`). |
 | `model`                | `TEXT`        | What the provider reported answering.                      |
 | `requested_model`      | `TEXT`        | What the reader picked. Authoritative for follow-ups.      |
 | `margin_side`          | `TEXT`        | `right` (default) or `left`.                               |
 | `parent_note_id`       | `UUID`        | FK → `paper_notes.id` cascade. Follow-ups chain here.      |
 | `created_at`           | `TIMESTAMPTZ` |                                                            |
+
+⚠ **A `scope='document'` row still carries an `anchor_sequence_id`** — the paper's first block —
+because the column is `NOT NULL`. Nothing positions by it, and margin-balancing
+(`notes.py::_choose_margin`) explicitly excludes these rows: they all share one sequence id, so
+counting them would make every note near the top of the paper look crowded.
 
 ⚠ `anchor_chunk_id` is `SET NULL` rather than `CASCADE` on purpose. Re-chunking deletes every
 chunk row, so cascading would delete the reader's notes along with them. `anchor_sequence_id`

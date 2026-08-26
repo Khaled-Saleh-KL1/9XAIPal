@@ -22,7 +22,7 @@ Reading dense material is cognitively expensive — whether it's a 12-page paper
 
 Either way you learn by asking, not just by highlighting — and for papers the question and its answer stay pinned to the paragraph that provoked them.
 
-Everything runs locally by default. Your documents and conversations never leave your machine unless you explicitly ask a question that requires live web search.
+Everything runs locally by default. Your documents and conversations never leave your machine — only a search query does, and only when a question needs the live web.
 
 ---
 
@@ -37,7 +37,7 @@ Everything runs locally by default. Your documents and conversations never leave
 | **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Gemini / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed — no config switching |
 | **PDF extraction** | **MinerU** 3.x (with PyMuPDF fallback) | State-of-the-art structural extraction: OCR, table recognition, equation → LaTeX |
 | **Background jobs** | Celery + Redis | Heavy extraction runs asynchronously so uploads never hang |
-| **Web search** | SearXNG (self-hosted metasearch) | EXTERNAL answers without sending every query to a single commercial engine. **Being replaced** by Exa (semantic search) + Firecrawl (page → clean markdown) so the research agent reads sources instead of summarising search snippets — see [the migration plan](docs/plans/exa-firecrawl-research-stack.md) |
+| **Web search** | Tavily (default) or self-hosted SearXNG | Tavily returns ranked, already-extracted page text in one call, so the model reads sources instead of 280-character snippets. ⚠ It is a third party: the **query string** leaves the machine (never paper text, chunks, or chat history). Set `WEB_SEARCH_PROVIDER=searxng` to keep even the query local — see [configuration](docs/03-reference/configuration.md#web-search) |
 | **Vector index** | pgvector HNSW | Fast approximate nearest neighbors inside Postgres; no extra service to run |
 
 ---

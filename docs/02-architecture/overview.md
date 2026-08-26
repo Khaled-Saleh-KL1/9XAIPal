@@ -34,19 +34,24 @@ Three halves:
 2. **Reading** — two readers, chosen by `doc_kind`. A **paper** renders as a continuous article
    with a note margin either side. A **book** keeps the chapter-by-chapter reveal reader and its
    chat pane.
-3. **Asking** — for papers, anchored **margin notes** answered by the paper agent from the
-   highlighted passage plus the paper's contents index, with an agentic
-   `SECTION`/`SEARCH`/`READ` loop for whatever else it needs. For books, the routed `/ask`
-   orchestrator with its four context sources.
+3. **Asking** — two levels for papers, both served by the paper agent. **Anchored**: highlight a
+   passage, get a margin note answered from that passage plus the paper's contents index.
+   **Holistic**: open the panel (bottom-left, or `P`) and ask about the paper as a whole. Either
+   way an agentic `SECTION`/`SEARCH`/`READ`/`WEB` loop fetches what it needs, and every fetch is
+   shown to the reader. For books, the routed `/ask` orchestrator with its four context sources.
 
 **Why local-first:** privacy (papers and chats never leave the machine), latency (LLM and vector
 search colocated with the data), cost (no per-token billing). The price is the cold-start latency
 of a local model and the throughput of one machine.
 
-⚠ That claim has exactly one hole, and it is deliberate: the EXTERNAL chat route reaches the
-public internet. It is opt-in per question, chosen by the router. Everything else — extraction,
-embedding, retrieval, reading — is local. ⚠ It stops being true if you configure a cloud LLM
-provider or adopt [the Exa + Firecrawl plan](../plans/exa-firecrawl-research-stack.md).
+⚠ That claim has two deliberate holes. The EXTERNAL chat route reaches the public internet, and
+so does the paper agent's `WEB` tool — both opt-in per question, one chosen by the router and one
+by the model. Everything else — extraction, embedding, retrieval, reading — is local.
+
+⚠ **Since 2026-08-26 the default web provider is Tavily, which is a third party.** SearXNG ran on
+localhost, so even a web search stayed on the machine; a Tavily query does not. Only the query
+string leaves. `WEB_SEARCH_PROVIDER=searxng` takes the trade back in one line — see
+[configuration.md § Web search](../03-reference/configuration.md#web-search).
 
 ---
 
@@ -217,9 +222,10 @@ Falsifiable claims. Each is a bug if violated.
    has no chain at all — it is complete once chunked.
 4. `/ask` records the chosen route, the router's reason, the model, and latency for **every**
    call — `ask_traces` has one row per assistant turn.
-4b. A note records the model that answered it and how it was grounded (`retrieval_mode` —
-   `agent` by default, `whole` only when whole-document context is switched on), so two answers to
-   the same question are always attributable.
+4b. A note records the model that answered it and how it was grounded — `retrieval_mode`
+   (`agent` by default, `whole` only when whole-document context is switched on) **and
+   `agent_steps`, the full list of tool calls it made** — so two answers to the same question are
+   always attributable, and an answer can be checked against the sections it actually read.
 5. The app works with no cloud service configured, provided Ollama is running.
 6. Conversation compaction fires at ≥ 5 user turns, so context never grows unbounded.
 7. Sub-threads isolate tangents via `parent_turn_id` and are deliberately paper-free.
@@ -242,8 +248,10 @@ Everything after the HTTP 201 runs in a Celery worker; the API never blocks on e
 Two paths that share only the LLM client.
 
 **Papers → the paper agent** (`/notes`). `anchor + question + the paper's contents index → an
-agentic SECTION/SEARCH/READ loop → answer → persist to paper_notes`. No router, no guardrail, no
-compaction, no embeddings.
+agentic SECTION/SEARCH/READ/WEB loop → answer → persist to paper_notes`. No router, no guardrail,
+no compaction, no embeddings. Two levels: an **anchored** note beside a passage, and a **holistic**
+question about the whole paper asked from the assistant panel. Every tool call is reported to the
+reader and persisted to `paper_notes.agent_steps`.
 
 | Mode | When | Cost |
 | --- | --- | --- |
@@ -270,10 +278,13 @@ chosen per question:
 ## 7. What never happens
 
 1. **No document leaves the machine.** Paper text, chunks, and chat history are never sent to a
-   web search provider. Only the query string goes out, and only on EXTERNAL. ⚠ Choosing a
-   `:cloud` model in the note picker does send the paper to Ollama's infrastructure — that is what
-   the local/cloud split in the picker exists to make visible.
-2. **No route except EXTERNAL touches the network** (beyond the LLM host, which may be local).
+   web search provider. Only the query string goes out, and only on EXTERNAL or the paper agent's
+   `WEB` tool. ⚠ Choosing a `:cloud` model in the note picker does send the paper to Ollama's
+   infrastructure — that is what the local/cloud split in the picker exists to make visible.
+   ⚠ With `WEB_SEARCH_PROVIDER=tavily` (the default) the query reaches `api.tavily.com`; with
+   `searxng` it reaches only the compose service.
+2. **No route except EXTERNAL and the `WEB` tool touches the network** (beyond the LLM host, which
+   may be local).
 3. **Vector search never changes reading order** — see rule 1.
 4. **A failed chat never marks a document failed.** Ingestion and chat are unrelated subsystems.
 5. **A missing AI backend never crashes startup.** It degrades to 503 on chat only.

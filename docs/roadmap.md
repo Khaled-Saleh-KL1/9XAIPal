@@ -103,16 +103,23 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Planned direction
 
-- `[planned]` **Replace SearXNG with Exa + Firecrawl** — semantic search plus real page reading,
-  so the research agent stops synthesizing from 280-character snippets. Full design:
-  [plans/exa-firecrawl-research-stack.md](plans/exa-firecrawl-research-stack.md).
+- ~~**Replace SearXNG with Exa + Firecrawl**~~ — **superseded 2026-08-26** by **Tavily**, which
+  returns ranked, already-extracted page text in one call rather than assembling it from two
+  vendors. Providers now dispatch through
+  [`app/search/web.py`](../backend/app/search/web.py); SearXNG remains as the local-only option.
+  Original design, never implemented:
+  [archive/2026-08-26/exa-firecrawl-research-stack.md](archive/2026-08-26/exa-firecrawl-research-stack.md).
 - ~~**Paper-only mode**~~ — **superseded 2026-07-25** by `INGEST_PROFILE=fast`, which skips the
   whole post-chunking chain for papers rather than embeddings alone, and answers at question time
   via [`chat/paper_agent.py`](../backend/app/chat/paper_agent.py). The `PAPER_ONLY_*` settings
   still govern `INGEST_PROFILE=full` and books. Original design:
   [plans/paper-only-embedding-skip.md](plans/paper-only-embedding-skip.md).
 - `[planned]` **Alembic** for schema evolution, replacing best-effort `schema.sql` application.
-- `[planned]` Cross-paper GLOBAL search across the whole library.
+- `[planned]` **Cross-paper questions** — one question answered from every paper in the library,
+  each claim attributed to the paper it came from. The surface exists: the assistant panel's
+  "Across papers" tab ([`AssistantPanel.tsx`](../frontend/src/views/AssistantPanel.tsx)) is a
+  deliberate stub that states the level and routes back. The agent loop, the step trail, and
+  `paper_notes.scope` were all built to extend to a `library` scope.
 - ~~Second PDF extractor (PaddleOCR-VL)~~ — **evaluated and rejected 2026-07-25.** MinerU 3.4.4
   produced correct two-column reading order with zero inversions and zero fragmented equations on
   the backend this app already uses; the premise did not reproduce. Measured results:

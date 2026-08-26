@@ -22,6 +22,8 @@ GET    /papers
 GET    /papers/{paper_id}
 GET    /papers/{paper_id}/progress
 GET    /papers/{paper_id}/raw
+GET    /papers/{paper_id}/cover
+PATCH  /papers/{paper_id}
 DELETE /papers/{paper_id}
 POST   /papers/{paper_id}/rechunk
 POST   /papers/{paper_id}/reextract
@@ -77,12 +79,23 @@ Source: [endpoints/health.py](../../backend/app/api/v1/endpoints/health.py).
   "status": "ok" | "degraded",
   "database": "ok" | "unavailable",
   "ollama":   "ok" | "unavailable",
+  "web_search": "ok" | "unavailable",
+  "web_search_provider": "tavily" | "searxng" | "none",
   "searxng":  "ok" | "unavailable"
 }
 ```
 
-Probes the DB, Ollama (`/api/tags`), and SearXNG. Overall `status` is
+Probes the DB, Ollama (`/api/tags`), and the active web-search provider. Overall `status` is
 `degraded` if the database is unavailable.
+
+⚠ `searxng` is a **deprecated alias for `web_search`**, kept so older clients keep parsing. It
+carries the *active* provider's status — it says nothing about SearXNG specifically unless SearXNG
+is the one running.
+
+⚠ **`web_search` does not prove a Tavily key works.** Tavily exposes no health endpoint, so the
+only way to verify a key is to spend a search credit, and this endpoint is the container
+healthcheck polled every 30 seconds. On `tavily` the field means "a key is configured"; a bad key
+surfaces as a logged `401` on the first real search.
 
 ---
 
@@ -139,6 +152,7 @@ Response:
   id: UUID,
   filename: string,                   // storage-side uuid
   original_filename: string,
+  title: string | null,               // reader-chosen name; null = use original_filename
   file_size_bytes: number | null,
   page_count: number | null,
   status: "queued" | "extracting" | "chunking" | "embedding" | "complete" | "failed",
@@ -173,6 +187,37 @@ The frontend's polling endpoint during ingestion.
 Streams the original uploaded PDF as `application/pdf`, with
 `Content-Disposition` honoring the original filename. Falls back from
 `assets/<id>.pdf` to `documents/<filename>` if needed.
+
+### `PATCH /papers/{paper_id}`
+
+Rename a paper. Body `{"title": "<name>" | null}` → the updated `DocumentResponse`.
+`404 DocumentNotFound` if it does not exist.
+
+A blank or whitespace-only title **clears** the override rather than storing an empty name, so the
+UI falls back to `original_filename`.
+
+⚠ **This renames the row, never the file.** `filename` is the on-disk key that `documents/`,
+`extracted/`, `images/` and every chunk asset path are built from, and `original_filename` is what
+`GET /raw` serves the download as. Renaming either to match a label would break both.
+
+### `GET /papers/{paper_id}/cover`
+
+The paper's first page as `image/jpeg`, ~480px wide, `Cache-Control: public, max-age=86400`.
+Rendered with PyMuPDF on first request and cached at `storage/covers/<id>.jpg`.
+
+| Status | When |
+| --- | --- |
+| `200` | The cover exists or was just rendered. |
+| `204` | No source PDF, or the first page would not rasterise. |
+| `404` | No such paper. |
+
+⚠ **204, not 404, for a missing cover.** The library requests one per card; a wall of 404s makes a
+working library look broken. ⚠ A browser reports 204 to `<img>` as a **load error**, so every
+client needs an `onError` placeholder — see
+[`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx).
+
+⚠ The cache is keyed by document id alone and is never invalidated. A document's first page cannot
+change: re-extraction and re-chunking rewrite derived text, never the source PDF.
 
 ### `DELETE /papers/{paper_id}`
 
@@ -320,19 +365,28 @@ sub-threads.
 
 ### `GET /papers/{paper_id}/notes`
 
-Every note on the paper, ordered by `anchor_sequence_id` then `created_at` — the same order the
-margin lays them out in.
+Every note on the paper — **both scopes** — ordered by `anchor_sequence_id` then `created_at`,
+the same order the margin lays them out in. The client splits them: `scope='anchor'` renders in the
+gutter, `scope='document'` in the assistant panel.
+
+⚠ A `scope='document'` note carries the first block's `anchor_sequence_id` because the column is
+`NOT NULL`. Nothing positions by it; do not sort or place these by anchor.
+
+⚠ `agent_steps` is `[]` for notes created before 2026-08-26, and for any note the model answered
+without calling a tool. Both are correct, not missing data.
 
 ```json
 {"notes": [
   {
     "id": "<uuid>",
+    "scope": "anchor" | "document",
     "anchor_sequence_id": <int>, "anchor_chunk_id": "<uuid>|null",
-    "anchor_kind": "text|figure|equation|table|block",
+    "anchor_kind": "text|figure|equation|table|block|document",
     "anchor_quote": "<the highlighted passage>|null",
     "anchor_image_path": "<doc_id>/<file>|null",
     "question": "...", "answer": "...",
     "cited_sequence_ids": [<int>],
+    "agent_steps": [AgentStep],
     "retrieval_mode": "whole" | "agent" | null,
     "model": "<what the provider reported>|null",
     "requested_model": "<what the reader picked>|null",
@@ -351,7 +405,7 @@ Create a note and stream its answer as Server-Sent Events.
 {
   "question": "why is tau so small here?",
   "anchor": {
-    "kind": "text|figure|equation|block",
+    "kind": "text|figure|equation|table|block|document",
     "sequence_id": <int>,
     "chunk_id": "<uuid>|null",
     "quote": "<selected text, or a figure caption / equation LaTeX>|null",
@@ -368,10 +422,34 @@ Event types, one JSON object per `data:` line:
 | Event | Payload | Meaning |
 | --- | --- | --- |
 | `created` | `note_id` | The row exists — render the card now. |
-| `status` | `message` | What the agent is doing (`Searching: …`, `Reading blocks 40–52`). |
+| `status` | `message` | The phase (`Reading the passage…`, `Writing the answer…`). |
+| `step` | see below | One tool call. Arrives **twice** per call. |
 | `token` | `text` | Answer text as it generates. |
-| `done` | `note_id`, `answer`, `model`, `retrieval_mode`, `cited_sequence_ids` | Final state. |
+| `done` | `note_id`, `answer`, `model`, `retrieval_mode`, `cited_sequence_ids`, `agent_steps` | Final state. |
 | `error` | `detail` | Generation failed; the row survives with an empty answer. |
+
+`AgentStep`:
+
+```ts
+{
+  id: string,          // "s{round}-{index}" — stable across the running/done pair
+  n: number,           // which tool round, 1-based
+  tool: "SECTION" | "SEARCH" | "READ" | "WEB",
+  arg: string,         // what was asked for
+  state: "running" | "done",
+  think: string | null,   // the model's stated reason; first call of the round only
+  label: string,          // "Read “4.2 Training mixture”"
+  result: string,         // "2 blocks · ¶47–¶48" — empty while running
+  seqs: number[],         // block numbers pulled in
+  sources: { title: string, url: string }[]   // WEB only
+}
+```
+
+⚠ **Upsert by `id`, never append.** Every call is announced as `running` before it executes and
+re-sent as `done` after. Appending renders each fetch as two rows, the first spinning forever.
+
+⚠ **The observation is never sent.** The raw blocks the model reads — thousands of characters per
+call — stay server-side and go only into the next prompt. `result` and `seqs` are the summary.
 
 ⚠ Three fields in the request are **advisory and can be overridden by the server**:
 
@@ -382,7 +460,15 @@ Event types, one JSON object per `data:` line:
   parent's `requested_model`. A thread that switched models halfway would destroy the comparison
   the picker exists for.
 - `margin_side` defaults to whichever margin is less crowded near the anchor; a follow-up inherits
-  its parent's side.
+  its parent's side. It is forced to `right` for `scope='document'`, which is never in a gutter.
+
+⚠ **`scope` is not a request field.** The server derives it: `anchor.kind === 'document'` →
+`scope='document'`, everything else → `'anchor'`. A follow-up inherits its parent's. Accepting both
+would allow rows (`kind='document', scope='anchor'`) that no surface can place.
+
+⚠ **A holistic question gets more tool rounds** — `PAPER_AGENT_HOLISTIC_MAX_STEPS` (6) rather than
+`PAPER_AGENT_MAX_STEPS` (4) — and whole-document stuffing is disabled for it regardless of
+`PAPER_WHOLE_DOCUMENT_CONTEXT`.
 
 ### `PATCH /papers/{paper_id}/notes/{note_id}/margin`
 
