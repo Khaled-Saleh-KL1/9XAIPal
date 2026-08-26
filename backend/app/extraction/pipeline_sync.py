@@ -3,7 +3,7 @@
 import uuid
 from pathlib import Path
 from uuid import UUID
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text, Table, MetaData, Column, String, Integer, JSON, insert
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PG_UUID
@@ -89,7 +89,10 @@ chunk_assets_table = Table(
 
 def update_job_status_sync(session: Session, job_id: UUID, status: str, error_message: Optional[str] = None) -> None:
     """Update ingestion job status synchronously."""
-    sets = ["status = :status"]
+    # progress_fraction only means something within the CURRENT status (e.g.
+    # pages extracted / total while status='extracting') — clear it on every
+    # transition so a stale fraction from the previous stage never leaks in.
+    sets = ["status = :status", "progress_fraction = NULL"]
     params = {"id": job_id, "status": status}
 
     if status in ("extracting", "chunking", "embedding") and error_message is None:
@@ -103,6 +106,19 @@ def update_job_status_sync(session: Session, job_id: UUID, status: str, error_me
     session.execute(
         text(f"UPDATE ingestion_jobs SET {', '.join(sets)} WHERE id = :id"),
         params,
+    )
+
+
+def update_job_progress_sync(session: Session, job_id: UUID, fraction: float) -> None:
+    """Report real incremental progress within the current job status.
+
+    Distinct from update_job_status_sync: this never touches status, only the
+    fraction, so it's safe to call repeatedly mid-stage (e.g. once per
+    extraction page-batch) without disturbing anything else.
+    """
+    session.execute(
+        text("UPDATE ingestion_jobs SET progress_fraction = :f WHERE id = :id"),
+        {"id": job_id, "f": max(0.0, min(1.0, fraction))},
     )
 
 
@@ -248,7 +264,11 @@ def clean_slate_sync(session: Session, document_id: UUID) -> None:
     )
 
 
-def resolve_extractor(pdf_path: Path, output_dir: Path) -> tuple[Path, str]:
+def resolve_extractor(
+    pdf_path: Path,
+    output_dir: Path,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> tuple[Path, str]:
     """Route extraction by EXTRACTOR_PROVIDER; returns ``(output_dir, extractor_name)``.
 
     ``extractor_name`` is persisted to ``documents.extractor`` by the caller so
@@ -260,15 +280,17 @@ def resolve_extractor(pdf_path: Path, output_dir: Path) -> tuple[Path, str]:
     actually used. extract_pdf_sync derives its own output dir from a
     document_id string (``extracted_dir() / document_id``), so we recover that
     id from ``output_dir.name`` — the caller builds ``output_dir`` the same way.
+    ``on_progress`` is forwarded to it (see its docstring) — real incremental
+    progress during extraction, not available on any other path.
 
     "vlm" routes to the Qwen3-VL extractor instead, which takes the output dir
     directly; there is no fallback distinction there, so the extractor name is
-    always "vlm".
+    always "vlm". It has no progress callback — ``on_progress`` is unused here.
     """
     provider = (settings.extractor_provider or "mineru").lower()
     if provider == "vlm":
         return extract_via_vlm(pdf_path, output_dir), "vlm"
-    return extract_pdf_sync(pdf_path, output_dir.name)
+    return extract_pdf_sync(pdf_path, output_dir.name, on_progress=on_progress)
 
 
 def run_pipeline_sync(
@@ -284,8 +306,14 @@ def run_pipeline_sync(
         update_job_status_sync(session, job_id, JobStatus.EXTRACTING)
         session.commit()
 
+        def _report_extraction_progress(pages_done: int, total_pages: Optional[int]) -> None:
+            if not total_pages:
+                return
+            update_job_progress_sync(session, job_id, pages_done / total_pages)
+            session.commit()
+
         output_dir = extracted_dir() / str(document_id)
-        output_dir, extractor = resolve_extractor(pdf_path, output_dir)
+        output_dir, extractor = resolve_extractor(pdf_path, output_dir, on_progress=_report_extraction_progress)
         # Persist which extractor produced the artifacts so the UI can label
         # the document (e.g. "Processed by MinerU" vs "Processed by PyMuPDF (fallback)").
         try:

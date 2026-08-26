@@ -149,6 +149,16 @@ class Settings(BaseSettings):
     # phase.
     generate_figure_descriptions: bool = True
 
+    # How many embedding batches (see embed_document_chunks_sync's batch_size)
+    # run concurrently against the embedding backend. Measured directly on
+    # this deployment's local Ollama (qwen3-embedding:0.6b, 6-core host): a
+    # single batch request occupies only ~2.8 cores server-side, and
+    # one-request-per-chunk is ~13x slower than batching at all — so a couple
+    # of batches in flight uses the box's other idle cores. Kept modest like
+    # vlm_max_concurrency: local CPU inference degrades under oversubscription
+    # rather than just queuing, unlike a hosted rate-limited endpoint.
+    embedding_max_concurrency: int = 2
+
     # ── Latency tuning ──────────────────────────────────────────────────────
     # Small, fast model used ONLY for cheap classification (router + guardrail).
     # Leave empty to reuse chat_model. Pointing this at a 1–3B model (e.g.

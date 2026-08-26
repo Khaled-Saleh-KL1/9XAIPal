@@ -87,6 +87,8 @@ function stateFor(step: StepDef, status: BackendStatus): StepState {
 interface Props {
   file: UploadingFile;
   status: BackendStatus;
+  /** Real progress within `status` (pages extracted / total while extracting). */
+  progressFraction?: number | null;
   errorMessage?: string | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | null while pending
   /** Only affects completion copy below — reading navigation, not the pipeline. */
@@ -101,11 +103,11 @@ function extractorLabel(ex: string | null | undefined): { label: string; tone: '
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
-export function ProcessingOverlay({ file, status, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
+export function ProcessingOverlay({ file, status, progressFraction, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
   const steps = [...EXTRACT_STEPS, ...INDEX_STEPS];
-  const overall = failed ? 0 : stageProgress(status);
+  const overall = failed ? 0 : stageProgress(status, null, progressFraction);
 
   return (
     <div
@@ -195,7 +197,12 @@ export function ProcessingOverlay({ file, status, errorMessage, extractor, kind 
         {/* step list */}
         <div className="px-7 pb-7" style={{ borderTop: '1px solid var(--border)' }}>
           {steps.map((step) => (
-            <StepRow key={step.id} step={step} state={stateFor(step, status)} />
+            <StepRow
+              key={step.id}
+              step={step}
+              state={stateFor(step, status)}
+              progressFraction={status === 'extracting' ? progressFraction : null}
+            />
           ))}
         </div>
 
@@ -236,7 +243,17 @@ export function ProcessingOverlay({ file, status, errorMessage, extractor, kind 
 
 // ── Individual step row ───────────────────────────────────────────────────────
 
-function StepRow({ step, state }: { step: StepDef; state: StepState }) {
+function StepRow({
+  step,
+  state,
+  progressFraction,
+}: {
+  step: StepDef;
+  state: StepState;
+  /** Real pages-done/total while this step is 'active' (extracting only). */
+  progressFraction?: number | null;
+}) {
+  const showsPct = state === 'active' && typeof progressFraction === 'number' && Number.isFinite(progressFraction);
   return (
     <div className="py-5 flex gap-5">
       <StepIndicator id={step.id} state={state} />
@@ -252,7 +269,9 @@ function StepRow({ step, state }: { step: StepDef; state: StepState }) {
             <span className="text-[11px] font-mono" style={{ color: 'var(--ok)' }}>done</span>
           )}
           {state === 'active' && (
-            <span className="text-[11px] font-mono" style={{ color: 'var(--accent)' }}>running…</span>
+            <span className="text-[11px] font-mono" style={{ color: 'var(--accent)' }}>
+              {showsPct ? `${Math.round((progressFraction as number) * 100)}% of pages…` : 'running…'}
+            </span>
           )}
           {state === 'error' && (
             <span className="text-[11px] font-mono" style={{ color: '#ef4444' }}>failed</span>

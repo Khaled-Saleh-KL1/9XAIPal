@@ -47,6 +47,9 @@ export interface PaperMeta {
   // chunking | embedding | complete | failed). Drives the library's live
   // progress bar without an N+1 poll per card.
   job_status?: string | null;
+  // Real progress *within* job_status (e.g. pages extracted / total while
+  // extracting). null/undefined when nothing finer than the status exists.
+  job_progress_fraction?: number | null;
 }
 
 export interface ChunkData {
@@ -112,6 +115,9 @@ export interface ProgressResponse {
   paper_id: string;
   status: string;
   job_status?: string | null;   // finer stage: extracting | chunking | embedding | ...
+  // Real progress *within* job_status (e.g. pages extracted / total while
+  // extracting). null when there's nothing finer than the status.
+  progress_fraction?: number | null;
   page_count: number | null;
   error_message?: string | null;
   extractor?: string | null;    // "mineru" | "pymupdf_fallback"
@@ -199,6 +205,22 @@ export async function getNextChunk(paperId: string, afterSequence: number): Prom
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Chunk fetch failed: ${res.status}`);
   return res.json();
+}
+
+/**
+ * Bulk, gap-tolerant fetch of every chunk after `afterSequence`, up to `limit`.
+ * Used to fast-forward to a saved reading position in one request instead of
+ * one `getNextChunk` round trip per chunk.
+ */
+export async function getChunksRange(
+  paperId: string,
+  afterSequence: number,
+  limit = 500,
+): Promise<ChunkData[]> {
+  const res = await fetch(`${BASE}/papers/${paperId}/chunks/range?after=${afterSequence}&limit=${limit}`);
+  if (!res.ok) throw new Error(`Chunk range fetch failed: ${res.status}`);
+  const data = await res.json();
+  return data.chunks as ChunkData[];
 }
 
 // ── Whole document (article reader) ──────────────────────────────────────────

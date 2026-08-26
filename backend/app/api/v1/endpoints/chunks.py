@@ -39,21 +39,8 @@ async def list_chunks(
     }
 
 
-async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
-    """Shape a chunk row for the reader, attaching its image URL if any.
-
-    file_path is stored relative to images_dir() (e.g. "<doc_id>/<uuid>.png"),
-    which is mounted at /static/images.
-    """
-    from app.database.repositories import assets as asset_repo
-    assets = await asset_repo.get_assets_for_chunk(db, chunk["id"])
-    image_url = None
-    if assets:
-        for a in assets:
-            if a.get("asset_type") == "image":
-                image_url = f"/static/images/{a['file_path']}"
-                break
-
+def _shape_chunk_for_reader(chunk: dict, image_url: str | None) -> dict:
+    """Shape a chunk row for the reader given its (already resolved) image URL."""
     return {
         "id": str(chunk["id"]),
         "paper_id": str(chunk["document_id"]),
@@ -67,6 +54,24 @@ async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
         "image_url": image_url,
         "image_refs": chunk.get("image_refs") or [],
     }
+
+
+async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
+    """Shape a single chunk row for the reader, attaching its image URL if any.
+
+    file_path is stored relative to images_dir() (e.g. "<doc_id>/<uuid>.png"),
+    which is mounted at /static/images.
+    """
+    from app.database.repositories import assets as asset_repo
+    assets = await asset_repo.get_assets_for_chunk(db, chunk["id"])
+    image_url = None
+    if assets:
+        for a in assets:
+            if a.get("asset_type") == "image":
+                image_url = f"/static/images/{a['file_path']}"
+                break
+
+    return _shape_chunk_for_reader(chunk, image_url)
 
 
 @router.get("/{paper_id}/document")
@@ -170,6 +175,54 @@ async def get_chunk_after_sequence(
     if not chunk:
         raise ChunkNotFound(f"No chunk after sequence_order={sequence_order}")
     return await _serialize_chunk(db, chunk)
+
+
+# ⚠ Must be registered before /{paper_id}/chunks/{sequence_order}: that route's
+# path parameter has no `:int` converter, so a plain string route registered
+# after it would never be reached — "range" would match {sequence_order} first
+# and fail int validation with a 422 instead of hitting this route.
+@router.get("/{paper_id}/chunks/range")
+async def get_chunks_range(
+    paper_id: UUID,
+    after: int,
+    limit: int = 500,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Bulk, gap-tolerant fetch of every chunk after `after`, up to `limit`.
+
+    Same identical bug get_full_document's docstring describes for the
+    article reader: the book reader used to fast-forward to a saved position
+    by calling /chunks/after/{seq} once per chunk — hundreds of sequential
+    round trips to restore a deep chapter. This does it in one query, batching
+    image-asset lookups the same way get_full_document does.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    limit = max(1, min(limit, 2000))
+    chunks = await chunk_repo.get_chunks_after(db, paper_id, after, limit=limit)
+
+    from app.database.repositories import assets as asset_repo
+    assets = await asset_repo.get_assets_for_chunks(db, [c["id"] for c in chunks])
+    by_chunk: dict = {}
+    for a in assets:
+        by_chunk.setdefault(a["chunk_id"], []).append(a)
+
+    result = []
+    for c in chunks:
+        image_url = next(
+            (
+                f"/static/images/{a['file_path']}"
+                for a in by_chunk.get(c["id"], [])
+                if a.get("asset_type") == "image" and a.get("file_path")
+            ),
+            None,
+        )
+        result.append(_shape_chunk_for_reader(c, image_url))
+
+    return {"chunks": result, "paper_id": str(paper_id)}
 
 
 @router.get("/{paper_id}/chunks/{sequence_order}")

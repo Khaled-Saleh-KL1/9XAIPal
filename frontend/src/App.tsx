@@ -27,7 +27,7 @@ function metaToPaper(m: PaperMeta): Paper {
     venue: '',
     pages: m.page_count || 0,
     added: new Date(m.created_at).toLocaleDateString(),
-    progress: stageProgress(m.status, m.job_status),
+    progress: stageProgress(m.status, m.job_status, m.job_progress_fraction),
     rawStatus: m.status,
     jobStatus: m.job_status ?? null,
     tags: [],
@@ -77,6 +77,9 @@ export function App() {
   >('queued');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadExtractor, setUploadExtractor] = useState<string | null>(null);
+  // Real progress within uploadStatus (e.g. pages extracted / total while
+  // extracting) — null when nothing finer than the status is available.
+  const [uploadProgressFraction, setUploadProgressFraction] = useState<number | null>(null);
   // `kind` only changes reading navigation (chapters vs linear) and the
   // overlay's completion copy — every document runs the same backend
   // pipeline (see ProcessingOverlay's header comment).
@@ -160,6 +163,7 @@ export function App() {
           // Prefer the finer job_status (extracting / chunking / embedding) when available
           const effectiveStatus = (progress.job_status || progress.status) as typeof uploadStatus;
           setUploadStatus(effectiveStatus);
+          setUploadProgressFraction(progress.progress_fraction ?? null);
           if (progress.error_message) {
             setUploadError(progress.error_message);
           }
@@ -419,6 +423,7 @@ export function App() {
         <ProcessingOverlay
           file={uploadingFile}
           status={uploadStatus}
+          progressFraction={uploadProgressFraction}
           errorMessage={uploadError}
           extractor={uploadExtractor}
           kind={uploadKind}

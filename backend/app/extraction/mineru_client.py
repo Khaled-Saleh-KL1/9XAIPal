@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import fitz  # PyMuPDF (only used by the degraded fallback)
 
@@ -53,8 +53,20 @@ EXTRACTOR_MINERU = "mineru"
 EXTRACTOR_PYMUPDF = "pymupdf_fallback"
 
 
-def extract_pdf_sync(pdf_path: Path, document_id: str) -> tuple[Path, str]:
+def extract_pdf_sync(
+    pdf_path: Path,
+    document_id: str,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> tuple[Path, str]:
     """Extract a PDF using MinerU synchronously, with PyMuPDF fallback on failure.
+
+    ``on_progress(pages_done, total_pages)``, when given, is called after each
+    page-batch finishes (see MINERU_PAGE_BATCH_SIZE below) so the caller can
+    report real incremental progress during what is otherwise a single opaque
+    multi-minute call. Exceptions raised inside it are swallowed — a broken
+    progress callback must never fail an extraction. Only fires for documents
+    that actually get batched (more pages than the batch size); a short
+    document extracts in one pass with no sub-progress to report.
 
     Returns ``(output_dir, extractor_name)``. ``extractor_name`` is one of
     ``EXTRACTOR_MINERU`` or ``EXTRACTOR_PYMUPDF`` so callers (and the UI)
@@ -141,6 +153,11 @@ def extract_pdf_sync(pdf_path: Path, document_id: str) -> tuple[Path, str]:
                     logger.info(f"MinerU batch {i + 1}/{len(batches)}: pages {start}-{end}")
                     _run_mineru_cli(binary, pdf_path, bdir, server_url, env, (start, end))
                     batch_outputs.append((bdir, start))
+                    if on_progress:
+                        try:
+                            on_progress(end + 1, total_pages)
+                        except Exception:
+                            logger.exception("[mineru] on_progress callback failed (non-fatal)")
                 _merge_batch_outputs(batch_outputs, output_dir, pdf_path.stem)
             finally:
                 shutil.rmtree(batch_root, ignore_errors=True)

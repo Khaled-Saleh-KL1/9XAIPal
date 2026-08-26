@@ -59,16 +59,18 @@ async def list_documents(
 ) -> list[dict]:
     """List this user's documents ordered by creation date.
 
-    Also attaches the *most-recent* ingestion job's status as ``job_status`` so
-    the library UI can render a live progress bar (extracting / chunking /
-    embedding) without an N+1 poll-per-card.
+    Also attaches the *most-recent* ingestion job's status as ``job_status``,
+    and its ``progress_fraction`` (real progress within that status, e.g.
+    pages extracted / total while extracting — None when nothing finer than
+    the status is available), so the library UI can render a live, honest
+    progress bar without an N+1 poll-per-card.
     """
     result = await session.execute(
         text("""
-            SELECT d.*, j.status AS job_status
+            SELECT d.*, j.status AS job_status, j.progress_fraction AS job_progress_fraction
             FROM documents d
             LEFT JOIN LATERAL (
-                SELECT status
+                SELECT status, progress_fraction
                 FROM ingestion_jobs
                 WHERE document_id = d.id
                 ORDER BY created_at DESC

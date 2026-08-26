@@ -222,10 +222,11 @@ async def get_paper_progress(
     # Also fetch latest job status so the frontend can show accurate
     # "Extracting" / "Chunking" / "Embedding" steps while processing.
     job_status = None
+    progress_fraction = None
     try:
         job_row = await db.execute(
             text("""
-                SELECT status
+                SELECT status, progress_fraction
                 FROM ingestion_jobs
                 WHERE document_id = :doc_id
                 ORDER BY created_at DESC
@@ -236,6 +237,7 @@ async def get_paper_progress(
         job = job_row.mappings().first()
         if job:
             job_status = job["status"]
+            progress_fraction = job["progress_fraction"]
     except Exception:
         pass
 
@@ -243,6 +245,9 @@ async def get_paper_progress(
         "paper_id": str(paper_id),
         "status": doc["status"],
         "job_status": job_status or doc["status"],
+        # Real progress *within* job_status (e.g. pages extracted / total
+        # while extracting) — None when there's nothing finer than the status.
+        "progress_fraction": progress_fraction,
         "page_count": doc.get("page_count"),
         "error_message": doc.get("error_message"),
         "extractor": doc.get("extractor"),

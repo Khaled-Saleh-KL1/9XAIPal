@@ -225,7 +225,7 @@ def test_resolve_extractor_uses_mineru_by_default(tmp_path, monkeypatch):
     called = {}
     fake_out = tmp_path / "o"
 
-    def fake_extract_pdf_sync(pdf_path, document_id):
+    def fake_extract_pdf_sync(pdf_path, document_id, on_progress=None):
         called["mineru"] = (pdf_path, document_id)
         return fake_out, "mineru"
 

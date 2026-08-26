@@ -14,6 +14,7 @@ import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { ChatPane } from './ChatPane';
 import {
   getNextChunk,
+  getChunksRange,
   getChunkCount,
   getPaper,
   getFigureDescriptions,
@@ -332,16 +333,33 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
     let cursor = startCursor;
     let reachedEnd = false;
     try {
-      let guard = 0;
-      while (guard++ < 8000) {
-        const c = await getNextChunk(paperId, cursor);
-        if (!c) { reachedEnd = true; break; }
-        if (chapter && c.sequence_order > chapter.end_sequence) { reachedEnd = true; break; }
-        loaded.push(c);
-        units.push(...chunkToUnits(c));
-        cursor = c.sequence_order;
-        if (restoring) { if (cursor >= savedSeq) break; }
-        else if (loaded.length >= 2) break;
+      if (restoring) {
+        // Fast-forward to the saved position in one bulk request instead of
+        // one getNextChunk round trip per chunk — a deep chapter used to cost
+        // hundreds of sequential HTTP calls just to restore where you left off.
+        const cap = chapter ? chapter.end_sequence : savedSeq;
+        const range = await getChunksRange(paperId, startCursor, Math.max(1, cap - startCursor + 1));
+        for (const c of range) {
+          if (chapter && c.sequence_order > chapter.end_sequence) { reachedEnd = true; break; }
+          loaded.push(c);
+          units.push(...chunkToUnits(c));
+          cursor = c.sequence_order;
+          if (cursor >= savedSeq) break;
+        }
+        // Fewer chunks exist than expected (e.g. re-chunked shorter since the
+        // position was saved) — we ran out before reaching it.
+        if (!reachedEnd && cursor < savedSeq) reachedEnd = true;
+      } else {
+        let guard = 0;
+        while (guard++ < 8000) {
+          const c = await getNextChunk(paperId, cursor);
+          if (!c) { reachedEnd = true; break; }
+          if (chapter && c.sequence_order > chapter.end_sequence) { reachedEnd = true; break; }
+          loaded.push(c);
+          units.push(...chunkToUnits(c));
+          cursor = c.sequence_order;
+          if (loaded.length >= 2) break;
+        }
       }
     } catch { /* fall through with whatever loaded */ }
 
