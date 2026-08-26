@@ -1,4 +1,4 @@
-# Runtime dependencies for the 9XAIPal backend.
+# Runtime dependencies for the ScholarFlow backend.
 # Install via:  pip install -r requirements.txt
 
 # Web framework & server

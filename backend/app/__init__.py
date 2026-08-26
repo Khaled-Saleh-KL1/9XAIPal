@@ -1,2 +1,2 @@
-# Package marker for the 9XAIPal backend.
+# Package marker for the ScholarFlow backend.
 

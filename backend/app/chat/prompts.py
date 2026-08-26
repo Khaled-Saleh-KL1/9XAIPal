@@ -1,6 +1,6 @@
 """System prompts and templates for chat contexts.
 
-9XAIPal is a reading assistant specialized for **technology research papers** —
+ScholarFlow is a reading assistant specialized for **technology research papers** —
 computer science, machine learning, deep learning, NLP, computer vision,
 systems, hardware, and related engineering fields. All prompts steer the model
 toward that domain so ambiguous terms (e.g. "transduction", "attention",

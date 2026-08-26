@@ -136,10 +136,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Long-running work (PDF ingestion, embedding) is dispatched to Celery workers.
     """
     setup_logging()
-    logger.info("Starting 9XAIPal backend")
+    logger.info("Starting ScholarFlow backend")
 
     from app.core.config import settings
-    if settings.postgres_password == "9xaipal_dev_password":
+    if settings.postgres_password == "scholarflow_dev_password":
         logger.warning(
             "PostgreSQL is using the default development password. "
             "Set POSTGRES_PASSWORD in backend/.env before exposing this server to a network."
@@ -188,10 +188,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # (e.g. moving the library from Ollama to a cloud embedder).
             await _check_embedding_model_switch(session)
 
-    logger.info("9XAIPal backend ready")
+    logger.info("ScholarFlow backend ready")
     yield
 
     # Shutdown
-    logger.info("Shutting down 9XAIPal backend")
+    logger.info("Shutting down ScholarFlow backend")
     await engine.dispose()
 

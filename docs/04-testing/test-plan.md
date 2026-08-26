@@ -8,7 +8,7 @@
 > ([operations.md](../01-orientation/operations.md)).
 >
 > **Status:** current · **Last verified:** 2026-07-25
-> **Verify with:** `cd backend && POSTGRES_DB=9xaipal_test pytest -v`
+> **Verify with:** `cd backend && POSTGRES_DB=scholarflow_test pytest -v`
 
 ---
 
@@ -16,7 +16,7 @@
 
 ```bash
 cd backend && source .venv/bin/activate
-POSTGRES_DB=9xaipal_test pytest -v
+POSTGRES_DB=scholarflow_test pytest -v
 ```
 
 | File | Covers |
@@ -36,15 +36,15 @@ has happened.
 `conftest.py` therefore refuses to start unless the database name contains "test":
 
 ```bash
-POSTGRES_DB=9xaipal_test pytest -v          # the normal way
+POSTGRES_DB=scholarflow_test pytest -v          # the normal way
 ALLOW_DESTRUCTIVE_TESTS=1 pytest -v         # override, if you mean it
 ```
 
 First-time setup of the scratch database:
 
 ```bash
-docker exec 9xaipal-postgres psql -U 9xaipal -d postgres -c 'CREATE DATABASE "9xaipal_test"'
-docker exec 9xaipal-postgres psql -U 9xaipal -d 9xaipal_test \
+docker exec scholarflow-postgres psql -U scholarflow -d postgres -c 'CREATE DATABASE "scholarflow_test"'
+docker exec scholarflow-postgres psql -U scholarflow -d scholarflow_test \
   -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
 ```
 

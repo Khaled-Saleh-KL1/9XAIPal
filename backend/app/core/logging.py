@@ -22,5 +22,5 @@ def setup_logging(level: str = "INFO") -> None:
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """Return a named logger."""
-    return logging.getLogger(name or "9xaipal")
+    return logging.getLogger(name or "scholarflow")
 

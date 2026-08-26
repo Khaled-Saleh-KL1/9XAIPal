@@ -1,4 +1,4 @@
-# 9XAIPal (V1)
+# ScholarFlow (V1)
 
 [![Video demo](https://img.youtube.com/vi/m-uIaNKOOrk/0.jpg)](https://youtu.be/m-uIaNKOOrk)
 
@@ -6,7 +6,7 @@
 
 ## What is it?
 
-**9XAIPal** is a local-first reading companion for **research papers, technical books, and long-form PDFs**. Drop a file and it structurally extracts headings, math, tables, and figures.
+**ScholarFlow** is a local-first reading companion for **research papers, technical books, and long-form PDFs**. Drop a file and it structurally extracts headings, math, tables, and figures.
 
 A **paper** then reads as one continuous article. Highlight a passage, a figure, or an equation and ask about it — the answer arrives as a note in the margin, beside the thing it is about. A **book** keeps the chapter-by-chapter reader and its side chat.
 
@@ -16,7 +16,7 @@ A **paper** then reads as one continuous article. Highlight a passage, a figure,
 
 Reading dense material is cognitively expensive — whether it's a 12-page paper or a 600-page textbook. Most people skim and retain surprisingly little. Research in **cognitive load theory** and the **segmented learning** literature shows that breaking content into small, labeled units — and pairing it with **generative questioning** — significantly improves comprehension and retention over passive scrolling.
 
-9XAIPal adapts to what you uploaded:
+ScholarFlow adapts to what you uploaded:
 - **Research papers** — the whole paper as an article, with questions anchored where you asked them. Nothing is gated behind a keypress; the interruption is yours to choose.
 - **Books** — read one *chapter* at a time. The system detects major chapter boundaries and lets you study an entire chapter as a single unit, so you stay in narrative flow while still avoiding wall-of-text overwhelm.
 
@@ -70,8 +70,8 @@ Everything runs locally by default. Your documents and conversations never leave
 
 ### 1. Clone the repo
 ```bash
-git clone https://github.com/Khaled-Saleh-KL1/9XAIPal.git
-cd 9XAIPal
+git clone https://github.com/Khaled-Saleh-KL1/ScholarFlow.git
+cd ScholarFlow
 ```
 
 ### 2. Start the backend
@@ -144,4 +144,4 @@ A sample paper for testing ingestion ships at
 
 ## Repository
 
-[https://github.com/Khaled-Saleh-KL1/9XAIPal.git](https://github.com/Khaled-Saleh-KL1/9XAIPal.git)
+[https://github.com/Khaled-Saleh-KL1/ScholarFlow.git](https://github.com/Khaled-Saleh-KL1/ScholarFlow.git)

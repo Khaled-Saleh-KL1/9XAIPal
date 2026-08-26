@@ -49,7 +49,7 @@ def _mark_document_and_job_complete(session, doc_uuid: UUID) -> None:
 
 
 @celery_app.task(
-    name="9xaipal.process_ingestion",
+    name="scholarflow.process_ingestion",
     bind=True,
     max_retries=0,
     acks_late=True,
@@ -93,7 +93,7 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dic
 
 
 @celery_app.task(
-    name="9xaipal.embed_document",
+    name="scholarflow.embed_document",
     bind=True,
     max_retries=3,
     default_retry_delay=10,
@@ -147,7 +147,7 @@ def embed_document(self, document_id: str) -> dict:
 
 
 @celery_app.task(
-    name="9xaipal.generate_section_summaries",
+    name="scholarflow.generate_section_summaries",
     bind=True,
     max_retries=2,
     default_retry_delay=30,
@@ -230,7 +230,7 @@ def generate_section_summaries(self, document_id: str) -> dict:
 
 
 @celery_app.task(
-    name="9xaipal.reconstruct_reading_order",
+    name="scholarflow.reconstruct_reading_order",
     bind=True,
     max_retries=1,
     acks_late=True,

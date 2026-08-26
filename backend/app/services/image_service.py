@@ -139,7 +139,7 @@ async def fetch_image_via_proxy(url: str) -> tuple[bytes, str, str]:
             return content, ctype, existing.name
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-        resp = await client.get(url, headers={"User-Agent": "9XAIPal-ImageProxy/1.0"})
+        resp = await client.get(url, headers={"User-Agent": "ScholarFlow-ImageProxy/1.0"})
         resp.raise_for_status()
 
         content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()

@@ -8,7 +8,7 @@ export function LogoMark() {
         className="font-serif text-[13px] leading-none"
         style={{ fontWeight: 500 }}
       >
-        9
+        S
       </span>
     </div>
   );

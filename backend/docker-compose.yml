@@ -1,18 +1,18 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    container_name: 9xaipal-postgres
+    container_name: scholarflow-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
-      POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-scholarflow}
+      POSTGRES_USER: ${POSTGRES_USER:-scholarflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scholarflow_dev_password}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - 9xaipal_postgres_data:/var/lib/postgresql/data
+      - scholarflow_postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-9xaipal} -d ${POSTGRES_DB:-9xaipal}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-scholarflow} -d ${POSTGRES_DB:-scholarflow}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,11 +22,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: 9xaipal-redis
+    container_name: scholarflow-redis
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - 9xaipal_redis_data:/data
+      - scholarflow_redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -38,28 +38,28 @@ services:
 
   searxng:
     image: searxng/searxng:latest
-    container_name: 9xaipal-searxng
+    container_name: scholarflow-searxng
     ports:
       - "${SEARXNG_PORT:-8080}:8080"
     volumes:
       - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
       BASE_URL: http://localhost:${SEARXNG_PORT:-8080}/
-      INSTANCE_NAME: 9xaipal-searxng
+      INSTANCE_NAME: scholarflow-searxng
     restart: unless-stopped
 
   celery_worker:
     build:
       context: .
       dockerfile: Dockerfile.mineru
-    container_name: 9xaipal-celery-worker
+    container_name: scholarflow-celery-worker
     command: celery -A app.core.celery_app worker --loglevel=info
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
-      POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-scholarflow}
+      POSTGRES_USER: ${POSTGRES_USER:-scholarflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scholarflow_dev_password}
       REDIS_URL: redis://redis:6379/0
       # Ollama runs on the host network (or wherever you point it). Do NOT inherit
       # OLLAMA_BASE_URL from the host .env here: a local-dev value like
@@ -160,7 +160,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: 9xaipal-api
+    container_name: scholarflow-api
     command: >
       uvicorn app.main:app
       --host 0.0.0.0 --port 8000
@@ -171,9 +171,9 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
-      POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-scholarflow}
+      POSTGRES_USER: ${POSTGRES_USER:-scholarflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scholarflow_dev_password}
       REDIS_URL: redis://redis:6379/0
       # Ollama runs on the host network. Do NOT inherit OLLAMA_BASE_URL from the
       # host .env here: a local-dev value like http://localhost:11434 resolves
@@ -261,7 +261,7 @@ services:
   # the restarts.
   autoheal:
     image: willfarrell/autoheal:latest
-    container_name: 9xaipal-autoheal
+    container_name: scholarflow-autoheal
     environment:
       AUTOHEAL_CONTAINER_LABEL: autoheal
       AUTOHEAL_INTERVAL: 15
@@ -282,7 +282,7 @@ services:
   # `--profile server`.
   frontend-build:
     image: node:20-alpine
-    container_name: 9xaipal-frontend-build
+    container_name: scholarflow-frontend-build
     working_dir: /src
     volumes:
       - ../frontend:/src
@@ -306,8 +306,8 @@ services:
     restart: "no"
 
 volumes:
-  9xaipal_postgres_data:
-  9xaipal_redis_data:
+  scholarflow_postgres_data:
+  scholarflow_redis_data:
   # Holds the production React build so the api container can serve the SPA
   # at "/" (single port, no extra reverse proxy needed for "my machine = server").
   frontend-dist:
