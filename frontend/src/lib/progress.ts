@@ -26,9 +26,24 @@ export const STAGE_PROGRESS: Record<string, number> = {
  * `status` is the document's coarse status (or an already-merged
  * job_status/status stage string); `jobStatus`, when passed separately, is
  * preferred since it is more fine-grained.
+ *
+ * `subFraction` (0-1), when given, is real progress *within* the extracting
+ * stage (pages extracted / total pages — see ingestion_jobs.progress_fraction)
+ * and is blended into the queued→extracting band instead of the flat 0.3, so
+ * a long extraction actually moves instead of sitting still for minutes.
  */
-export function stageProgress(status: string | null | undefined, jobStatus?: string | null): number {
+export function stageProgress(
+  status: string | null | undefined,
+  jobStatus?: string | null,
+  subFraction?: number | null,
+): number {
   if (status === 'complete') return 1;
   const stage = (jobStatus || status || '').toLowerCase();
+  if (stage === 'extracting' && typeof subFraction === 'number' && Number.isFinite(subFraction)) {
+    const lo = STAGE_PROGRESS.queued;
+    const hi = STAGE_PROGRESS.extracting;
+    const clamped = Math.max(0, Math.min(1, subFraction));
+    return lo + (hi - lo) * clamped;
+  }
   return STAGE_PROGRESS[stage] ?? 0.08;
 }

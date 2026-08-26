@@ -150,6 +150,9 @@ async def _ensure_recent_columns() -> None:
         # Nested sub-threads for tangents (paper-free focus mode inside threads).
         # Main chat turns keep parent_turn_id = NULL. Sub-thread turns point to their parent.
         "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS parent_turn_id UUID REFERENCES conversation_turns(id) ON DELETE CASCADE",
+        # Fraction (0-1) of progress within the current job status, e.g. pages
+        # extracted so far / total pages while status='extracting'.
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_fraction REAL",
     ]
 
     async with engine.begin() as conn:

@@ -71,6 +71,27 @@ async def get_next_chunk(
     return dict(row) if row else None
 
 
+async def get_chunks_after(
+    session: AsyncSession, document_id: UUID, current_sequence_id: int, limit: int = 500
+) -> list[dict]:
+    """Gap-tolerant bulk fetch: every chunk after current_sequence_id, up to limit.
+
+    Same ordering/semantics as get_next_chunk, but returns many rows in one
+    query instead of one — used to fast-forward the reader to a saved
+    position instead of one round trip per chunk.
+    """
+    result = await session.execute(
+        text("""
+            SELECT * FROM chunks
+            WHERE document_id = :document_id AND sequence_id > :seq
+            ORDER BY sequence_id ASC
+            LIMIT :limit
+        """),
+        {"document_id": document_id, "seq": current_sequence_id, "limit": limit},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def get_previous_chunk(
     session: AsyncSession, document_id: UUID, current_sequence_id: int
 ) -> Optional[dict]:

@@ -22,7 +22,7 @@ interface Props {
 }
 
 function deriveProgress(m: PaperMeta): number {
-  return stageProgress(m.status, m.job_status);
+  return stageProgress(m.status, m.job_status, m.job_progress_fraction);
 }
 
 function metaToPaper(m: PaperMeta): Paper {

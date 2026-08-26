@@ -288,6 +288,12 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'queued',
+    -- Fraction (0-1) of progress *within* the current status, e.g. pages
+    -- extracted so far / total pages while status='extracting'. NULL when no
+    -- finer-grained signal is available than the status itself (the normal
+    -- case for statuses other than 'extracting', and for short documents
+    -- extracted in a single pass with nothing to checkpoint mid-way).
+    progress_fraction REAL,
     error_message TEXT,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,

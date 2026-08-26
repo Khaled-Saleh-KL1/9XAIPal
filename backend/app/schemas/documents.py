@@ -26,6 +26,9 @@ class DocumentResponse(BaseModel):
     # (queued / extracting / chunking / embedding / complete / failed).
     # Lets the library show a live progress bar without per-card /progress calls.
     job_status: Optional[str] = None
+    # Real progress *within* job_status (e.g. pages extracted / total while
+    # extracting). None when there's nothing finer-grained than the status.
+    job_progress_fraction: Optional[float] = None
 
 
 class DocumentListResponse(BaseModel):

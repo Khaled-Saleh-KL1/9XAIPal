@@ -71,7 +71,13 @@ def test_run_pipeline_success(
             pdf_path=pdf_path,
         )
 
-        mock_extract.assert_called_once_with(pdf_path, str(doc_id))
+        # run_pipeline_sync also passes an on_progress callback (a closure over
+        # this call's session/job_id — not something we can compare by
+        # identity), so check the positional args and that the kwarg exists
+        # rather than the exact call signature.
+        mock_extract.assert_called_once()
+        assert mock_extract.call_args.args == (pdf_path, str(doc_id))
+        assert callable(mock_extract.call_args.kwargs.get("on_progress"))
         mock_find_md.assert_called_once_with(fake_extracted_dir)
         mock_find_images.assert_called_once_with(fake_extracted_dir)
         mock_move_asset.assert_called_once_with(img_path, document_id=str(doc_id))
