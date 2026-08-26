@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | Python | 3.11+ | Backend |
 | Node.js | 18+ | Frontend (Vite 6, React 19) |
-| Docker + Compose | latest | Postgres / Redis / SearXNG / worker |
+| Docker + Compose | latest | Postgres / Redis / SearXNG (optional) / worker |
 | PostgreSQL | 15+ (16 in compose) | Needs `pgvector` + `uuid-ossp` |
 | Redis | 7+ | Celery broker |
 | MinerU | 3.2+ | `mineru` CLI. ⚠ `magic-pdf` 0.x is a different, abandoned package and is **not** supported |
@@ -144,7 +144,7 @@ The FastAPI lifespan ([`core/lifecycle.py`](../../backend/app/core/lifecycle.py)
 ```bash
 # 1. health
 curl -s http://localhost:8000/api/v1/health | jq
-# expect: {"status":"ok","database":"ok","ollama":"ok","searxng":"ok"}
+# expect: {"status":"ok","database":"ok","ollama":"ok","web_search":"ok","web_search_provider":"tavily"}
 
 # 2. upload
 curl -s -F "file=@../samples/attention-is-all-you-need.pdf" \
@@ -216,7 +216,7 @@ Collected because each one has cost someone an hour:
 | Worker logs `Cannot connect to redis://redis:6379: Name or service not known` | A container left over from an older `up` is attached to no compose network | `docker compose up -d --force-recreate redis celery_worker` |
 | First embed 404s | `EMBEDDING_MODEL` has no matching pulled tag | Use an explicit tag, e.g. `qwen3-embedding:8b` |
 | Every model call refused, in Docker | `OLLAMA_BASE_URL=localhost` inside a container resolves to the container | Compose already sets `host.docker.internal`; do not override it from the host `.env` |
-| Web search silently returns nothing | SearXNG not running | `docker compose up -d searxng` |
+| Web search silently returns nothing | No provider configured, or the active one is down | `WEB_SEARCH_PROVIDER=tavily` needs `TAVILY_API_KEY`; check the logs for `Tavily search failed: HTTP 401`. On `searxng`: `docker compose up -d searxng`. ⚠ `/health` cannot verify a Tavily key — see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
 | Ingestion fails with `MinerUError` | MinerU missing from the worker's `$PATH` | Install it, or run the worker in compose |
 | Chat 503 `NO_LLM_CONFIGURED` | No Ollama and no cloud key | Start Ollama or paste one API key |
 | Setting seems to do nothing | Typo'd env key — `extra="ignore"` swallows unknown keys silently | Check spelling against [configuration.md](../03-reference/configuration.md) |

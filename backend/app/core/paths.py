@@ -31,6 +31,16 @@ def logs_dir() -> Path:
     return _root() / "logs"
 
 
+def covers_dir() -> Path:
+    """First-page thumbnails, one JPEG per document, keyed by document id.
+
+    A derived cache, not user data: every file here can be regenerated from the
+    PDF in assets/, so losing the directory costs one render per paper and
+    nothing else.
+    """
+    return _root() / "covers"
+
+
 def research_images_dir(conversation_id: Optional[Union[UUID, str]] = None) -> Path:
     """
     Returns the directory for permanently stored research images.
@@ -55,6 +65,7 @@ def ensure_storage_dirs() -> None:
         images_dir(),
         assets_dir(),
         logs_dir(),
+        covers_dir(),
         # research images base (per-conversation folders are created on demand)
         research_images_dir(),
     ]:

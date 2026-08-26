@@ -184,9 +184,21 @@ class Settings(BaseSettings):
         return self.ingest_profile.strip().lower() == "fast"
 
     # ── Paper agent (answering without embeddings) ──────────────────────────
-    # Stuff the ENTIRE document into the prompt when its measured token count
-    # is at or below this. Above it, the agent falls back to an iterative
-    # SEARCH/READ loop over chunks.
+    # Whether a note may be answered by stuffing the ENTIRE paper into the
+    # prompt.
+    #
+    # ⚠ Default False, and that default is the product decision. A note is a
+    # question about one passage the reader is pointing at; handing the model
+    # forty pages of unrelated prose buys nothing, costs the whole prompt, and
+    # measurably dilutes the answer — the model starts describing the paper
+    # instead of the sentence. The anchored path gives it the quote, its
+    # neighbours, and the paper's contents index, and lets it pull the rest
+    # itself with SEARCH / READ / SECTION.
+    #
+    # Set True to restore the old behavior for papers under
+    # whole_paper_max_tokens.
+    paper_whole_document_context: bool = False
+    # The ceiling that applies when the setting above is True.
     # ⚠ token_count is len(plain_text)/4 — a character heuristic that
     # undercounts math and tables badly. Leave headroom below the real window.
     whole_paper_max_tokens: int = 120_000
@@ -198,6 +210,32 @@ class Settings(BaseSettings):
     paper_agent_read_max_chunks: int = 40
     # Ceiling on how many chunks a single SEARCH may return as hits.
     paper_agent_search_limit: int = 8
+    # How many blocks the contents index falls back to sampling when a paper
+    # has no detected headings at all, so the model still gets a map of it.
+    paper_agent_map_stride: int = 12
+    # Ceiling on results returned by one WEB call. Kept small: web extracts are
+    # long, and three good sources beat eight that crowd out the paper's own
+    # text in the prompt.
+    paper_agent_web_limit: int = 4
+    # How many rounds a HOLISTIC question gets (asked from the panel about the
+    # whole paper rather than about a passage). Higher than the anchored
+    # default because there is no anchor doing half the retrieval work: the
+    # agent has to find the relevant sections before it can read them.
+    paper_agent_holistic_max_steps: int = 6
+    # How many opening blocks a holistic question is shown as orientation —
+    # normally title, authors, and abstract. The contents index says what
+    # exists; this says what the paper claims to be about.
+    paper_agent_opening_blocks: int = 6
+
+    # ── Study agent (answering across a group of papers) ────────────────────
+    # Tool rounds a desk question gets. Higher than either paper-agent budget
+    # because the first round or two are usually spent working out WHICH papers
+    # the question turns on, before any of them has been read.
+    study_agent_max_steps: int = 8
+    # Ceiling on papers one study may hold. The index is headings only, so the
+    # prompt cost is modest, but every paper is a full chunk load per question —
+    # this is a guard against a study of the entire library.
+    study_max_papers: int = 24
 
     # ── Paper-only mode ─────────────────────────────────────────────────────
     # Skip the embedding pass for documents small enough to fit whole in the
@@ -229,7 +267,25 @@ class Settings(BaseSettings):
     # Changing this triggers an automatic re-embed of the library on next start.
     vector_dimension: int = 1024
 
-    # SearXNG
+    # ── Web search ──────────────────────────────────────────────────────────
+    # Which provider serves the EXTERNAL route, the research agent, and the
+    # paper agent's WEB tool. "auto" (default): Tavily when TAVILY_API_KEY is
+    # set, otherwise SearXNG. Pin to "tavily", "searxng", or "none".
+    #
+    # ⚠ This is a privacy setting as much as a quality one. SearXNG runs in the
+    # compose stack, so a query never leaves the host; Tavily is a third party
+    # and the query string does. Neither ever receives paper text, chunks, or
+    # chat history. See app/search/web.py.
+    web_search_provider: str = "auto"
+
+    # Tavily (https://tavily.com) — search built for agents: ranked, already
+    # extracted page content instead of a SERP that still needs scraping.
+    tavily_api_key: str = ""
+    # "basic" (one credit, fast) or "advanced" (two credits, deeper extraction
+    # and better recall on niche research queries).
+    tavily_search_depth: str = "basic"
+
+    # SearXNG — the previous default, kept as the local-only alternative.
     searxng_url: str = "http://localhost:8080"
 
     # Upload limits

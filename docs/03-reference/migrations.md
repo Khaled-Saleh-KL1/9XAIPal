@@ -26,11 +26,11 @@ This project uses an "apply the SQL" approach rather than Alembic because it is 
 
 2. Apply the new schema additions (idempotent):
    ```bash
-   docker compose exec -T db psql -U postgres -d 9xaipal -f /docker-entrypoint-initdb.d/schema.sql
+   docker compose exec -T db psql -U postgres -d scholarflow -f /docker-entrypoint-initdb.d/schema.sql
    ```
    Or from host (if you have psql locally and port 5432 exposed):
    ```bash
-   psql -h localhost -U postgres -d 9xaipal -f backend/app/database/schema.sql
+   psql -h localhost -U postgres -d scholarflow -f backend/app/database/schema.sql
    ```
 
    The `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS` statements are safe to run multiple times.
@@ -46,7 +46,7 @@ This table is **completely independent** of the `chunks` + `chunk_embeddings` ta
 Add these columns to support AI-corrected reading order:
 
 ```bash
-docker compose exec -T db psql -U postgres -d 9xaipal -f /docker-entrypoint-initdb.d/schema.sql
+docker compose exec -T db psql -U postgres -d scholarflow -f /docker-entrypoint-initdb.d/schema.sql
 ```
 
 New fields on `documents`:
@@ -62,7 +62,7 @@ These are major quality improvements for deep interaction with tables, diagrams,
 
 **Apply the schema** (same command as above):
 ```bash
-docker compose exec -T db psql -U postgres -d 9xaipal -f /docker-entrypoint-initdb.d/schema.sql
+docker compose exec -T db psql -U postgres -d scholarflow -f /docker-entrypoint-initdb.d/schema.sql
 ```
 
 New capabilities added:
@@ -115,12 +115,12 @@ ADD COLUMN IF NOT EXISTS parent_turn_id UUID
 **Apply the migration (idempotent):**
 
 ```bash
-docker compose exec -T db psql -U postgres -d 9xaipal -f /docker-entrypoint-initdb.d/schema.sql
+docker compose exec -T db psql -U postgres -d scholarflow -f /docker-entrypoint-initdb.d/schema.sql
 ```
 
 Or from host:
 ```bash
-psql -h localhost -U postgres -d 9xaipal -f backend/app/database/schema.sql
+psql -h localhost -U postgres -d scholarflow -f backend/app/database/schema.sql
 ```
 
 **New repository helpers** (see `backend/app/database/repositories/conversations.py`):

@@ -194,6 +194,38 @@ async def search_chunks_substring(
     return [dict(r) for r in result.mappings().all()]
 
 
+async def search_chunks_substring_multi(
+    session: AsyncSession, document_ids: list[UUID], needle: str, limit: int
+) -> list[dict]:
+    """Case-insensitive substring search across several documents at once.
+
+    The multi-document twin of :func:`search_chunks_substring`, for the study
+    agent. Same reason for existing: full-text search cannot find what it does
+    not tokenize — single Greek letters, equation numbers, hyphenated compounds.
+
+    ⚠ Ordered by ``(document_id, sequence_id)`` so hits from one paper stay
+    together. Interleaving them by rank alone reads as a single document that
+    keeps changing subject.
+    """
+    if not needle.strip() or not document_ids:
+        return []
+    result = await session.execute(
+        text("""
+            SELECT * FROM chunks
+            WHERE document_id = ANY(:document_ids)
+              AND (plain_text ILIKE :pattern OR markdown ILIKE :pattern)
+            ORDER BY document_id, sequence_id ASC
+            LIMIT :limit
+        """),
+        {
+            "document_ids": list(document_ids),
+            "pattern": f"%{needle.strip()}%",
+            "limit": limit,
+        },
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def count_document_chunks(session: AsyncSession, document_id: UUID) -> int:
     """Total number of chunks for the given document."""
     result = await session.execute(

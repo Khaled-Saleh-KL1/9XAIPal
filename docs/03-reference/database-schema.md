@@ -6,8 +6,12 @@
 > **Does not own:** how the schema is applied ([migrations.md](migrations.md)), what the data
 > means in flow ([overview.md](../02-architecture/overview.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-28 against
-> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 5471870)
+> **Status:** current · **Last verified:** `documents.title` and `paper_notes.scope` /
+> `agent_steps` on 2026-08-26 against a live database (the migration was applied and the columns
+> read back); the rest 2026-07-28 against
+> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 5471870), and the
+> `paper_notes` anchor/retrieval columns 2026-08-18 (`8fb153b`) — against the file, **not** a live
+> database.
 > **Verify with:** `\d+ <table>` in psql — the live database is authoritative
 >
 > ⚠ One FK deviates from the pattern: `conversation_turns.document_id` is `ON DELETE SET NULL`,
@@ -40,6 +44,11 @@ documents (1) ─────< (N) paper_notes
 documents (1) ─────< (N) reading_bookmarks
 documents (1) ─────< (N) personal_notes
             personal_notes ── anchor_chunk_id → chunks.id (SET NULL)
+documents (1) ─────< (N) study_papers >───── (1) studies
+                                          studies (1) ─────< (N) conversation_turns
+                                                              (study_id, NULL = whole library)
+documents (1) ─────< (N) sticky_note_papers >───── (1) sticky_notes
+
 documents (1) ─────< (N) note_decks
             note_decks ─────< (N) note_deck_members
                               note_deck_members ── ai_note_id       → paper_notes.id    ┐ exactly
@@ -69,6 +78,11 @@ erDiagram
     paper_notes        ||--o{ paper_notes        : "follow-up"
     documents          ||--o{ reading_bookmarks  : "cascade"
     documents          ||--o{ personal_notes     : "cascade"
+    documents          ||--o{ study_papers       : "cascade"
+    studies            ||--o{ study_papers       : "cascade"
+    studies            |o--o{ conversation_turns : "cascade, NULL = library scope"
+    documents          ||--o{ sticky_note_papers : "cascade"
+    sticky_notes       ||--o{ sticky_note_papers : "cascade"
     documents          ||--o{ note_decks         : "cascade"
     chunks             |o--o{ personal_notes     : "anchor, SET NULL"
     note_decks         ||--o{ note_deck_members  : "cascade"
@@ -93,7 +107,8 @@ The library row.
 | --------------------------- | ----------- | ----------------------------------------------------- |
 | `id`                        | `UUID`      | PK, server-generated.                                 |
 | `filename`                  | `TEXT`      | The opaque `<uuid>.pdf` on disk under `documents/`.   |
-| `original_filename`         | `TEXT`      | What the user uploaded (used by `/raw`).              |
+| `original_filename`         | `TEXT`      | What the user uploaded (used by `/raw`). ⚠ Never rewritten by a rename. |
+| `title`                     | `TEXT`      | Reader-chosen display name, `NULL` = no override. Set by `PATCH /papers/{id}`. Deliberately separate from `original_filename` so the uploaded name is never lost and `/raw` still hands back a file named the way it arrived. |
 | `file_size_bytes`           | `BIGINT`    |                                                       |
 | `page_count`                | `INTEGER`   | Set by `pypdf` after pipeline completes.              |
 | `status`                    | `TEXT`      | `queued / complete / failed`.                         |
@@ -280,18 +295,25 @@ surface notes in the chat-history endpoints.
 | `document_id`          | `UUID`        | FK → `documents.id` cascade.                              |
 | `anchor_chunk_id`      | `UUID`        | FK → `chunks.id` **SET NULL**. A convenience, not the anchor. |
 | `anchor_sequence_id`   | `INTEGER`     | **The durable anchor.** What the margin positions by.      |
-| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `block` (no selection — anchored to what was in view). |
+| `scope`                | `TEXT`        | `anchor` (default — a margin card beside a passage) or `document` (asked about the whole paper, from the assistant panel). Decides which surface renders it. |
+| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `table` (the whole table, including when the reader selected inside it) / `block` (no selection — anchored to what was in view) / `document` (the holistic level — not anchored at all). |
 | `anchor_quote`         | `TEXT`        | The exact highlighted text; re-located in the DOM to repaint the highlight. For an equation, its LaTeX. |
 | `anchor_image_path`    | `TEXT`        | Relative path under `images/` for figure and equation anchors. |
 | `question`             | `TEXT`        |                                                            |
 | `answer`               | `TEXT`        | `''` until generation completes — a failed call leaves a visible, retryable card. |
 | `cited_sequence_ids`   | `INTEGER[]`   | Blocks the answer referenced via `[[42]]` markers; renders as jump chips. |
-| `retrieval_mode`       | `TEXT`        | `whole` (paper fit in context) or `agent` (SEARCH/READ loop ran). |
+| `agent_steps`          | `JSONB`       | The trail of tool calls that produced the answer — one entry per `SECTION`/`SEARCH`/`READ`/`WEB`, with what was asked for, the model's stated reason, and a one-line summary of what came back. `NULL`/`[]` for notes predating 2026-08-26 and for answers that used no tool. Shape: [api.md `AgentStep`](api.md#post-papers_paper_idnotesstream). |
+| `retrieval_mode`       | `TEXT`        | `agent` (the default: anchor + contents index, with a SECTION/SEARCH/READ/WEB loop available) or `whole` (the whole paper was in the prompt — only reachable with `PAPER_WHOLE_DOCUMENT_CONTEXT`, and never for `scope='document'`). |
 | `model`                | `TEXT`        | What the provider reported answering.                      |
 | `requested_model`      | `TEXT`        | What the reader picked. Authoritative for follow-ups.      |
 | `margin_side`          | `TEXT`        | `right` (default) or `left`.                               |
 | `parent_note_id`       | `UUID`        | FK → `paper_notes.id` cascade. Follow-ups chain here.      |
 | `created_at`           | `TIMESTAMPTZ` |                                                            |
+
+⚠ **A `scope='document'` row still carries an `anchor_sequence_id`** — the paper's first block —
+because the column is `NOT NULL`. Nothing positions by it, and margin-balancing
+(`notes.py::_choose_margin`) explicitly excludes these rows: they all share one sequence id, so
+counting them would make every note near the top of the paper look crowded.
 
 ⚠ `anchor_chunk_id` is `SET NULL` rather than `CASCADE` on purpose. Re-chunking deletes every
 chunk row, so cascading would delete the reader's notes along with them. `anchor_sequence_id`
@@ -299,6 +321,60 @@ survives, so a re-chunk degrades an anchor's precision instead of destroying the
 
 Indexes: `(document_id, anchor_sequence_id, created_at)` — the exact order the margin lays cards
 out in — and `(parent_note_id)` for thread loading.
+
+### `studies`, `study_papers`
+
+A named group of papers that scopes an answer. **Not a folder** — a paper can sit in several studies
+at once, and removing it from one takes nothing away from the library.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `studies.id` | `UUID` | PK. |
+| `studies.name` | `TEXT` | |
+| `studies.description` | `TEXT` | |
+| `study_papers.study_id` | `UUID` | FK → `studies.id` cascade. PK with `document_id`. |
+| `study_papers.document_id` | `UUID` | FK → `documents.id` cascade. |
+| `study_papers.position` | `INTEGER` | **The citation order.** Index in this list is the `P<n>` an answer names the paper by. |
+
+⚠ **`position` is load-bearing, not cosmetic.** Answers cite `[[P2:41]]`, so re-ordering a study
+repoints every citation the reader has already read. That is why membership is written
+whole-collection (`PUT /studies/{id}/papers`) — the list order *is* the numbering.
+
+### `sticky_notes`, `sticky_note_papers`
+
+A note the reader keeps in front of them, with no anchor.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `sticky_notes.id` | `UUID` | PK. |
+| `sticky_notes.body` | `TEXT` | Markdown, rendered by the shared pipeline. |
+| `sticky_notes.color` | `TEXT` | `yellow` \| `blue` \| `green` \| `pink` \| `orange` \| `plain`. A **name**, not a hex — the UI maps it to CSS variables so it survives the light/dark switch. |
+| `sticky_notes.pinned` | `BOOLEAN` | Sorts first. |
+| `sticky_notes.board` | `TEXT` | `chat` (beside one conversation) or `universal` (the standalone board). |
+| `sticky_notes.study_id` | `UUID` (null) | FK → `studies.id`, **`SET NULL`**. Which chat, with NULL meaning the library-wide one. Always NULL when `board='universal'`. |
+| `sticky_notes.origin` | `TEXT` | `user` or `assistant`. Never patchable. |
+| `sticky_notes.author_model` | `TEXT` | Which model wrote an assistant note. |
+| `sticky_note_papers` | | `(sticky_id, document_id)`, both cascade. Papers a note *references*, distinct from the board it lives on. |
+
+⚠ **`board` is not redundant with `study_id`.** `study_id IS NULL` already means
+the library-wide *chat*, so without the column a note on that chat and a note on
+the universal board would be the same row.
+
+⚠ **`study_id` is `SET NULL`, not `CASCADE`.** Deleting a study must not delete
+the reader's notes — only the reader removes a note. They move to the universal
+board instead, and the delete confirmation says so.
+
+⚠ **`origin='assistant'` is written only by `study_agent`**, through the
+repository. `POST /stickies` forces `user`, so a client cannot forge one.
+
+⚠ **Deliberately not `personal_notes`.** A personal note is anchored to a block in one document and
+lives in that document's margin; a sticky has no anchor, may name several papers or none, and lives
+on the desk. Sharing a table would give every sticky an `anchor_sequence_id` that means nothing and
+would surface stickies in the margin layout.
+
+⚠ **Zero rows in `sticky_note_papers` is a scope, not an incomplete row.** A note about nothing in
+particular shows on every desk. Code that treats an empty scope as "not yet assigned" hides exactly
+the notes the reader most wanted pinned.
 
 ## Personal reading state
 

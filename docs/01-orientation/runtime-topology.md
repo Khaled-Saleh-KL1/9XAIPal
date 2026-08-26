@@ -25,7 +25,7 @@
 | Celery worker | — | Yes | No port; consumes from Redis |
 | Ollama | `http://localhost:11434` | Optional* | Chat / VLM / classifier / embedding host |
 | MinerU CLI | binary on `$PATH` | Yes | Subprocess, not a service. `ALLOW_PYMUPDF_FALLBACK=true` degrades gracefully |
-| SearXNG | `http://localhost:8080` | Optional | Only on the EXTERNAL route |
+| SearXNG | `http://localhost:8080` | Optional | Only when `WEB_SEARCH_PROVIDER=searxng`. The default provider is **Tavily**, which is reached over the public internet and runs no local service. |
 | autoheal | — | Compose only | Restarts containers whose healthcheck goes unhealthy |
 
 \* **One AI backend is required** — either Ollama or a cloud API key. Neither ⇒ chat returns
@@ -76,9 +76,13 @@
                                     │ OR cloud API fallback   │
                                     └─────────────────────────┘
 
-                  ┌──────────────────────┐
-                  │ SearXNG :8080        │  ⚠ the ONLY egress to the public
-                  └──────────────────────┘     internet, and only on EXTERNAL
+                  ┌──────────────────────────────┐
+                  │ search/web.py                │
+                  │   tavily (default) ──────────┼──► api.tavily.com   ⚠ leaves the host
+                  │   searxng ───────────────────┼──► :8080               (query string only)
+                  └──────────────────────────────┘     (stays on host)
+                     the ONLY egress to the public internet, and only on the
+                     EXTERNAL route or the paper agent's WEB tool
 ```
 
 ### (rendered)
@@ -94,21 +98,24 @@ flowchart TD
     W -->|subprocess| MU[MinerU CLI]
     W -->|HTTP| OL([Ollama :11434])
     API -->|HTTP| OL
-    API -->|EXTERNAL route only| SX([SearXNG :8080])
+    API -->|"EXTERNAL route · WEB tool"| SX{{"search/web.py"}}
+    SX -->|"default"| TV([api.tavily.com])
+    SX -.->|"WEB_SEARCH_PROVIDER=searxng"| SXNG([SearXNG :8080])
     OL -.->|"when unreachable"| CLOUD([cloud LLM API])
-    SX -.-> NET([public internet])
+    TV --> NET([public internet])
+    SXNG -.-> NET
 
     classDef owned stroke:#3b82f6,stroke-width:2px
     classDef store stroke:#10b981,stroke-width:2px
     classDef ext stroke:#f59e0b,stroke-dasharray:4 3
     class API,W,MU owned
     class PG,RD store
-    class OL,SX,CLOUD,NET ext
+    class OL,TV,SXNG,CLOUD,NET ext
 ```
 
 > 🟦 owned process · 🟩 data store · 🟨 external / optional.
 > Two edges are worth memorising: **the worker talks to Postgres over psycopg2 (sync), the API
-> over asyncpg (async)** — two separate pools against one database; and **SearXNG is the only
+> over asyncpg (async)** — two separate pools against one database; and **web search is the only
 > arrow leaving the machine**, which is what makes the local-first claim true.
 
 ---

@@ -3,7 +3,7 @@
 > **What this is:** the dispatcher for every doc in this repo. Find your task in the table, start
 > at the named doc, verify with the named command. This page routes; it never explains.
 >
-> **Status:** current · **Reflects code as of:** 2026-07-28 (`main`, 5471870)
+> **Status:** current · **Reflects code as of:** 2026-08-18 (`8fb153b`)
 > **Rule:** when a doc and the code disagree, **the code is authoritative** — and the doc is a
 > defect to be fixed in the same unit of work.
 
@@ -46,16 +46,17 @@ strings, not for synonyms.
 | **personal note** | Something the *reader* wrote, anchored the same way. Row in `personal_notes`. Distinct from **note** above, which is what the model answered. |
 | **bookmark** | A marked block, several per paper. Row in `reading_bookmarks`. One per block, enforced by a unique constraint. |
 | **deck** | Several margin cards sharing one slot, browsed one at a time. Rows in `note_decks` + `note_deck_members`. Owns nothing — spreading one leaves every card as it was. |
-| **anchor** | Where a note hangs: `anchor_sequence_id` plus an `anchor_kind` of `text`, `figure`, `equation`, or `block`. |
+| **anchor** | Where a note hangs: `anchor_sequence_id` plus an `anchor_kind` of `text`, `figure`, `equation`, `table`, or `block`. A `table` anchor covers the whole table — a selection inside one is promoted to it. |
+| **contents** | The paper's heading spine, each entry carrying the block number it starts at. What the paper agent is given instead of the paper, and what `SECTION` takes its argument from. |
 | **ingest profile** | `INGEST_PROFILE` — `fast` (a paper is done at chunking) or `full` (the historical embed → summarize chain). Books always take `full`. |
-| **paper agent** | `chat/paper_agent.py` — answers a note without embeddings, by stuffing the whole document or by driving `SEARCH`/`READ` over chunks. |
-| **retrieval_mode** | Which of those two the agent used for a given note: `whole` or `agent`. |
+| **paper agent** | `chat/paper_agent.py` — answers a note without embeddings, from the anchor plus the contents index, driving `SECTION`/`SEARCH`/`READ` over chunks. |
+| **retrieval_mode** | Which of those two the agent used for a given note: `whole` or `agent`. ⚠ `agent` is now the default for every size of paper; `whole` requires `PAPER_WHOLE_DOCUMENT_CONTEXT`. |
 | **`sequence_id`** | 1-based physical reading order within a document. The source of truth for order; vector similarity never redefines it. |
 | **route / `context_type`** | Which context source answers a `/ask` question: `LOCAL`, `GLOBAL`, `OVERVIEW`, `EXTERNAL`, or `OUT_OF_SCOPE`. Chosen by `chat/router.py`. ⚠ Applies to books only — notes are never routed. |
 | **LOCAL** | Current chunk + neighbours + inline images. |
 | **GLOBAL** | pgvector similarity search across one document. |
 | **OVERVIEW** | Pre-computed hierarchical summaries (`section_summaries`), no vector search. |
-| **EXTERNAL** | Live web search. The only path that reaches the public internet. |
+| **EXTERNAL** | Live web search (Tavily by default, SearXNG when pinned). With the paper agent's `WEB` tool, the only path that reaches the public internet — and only the query string does. |
 | **turn** | One message in a conversation. Row in `conversation_turns`. |
 | **sub-thread** | A tangent branched off a turn via `parent_turn_id`. Deliberately paper-free. |
 | **compaction** | A `role='compaction'` turn holding a dense summary of earlier turns, so long chats don't overflow the context window. |

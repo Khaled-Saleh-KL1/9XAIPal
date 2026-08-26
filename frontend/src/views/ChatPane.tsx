@@ -1007,7 +1007,7 @@ const MessageBubble = memo(function MessageBubble({
         >
           <span className="text-[10px] font-mono" style={{ color: 'var(--accent-fg)' }}>9</span>
         </div>
-        <span className="text-[11.5px] font-mono" style={{ color: 'var(--muted)' }}>9xaipal</span>
+        <span className="text-[11.5px] font-mono" style={{ color: 'var(--muted)' }}>scholarflow</span>
 
         {m.researchPerformed && (
           <span

@@ -11,6 +11,9 @@ class DocumentResponse(BaseModel):
     id: UUID
     filename: str
     original_filename: str
+    # Reader-chosen display name. None means "no override" — clients fall back
+    # to original_filename, which for an arXiv download is an id, not a title.
+    title: Optional[str] = None
     file_size_bytes: Optional[int] = None
     page_count: Optional[int] = None
     status: str
@@ -28,6 +31,11 @@ class DocumentResponse(BaseModel):
 class DocumentListResponse(BaseModel):
     documents: list[DocumentResponse]
     total: int
+
+
+class RenameDocumentRequest(BaseModel):
+    # None or blank clears the override and restores the filename.
+    title: Optional[str] = None
 
 
 class DocumentUploadResponse(BaseModel):

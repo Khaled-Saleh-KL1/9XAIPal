@@ -85,8 +85,12 @@ async def search_chunks_fulltext(
     query: str,
     limit: int = 10,
     document_id: Optional[UUID] = None,
+    document_ids: Optional[list[UUID]] = None,
 ) -> list[dict]:
     """Keyword search over chunks via Postgres full-text search.
+
+    Scope is one document (``document_id``), several (``document_ids``, which
+    wins), or the whole library (neither).
 
     Complements vector search: exact terms (equation numbers, acronyms, author
     names, dataset names) that embeddings blur are matched literally here.
@@ -95,7 +99,13 @@ async def search_chunks_fulltext(
     """
     filters = ""
     params: dict = {"q": query, "limit": limit}
-    if document_id:
+    if document_ids:
+        # ⚠ ANY(:ids), not IN (...). The study agent searches a list whose
+        # length changes per request, and interpolating it would build a new
+        # query string — and a new prepared-statement plan — every time.
+        filters = "AND c.document_id = ANY(:document_ids)"
+        params["document_ids"] = list(document_ids)
+    elif document_id:
         filters = "AND c.document_id = :document_id"
         params["document_id"] = document_id
 

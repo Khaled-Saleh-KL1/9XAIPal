@@ -6,8 +6,9 @@ import traceback
 from uuid import UUID, uuid4
 
 import aiofiles
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,13 @@ from app.api.errors import DocumentNotFound
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.paths import documents_dir, assets_dir, extracted_dir, images_dir, ensure_storage_dirs
-from app.schemas.documents import DocumentResponse, DocumentListResponse, DocumentUploadResponse
+from app.schemas.documents import (
+    DocumentResponse,
+    DocumentListResponse,
+    DocumentUploadResponse,
+    RenameDocumentRequest,
+)
+from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
@@ -236,6 +243,65 @@ async def get_paper_progress(
     }
 
 
+@router.patch("/{paper_id}", response_model=DocumentResponse)
+async def rename_paper(
+    paper_id: UUID,
+    payload: RenameDocumentRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a paper.
+
+    Sets a display title that overrides the uploaded filename everywhere the
+    library and reader show a name. A blank title clears the override.
+
+    ⚠ Renames the ROW, never the file. ``filename`` is the on-disk key that
+    documents/, extracted/, images/ and every chunk asset path are built from,
+    and ``original_filename`` is what /raw hands back when the reader downloads
+    the PDF. Touching either to satisfy a rename would break both.
+    """
+    doc = await doc_service.rename_document(db, paper_id, payload.title)
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+    await db.commit()
+    return DocumentResponse(**doc)
+
+
+@router.get("/{paper_id}/cover")
+async def get_paper_cover(
+    paper_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """The paper's first page as a JPEG thumbnail, rendered on first request.
+
+    Returns 204 rather than 404 when no cover can be produced (no source PDF,
+    an unrenderable first page). The library asks for a cover for every card it
+    draws, and a wall of 404s in the console makes a working library look
+    broken; "there is nothing here" is the honest answer and the <img> falls
+    back to its placeholder either way.
+    """
+    doc = await doc_service.get_document(db, paper_id)
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    # ⚠ Off the event loop. Rasterising a page is 50-200ms of CPU inside a
+    # native extension, and the library asks for every card's cover at once —
+    # inline, a twelve-paper grid would stall every other request for a second.
+    path = await run_in_threadpool(
+        cover_service.render_cover, paper_id, doc.get("filename")
+    )
+    if not path:
+        return Response(status_code=204)
+
+    return FileResponse(
+        path=str(path),
+        media_type="image/jpeg",
+        # A cover is immutable for the life of the document — the first page of
+        # a PDF cannot change — so let the browser keep it for a day and stop
+        # re-fetching one image per card on every library poll.
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @router.delete("/{paper_id}", status_code=204)
 async def delete_paper(
     paper_id: UUID,
@@ -287,6 +353,9 @@ async def delete_paper(
         pass
     except OSError as e:
         logger.warning(f"could not rmtree {image_path}: {e}")
+
+    # 5. Cached first-page cover: covers/<paper_id>.jpg
+    cover_service.delete_cover(paper_id)
 
 
 @router.post("/{paper_id}/rechunk", status_code=200)

@@ -18,10 +18,17 @@ import { getPaper, type PaperMeta } from '../api';
 export function ReadingView({
   paper,
   paperId,
+  jumpToSequence = null,
+  onJumped,
+  onOpenDesk,
   onBack,
 }: {
   paper: Paper;
   paperId: string;
+  /** A block to scroll to on open, handed over by the desk. */
+  jumpToSequence?: number | null;
+  onJumped?: () => void;
+  onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
 }) {
   const [meta, setMeta] = useState<PaperMeta | null>(null);
@@ -55,6 +62,9 @@ export function ReadingView({
     <ArticleReader
       paperId={paperId}
       fallbackTitle={paper.title}
+      jumpToSequence={jumpToSequence}
+      onJumped={onJumped}
+      onOpenDesk={onOpenDesk}
       onBack={onBack}
     />
   );

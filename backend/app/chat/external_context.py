@@ -1,4 +1,4 @@
-"""External context builder: web search via SearXNG.
+"""External context builder: web search via the configured provider.
 
 This app is exclusively about technology / computer-science research papers
 (machine learning, NLP, systems, hardware, etc.), so we bias the web search
@@ -9,7 +9,7 @@ that are useless for someone reading a Transformer paper.
 
 from typing import Optional
 
-from app.search.searxng_client import search, search_images
+from app.search.web import search, search_images
 from app.search.ranking import rank_results
 
 # Words in the user query that strongly suggest they want a picture.

@@ -96,6 +96,12 @@ services:
       # local-dev value like http://localhost:8080 resolves to *this container*
       # and makes web search fail with connection-refused.
       SEARXNG_URL: http://searxng:8080
+      # Web search provider. Tavily is hosted and reached over the public
+      # internet from inside the container, so unlike SEARXNG_URL it can be
+      # inherited from the host .env unchanged.
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
       MINERU_BINARY: ${MINERU_BINARY:-mineru}
       # Tells mineru_client.py that pipeline models are pre-baked into the
       # image (Dockerfile.mineru runs `mineru-models-download` at build time).
@@ -198,6 +204,12 @@ services:
       GUARDRAIL_SKIP_IN_PAPER: ${GUARDRAIL_SKIP_IN_PAPER:-true}
       # Reach the SearXNG compose service by name (see celery_worker note above).
       SEARXNG_URL: http://searxng:8080
+      # Web search provider. Tavily is hosted and reached over the public
+      # internet from inside the container, so unlike SEARXNG_URL it can be
+      # inherited from the host .env unchanged.
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
       STORAGE_ROOT: /data/storage
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-false}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}

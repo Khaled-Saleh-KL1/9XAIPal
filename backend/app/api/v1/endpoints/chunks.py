@@ -10,6 +10,7 @@ from app.api.errors import ChunkNotFound, DocumentNotFound
 from app.schemas.chunks import ChunkResponse, ChunkListResponse
 from app.services import chunks as chunk_service
 from app.services import documents as doc_service
+from app.services.outline import heading_level
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import figure_descriptions as fig_desc_repo
 
@@ -119,15 +120,23 @@ async def get_full_document(
             "image_url": image_url,
         })
         if c["chunk_type"] == "heading":
+            text = (c.get("plain_text") or "").strip()
             outline.append({
                 "sequence_order": c["sequence_id"],
-                "text": (c.get("plain_text") or "").strip(),
-                "level": len(c.get("heading_path") or []) or 1,
+                "text": text,
+                # ⚠ Not len(heading_path). MinerU flattens every section to
+                # depth 2, so that number cannot tell "3" from "3.1" and the
+                # contents render as one flat column. See services/outline.py.
+                "level": heading_level(text, len(c.get("heading_path") or [])),
             })
 
     return {
         "paper_id": str(paper_id),
-        "title": (doc.get("original_filename") or "").rsplit(".", 1)[0],
+        # A rename wins over the filename here too — the reader's title bar
+        # showing "2608.09888v1" while the library shows the real name would
+        # read as two different documents.
+        "title": (doc.get("title") or "").strip()
+                 or (doc.get("original_filename") or "").rsplit(".", 1)[0],
         "doc_kind": doc.get("doc_kind"),
         "status": doc.get("status"),
         "page_count": doc.get("page_count"),

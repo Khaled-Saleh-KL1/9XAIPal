@@ -81,7 +81,7 @@ export interface UploadingFile {
 
 // ── UI state types ────────────────────────────────────────────────────────────
 
-export type Route = 'library' | 'processing' | 'reading' | 'pdf-viewer';
+export type Route = 'library' | 'processing' | 'reading' | 'pdf-viewer' | 'desk';
 export type LibraryLayout = 'grid' | 'list';
 export type SortKey = 'recent' | 'title' | 'pages';
 

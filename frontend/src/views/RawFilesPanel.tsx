@@ -86,7 +86,7 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
         {/* storage info */}
         <div className="px-6 pb-2 flex items-center justify-between shrink-0">
           <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
-            Stored at ~/.9xaipal/raw/
+            Stored at ~/.scholarflow/raw/
           </span>
           <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
             {formatTotalSize(papers)}

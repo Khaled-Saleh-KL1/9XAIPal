@@ -6,3 +6,4 @@
 
 | Folder | Contains |
 | --- | --- |
+| [2026-08-26/](2026-08-26/) | `exa-firecrawl-research-stack.md` — superseded by the Tavily provider; never implemented. |

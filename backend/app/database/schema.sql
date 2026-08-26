@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS documents (
     -- or a "paper" (linear reading). Chosen by the user at upload time.
     doc_kind TEXT NOT NULL DEFAULT 'paper',
 
+    -- A reader-chosen display name, set from the library's rename control.
+    -- NULL means no override: the UI falls back to original_filename, which is
+    -- often an arXiv id rather than anything readable. Deliberately separate
+    -- from original_filename so the uploaded name is never lost and /raw can
+    -- still hand back a file named the way it arrived.
+    title TEXT,
+
     -- Paper-only mode: whether this document was embedded at ingestion, or the
     -- embedding pass was skipped because the whole document fits in the chat
     -- model's context (see docs/plans/paper-only-embedding-skip.md).
@@ -89,6 +96,91 @@ CREATE TABLE IF NOT EXISTS chunk_assets (
 
 CREATE INDEX IF NOT EXISTS idx_chunk_assets_chunk_id ON chunk_assets(chunk_id);
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- The desk: studies, their chats, and sticky notes
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- A named group of papers that scopes an answer.
+--
+-- A study is the unit of "what may this question be answered from". It is
+-- deliberately NOT a folder: a paper can sit in several studies at once, and
+-- removing it from one takes nothing away from the library.
+CREATE TABLE IF NOT EXISTS studies (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Membership. Ordered by position so the study's paper numbering (P1, P2, …)
+-- that the agent cites by is stable across requests -- a citation the reader
+-- saw yesterday must still point at the same paper today.
+CREATE TABLE IF NOT EXISTS study_papers (
+    study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (study_id, document_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_study_papers_document ON study_papers (document_id);
+
+-- A note the reader wants to keep in front of them, independent of where in a
+-- paper it came from -- or of any paper at all.
+--
+-- ⚠ Deliberately not personal_notes. A personal note is anchored to a block in
+-- one document and lives in that document's margin. A sticky has no anchor, may
+-- name several papers or none, and lives on the desk. Sharing a table would
+-- give every sticky an anchor_sequence_id that means nothing.
+CREATE TABLE IF NOT EXISTS sticky_notes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    body TEXT NOT NULL DEFAULT '',
+    -- One of a small named set the UI maps to CSS variables, not a hex value.
+    -- A stored hex would not survive the light/dark switch.
+    color TEXT NOT NULL DEFAULT 'yellow',
+    pinned BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- Which board this note lives on.
+    -- 'chat'      beside one conversation, keyed by study_id below
+    -- 'universal' the standalone board, not tied to any conversation
+    --
+    -- board and study_id together are the scope, and board is NOT redundant:
+    -- study_id IS NULL already means the library-wide CHAT, so without this
+    -- column a note on the library chat and a note on the universal board are
+    -- indistinguishable.
+    board TEXT NOT NULL DEFAULT 'universal',
+    -- The chat this note sits beside. NULL with board='chat' is the
+    -- library-wide chat. Always NULL when board='universal'.
+    --
+    -- ⚠ SET NULL, not CASCADE. Deleting a study must not delete the reader's
+    -- notes -- only the reader deletes a note. They move to the universal
+    -- board instead, and the delete confirmation says so.
+    study_id UUID REFERENCES studies(id) ON DELETE SET NULL,
+
+    -- Who wrote it: 'user' or 'assistant'. The assistant can create and edit
+    -- notes but never delete one, which is enforced structurally -- there is no
+    -- delete tool and study_agent does not import the repository's delete.
+    origin TEXT NOT NULL DEFAULT 'user',
+    -- Which model wrote an assistant note. NULL for the reader's own.
+    author_model TEXT,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sticky_notes_board ON sticky_notes (board, study_id);
+
+-- Which papers a sticky is about. Zero rows = a note about nothing in
+-- particular, which is a first-class case: it shows on every desk.
+CREATE TABLE IF NOT EXISTS sticky_note_papers (
+    sticky_id UUID NOT NULL REFERENCES sticky_notes(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    PRIMARY KEY (sticky_id, document_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sticky_note_papers_document ON sticky_note_papers (document_id);
+
 -- Conversation turns
 -- Supports the nested sub-thread feature (tangents without polluting the main paper chat).
 -- Main linear chat turns have parent_turn_id IS NULL.
@@ -105,6 +197,15 @@ CREATE TABLE IF NOT EXISTS conversation_turns (
     model TEXT,
     citations JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Which study's chat this turn belongs to.
+    -- NULL means the library-wide chat -- the scope that sees every paper.
+    -- That is a real scope, not a missing value, so it is not an error state.
+    study_id UUID REFERENCES studies(id) ON DELETE CASCADE,
+
+    -- The trail of tool calls behind an assistant turn, same shape as
+    -- paper_notes.agent_steps. See docs/02-architecture/chat-and-ask.md.
+    agent_steps JSONB,
 
     -- NULL for all turns that belong to the main linear chat for a conversation_id.
     -- Non-NULL points to the parent turn this message is a reply to (supports
@@ -269,9 +370,12 @@ CREATE TABLE IF NOT EXISTS paper_notes (
     anchor_chunk_id UUID REFERENCES chunks(id) ON DELETE SET NULL,
     anchor_sequence_id INTEGER NOT NULL,
 
-    -- 'text'   the reader highlighted a passage, held in anchor_quote
-    -- 'figure' the reader picked a figure, located by anchor_image_path
-    -- 'block'  no selection, so the note hangs off the block in view
+    -- 'text'     the reader highlighted a passage, held in anchor_quote
+    -- 'figure'   the reader picked a figure, located by anchor_image_path
+    -- 'equation' the reader picked a math block: quote is its LaTeX, image its crop
+    -- 'table'    the reader picked a whole table: quote is its transcription,
+    --            image its crop (a selection inside a table is promoted to this)
+    -- 'block'    no selection, so the note hangs off the block in view
     -- (no semicolons in these comments: the migration runner splits on them)
     anchor_kind TEXT NOT NULL DEFAULT 'text',
     anchor_quote TEXT,
@@ -302,6 +406,20 @@ CREATE TABLE IF NOT EXISTS paper_notes (
     -- per note, so a card can be moved off a figure it happens to cover.
     -- Ignored on windows too narrow for two gutters.
     margin_side TEXT NOT NULL DEFAULT 'right',
+
+    -- The trail of tool calls that produced this answer: one entry per
+    -- SECTION / SEARCH / READ / WEB call, carrying what was asked for, the
+    -- model's stated reason, and a one-line summary of what came back.
+    -- Persisted rather than only streamed, so a note reopened next week still
+    -- shows how it was grounded instead of just what it concluded.
+    agent_steps JSONB,
+
+    -- Which surface owns this note.
+    -- 'anchor'   a margin card beside the passage it is about (the default)
+    -- 'document' asked about the paper as a whole, from the panel
+    -- Document-scope notes still carry an anchor_sequence_id (the first block)
+    -- because the column is NOT NULL, but nothing positions by it.
+    scope TEXT NOT NULL DEFAULT 'anchor',
 
     -- Follow-ups chain off their parent so a note can become a short thread
     -- without leaving the margin.

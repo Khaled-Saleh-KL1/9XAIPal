@@ -5,6 +5,7 @@ import { LibraryView } from './views/LibraryView';
 import { ProcessingOverlay } from './views/ProcessingOverlay';
 import { ReadingView } from './views/ReadingView';
 import { RawFilesPanel } from './views/RawFilesPanel';
+import { DeskView } from './views/DeskView';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
 // keeps it out of the initial bundle so the library/reading views appear
@@ -13,6 +14,7 @@ const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
 import { uploadPaper, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
+import { displayTitle } from './lib/titles';
 
 // Mirrors the mapping used inside LibraryView so deep-linked papers carry the
 // same status/job_status fields the cards expect.
@@ -30,7 +32,7 @@ function metaToPaper(m: PaperMeta): Paper {
   const stage = (m.job_status || m.status || '').toLowerCase();
   return {
     id: m.id,
-    title: m.original_filename.replace('.pdf', ''),
+    title: displayTitle(m),
     authors: '',
     venue: '',
     pages: m.page_count || 0,
@@ -45,13 +47,23 @@ function metaToPaper(m: PaperMeta): Paper {
 type HashState =
   | { route: 'library' }
   | { route: 'reading'; paperId: string }
-  | { route: 'pdf-viewer'; paperId: string };
+  | { route: 'pdf-viewer'; paperId: string }
+  | { route: 'desk'; scope: string; page: DeskPage };
+
+/** The desk's two pages. `notes` is the universal board. */
+type DeskPage = 'study' | 'notes';
 
 function parseHash(): HashState {
   const h = window.location.hash.replace(/^#\/?/, '');
   const [head, id] = h.split('/');
   if (head === 'paper' && id) return { route: 'reading', paperId: id };
   if (head === 'raw' && id) return { route: 'pdf-viewer', paperId: id };
+  // The desk is deep-linkable: #/desk, #/desk/<studyId>, or #/desk/notes for
+  // the universal board. `notes` is not a study id, so the two cannot collide.
+  if (head === 'desk') {
+    if (id === 'notes') return { route: 'desk', scope: 'library', page: 'notes' };
+    return { route: 'desk', scope: id || 'library', page: 'study' };
+  }
   return { route: 'library' };
 }
 
@@ -59,6 +71,8 @@ function writeHash(state: HashState) {
   let next = '#/library';
   if (state.route === 'reading') next = `#/paper/${state.paperId}`;
   else if (state.route === 'pdf-viewer') next = `#/raw/${state.paperId}`;
+  else if (state.route === 'desk')
+    next = state.page === 'notes' ? '#/desk/notes' : `#/desk/${state.scope}`;
   if (window.location.hash !== next) window.history.replaceState(null, '', next);
 }
 
@@ -92,6 +106,18 @@ export function App() {
   const [rawPapers, setRawPapers] = useState<PaperMeta[]>([]);
   const [rawFilesOpen, setRawFilesOpen] = useState(false);
   const [viewingPdf, setViewingPdf] = useState<PaperMeta | null>(null);
+
+  // Which scope the desk opens on: a study id, or 'library'.
+  const [deskScope, setDeskScope] = useState<string>('library');
+  const [deskPage, setDeskPage] = useState<DeskPage>('study');
+  /**
+   * A block to scroll to once the reader mounts.
+   *
+   * ⚠ Held in App, not passed through the route, because it is consumed once.
+   * The desk hands over "open P2 at block 41" and the reader must not re-jump
+   * there every time it re-renders.
+   */
+  const [jumpTo, setJumpTo] = useState<number | null>(null);
 
   // Fetch raw papers list
   const refreshPapers = useCallback(() => {
@@ -200,7 +226,27 @@ export function App() {
   const openPaper = useCallback((p: Paper) => {
     setActivePaper(p);
     setActivePaperId(p.id);
+    setJumpTo(null);
     setRoute('reading');
+  }, []);
+
+  /** Open a paper the desk names, optionally at one of its blocks. */
+  const openPaperById = useCallback(async (documentId: string, sequenceId?: number) => {
+    try {
+      const meta = await getPaper(documentId);
+      setActivePaper(metaToPaper(meta));
+      setActivePaperId(meta.id);
+      setJumpTo(sequenceId ?? null);
+      setRoute('reading');
+    } catch {
+      // The paper is gone from under the desk; stay put rather than blanking.
+    }
+  }, []);
+
+  const openDesk = useCallback((scope: string = 'library', page: DeskPage = 'study') => {
+    setDeskScope(scope);
+    setDeskPage(page);
+    setRoute('desk');
   }, []);
 
   const onProcessingClose = useCallback(() => {
@@ -244,6 +290,12 @@ export function App() {
   useEffect(() => {
     const initial = parseHash();
     if (initial.route === 'library') return;
+    if (initial.route === 'desk') {
+      setDeskScope(initial.scope);
+      setDeskPage(initial.page);
+      setRoute('desk');
+      return;
+    }
 
     (async () => {
       try {
@@ -264,17 +316,46 @@ export function App() {
     // Only run on mount; further nav updates the hash via the next effect.
   }, []);
 
+  /**
+   * Follow the hash when something outside React changes it — a typed URL, a
+   * bookmark, the back button after a real navigation.
+   *
+   * ⚠ Without this the address bar and the view can disagree: changing only the
+   * fragment does not reload the page, so the SPA never learns about it and
+   * sits on whatever it was already showing. `writeHash` uses `replaceState`,
+   * so this listener never fires for our own navigation.
+   */
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = parseHash();
+      if (next.route === 'library') { setRoute('library'); return; }
+      if (next.route === 'desk') {
+        setDeskScope(next.scope);
+        setDeskPage(next.page);
+        setRoute('desk');
+        return;
+      }
+      if (next.route === 'reading' && next.paperId !== activePaperId) {
+        void openPaperById(next.paperId);
+      }
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [activePaperId, openPaperById]);
+
   useEffect(() => {
     if (route === 'reading' && activePaperId) {
       writeHash({ route: 'reading', paperId: activePaperId });
     } else if (route === 'pdf-viewer' && viewingPdf) {
       writeHash({ route: 'pdf-viewer', paperId: viewingPdf.id });
+    } else if (route === 'desk') {
+      writeHash({ route: 'desk', scope: deskScope, page: deskPage });
     } else if (route === 'library') {
       writeHash({ route: 'library' });
     }
     // 'processing' intentionally leaves the existing hash alone so a refresh
     // mid-upload returns to the library, not a half-baked processing state.
-  }, [route, activePaperId, viewingPdf]);
+  }, [route, activePaperId, viewingPdf, deskScope, deskPage]);
 
   return (
     <>
@@ -283,6 +364,7 @@ export function App() {
           onOpenPaper={openPaper}
           onUpload={startUpload}
           onOpenRawFiles={() => setRawFilesOpen(true)}
+          onOpenDesk={() => openDesk('library')}
           layout={layout}
           setLayout={setLayout}
         />
@@ -292,7 +374,20 @@ export function App() {
         <ReadingView
           paper={activePaper}
           paperId={activePaperId || activePaper.id}
+          jumpToSequence={jumpTo}
+          onJumped={() => setJumpTo(null)}
+          onOpenDesk={openDesk}
           onBack={() => setRoute('library')}
+        />
+      )}
+
+      {route === 'desk' && (
+        <DeskView
+          initialScope={deskScope}
+          page={deskPage}
+          onPageChange={setDeskPage}
+          onBack={() => setRoute('library')}
+          onOpenPaper={openPaperById}
         />
       )}
 

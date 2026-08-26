@@ -3,6 +3,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { getStaticPdfUrl } from '../api';
+import { displayTitle } from '../lib/titles';
 import type { PaperMeta } from '../api';
 import { IconBack } from '../components/Icons';
 
@@ -64,8 +65,11 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
         <span
           className="font-serif text-[14px] tracking-tight truncate"
           style={{ color: 'var(--fg)' }}
+          // The name the reader gave it, with the real filename on hover —
+          // this view is about the file, so the filename stays reachable.
+          title={paper.original_filename}
         >
-          {paper.original_filename}
+          {displayTitle(paper)}
         </span>
         {paper.page_count && (
           <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>

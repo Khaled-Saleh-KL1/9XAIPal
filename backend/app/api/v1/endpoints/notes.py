@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_ask_semaphore
 from app.api.errors import DocumentNotFound, ModelUnavailable, NoLLMConfigured
 from app.chat.paper_agent import answer_paper_question
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.connection import async_session_factory
 from app.database.repositories import chunks as chunk_repo
@@ -32,8 +33,10 @@ router = APIRouter()
 class NoteAnchor(BaseModel):
     """Where in the paper a note hangs."""
 
-    # 'text' (a highlighted passage), 'figure' (a picture), or 'block' (the
-    # reader asked without selecting anything, so we anchor to what's in view).
+    # 'text' (a highlighted passage), 'figure'/'equation'/'table' (a picture,
+    # a formula, a whole table), 'block' (the reader asked without selecting
+    # anything, so we anchor to what's in view), or 'document' (the holistic
+    # level — a question about the paper as a whole, asked from the panel).
     kind: str = "text"
     sequence_id: int
     chunk_id: Optional[UUID] = None
@@ -79,6 +82,11 @@ async def _choose_margin(
     near = [
         n for n in rows
         if n.get("parent_note_id") is None
+        # ⚠ Document-scope notes are excluded, not merely irrelevant. They all
+        # carry the first block's sequence id to satisfy a NOT NULL column, so
+        # counting them would make every note near the top of the paper look
+        # crowded on whichever side they nominally landed on.
+        and (n.get("scope") or "anchor") == "anchor"
         and abs((n.get("anchor_sequence_id") or 0) - anchor_sequence_id) <= _CROWDING_WINDOW
     ]
     right = sum(1 for n in near if (n.get("margin_side") or "right") == "right")
@@ -101,6 +109,8 @@ def _to_storage_path(image_url: Optional[str]) -> Optional[str]:
 def _serialize_note(n: dict) -> dict:
     return {
         "id": str(n["id"]),
+        "scope": n.get("scope") or "anchor",
+        "agent_steps": n.get("agent_steps") or [],
         "anchor_sequence_id": n["anchor_sequence_id"],
         "anchor_chunk_id": str(n["anchor_chunk_id"]) if n.get("anchor_chunk_id") else None,
         "anchor_kind": n.get("anchor_kind") or "text",
@@ -167,7 +177,11 @@ async def create_note_stream(
     """Create a note and stream its answer as Server-Sent Events.
 
     Events: ``created`` (carries the note id so the card can render at once),
-    ``status``, ``token``, ``done``, ``error``.
+    ``status``, ``step``, ``token``, ``done``, ``error``.
+
+    ``step`` arrives twice per tool call — once as ``running`` when the agent
+    announces it and once as ``done`` with what came back — keyed by ``id`` so
+    the client updates the row in place rather than appending a duplicate.
 
     The row is inserted before generation so the question is never lost to a
     failed model call — a note with an empty answer is a visible, retryable
@@ -204,12 +218,22 @@ async def create_note_stream(
     if payload.parent_note_id:
         parent = await note_repo.get_note(db, payload.parent_note_id)
 
+    # ⚠ Scope is derived from the anchor kind, never sent as its own field.
+    # A request carrying kind='document' with scope='anchor' (or the reverse)
+    # has no coherent meaning — the two say the same thing — and accepting both
+    # only creates rows the UI cannot place. A follow-up inherits its parent's.
+    scope = "document" if anchor.kind == "document" else "anchor"
+
     if parent:
+        scope = parent.get("scope") or "anchor"
         margin_side = parent.get("margin_side") or "right"
         requested_model = parent.get("requested_model")
     else:
         requested_model = resolve_requested_model(payload.model)
-        if payload.margin_side in ("left", "right"):
+        if scope == "document":
+            # Never rendered in a gutter, so there is no side to balance.
+            margin_side = "right"
+        elif payload.margin_side in ("left", "right"):
             margin_side = payload.margin_side
         else:
             margin_side = await _choose_margin(db, paper_id, anchor.sequence_id)
@@ -226,6 +250,7 @@ async def create_note_stream(
         parent_note_id=payload.parent_note_id,
         margin_side=margin_side,
         requested_model=requested_model,
+        scope=scope,
     )
     await db.commit()
     note_id = note["id"]
@@ -249,6 +274,7 @@ async def create_note_stream(
             model = ""
             retrieval_mode = None
             cited: list[int] = []
+            steps: list[dict] = []
             try:
                 async with async_session_factory() as session:
                     async for event in answer_paper_question(
@@ -263,12 +289,20 @@ async def create_note_stream(
                         thread=thread,
                         image_paths=[image_path] if image_path else None,
                         model=requested_model,
+                        # A holistic question has no anchor doing half the
+                        # retrieval, so it gets a bigger round budget.
+                        max_steps=(
+                            settings.paper_agent_holistic_max_steps
+                            if scope == "document"
+                            else None
+                        ),
                     ):
                         if event["type"] == "done":
                             answer = event.get("answer") or ""
                             model = event.get("model") or ""
                             retrieval_mode = event.get("retrieval_mode")
                             cited = event.get("cited") or []
+                            steps = event.get("steps") or []
                         else:
                             yield sse(event)
 
@@ -279,6 +313,7 @@ async def create_note_stream(
                         model=model,
                         retrieval_mode=retrieval_mode,
                         cited_sequence_ids=cited,
+                        agent_steps=steps,
                     )
                     await session.commit()
 
@@ -289,6 +324,7 @@ async def create_note_stream(
                     "model": model,
                     "retrieval_mode": retrieval_mode,
                     "cited_sequence_ids": cited,
+                    "agent_steps": steps,
                 })
             except NoLLMConfigured as e:
                 yield sse({"type": "error", "detail": str(e.model)})
