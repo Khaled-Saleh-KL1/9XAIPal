@@ -72,6 +72,18 @@ async def _ensure_recent_columns() -> None:
         # The model the reader picked, as distinct from the one the provider
         # reported. Follow-ups read this so they stay on the original model.
         "ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS requested_model TEXT",
+        # The trail of tool calls that produced a note's answer (SECTION /
+        # SEARCH / READ / WEB, each with what it asked for and what came back).
+        # Persisted so a note reopened later still shows how it was grounded,
+        # not just what it concluded.
+        "ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS agent_steps JSONB",
+        # Which surface a note belongs to: 'anchor' (a margin card beside a
+        # passage) or 'document' (asked about the whole paper from the panel).
+        # Defaults to 'anchor' so every pre-existing note stays in the margin.
+        "ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'anchor'",
+        # A reader-chosen display name for a paper, overriding the uploaded
+        # filename. NULL means "no override" — the filename still shows.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS title TEXT",
         # Nested sub-threads for tangents (paper-free focus mode inside threads).
         # Main chat turns keep parent_turn_id = NULL. Sub-thread turns point to their parent.
         "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS parent_turn_id UUID REFERENCES conversation_turns(id) ON DELETE CASCADE",

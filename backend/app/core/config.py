@@ -203,6 +203,19 @@ class Settings(BaseSettings):
     # How many blocks the contents index falls back to sampling when a paper
     # has no detected headings at all, so the model still gets a map of it.
     paper_agent_map_stride: int = 12
+    # Ceiling on results returned by one WEB call. Kept small: web extracts are
+    # long, and three good sources beat eight that crowd out the paper's own
+    # text in the prompt.
+    paper_agent_web_limit: int = 4
+    # How many rounds a HOLISTIC question gets (asked from the panel about the
+    # whole paper rather than about a passage). Higher than the anchored
+    # default because there is no anchor doing half the retrieval work: the
+    # agent has to find the relevant sections before it can read them.
+    paper_agent_holistic_max_steps: int = 6
+    # How many opening blocks a holistic question is shown as orientation —
+    # normally title, authors, and abstract. The contents index says what
+    # exists; this says what the paper claims to be about.
+    paper_agent_opening_blocks: int = 6
 
     # ── Paper-only mode ─────────────────────────────────────────────────────
     # Skip the embedding pass for documents small enough to fit whole in the

@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS documents (
     -- or a "paper" (linear reading). Chosen by the user at upload time.
     doc_kind TEXT NOT NULL DEFAULT 'paper',
 
+    -- A reader-chosen display name, set from the library's rename control.
+    -- NULL means no override: the UI falls back to original_filename, which is
+    -- often an arXiv id rather than anything readable. Deliberately separate
+    -- from original_filename so the uploaded name is never lost and /raw can
+    -- still hand back a file named the way it arrived.
+    title TEXT,
+
     -- Paper-only mode: whether this document was embedded at ingestion, or the
     -- embedding pass was skipped because the whole document fits in the chat
     -- model's context (see docs/plans/paper-only-embedding-skip.md).
@@ -305,6 +312,20 @@ CREATE TABLE IF NOT EXISTS paper_notes (
     -- per note, so a card can be moved off a figure it happens to cover.
     -- Ignored on windows too narrow for two gutters.
     margin_side TEXT NOT NULL DEFAULT 'right',
+
+    -- The trail of tool calls that produced this answer: one entry per
+    -- SECTION / SEARCH / READ / WEB call, carrying what was asked for, the
+    -- model's stated reason, and a one-line summary of what came back.
+    -- Persisted rather than only streamed, so a note reopened next week still
+    -- shows how it was grounded instead of just what it concluded.
+    agent_steps JSONB,
+
+    -- Which surface owns this note.
+    -- 'anchor'   a margin card beside the passage it is about (the default)
+    -- 'document' asked about the paper as a whole, from the panel
+    -- Document-scope notes still carry an anchor_sequence_id (the first block)
+    -- because the column is NOT NULL, but nothing positions by it.
+    scope TEXT NOT NULL DEFAULT 'anchor',
 
     -- Follow-ups chain off their parent so a note can become a short thread
     -- without leaving the margin.
