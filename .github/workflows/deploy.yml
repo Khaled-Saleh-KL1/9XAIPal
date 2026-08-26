@@ -14,6 +14,10 @@ concurrency:
 
 permissions:
   contents: read
+  # Lets this workflow create/update a GitHub Deployment automatically (via
+  # the job-level `environment:` key below) — needed for the deployment
+  # status GitHub shows on the repo homepage, on commits, and on PRs.
+  deployments: write
 
 env:
   # The persistent deployment directory. This is NOT where actions/checkout
@@ -31,6 +35,14 @@ jobs:
   deploy:
     name: deploy
     runs-on: self-hosted
+    # Turns this job into a tracked GitHub Deployment: shows "in progress"
+    # the moment it starts, then success/failure when it finishes, on the
+    # repo homepage's Environments widget, on this commit, and on the PR
+    # that introduced it. GitHub creates and updates this automatically —
+    # no extra step or third-party action needed, just this key.
+    environment:
+      name: production
+      url: https://kl1-9xaipal.duckdns.org
     steps:
       - uses: actions/checkout@v4
 
