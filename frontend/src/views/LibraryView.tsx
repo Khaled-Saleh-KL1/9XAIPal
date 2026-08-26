@@ -7,6 +7,7 @@ import {
 } from '../components/Icons';
 import { PaperCover } from './PaperCover';
 import { displayTitle } from '../lib/titles';
+import { stageProgress } from '../lib/progress';
 import { listPapers, deletePaper, renamePaper, type PaperMeta } from '../api';
 
 interface Props {
@@ -20,23 +21,8 @@ interface Props {
   setLayout: (v: LibraryLayout) => void;
 }
 
-// Map fine-grained ingestion stage → fraction for the library progress bar.
-// We deliberately reserve the first slice for "queued" so a fresh upload
-// shows visible motion immediately rather than a flat empty bar.
-const STAGE_PROGRESS: Record<string, number> = {
-  queued: 0.06,
-  extracting: 0.3,
-  chunking: 0.55,
-  embedding: 0.78,
-  summarizing: 0.92,
-  complete: 1,
-  failed: 0,
-};
-
 function deriveProgress(m: PaperMeta): number {
-  if (m.status === 'complete') return 1;
-  const stage = (m.job_status || m.status || '').toLowerCase();
-  return STAGE_PROGRESS[stage] ?? 0.08;
+  return stageProgress(m.status, m.job_status);
 }
 
 function metaToPaper(m: PaperMeta): Paper {
@@ -539,7 +525,7 @@ function PaperCard({
           }
         }}
       >
-        <PaperCover paperId={paper.id} title={paper.title} ready={!processing} />
+        <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
 
         <div className="paper-body">
           <div className="paper-head">

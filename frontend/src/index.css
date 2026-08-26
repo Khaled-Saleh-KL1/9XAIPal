@@ -148,6 +148,30 @@ body {
     ),
     var(--bg-3);
 }
+/* Title burned into the cover (book-jacket style). A bottom-anchored
+   gradient scrim, independent of the image's own colors, keeps white text
+   legible whether the first page underneath is mostly white paper or a dark
+   figure. */
+.paper-cover-title-scrim {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 20px 10px 9px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.5) 55%, transparent 100%);
+  pointer-events: none;
+}
+.paper-cover-title-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 13px;
+  line-height: 1.3;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
 /* Row layout: the same cover, shrunk to a spine-width chip. */
 .paper-cover.is-thumb {
   width: 34px;
@@ -428,7 +452,15 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 0.8s linear infinite; }
 
-@keyframes spin-slow { to { transform: rotate(360deg); } }
+/* Explicit from/to (not just `to`), offset by -90deg to match the base
+   orientation ProcessingOverlay's ring applies via the `-rotate-90` utility
+   class on the same element. A keyframes rule with only `to` implicitly
+   starts each cycle from whatever the OTHER CSS on the element already sets
+   (here, that -90deg utility) — so it swept from -90deg to 360deg (450
+   degrees, more than a full turn) and then snapped backward to -90deg on
+   every loop restart. Starting and ending 360deg apart at the same
+   normalized angle makes the loop seamless. */
+@keyframes spin-slow { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
 .spin-slow { animation: spin-slow 1.6s linear infinite; }
 
 /* Diagonal moving stripes — overlaid on the green progress fill while a paper

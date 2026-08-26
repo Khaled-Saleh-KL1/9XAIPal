@@ -1,16 +1,23 @@
 import type { UploadingFile, StepState } from '../types';
 import { IconDoc, IconCheck } from '../components/Icons';
+import { stageProgress } from '../lib/progress';
 
 /**
  * Backend-driven processing overlay. The visible step states are derived
  * directly from the document's real status. No fake timer, no fake counters.
  *
- * The step LIST depends on the document kind, because the pipelines differ:
- * a paper under the fast ingest profile is complete once it is chunked
- * (nothing is embedded or summarized — the model reads the paper at question
- * time), while a book still runs the full embed → summarize chain. Showing a
- * paper an "Embedding" step it never runs would tick green having done
- * nothing, which is exactly the dishonesty this overlay exists to avoid.
+ * The step list is the same for every document kind. Whether embedding and
+ * summarizing actually run is a backend decision (INGEST_PROFILE, see
+ * backend/app/extraction/pipeline_sync.py::_is_fast_ingest) that has nothing
+ * to do with `kind` — a deployment running the "full" profile embeds and
+ * summarizes papers too. Branching the step list on `kind` used to cause a
+ * paper to show both of its steps as "done" the moment it left chunking
+ * (because the old 4-item order didn't include 'embedding'/'summarizing'
+ * at all, so looking them up returned -1), while the library card — which
+ * reads the real stage — still correctly showed ~78%. If a document's
+ * embedding truly is skipped, its status jumps straight to 'complete' and
+ * `stateFor` marks every step done at that point regardless, so showing all
+ * four steps is never dishonest, just occasionally instant.
  */
 
 type BackendStatus =
@@ -82,7 +89,7 @@ interface Props {
   status: BackendStatus;
   errorMessage?: string | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | null while pending
-  /** Papers finish at chunking; books continue through embed + summarize. */
+  /** Only affects completion copy below — reading navigation, not the pipeline. */
   kind?: 'book' | 'paper';
   onClose: () => void;
   onCancel: () => void;
@@ -97,15 +104,8 @@ function extractorLabel(ex: string | null | undefined): { label: string; tone: '
 export function ProcessingOverlay({ file, status, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
-  const steps = kind === 'book' ? [...EXTRACT_STEPS, ...INDEX_STEPS] : EXTRACT_STEPS;
-  const order: BackendStatus[] = kind === 'book'
-    ? ['queued', 'extracting', 'chunking', 'embedding', 'summarizing', 'complete']
-    : ['queued', 'extracting', 'chunking', 'complete'];
-  const overall = complete
-    ? 1
-    : failed
-    ? 0
-    : Math.max(0, order.indexOf(status)) / (order.length - 1);
+  const steps = [...EXTRACT_STEPS, ...INDEX_STEPS];
+  const overall = failed ? 0 : stageProgress(status);
 
   return (
     <div
@@ -287,7 +287,7 @@ function StepIndicator({ id, state }: { id: number; state: StepState }) {
           </div>
         ) : state === 'active' ? (
           // Indeterminate spinner
-          <svg viewBox="0 0 28 28" className="w-7 h-7 ring-anim -rotate-90 spin-slow">
+          <svg viewBox="0 0 28 28" className="w-7 h-7 ring-anim spin-slow">
             <circle cx="14" cy="14" r={r} stroke="var(--border)" strokeWidth="2" fill="none" />
             <circle
               cx="14" cy="14" r={r}
