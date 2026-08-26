@@ -26,6 +26,7 @@ from app.chat.study_agent import answer_study_question
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.connection import async_session_factory
+from app.database.repositories import stickies as sticky_repo
 from app.database.repositories import studies as study_repo
 from app.llm.catalog import resolve_requested_model
 from app.services import documents as doc_service
@@ -271,9 +272,16 @@ async def chat_stream(
     )
     await db.commit()
 
+    # What is already pinned, so the agent can build on it and will not re-pin
+    # what it wrote last turn. Read here, while the request session is open.
+    chat_notes = await sticky_repo.list_stickies(db, board="chat", study_id=sid)
+    universal_notes = await sticky_repo.list_stickies(db, board="universal")
+
     # Plain dicts, read while the request session is still open.
     papers = [dict(p) for p in papers]
     history = [{"role": t["role"], "content": t["content"]} for t in history]
+    chat_notes = [{"body": n["body"], "origin": n["origin"]} for n in chat_notes]
+    universal_notes = [{"body": n["body"], "origin": n["origin"]} for n in universal_notes]
 
     def sse(event: dict) -> str:
         return f"data: {json.dumps(event)}\n\n"
@@ -290,6 +298,9 @@ async def chat_stream(
                         question=payload.question,
                         history=history,
                         model=requested_model,
+                        study_id=sid,
+                        chat_notes=chat_notes,
+                        universal_notes=universal_notes,
                     ):
                         if event["type"] == "done":
                             answer = event.get("answer") or ""

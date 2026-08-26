@@ -291,9 +291,48 @@ async def run_web(query: str, *, limit: Optional[int] = None) -> tuple[str, list
 # The final, streamed answer
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Longest prefix of the opening marker that could arrive split across two
-# tokens. Held back from the reader until the next token proves it is prose.
-_HOLD = len("<tool")
+# Longest prefix of a marker that could arrive split across two tokens. Held
+# back from the reader until the next token proves it is prose.
+_HOLD = len("</note>")
+
+# A note the model wants pinned, written inside its answer.
+#
+# ⚠ **This exists because the model reaches for it whether or not we offer it.**
+# Asked to "pin a note", it wrote `<note>…</note>` into the answer on the first
+# try — the forced final turn is told it has no tools, so a NOTE: line in a tool
+# block is not available to it there, and it improvised a tag. Parsing the tag
+# is meeting the model where it is; refusing to would leave raw XML in the
+# reader's answer and no note on the board.
+_NOTE_TAG_RE = re.compile(r"<note(\s[^>]*)?>(.*?)</note>", re.DOTALL | re.IGNORECASE)
+# `<note board="all">` / `<note all>` targets the universal board.
+_NOTE_ALL_RE = re.compile(r"\ball\b|universal", re.IGNORECASE)
+
+
+def extract_notes(text: str) -> tuple[str, list[dict]]:
+    """Pull `<note>` blocks out of an answer.
+
+    Returns the answer with them removed and the notes themselves, each
+    ``{"body", "board"}``. A note is *removed* from the answer rather than left
+    in: it is going on the board, and saying it twice makes the board the
+    duplicate of the thing above it.
+    """
+    notes: list[dict] = []
+    for m in _NOTE_TAG_RE.finditer(text or ""):
+        body = (m.group(2) or "").strip()
+        if not body:
+            continue
+        attrs = m.group(1) or ""
+        notes.append({
+            "body": body,
+            "board": "universal" if _NOTE_ALL_RE.search(attrs) else "chat",
+        })
+    if not notes:
+        return text, []
+    cleaned = _NOTE_TAG_RE.sub("", text)
+    # Collapse the hole the tag left: a removed block otherwise shows as three
+    # blank lines mid-answer.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, notes
 
 
 async def stream_answer(
@@ -301,30 +340,44 @@ async def stream_answer(
     *,
     model: Optional[str] = None,
     temperature: float = 0.3,
+    catch_notes: bool = False,
 ) -> AsyncIterator[dict]:
-    """Stream the forced final answer, refusing to emit a tool block.
+    """Stream the forced final answer, keeping markup out of the reader's view.
 
     Yields ``{"type": "token"}`` events and finally
-    ``{"type": "_final", "answer", "model"}`` for the caller to shape.
+    ``{"type": "_final", "answer", "model", "notes"}`` for the caller to shape.
 
-    ⚠ **The last turn is told it has no tools left, and sometimes calls one
-    anyway.** When that happens the tokens are already on their way to the
-    reader, so a post-hoc strip is too late — "tool> THINK: verify P3's cost
-    claim… SECTION: P3:29" lands in the middle of the answer and stays there
-    until a refetch quietly replaces it. The filter therefore sits in the
-    stream: the moment ``<tool`` appears the generation has stopped being an
-    answer, and everything from there is dropped from both the stream and the
-    persisted text.
+    Two different filters, because two different things go wrong:
 
-    ⚠ The last few characters are withheld until the next token arrives,
-    because the marker can be split across token boundaries ("<to" + "ol>").
-    Without that, a leak that straddles a boundary is emitted before it can be
-    recognised. They are flushed when the stream ends.
+    ⚠ **A leaked `<tool>` block truncates.** The last turn is told it has no
+    tools left and sometimes calls one anyway. When it does, everything from
+    that point has stopped being an answer — "tool> THINK: verify P3's cost
+    claim… SECTION: P3:29" — so the stream ends there. **Observed, not
+    hypothetical**: it happened on the first live desk question.
+
+    ⚠ **A `<note>` block is skipped, not truncated.** It is a legitimate thing
+    the model wanted to say, it just belongs on the board rather than in the
+    prose — and it routinely comes *first*, so truncating at it would drop the
+    entire answer. The span is stepped over and the answer continues after it.
+
+    Both hold back the last few characters until the next token arrives, because
+    a marker can be split across token boundaries ("<no" + "te>").
     """
     buf = ""
     sent = 0          # how much of buf the reader has already seen
     leaked = False
+    skip_from = -1    # start of a `<note>` span we are stepping over
     answered_by = ""
+
+    def emit_upto(limit: int) -> Optional[dict]:
+        """Release buf[sent:limit] to the reader, if there is anything there."""
+        nonlocal sent
+        if limit > sent:
+            chunk = buf[sent:limit]
+            sent = limit
+            if chunk:
+                return {"type": "token", "text": chunk}
+        return None
 
     async for event in llm_client.stream_chat(
         messages, temperature=temperature, model=model
@@ -338,24 +391,55 @@ async def stream_answer(
         if leaked:
             continue
         buf += event["text"]
-        cut = buf.lower().find("<tool")
+        low = buf.lower()
+
+        # Inside a note we are waiting for the closing tag, and nothing in
+        # between reaches the reader.
+        if skip_from >= 0:
+            close = low.find("</note>", skip_from)
+            if close == -1:
+                continue
+            sent = close + len("</note>")
+            skip_from = -1
+            low = buf.lower()
+
+        cut = low.find("<tool", sent)
+        note_at = low.find("<note", sent) if catch_notes else -1
+
+        if note_at != -1 and (cut == -1 or note_at < cut):
+            ev = emit_upto(note_at)
+            if ev:
+                yield ev
+            skip_from = note_at
+            continue
+
         if cut != -1:
             leaked = True
-            if cut > sent:
-                yield {"type": "token", "text": buf[sent:cut]}
-                sent = cut
+            ev = emit_upto(cut)
+            if ev:
+                yield ev
             continue
-        safe = max(sent, len(buf) - _HOLD)
-        if safe > sent:
-            yield {"type": "token", "text": buf[sent:safe]}
-            sent = safe
 
-    answer = strip_tool_block(buf) if leaked else buf.strip()
-    if not leaked and len(buf) > sent:
-        yield {"type": "token", "text": buf[sent:]}
+        ev = emit_upto(max(sent, len(buf) - _HOLD))
+        if ev:
+            yield ev
+
+    answer = strip_tool_block(buf) if leaked else buf
+    notes: list[dict] = []
+    if catch_notes:
+        answer, notes = extract_notes(answer)
+    answer = answer.strip()
+
+    if not leaked and skip_from < 0:
+        # Flush whatever was held back, minus anything the note pass removed.
+        tail = buf[sent:]
+        if catch_notes:
+            tail, _ = extract_notes(tail)
+        if tail.strip():
+            yield {"type": "token", "text": tail}
     if leaked:
         logger.warning(
             "agent emitted a tool block on the forced final turn; %d chars dropped",
             len(buf) - len(answer),
         )
-    yield {"type": "_final", "answer": answer, "model": answered_by}
+    yield {"type": "_final", "answer": answer, "model": answered_by, "notes": notes}

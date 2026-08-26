@@ -1,15 +1,24 @@
-"""Sticky notes: what the reader wants kept in front of them.
+"""Sticky notes: what the reader — and the assistant — want kept in front of them.
+
+Two boards:
+
+    board='chat'       beside one conversation, keyed by study_id
+                       (NULL study_id = the library-wide chat)
+    board='universal'  the standalone board, tied to no conversation
+
+⚠ **`board` is not redundant with `study_id`.** `study_id IS NULL` already means
+the library-wide *chat*, so without the column a note on that chat and a note on
+the universal board would be the same row.
 
 ⚠ **Deliberately not `personal_notes`.** A personal note is anchored to a block
-in one document and lives in that document's margin; a sticky has no anchor,
-may name several papers or none, and lives on the desk. Sharing a table would
-give every sticky an `anchor_sequence_id` that means nothing and would surface
-stickies in the margin layout.
+in one document and lives in that document's margin; a sticky has no anchor and
+lives on a board. Sharing a table would give every sticky an
+`anchor_sequence_id` that means nothing.
 
-⚠ **Zero papers is a first-class scope, not an incomplete row.** A note about
-nothing in particular — a question to come back to, a definition worth
-remembering — shows on every desk. Code that treats an empty `document_ids` as
-"not yet assigned" will hide exactly the notes the reader most wanted pinned.
+⚠ **There is no assistant-facing delete.** The reader is the only one who
+removes a note. That is enforced structurally rather than by a flag:
+:func:`delete_sticky` exists for the HTTP endpoint the UI calls, and
+``study_agent`` never imports it.
 """
 
 from uuid import UUID
@@ -20,7 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # The UI maps these to CSS variables so they survive the light/dark switch;
 # storing a hex here would not. Anything else falls back to 'yellow'.
-COLORS = ("yellow", "blue", "green", "pink", "plain")
+COLORS = ("yellow", "blue", "green", "pink", "orange", "plain")
+
+BOARDS = ("chat", "universal")
 
 
 def normalize_color(color: Optional[str]) -> str:
@@ -28,8 +39,13 @@ def normalize_color(color: Optional[str]) -> str:
     return c if c in COLORS else "yellow"
 
 
+def normalize_board(board: Optional[str]) -> str:
+    b = (board or "").strip().lower()
+    return b if b in BOARDS else "universal"
+
+
 async def _attach_papers(session: AsyncSession, rows: list[dict]) -> list[dict]:
-    """Fold each sticky's paper ids onto it in one extra query, not N."""
+    """Fold each sticky's referenced papers onto it in one extra query, not N."""
     if not rows:
         return []
     ids = [r["id"] for r in rows]
@@ -54,35 +70,34 @@ async def _attach_papers(session: AsyncSession, rows: list[dict]) -> list[dict]:
 
 
 async def list_stickies(
-    session: AsyncSession, *, document_ids: Optional[list[UUID]] = None
+    session: AsyncSession,
+    *,
+    board: str = "universal",
+    study_id: Optional[UUID] = None,
 ) -> list[dict]:
-    """Stickies, pinned first then newest.
+    """One board's notes, pinned first then newest.
 
-    ``document_ids`` narrows to notes about any of those papers **plus every
-    unscoped note** — an unscoped sticky is relevant everywhere, so filtering
-    it out of a study's desk would be wrong. Passing ``None`` returns all.
+    ⚠ ``IS NOT DISTINCT FROM`` rather than ``=`` for ``study_id``: the
+    library-wide chat is keyed by NULL, and ``study_id = NULL`` matches nothing.
     """
-    if document_ids is None:
+    board = normalize_board(board)
+    if board == "universal":
         result = await session.execute(
             text("""
                 SELECT * FROM sticky_notes
+                WHERE board = 'universal'
                 ORDER BY pinned DESC, updated_at DESC
             """)
         )
     else:
         result = await session.execute(
             text("""
-                SELECT sn.* FROM sticky_notes sn
-                WHERE NOT EXISTS (
-                          SELECT 1 FROM sticky_note_papers p WHERE p.sticky_id = sn.id
-                      )
-                   OR EXISTS (
-                          SELECT 1 FROM sticky_note_papers p
-                          WHERE p.sticky_id = sn.id AND p.document_id = ANY(:ids)
-                      )
-                ORDER BY sn.pinned DESC, sn.updated_at DESC
+                SELECT * FROM sticky_notes
+                WHERE board = 'chat'
+                  AND study_id IS NOT DISTINCT FROM :study_id
+                ORDER BY pinned DESC, updated_at DESC
             """),
-            {"ids": document_ids or [None]},
+            {"study_id": study_id},
         )
     return await _attach_papers(session, [dict(r) for r in result.mappings().all()])
 
@@ -118,17 +133,34 @@ async def create_sticky(
     session: AsyncSession,
     *,
     body: str,
+    board: str = "universal",
+    study_id: Optional[UUID] = None,
     color: Optional[str] = None,
     pinned: bool = False,
+    origin: str = "user",
+    author_model: Optional[str] = None,
     document_ids: Optional[list[UUID]] = None,
 ) -> dict:
+    board = normalize_board(board)
     result = await session.execute(
         text("""
-            INSERT INTO sticky_notes (body, color, pinned)
-            VALUES (:body, :color, :pinned)
+            INSERT INTO sticky_notes
+                (body, board, study_id, color, pinned, origin, author_model)
+            VALUES
+                (:body, :board, :study_id, :color, :pinned, :origin, :author_model)
             RETURNING *
         """),
-        {"body": body, "color": normalize_color(color), "pinned": pinned},
+        {
+            "body": body,
+            "board": board,
+            # A universal note is tied to no conversation, so the scope is
+            # dropped rather than carried along where nothing would read it.
+            "study_id": study_id if board == "chat" else None,
+            "color": normalize_color(color),
+            "pinned": pinned,
+            "origin": "assistant" if origin == "assistant" else "user",
+            "author_model": author_model if origin == "assistant" else None,
+        },
     )
     row = dict(result.mappings().one())
     await _set_papers(session, row["id"], document_ids or [])
@@ -142,14 +174,21 @@ async def update_sticky(
     body: Optional[str] = None,
     color: Optional[str] = None,
     pinned: Optional[bool] = None,
+    board: Optional[str] = None,
+    study_id: Optional[UUID] = None,
+    move_scope: bool = False,
     document_ids: Optional[list[UUID]] = None,
 ) -> Optional[dict]:
     """Patch a sticky. Omitted fields are left alone.
 
-    ⚠ ``document_ids=[]`` clears the scope (making the note global) while
-    ``document_ids=None`` leaves it untouched. The two must stay distinguishable
-    — collapsing them would make "this note is about nothing in particular"
-    unreachable through the API.
+    ⚠ ``origin`` is never patchable. A note the assistant wrote stays marked as
+    the assistant's however many times the reader edits it — the marker records
+    where the claim came from, and letting an edit launder it would make the
+    badge worthless.
+
+    ⚠ Moving between boards needs ``move_scope=True`` as well as ``board``,
+    because ``study_id=None`` is a legitimate destination (the library chat) and
+    is otherwise indistinguishable from "not supplied".
     """
     sets = ["updated_at = NOW()"]
     params: dict = {"id": sticky_id}
@@ -162,6 +201,12 @@ async def update_sticky(
     if pinned is not None:
         sets.append("pinned = :pinned")
         params["pinned"] = pinned
+    if move_scope:
+        target = normalize_board(board)
+        sets.append("board = :board")
+        params["board"] = target
+        sets.append("study_id = :study_id")
+        params["study_id"] = study_id if target == "chat" else None
 
     result = await session.execute(
         text(f"UPDATE sticky_notes SET {', '.join(sets)} WHERE id = :id RETURNING *"),
@@ -176,6 +221,12 @@ async def update_sticky(
 
 
 async def delete_sticky(session: AsyncSession, sticky_id: UUID) -> bool:
+    """Remove a note.
+
+    ⚠ **Reader-only.** Reached from `DELETE /stickies/{id}`, which the UI calls
+    and nothing else does. ``study_agent`` must never import this: the
+    assistant writes and edits notes, and removing one is the reader's call.
+    """
     result = await session.execute(
         text("DELETE FROM sticky_notes WHERE id = :id"), {"id": sticky_id}
     )

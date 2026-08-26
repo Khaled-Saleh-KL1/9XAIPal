@@ -140,9 +140,36 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
     -- A stored hex would not survive the light/dark switch.
     color TEXT NOT NULL DEFAULT 'yellow',
     pinned BOOLEAN NOT NULL DEFAULT FALSE,
+
+    -- Which board this note lives on.
+    -- 'chat'      beside one conversation, keyed by study_id below
+    -- 'universal' the standalone board, not tied to any conversation
+    --
+    -- board and study_id together are the scope, and board is NOT redundant:
+    -- study_id IS NULL already means the library-wide CHAT, so without this
+    -- column a note on the library chat and a note on the universal board are
+    -- indistinguishable.
+    board TEXT NOT NULL DEFAULT 'universal',
+    -- The chat this note sits beside. NULL with board='chat' is the
+    -- library-wide chat. Always NULL when board='universal'.
+    --
+    -- ⚠ SET NULL, not CASCADE. Deleting a study must not delete the reader's
+    -- notes -- only the reader deletes a note. They move to the universal
+    -- board instead, and the delete confirmation says so.
+    study_id UUID REFERENCES studies(id) ON DELETE SET NULL,
+
+    -- Who wrote it: 'user' or 'assistant'. The assistant can create and edit
+    -- notes but never delete one, which is enforced structurally -- there is no
+    -- delete tool and study_agent does not import the repository's delete.
+    origin TEXT NOT NULL DEFAULT 'user',
+    -- Which model wrote an assistant note. NULL for the reader's own.
+    author_model TEXT,
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_sticky_notes_board ON sticky_notes (board, study_id);
 
 -- Which papers a sticky is about. Zero rows = a note about nothing in
 -- particular, which is a first-class case: it shows on every desk.

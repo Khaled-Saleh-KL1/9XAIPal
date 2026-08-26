@@ -114,6 +114,12 @@ async def _ensure_recent_columns() -> None:
             document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             PRIMARY KEY (sticky_id, document_id)
         )""",
+        # Sticky notes gained a board, a scope, and an author.
+        "ALTER TABLE sticky_notes ADD COLUMN IF NOT EXISTS board TEXT NOT NULL DEFAULT 'universal'",
+        "ALTER TABLE sticky_notes ADD COLUMN IF NOT EXISTS study_id UUID REFERENCES studies(id) ON DELETE SET NULL",
+        "ALTER TABLE sticky_notes ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'user'",
+        "ALTER TABLE sticky_notes ADD COLUMN IF NOT EXISTS author_model TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_sticky_notes_board ON sticky_notes (board, study_id)",
         # Which study's chat a turn belongs to. NULL = the library-wide chat,
         # which is a real scope rather than a missing value.
         "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS study_id UUID REFERENCES studies(id) ON DELETE CASCADE",

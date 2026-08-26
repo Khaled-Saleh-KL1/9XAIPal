@@ -10,6 +10,17 @@ question turns on before it can read anything.
     SEARCH: <terms>           full-text + substring across every paper in scope
     READ: P1:40-52            a block range, verbatim
     WEB: <terms>              the public internet
+    NOTE: <text>              pin a note to this chat's board
+    NOTE ALL: <text>          pin a note to the universal board
+
+⚠ **The agent writes notes and never deletes one.** Removing a note is the
+reader's call, and that is structural rather than a rule the model is asked to
+follow: there is no delete tool and this module does not import the
+repository's ``delete_sticky``.
+
+⚠ **It reads the boards too.** Both the chat's notes and the universal board
+ride in the prompt, each labelled with who wrote it, so a follow-up can build on
+what is pinned and the model does not re-pin something it already wrote.
 
 ⚠ **Papers are numbered, and the numbering is load-bearing.** A block number
 means nothing on its own once there is more than one paper, so every reference
@@ -46,6 +57,7 @@ from app.chat.agent_tools import (
     read_range,
     run_search,
     run_web,
+    extract_notes,
     section_range,
     step_event,
     stream_answer,
@@ -54,6 +66,10 @@ from app.chat.agent_tools import (
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.repositories import chunks as chunk_repo
+# ⚠ create_sticky and update_sticky only. delete_sticky is deliberately not
+# imported: removing a note is the reader's call, and the absence of the
+# import is the enforcement.
+from app.database.repositories import stickies as sticky_repo
 from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
 from app.search import web as web_search
@@ -110,6 +126,9 @@ containing it, so a SEARCH hit can be handed straight to SECTION.
 - SEARCH looks in EVERY paper in the study at once and tells you which paper \
 each hit came from. Use it when you do not know which paper holds something.
 - READ returns a block range from one paper, verbatim.{web_help}
+- NOTE pins a short note to this chat's board, where the reader will see it \
+beside the conversation. NOTE ALL pins it to the universal board instead, for \
+something that outlives this chat.
 - Up to three lines of each. Every line in one block runs before you are \
 called again.
 
@@ -131,11 +150,41 @@ never write [[WEB]] or a marker round anything that is not a paper block."""
 _WEB_EXAMPLE = "\nWEB: ARC-AGI state of the art 2026"
 
 
+# Appended to the tool instructions. Kept separate so the rules about when NOT
+# to write a note sit next to each other rather than being scattered through the
+# tool list, where the "do" and the "don't" drift apart as the prompt is edited.
+_NOTE_HELP = """
+
+Writing notes:
+- Write a note when the reader asks you to, or when you turn up something worth \
+keeping that the question did not ask about — a contradiction between two \
+papers, a number that undercuts a claim, a thread worth pulling later.
+- Do NOT summarise your own answer into a note. The answer is already on \
+screen, and a board that repeats it is a board nobody reads.
+- At most two notes per question, and never the same note twice: what is \
+already pinned is shown to you above.
+- You cannot delete or unpin a note. Only the reader can. If something pinned \
+is wrong, say so in the answer rather than trying to remove it.
+- The reader sees which notes are yours. Write them as notes to them, not as \
+notes to yourself."""
+
+
 _ANSWER_SYSTEM = _BASE_ROLE + """
 
 You are answering from what you gathered. You cannot look anything else up. \
 Answer from what is in front of you, and if it does not settle the question, \
-say which part is unsettled rather than assuming the papers are silent on it."""
+say which part is unsettled rather than assuming the papers are silent on it.
+
+If the reader asked you to note something down, or you found something worth \
+keeping, wrap it in a note tag anywhere in your reply:
+
+<note>P3 is the only one reporting wall-clock (tokens/sec), in its efficiency section</note>
+<note board="all">nobody here reports latency under load - worth chasing</note>
+
+Plain <note> pins to this chat's board; board="all" pins to the universal one. \
+The tag is removed before the reader sees your reply and the text goes on the \
+board instead, so do NOT also say it in the answer. You cannot delete a note - \
+only the reader can."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,6 +233,32 @@ def _format_index(papers: list[dict], chunks_by_doc: dict) -> str:
     return "\n".join(out)
 
 
+def _format_boards(chat_notes: list[dict], universal_notes: list[dict]) -> str:
+    """The two boards, as the model sees them.
+
+    ⚠ Each note says who wrote it. Without that the model re-pins its own notes
+    every few turns — it has no memory of having written them — and the reader
+    ends up with the same observation five times in five colours.
+
+    ⚠ It is also told it cannot remove them, at the point where it is looking at
+    them. The rule is in the system prompt too; this is the reminder at the site
+    of temptation.
+    """
+    if not chat_notes and not universal_notes:
+        return ""
+    lines = ["NOTES ALREADY ON THE BOARDS (you can add and edit, never remove):"]
+    for label, rows in (("this chat", chat_notes), ("the universal board", universal_notes)):
+        if not rows:
+            continue
+        lines.append(f"  On {label}:")
+        for n in rows:
+            who = "you wrote" if (n.get("origin") == "assistant") else "the reader wrote"
+            body = " ".join((n.get("body") or "").split())[:240]
+            if body:
+                lines.append(f"    - ({who}) {body}")
+    return "\n".join(lines)
+
+
 def _format_history(turns: list[dict]) -> str:
     """Earlier exchanges, so a follow-up has something to follow."""
     if not turns:
@@ -216,6 +291,11 @@ _READ_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _SEARCH_RE = re.compile(r"^\s*SEARCH:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+# ⚠ "NOTE ALL:" must be tried before "NOTE:", and the plain form must refuse to
+# match it — otherwise a universal note is parsed as a chat note whose body
+# begins "ALL:" and silently lands on the wrong board.
+_NOTE_ALL_RE = re.compile(r"^\s*NOTE\s+ALL:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_NOTE_RE = re.compile(r"^\s*NOTE:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 def parse_tool_calls(reply: str) -> dict:
@@ -224,7 +304,10 @@ def parse_tool_calls(reply: str) -> dict:
     Only looks inside a <tool> block. A model that mentions "SEARCH:" while
     explaining something in prose must not accidentally trigger a round trip.
     """
-    empty = {"think": None, "sections": [], "searches": [], "reads": [], "webs": []}
+    empty = {
+        "think": None, "sections": [], "searches": [], "reads": [], "webs": [],
+        "notes": [], "notes_all": [],
+    }
     match = TOOL_BLOCK_RE.search(reply)
     if not match:
         return empty
@@ -236,6 +319,10 @@ def parse_tool_calls(reply: str) -> dict:
         "searches": [q.strip() for q in _SEARCH_RE.findall(body) if q.strip()][:3],
         "reads": [(int(p), int(a), int(b)) for p, a, b in _READ_RE.findall(body)][:3],
         "webs": [q.strip() for q in WEB_RE.findall(body) if q.strip()][:2],
+        # Two notes per round, hard. A model that decides note-writing is the
+        # helpful thing to do will otherwise bury the board in one answer.
+        "notes": [n.strip() for n in _NOTE_RE.findall(body) if n.strip()][:2],
+        "notes_all": [n.strip() for n in _NOTE_ALL_RE.findall(body) if n.strip()][:2],
     }
 
 
@@ -243,6 +330,7 @@ def has_calls(calls: dict) -> bool:
     """Whether anything in this block actually executes. THINK alone does not."""
     return bool(
         calls["sections"] or calls["searches"] or calls["reads"] or calls["webs"]
+        or calls["notes"] or calls["notes_all"]
     )
 
 
@@ -275,6 +363,12 @@ def _plan(calls: dict, paper_count: int) -> list[dict]:
         plan.append({"tool": "SEARCH", "arg": query})
     for query in calls["webs"]:
         plan.append({"tool": "WEB", "arg": query})
+    # Notes last, and not because they are slow — they are a write, and running
+    # them after the reads keeps the trail reading as "looked, then wrote".
+    for body in calls["notes"]:
+        plan.append({"tool": "NOTE", "arg": body, "board": "chat"})
+    for body in calls["notes_all"]:
+        plan.append({"tool": "NOTE", "arg": body, "board": "universal"})
     return plan
 
 
@@ -285,6 +379,9 @@ def _pending_label(call: dict, papers: list[dict], chunks_by_doc: dict) -> str:
         return f"Searching all papers for “{call['arg']}”"
     if tool == "WEB":
         return f"Searching the web for “{call['arg']}”"
+    if tool == "NOTE":
+        where = "the universal board" if call.get("board") == "universal" else "this chat"
+        return f"Pinning a note to {where}"
     name = _paper_label(papers[call["p"] - 1])
     if tool == "READ":
         return f"Reading {name} · blocks {call['start']}–{call['end']}"
@@ -297,6 +394,9 @@ async def _run_call(
     call: dict,
     papers: list[dict],
     chunks_by_doc: dict,
+    *,
+    study_id: Optional[UUID] = None,
+    model_name: Optional[str] = None,
 ) -> dict:
     """Execute one planned call and return it filled in.
 
@@ -367,6 +467,34 @@ async def _run_call(
         ]
         return out
 
+    if tool == "NOTE":
+        universal = call.get("board") == "universal"
+        row = await sticky_repo.create_sticky(
+            session,
+            body=call["arg"],
+            board="universal" if universal else "chat",
+            study_id=None if universal else study_id,
+            # A distinct colour so an assistant note is legible as one even
+            # before the badge is read. The badge is the load-bearing marker;
+            # this is the glance.
+            color="orange",
+            origin="assistant",
+            author_model=model_name,
+        )
+        # ⚠ Committed here, not at the end of the request. The note is a side
+        # effect the reader asked for; if generation then fails or is cancelled,
+        # losing the note as well would be a second failure caused by the first.
+        await session.commit()
+        where = "the universal board" if universal else "this chat"
+        out["observation"] = (
+            f'NOTE — pinned to {where}: "{call["arg"]}". It is on the board now. '
+            f"Do not pin it again, and do not repeat it in your answer."
+        )
+        out["label"] = f"Pinned a note to {where}"
+        out["result"] = "saved"
+        out["note_id"] = str(row["id"])
+        return out
+
     text, sources = await run_web(call["arg"])
     out["observation"] = text
     out["label"] = f"Searched the web for “{call['arg']}”"
@@ -413,6 +541,76 @@ def cited_refs(answer: str, papers: list[dict]) -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Pinning what the answer asked to keep
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _pin_written_notes(
+    session: AsyncSession,
+    written: list[dict],
+    *,
+    study_id: Optional[UUID],
+    model_name: str,
+    round_no: int,
+    trail: list[dict],
+) -> AsyncIterator[dict]:
+    """Create the `<note>` blocks an answer carried, and report each as a step.
+
+    ⚠ Reached from **both** exits of the loop. The model can answer on the very
+    first probe without ever calling a tool, and that path does not go through
+    ``stream_answer`` — so extracting notes only in the streamed branch left the
+    tag sitting in the answer exactly when the reader had asked for a note.
+    That is how it failed the first time.
+
+    ⚠ Two per answer, hard. The prompt says so too; this is the enforcement.
+
+    ⚠ **De-duplicated by body, against the board it is going to.** Models write
+    the same note twice in one answer, and a board that accumulates three copies
+    of one observation is worse than one that missed it. Comparison is on
+    collapsed whitespace, because the second copy is usually the first one
+    re-wrapped.
+    """
+    seen = {
+        " ".join((n.get("body") or "").split()).lower()
+        for n in await sticky_repo.list_stickies(
+            session, board="chat", study_id=study_id
+        ) + await sticky_repo.list_stickies(session, board="universal")
+    }
+    fresh: list[dict] = []
+    for note in written:
+        key = " ".join(note["body"].split()).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        fresh.append(note)
+
+    for i, note in enumerate(fresh[:2]):
+        row = await sticky_repo.create_sticky(
+            session,
+            body=note["body"],
+            board=note["board"],
+            study_id=None if note["board"] == "universal" else study_id,
+            # A distinct colour so an assistant note is legible as one before
+            # the badge is read. The badge is the load-bearing marker; this is
+            # the glance.
+            color="orange",
+            origin="assistant",
+            author_model=model_name,
+        )
+        await session.commit()
+        where = "the universal board" if note["board"] == "universal" else "this chat"
+        call = {
+            "tool": "NOTE",
+            "arg": note["body"],
+            "label": f"Pinned a note to {where}",
+            "result": "saved",
+        }
+        ev = step_event(f"answer-note-{i}", round_no, call, state="done", think=None)
+        ev["note_id"] = str(row["id"])
+        trail.append({k: v for k, v in ev.items() if k != "type"})
+        yield ev
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -425,6 +623,9 @@ async def answer_study_question(
     model: Optional[str] = None,
     max_steps: Optional[int] = None,
     allow_web: bool = True,
+    study_id: Optional[UUID] = None,
+    chat_notes: Optional[list[dict]] = None,
+    universal_notes: Optional[list[dict]] = None,
 ) -> AsyncIterator[dict]:
     """Answer one question from a group of papers, streaming.
 
@@ -433,6 +634,11 @@ async def answer_study_question(
 
     ``papers`` must arrive in citation order (``study_papers.position``); P1 is
     ``papers[0]`` and nothing downstream re-sorts them.
+
+    ``study_id`` is the scope a ``NOTE:`` lands in — None being the library-wide
+    chat, not "no scope". ``chat_notes`` and ``universal_notes`` are what is
+    already pinned, read into the prompt so a follow-up can build on them and
+    the model does not re-pin what it wrote last turn.
     """
     if not papers:
         yield {
@@ -463,9 +669,12 @@ async def answer_study_question(
         max_steps=rounds,
         web_help=_WEB_HELP if web_on else "",
         web_example=_WEB_EXAMPLE if web_on else "",
-    )
+    ) + _NOTE_HELP
 
     base_parts = ["STUDY INDEX:\n" + _format_index(papers, chunks_by_doc)]
+    boards_block = _format_boards(chat_notes or [], universal_notes or [])
+    if boards_block:
+        base_parts.append(boards_block)
     history_block = _format_history(history or [])
     if history_block:
         base_parts.append(history_block)
@@ -480,6 +689,15 @@ async def answer_study_question(
 
     gathered: list[str] = []
     trail: list[dict] = []
+    # Signatures of calls already run this question.
+    #
+    # ⚠ **Observed**: asked a broad question, the model re-requested the same
+    # three SECTIONs on four consecutive rounds — twelve identical fetches, and
+    # four of eight rounds burned making no progress. It can see the results in
+    # WHAT YOU HAVE GATHERED, but a fresh copy of the same text reads to it as
+    # confirmation rather than repetition. Answering "you already have this"
+    # costs nothing and is the signal that moves it on.
+    done_calls: set = set()
 
     for step in range(rounds):
         remaining = rounds - step
@@ -505,8 +723,23 @@ async def answer_study_question(
 
         if not has_calls(calls):
             answer = strip_tool_block(reply)
-            if answer:
-                yield {"type": "token", "text": answer}
+            # ⚠ Notes come out here too. This branch never touches
+            # stream_answer — the model answered straight from the probe — so
+            # extracting only in the streamed path left the raw tag in the
+            # answer precisely when the reader had asked for a note.
+            answer, written = extract_notes(answer)
+            answer = answer.strip()
+            if answer or written:
+                if answer:
+                    yield {"type": "token", "text": answer}
+                async for ev in _pin_written_notes(
+                    session, written,
+                    study_id=study_id,
+                    model_name=result.get("model", "") or (model or ""),
+                    round_no=step + 1,
+                    trail=trail,
+                ):
+                    yield ev
                 yield {
                     "type": "done",
                     "answer": answer,
@@ -536,7 +769,24 @@ async def answer_study_question(
 
         observations: list[str] = []
         for i, call in enumerate(plan):
-            done_call = await _run_call(session, call, papers, chunks_by_doc)
+            sig = (call["tool"], call.get("arg"), call.get("board"))
+            if sig in done_calls and call["tool"] != "NOTE":
+                done_call = dict(call)
+                done_call["observation"] = (
+                    f'{call["tool"]} {call.get("arg")} — you already fetched this. '
+                    f"It is in WHAT YOU HAVE GATHERED above. Ask for something "
+                    f"else, or answer with what you have."
+                )
+                done_call["result"] = "already had it"
+                done_call["seqs"] = []
+                done_call["refs"] = []
+                done_call["sources"] = []
+            else:
+                done_calls.add(sig)
+                done_call = await _run_call(
+                    session, call, papers, chunks_by_doc,
+                    study_id=study_id, model_name=model or "",
+                )
             observations.append(done_call["observation"])
             event = step_event(
                 f"s{step}-{i}", step + 1, done_call,
@@ -569,12 +819,26 @@ async def answer_study_question(
     # would already be on screen by the time a strip could run.
     answer = ""
     answered_by = ""
-    async for event in stream_answer(messages, model=model, temperature=0.3):
+    written: list[dict] = []
+    async for event in stream_answer(
+        messages, model=model, temperature=0.3, catch_notes=True
+    ):
         if event["type"] == "token":
             yield event
         else:
             answer = event.get("answer") or ""
             answered_by = event.get("model") or ""
+            written = event.get("notes") or []
+
+    async for ev in _pin_written_notes(
+        session, written,
+        study_id=study_id,
+        model_name=answered_by or (model or ""),
+        round_no=rounds,
+        trail=trail,
+    ):
+        yield ev
+
     yield {
         "type": "done",
         "answer": answer,
