@@ -56,6 +56,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --index-strategy unsafe-best-match \
       -r requirements.txt
 
+# Hugging Face token for the download below, passed via --build-arg (compose
+# `environment:` only reaches a *running* container, never a `docker build`
+# step). Optional — anonymous downloads work too, just more likely to hit
+# rate limits. ⚠ Build args land in image layer history (`docker history`),
+# fine for a personal read-only HF token on a private box; use BuildKit
+# `--mount=type=secret` instead if that image is ever pushed somewhere shared.
+ARG HF_TOKEN=""
+ENV HF_TOKEN=${HF_TOKEN}
+
 # Pre-download the pipeline models INTO the image so the first upload doesn't
 # stall on a multi-GB download. Non-interactive (both -s and -m supplied).
 # Baked into the image layer — no volume to shadow it.

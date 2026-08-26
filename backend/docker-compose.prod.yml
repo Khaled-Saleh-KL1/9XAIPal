@@ -1,8 +1,14 @@
 # 9XAIPal — production VM deployment
 # ---------------------------------------------------------------------------
 # A self-contained stack for the production server. It runs the WHOLE
-# backend — API + Celery worker + Postgres + Redis + SearXNG — on one box, so
-# the app is "entirely on the web" and does NOT depend on your local machine.
+# backend — API + Celery worker + Postgres + Redis — on one box, so the app
+# is "entirely on the web" and does NOT depend on your local machine.
+#   • No SearXNG — web search goes through Ollama Cloud's own web-search
+#     capability instead of a self-hosted search engine. Every SearXNG call
+#     in app code (app/search/searxng_client.py) already catches all
+#     exceptions and degrades to an empty result list, and the /health
+#     endpoint's overall status only depends on the database — so simply not
+#     running this service is a safe, code-change-free way to disable it.
 #
 # Key differences from docker-compose.yml (local dev):
 #   • EXTRACTOR_PROVIDER=vlm  → PDF extraction uses a CLOUD VLM (gemma4:31b on
@@ -22,12 +28,17 @@
 #   • SERVE_FRONTEND=false → the API does NOT serve the SPA. The host's own
 #     nginx install (not managed by this compose file) serves the built SPA
 #     and reverse-proxies /api to this stack — see backend/nginx/9xaipal.conf.
-#   • No frontend-build / autoheal-docker-socket services (not needed here).
+#   • No frontend-build service (not needed here — the host builds the SPA
+#     separately). The `autoheal` watchdog IS included: `restart:
+#     unless-stopped` alone only recovers a container that has actually
+#     exited (crash/OOM); it does nothing for one that is still running but
+#     hung. autoheal restarts any container labeled autoheal=true the moment
+#     its healthcheck reports "unhealthy", covering that second failure mode.
 #
 # Public traffic enters through the host's nginx (installed separately, not a
 # container here) on 80/443, which serves the built SPA and reverse-proxies
-# to api:8000 published on 127.0.0.1. Postgres, Redis and SearXNG are not
-# published to the host at all.
+# to api:8000 published on 127.0.0.1. Postgres and Redis are not published to
+# the host at all.
 #
 # Usage (on the VM, inside the repo's backend/ folder):
 #   cp .env.prod .env   # set OLLAMA_API_KEY, POSTGRES_PASSWORD
@@ -57,6 +68,8 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    labels:
+      autoheal: "true"
 
   redis:
     image: redis:7-alpine
@@ -70,17 +83,8 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
-
-  searxng:
-    image: searxng/searxng:latest
-    container_name: 9xaipal-searxng
-    # Internal only — reached as http://searxng:8080 on the compose network.
-    volumes:
-       - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
-    environment:
-      BASE_URL: http://localhost:${SEARXNG_PORT:-8080}/
-      INSTANCE_NAME: 9xaipal-searxng
-    restart: unless-stopped
+    labels:
+      autoheal: "true"
 
   # ------------------------------------------------------------------
   # Celery worker — runs the ingestion pipeline. Builds from Dockerfile.oracle
@@ -124,8 +128,6 @@ services:
       EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}
       EXTRACTOR_VLM_CONCURRENCY: ${EXTRACTOR_VLM_CONCURRENCY:-3}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-true}
-       # SearXNG is a compose service on the same network — reach it by name.
-      SEARXNG_URL: http://searxng:8080
       STORAGE_ROOT: /data/storage
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
@@ -193,9 +195,7 @@ services:
       EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}
       EXTRACTOR_VLM_CONCURRENCY: ${EXTRACTOR_VLM_CONCURRENCY:-3}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-true}
-      SEARXNG_URL: http://searxng:8080
       STORAGE_ROOT: /data/storage
-
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
        # nginx on the host serves the SPA and proxies /api same-origin, so
@@ -215,14 +215,30 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      searxng:
-        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+    labels:
+      autoheal: "true"
+
+  # Watchdog: restarts any container labeled autoheal=true whose healthcheck
+  # turns "unhealthy". `restart: unless-stopped` only fires when a process
+  # EXITS (crash/OOM); this covers the other failure mode — a container that
+  # is still running but hung/not responding. Needs the Docker socket to
+  # issue the restarts.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: 9xaipal-autoheal
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 15
+      AUTOHEAL_START_PERIOD: 30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
 volumes:
