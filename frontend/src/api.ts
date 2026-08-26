@@ -1,5 +1,5 @@
 /**
- * API client for 9XAIPal backend.
+ * API client for ScholarFlow backend.
  * All requests proxy through Vite to http://localhost:8000.
  */
 import type { ContextType } from './types';
@@ -958,4 +958,288 @@ export async function putDecks(paperId: string, decks: WireDeck[]): Promise<Wire
   });
   if (!res.ok) throw new Error(`Deck save failed: ${res.status}`);
   return (await res.json()).decks || [];
+}
+
+// ── The desk: studies, their chats, and sticky notes ─────────────────────────
+
+/**
+ * The path segment that means "every paper" rather than a saved group.
+ *
+ * ⚠ A real scope, not a null. The server stores `study_id IS NULL` for its
+ * turns, and both are the library-wide chat — treating either as "unset" loses
+ * the reader's main conversation.
+ */
+export const LIBRARY_SCOPE = 'library';
+
+export interface Study {
+  id: string;
+  name: string;
+  description: string | null;
+  paper_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** A paper as the desk sees it: identity, and the P-number the agent cites it by. */
+export interface StudyPaper {
+  id: string;
+  title: string;
+  page_count: number | null;
+  status: string;
+  paper: number;
+}
+
+/** One `[[P2:41]]` an answer used, resolved to something openable. */
+export interface StudyCitation {
+  paper: number;
+  document_id: string;
+  label: string;
+  sequence_id: number;
+}
+
+export interface StudyTurn {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  model: string | null;
+  cited: StudyCitation[];
+  agent_steps: AgentStep[];
+  created_at: string | null;
+}
+
+export async function listStudies(): Promise<Study[]> {
+  const res = await fetch(`${BASE}/studies`);
+  if (!res.ok) throw new Error(`Studies fetch failed: ${res.status}`);
+  return (await res.json()).studies || [];
+}
+
+export async function getStudy(
+  studyId: string,
+): Promise<{ study: Study; papers: StudyPaper[] }> {
+  const res = await fetch(`${BASE}/studies/${studyId}`);
+  if (!res.ok) throw new Error(`Study fetch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function createStudy(name: string): Promise<Study> {
+  const res = await fetch(`${BASE}/studies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Could not create the study (${res.status})`);
+  return res.json();
+}
+
+export async function renameStudy(studyId: string, name: string): Promise<Study> {
+  const res = await fetch(`${BASE}/studies/${studyId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteStudy(studyId: string): Promise<void> {
+  const res = await fetch(`${BASE}/studies/${studyId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`Delete failed: ${res.status}`);
+}
+
+/**
+ * Replace a study's papers. List order sets citation order.
+ *
+ * ⚠ Whole-collection on purpose: the P-numbers the reader is looking at come
+ * from this order, so a partial update could repoint citations already on screen.
+ */
+export async function setStudyPapers(
+  studyId: string,
+  documentIds: string[],
+): Promise<StudyPaper[]> {
+  const res = await fetch(`${BASE}/studies/${studyId}/papers`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ document_ids: documentIds }),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { detail = (await res.json())?.detail || detail; } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+  return (await res.json()).papers || [];
+}
+
+export async function getStudyChat(studyId: string): Promise<StudyTurn[]> {
+  const res = await fetch(`${BASE}/studies/${studyId}/chat`);
+  if (!res.ok) throw new Error(`Chat fetch failed: ${res.status}`);
+  return (await res.json()).turns || [];
+}
+
+export async function clearStudyChat(studyId: string): Promise<void> {
+  const res = await fetch(`${BASE}/studies/${studyId}/chat`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`Clear failed: ${res.status}`);
+}
+
+export interface StudyStreamHandlers {
+  onStatus: (message: string) => void;
+  onStep: (step: AgentStep) => void;
+  onToken: (text: string) => void;
+}
+
+export interface StudyResult {
+  turn_id: string;
+  answer: string;
+  model: string;
+  cited: StudyCitation[];
+  agent_steps: AgentStep[];
+}
+
+/**
+ * Ask the study a question. Same SSE shapes as `askNoteStream`, so the trail
+ * component renders both.
+ */
+export async function askStudyStream(
+  studyId: string,
+  question: string,
+  handlers: StudyStreamHandlers,
+  model?: string | null,
+  signal?: AbortSignal,
+): Promise<StudyResult> {
+  const res = await fetch(`${BASE}/studies/${studyId}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({ question, model: model ?? null }),
+  });
+  if (!res.ok || !res.body) {
+    let detail = `HTTP ${res.status}`;
+    try { detail = (await res.json())?.detail || detail; } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let result: StudyResult | null = null;
+  let streamError: string | null = null;
+
+  const handleEvent = (raw: string) => {
+    let ev: Record<string, unknown>;
+    try { ev = JSON.parse(raw); } catch { return; }
+    switch (ev.type) {
+      case 'status':
+        handlers.onStatus(String(ev.message ?? ''));
+        break;
+      case 'step':
+        handlers.onStep(ev as unknown as AgentStep);
+        break;
+      case 'token':
+        handlers.onToken(String(ev.text ?? ''));
+        break;
+      case 'error':
+        streamError = String(ev.detail || 'Could not answer that');
+        break;
+      case 'done':
+        result = {
+          turn_id: String(ev.turn_id ?? ''),
+          answer: String(ev.answer ?? ''),
+          model: String(ev.model ?? ''),
+          cited: (ev.cited as StudyCitation[]) || [],
+          agent_steps: (ev.agent_steps as AgentStep[]) || [],
+        };
+        break;
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data:')) handleEvent(line.slice(5).trim());
+      }
+    }
+  }
+
+  if (streamError) throw new Error(streamError);
+  if (!result) throw new Error('The answer stream ended unexpectedly');
+  return result;
+}
+
+// ── Sticky notes ─────────────────────────────────────────────────────────────
+
+export type StickyColor = 'yellow' | 'blue' | 'green' | 'pink' | 'plain';
+
+export interface Sticky {
+  id: string;
+  body: string;
+  color: StickyColor;
+  pinned: boolean;
+  /** Papers this note is about. Empty = about nothing in particular. */
+  papers: { document_id: string; label: string }[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/**
+ * Stickies, pinned first then newest.
+ *
+ * ⚠ Passing `documentIds` returns notes about those papers **plus every
+ * unscoped note** — an unscoped sticky is relevant everywhere.
+ */
+export async function listStickies(documentIds?: string[]): Promise<Sticky[]> {
+  const qs = (documentIds || [])
+    .map((id) => `document_id=${encodeURIComponent(id)}`)
+    .join('&');
+  const res = await fetch(`${BASE}/stickies${qs ? `?${qs}` : ''}`);
+  if (!res.ok) throw new Error(`Stickies fetch failed: ${res.status}`);
+  return (await res.json()).stickies || [];
+}
+
+export async function createSticky(input: {
+  body?: string;
+  color?: StickyColor;
+  pinned?: boolean;
+  document_ids?: string[];
+}): Promise<Sticky> {
+  const res = await fetch(`${BASE}/stickies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`Could not create the note (${res.status})`);
+  return res.json();
+}
+
+/**
+ * Patch a sticky. Omitted fields are left alone.
+ *
+ * ⚠ `document_ids: []` clears the scope (making the note global);
+ * omitting it leaves the scope untouched. The two are different requests.
+ */
+export async function updateSticky(
+  stickyId: string,
+  patch: {
+    body?: string;
+    color?: StickyColor;
+    pinned?: boolean;
+    document_ids?: string[];
+  },
+): Promise<Sticky> {
+  const res = await fetch(`${BASE}/stickies/${stickyId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`Save failed: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteSticky(stickyId: string): Promise<void> {
+  const res = await fetch(`${BASE}/stickies/${stickyId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(`Delete failed: ${res.status}`);
 }

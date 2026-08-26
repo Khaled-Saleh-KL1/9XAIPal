@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { IconBack, IconDoc } from '../components/Icons';
 import { ArticleBlock } from './ArticleBlock';
 import { AskComposer, type ComposerTarget } from './AskComposer';
-import { AssistantPanel } from './AssistantPanel';
 import { NoteCardView, PendingNoteCard, type NoteGroup, type PendingNote } from './NoteCard';
 import {
   PersonalNoteCard,
@@ -44,6 +43,8 @@ import {
   getFullDocument,
   listModels,
   listNotes,
+  getStudy,
+  listStudies,
   moveNote as moveNoteApi,
   putDecks,
   updatePersonalNote as updatePersonalNoteApi,
@@ -195,10 +196,22 @@ let clientIdSeq = 0;
 interface Props {
   paperId: string;
   fallbackTitle: string;
+  /** A block the desk asked us to open at. Consumed once, then cleared. */
+  jumpToSequence?: number | null;
+  onJumped?: () => void;
+  /** Leave for the desk — the cross-paper surface this reader's panel became. */
+  onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
 }
 
-export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
+export function ArticleReader({
+  paperId,
+  fallbackTitle,
+  jumpToSequence = null,
+  onJumped,
+  onOpenDesk,
+  onBack,
+}: Props) {
   const [doc, setDoc] = useState<FullDocument | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notes, setNotes] = useState<PaperNote[]>([]);
@@ -215,8 +228,17 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   const [tintedBlocks, setTintedBlocks] = useState<Set<number>>(new Set());
   const [progress, setProgress] = useState(0);
   const [panel, setPanel] = useState<'contents' | 'bookmarks' | 'notes' | null>(null);
-  // The holistic level, opened by the one button in the bottom-left corner.
-  const [assistant, setAssistant] = useState(false);
+  /**
+   * Which desk scope this paper's corner button opens.
+   *
+   * A study containing this paper if there is exactly one — that is almost
+   * always the context the reader wants back. Two or more is ambiguous, and
+   * guessing between them is worse than landing on the library scope with the
+   * studies rail right there.
+   */
+  const [deskScope, setDeskScope] = useState<string | null>(null);
+  const deskScopeRef = useRef<string | null>(null);
+  deskScopeRef.current = deskScope;
   const [layout, setLayout] = useState<Layout>(() => layoutFor(window.innerWidth));
   const wideEnough = layout !== 'inline';
 
@@ -419,6 +441,39 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // Which study to hand the corner button, and where to land if the desk sent
+  // us to a specific block.
+  useEffect(() => {
+    let alive = true;
+    listStudies()
+      .then(async (all) => {
+        const holding = [];
+        for (const st of all) {
+          const detail = await getStudy(st.id).catch(() => null);
+          if (detail?.papers.some((x) => x.id === paperId)) holding.push(st.id);
+        }
+        if (alive) setDeskScope(holding.length === 1 ? holding[0] : null);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [paperId]);
+
+  /**
+   * Scroll to the block the desk cited.
+   *
+   * ⚠ Waits for `doc` — the block elements do not exist until the article has
+   * rendered, and a jump fired on mount silently does nothing. `onJumped`
+   * clears it in App so a later re-render cannot yank the reader back.
+   */
+  useEffect(() => {
+    if (jumpToSequence == null || !doc) return;
+    const t = setTimeout(() => {
+      jumpToRef.current(jumpToSequence);
+      onJumped?.();
+    }, 120);
+    return () => clearTimeout(t);
+  }, [jumpToSequence, doc, onJumped]);
+
   // ── Notes grouped into threads: a root plus its follow-ups ──────────────
   //
   // ⚠ Split by scope FIRST. Anchored notes belong in the gutter beside their
@@ -441,10 +496,6 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   // The gutter lays out anchored pending cards; the panel owns its own.
   const marginPending = useMemo(
     () => pending.filter((p) => p.scope !== 'document'),
-    [pending],
-  );
-  const holisticPending = useMemo(
-    () => pending.filter((p) => p.scope === 'document'),
     [pending],
   );
 
@@ -1152,7 +1203,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
       }
       if (e.key === 'p') {
         e.preventDefault();
-        setAssistant((v) => !v);
+        onOpenDesk?.(deskScopeRef.current ?? 'library');
       }
       if (e.key === 'Escape') {
         setComposer(null);
@@ -1204,9 +1255,14 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
             // `running` when the agent announces it, `done` when it returns —
             // and appending would show each fetch as two rows, the first one
             // spinning forever.
+            // ⚠ Clear the status line as well. Once a fetch is on screen the
+            // trail IS the activity indicator, and the phase message that
+            // preceded it would otherwise sit under finished rows still
+            // claiming to be what is happening now.
             onStep: (step) =>
               patch((p) => ({
                 ...p,
+                status: null,
                 steps: p.steps.some((s) => s.id === step.id)
                   ? p.steps.map((s) => (s.id === step.id ? step : s))
                   : [...p.steps, step],
@@ -1347,67 +1403,6 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     [composer, model, runNote],
   );
 
-  /**
-   * Ask about the paper as a whole, from the panel.
-   *
-   * ⚠ It still carries an anchor_sequence_id — the paper's first block —
-   * because paper_notes.anchor_sequence_id is NOT NULL. Nothing positions by
-   * it; `scope: 'document'` is what decides where the answer lands, and the
-   * server derives that from `kind: 'document'`.
-   */
-  const askWholePaper = useCallback(
-    (question: string) => {
-      const firstSeq = doc?.blocks[0]?.sequence_order ?? 0;
-      const draft: PendingNote = {
-        clientId: `pending-${++clientIdSeq}`,
-        noteId: null,
-        anchorSequenceId: firstSeq,
-        anchorKind: 'document',
-        quote: null,
-        imageUrl: null,
-        question,
-        answer: '',
-        status: null,
-        steps: [],
-        error: null,
-        parentNoteId: null,
-        scope: 'document',
-        marginSide: 'right',
-        model: model || null,
-      };
-      void runNote(draft, {
-        kind: 'document',
-        sequence_id: firstSeq,
-        chunk_id: null,
-        quote: null,
-        image_url: null,
-      });
-    },
-    [doc, model, runNote],
-  );
-
-  const retryPending = useCallback(
-    (clientId: string) => {
-      const p = pending.find((x) => x.clientId === clientId);
-      if (!p) return;
-      void runNote(
-        { ...p, error: null, answer: '', status: null, steps: [] },
-        {
-          kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'table' | 'block' | 'document',
-          sequence_id: p.anchorSequenceId,
-          chunk_id: null,
-          quote: p.quote,
-          image_url: p.imageUrl,
-        },
-      );
-    },
-    [pending, runNote],
-  );
-
-  const dismissPending = useCallback((clientId: string) => {
-    setPending((prev) => prev.filter((x) => x.clientId !== clientId));
-  }, []);
-
   const submitFollowUp = useCallback(
     (parentNoteId: string, question: string) => {
       const parent = notes.find((n) => n.id === parentNoteId);
@@ -1526,9 +1521,13 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   // note saved on the left is still reachable on a narrow window.
   const canFlip = layout === 'both';
 
+  // ⚠ `groups` (margin) AND `holisticGroups` (whole-paper). The desk is where
+  // new whole-paper questions are asked now, but notes from before that move
+  // still belong to this paper, and dropping them from the index would make
+  // them unreachable rather than merely relocated.
   const marginaliaRows = useMemo(
-    () => buildMarginaliaRows(groups, personalNotes, decks),
-    [groups, personalNotes, decks],
+    () => buildMarginaliaRows([...groups, ...holisticGroups], personalNotes, decks),
+    [groups, holisticGroups, personalNotes, decks],
   );
 
   /** Where each bookmark sits along the paper, 0..1, for the progress rail. */
@@ -1910,45 +1909,29 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         )}
       </div>
 
-      {/* One button, one meaning: the holistic level.
+      {/* One button, one meaning — and it now leaves.
           ⚠ It replaced an "Ask" and a "Note" button that both anchored to
-          whatever block happened to be at the top of the viewport — a worse
-          version of what highlighting already does, offered more prominently.
-          Passage-level work now belongs entirely to the selection pill and the
-          A / N keys; the corner is the level above it. */}
-      {!composer && !personalComposer && (
+          whatever block happened to be at the top of the viewport, and then a
+          panel that overlaid the article. Neither was right: a question about
+          the paper as a whole, or about several papers, is not a thing you do
+          *on top of* a document you are reading. It is its own place, so the
+          corner is now a door to the desk rather than a drawer. Passage-level
+          work stays here, on the selection pill and the A / N keys. */}
+      {!composer && !personalComposer && onOpenDesk && (
         <div className="reader-fabs">
           <button
-            className={`ask-fab panel-fab${assistant ? ' is-on' : ''}`}
-            onClick={() => setAssistant((v) => !v)}
-            title="Ask about the whole paper (P)"
-            aria-expanded={assistant}
+            className="ask-fab panel-fab"
+            onClick={() => onOpenDesk(deskScope ?? 'library')}
+            title="Open the desk — ask across this paper and others (P)"
           >
             <span className="panel-fab-glyph" aria-hidden="true">◈</span>
-            Panel
+            Desk
             {holisticGroups.length > 0 && (
               <span className="panel-fab-count">{holisticGroups.length}</span>
             )}
           </button>
         </div>
       )}
-
-      <AssistantPanel
-        open={assistant}
-        onClose={() => setAssistant(false)}
-        paperTitle={doc?.title || fallbackTitle}
-        groups={holisticGroups}
-        pending={holisticPending}
-        onAsk={askWholePaper}
-        onFollowUp={submitFollowUp}
-        onDelete={removeNote}
-        onRetry={retryPending}
-        onDismiss={dismissPending}
-        onJump={jumpTo}
-        catalog={catalog}
-        model={model}
-        onModelChange={chooseModel}
-      />
     </div>
   );
 }

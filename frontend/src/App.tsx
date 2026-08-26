@@ -5,6 +5,7 @@ import { LibraryView } from './views/LibraryView';
 import { ProcessingOverlay } from './views/ProcessingOverlay';
 import { ReadingView } from './views/ReadingView';
 import { RawFilesPanel } from './views/RawFilesPanel';
+import { DeskView } from './views/DeskView';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
 // keeps it out of the initial bundle so the library/reading views appear
@@ -46,13 +47,16 @@ function metaToPaper(m: PaperMeta): Paper {
 type HashState =
   | { route: 'library' }
   | { route: 'reading'; paperId: string }
-  | { route: 'pdf-viewer'; paperId: string };
+  | { route: 'pdf-viewer'; paperId: string }
+  | { route: 'desk'; scope: string };
 
 function parseHash(): HashState {
   const h = window.location.hash.replace(/^#\/?/, '');
   const [head, id] = h.split('/');
   if (head === 'paper' && id) return { route: 'reading', paperId: id };
   if (head === 'raw' && id) return { route: 'pdf-viewer', paperId: id };
+  // The desk is deep-linkable per scope: #/desk, or #/desk/<studyId>.
+  if (head === 'desk') return { route: 'desk', scope: id || 'library' };
   return { route: 'library' };
 }
 
@@ -60,6 +64,7 @@ function writeHash(state: HashState) {
   let next = '#/library';
   if (state.route === 'reading') next = `#/paper/${state.paperId}`;
   else if (state.route === 'pdf-viewer') next = `#/raw/${state.paperId}`;
+  else if (state.route === 'desk') next = `#/desk/${state.scope}`;
   if (window.location.hash !== next) window.history.replaceState(null, '', next);
 }
 
@@ -93,6 +98,17 @@ export function App() {
   const [rawPapers, setRawPapers] = useState<PaperMeta[]>([]);
   const [rawFilesOpen, setRawFilesOpen] = useState(false);
   const [viewingPdf, setViewingPdf] = useState<PaperMeta | null>(null);
+
+  // Which scope the desk opens on: a study id, or 'library'.
+  const [deskScope, setDeskScope] = useState<string>('library');
+  /**
+   * A block to scroll to once the reader mounts.
+   *
+   * ⚠ Held in App, not passed through the route, because it is consumed once.
+   * The desk hands over "open P2 at block 41" and the reader must not re-jump
+   * there every time it re-renders.
+   */
+  const [jumpTo, setJumpTo] = useState<number | null>(null);
 
   // Fetch raw papers list
   const refreshPapers = useCallback(() => {
@@ -201,7 +217,26 @@ export function App() {
   const openPaper = useCallback((p: Paper) => {
     setActivePaper(p);
     setActivePaperId(p.id);
+    setJumpTo(null);
     setRoute('reading');
+  }, []);
+
+  /** Open a paper the desk names, optionally at one of its blocks. */
+  const openPaperById = useCallback(async (documentId: string, sequenceId?: number) => {
+    try {
+      const meta = await getPaper(documentId);
+      setActivePaper(metaToPaper(meta));
+      setActivePaperId(meta.id);
+      setJumpTo(sequenceId ?? null);
+      setRoute('reading');
+    } catch {
+      // The paper is gone from under the desk; stay put rather than blanking.
+    }
+  }, []);
+
+  const openDesk = useCallback((scope: string = 'library') => {
+    setDeskScope(scope);
+    setRoute('desk');
   }, []);
 
   const onProcessingClose = useCallback(() => {
@@ -245,6 +280,11 @@ export function App() {
   useEffect(() => {
     const initial = parseHash();
     if (initial.route === 'library') return;
+    if (initial.route === 'desk') {
+      setDeskScope(initial.scope);
+      setRoute('desk');
+      return;
+    }
 
     (async () => {
       try {
@@ -270,12 +310,14 @@ export function App() {
       writeHash({ route: 'reading', paperId: activePaperId });
     } else if (route === 'pdf-viewer' && viewingPdf) {
       writeHash({ route: 'pdf-viewer', paperId: viewingPdf.id });
+    } else if (route === 'desk') {
+      writeHash({ route: 'desk', scope: deskScope });
     } else if (route === 'library') {
       writeHash({ route: 'library' });
     }
     // 'processing' intentionally leaves the existing hash alone so a refresh
     // mid-upload returns to the library, not a half-baked processing state.
-  }, [route, activePaperId, viewingPdf]);
+  }, [route, activePaperId, viewingPdf, deskScope]);
 
   return (
     <>
@@ -284,6 +326,7 @@ export function App() {
           onOpenPaper={openPaper}
           onUpload={startUpload}
           onOpenRawFiles={() => setRawFilesOpen(true)}
+          onOpenDesk={() => openDesk('library')}
           layout={layout}
           setLayout={setLayout}
         />
@@ -293,7 +336,18 @@ export function App() {
         <ReadingView
           paper={activePaper}
           paperId={activePaperId || activePaper.id}
+          jumpToSequence={jumpTo}
+          onJumped={() => setJumpTo(null)}
+          onOpenDesk={openDesk}
           onBack={() => setRoute('library')}
+        />
+      )}
+
+      {route === 'desk' && (
+        <DeskView
+          initialScope={deskScope}
+          onBack={() => setRoute('library')}
+          onOpenPaper={openPaperById}
         />
       )}
 

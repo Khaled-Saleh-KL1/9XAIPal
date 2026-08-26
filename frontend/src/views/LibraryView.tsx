@@ -15,6 +15,7 @@ interface Props {
    *  nothing when the user clicked (the file is chosen later, in a picker). */
   onUpload: (file?: File) => void;
   onOpenRawFiles: () => void;
+  onOpenDesk: () => void;
   layout: LibraryLayout;
   setLayout: (v: LibraryLayout) => void;
 }
@@ -54,7 +55,7 @@ function metaToPaper(m: PaperMeta): Paper {
   };
 }
 
-export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, setLayout }: Props) {
+export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout }: Props) {
   const [over, setOver] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
@@ -197,7 +198,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
           <div className="flex items-center gap-2.5">
             <LogoMark />
             <span className="text-[14px] font-medium tracking-tight" style={{ color: 'var(--fg)' }}>
-              9XAIPal
+              ScholarFlow
             </span>
             <span
               className="text-[11px] font-mono ml-1 px-1.5 py-0.5 rounded"
@@ -211,6 +212,15 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, layout, set
               {papers.length} papers · local
             </span>
             <span className="mx-2 h-4 w-px" style={{ background: 'var(--border)' }} />
+            <button
+              onClick={onOpenDesk}
+              className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
+              style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
+              title="Ask across your papers without opening them"
+            >
+              <span style={{ color: 'var(--accent)', fontSize: 11 }}>◈</span>
+              Desk
+            </button>
             <button
               onClick={onOpenRawFiles}
               className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
