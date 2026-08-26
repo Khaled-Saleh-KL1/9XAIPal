@@ -2812,19 +2812,28 @@ body {
 .wall-empty { max-width: 56ch; margin: 8vh auto 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
 .wall-empty p + p { margin-top: 10px; }
 
-/* Masonry by columns: notes are different heights and a grid would leave a
-   ragged band of whitespace under every short one. */
+/* ⚠ **A grid, not CSS multi-column — and that is the whole point.**
+   This was `columns: 260px` for the masonry. Multi-column FRAGMENTS its
+   children: a note taller than the remaining column height is split, and the
+   remainder is re-drawn at the top of the next column — pin, dashed border and
+   all. `display: inline-block` is the usual charm against that and it is not
+   enough in WebKit, where the reported symptom was exactly this: two orphaned
+   note-bottoms with their own pins stranded under the board.
+
+   Grid items never fragment, in any engine. The cost is the masonry: rows are
+   ragged rather than tightly packed. For a corkboard that is not a loss — a
+   real one is not masonry either — and it is a deterministic layout instead of
+   one that depends on how a browser handles a break. Do not "restore" the
+   columns without a WebKit test. */
 .wall-grid {
-  columns: 260px;
-  column-gap: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 22px 18px;
+  /* Each note keeps its own height; stretching them to the row would undo the
+     scrap-of-paper look the tilt and the tack are doing. */
+  align-items: start;
 }
 .wall-grid .sticky {
-  /* ⚠ inline-block + width:100%, not block. A column-flow child that can be
-     split across a column break will be, and half a note at the bottom of one
-     column with its other half at the top of the next is unreadable. */
-  display: inline-block;
-  width: 100%;
-  margin: 0 0 18px;
   padding: 16px 14px 12px;
   font-size: 13px;
   box-shadow: 0 10px 22px -14px rgba(0, 0, 0, 0.55);
@@ -2837,21 +2846,38 @@ body {
   z-index: 2;
   position: relative;
 }
-/* A long note is allowed to be long, but not to own the column. Clamped with
-   a fade, and clicking it opens the editor where the whole thing is visible. */
+/* A long note is allowed to be long, but not to own the row. Clamped, and
+   clicking it opens the editor where the whole thing is visible. */
 .wall-grid .sticky-body {
   min-height: 34px;
-  max-height: 320px;
+  max-height: 300px;
   overflow: hidden;
   position: relative;
-  -webkit-mask-image: linear-gradient(var(--tone) 0 84%, transparent 100%);
-  mask-image: linear-gradient(var(--tone) 0 84%, transparent 100%);
 }
-/* Short notes must not be faded — the mask would dim the last line of a
-   two-line note for no reason. */
-.wall-grid .sticky-body:not(:has(> :nth-child(3))) {
-  -webkit-mask-image: none;
-  mask-image: none;
+/* Fade only where there is actually more below.
+   ⚠ `.is-clipped` is set by StickyNote from a real measurement, not by a CSS
+   heuristic. The heuristic here was ":has(> :nth-child(3))" — fade when the
+   body has three or more blocks — and it is wrong for the common case, because
+   a long note is usually ONE long paragraph. It clamped with a hard cut through
+   the middle of a line and nothing to say why.
+   ⚠ The gradient uses black/transparent, not a colour token. A mask reads the
+   ALPHA channel; feeding it `var(--tone)` worked only because the token happens
+   to be opaque, and would stop the day one of them gained alpha. */
+.wall-grid .sticky-body.is-clipped {
+  -webkit-mask-image: linear-gradient(#000 0 78%, transparent 100%);
+  mask-image: linear-gradient(#000 0 78%, transparent 100%);
+}
+/* A clipped note says so, so the cut reads as "there is more" rather than as a
+   rendering fault. */
+.wall-grid .sticky-body.is-clipped::after {
+  content: 'more…';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: color-mix(in oklab, var(--fg), transparent 45%);
 }
 .wall-grid .sticky-foot { max-width: 100%; }
 

@@ -13,6 +13,10 @@
 > [`views/ArticleBlock.tsx`](../../frontend/src/views/ArticleBlock.tsx) (`8fb153b`); its
 > remaining sections 2026-07-28 (`main`, 5471870).
 > **Verify with:** `cd frontend && npm run build` (runs `tsc` first)
+> **Cross-engine:** layout regressions here have been WebKit-only twice. Check
+> Safari, or drive it headlessly — `npx playwright install webkit`, then load
+> the page and assert no element reports more than one client rect
+> (`el.getClientRects().length > 1` means it fragmented).
 
 Vite + React + Tailwind, no router library — a tiny state machine in
 [App.tsx](../../frontend/src/App.tsx) toggles between five views.
@@ -558,10 +562,23 @@ on the universal board would be the same row.
 `Math.random()` rotation re-rolls on every render — every keystroke in the
 filter box would make the whole wall twitch. Same id, same angle, forever.
 
-⚠ **Wall notes are `inline-block` with `width: 100%`, not `block`.** A
-column-flow child that *can* be split across a column break will be, and half a
-note at the bottom of one column with its other half at the top of the next is
-unreadable.
+⚠ **The wall is a CSS grid, not multi-column — and that is the whole point.**
+It was `columns: 260px` for the masonry. Multi-column *fragments* its children:
+a note taller than the remaining column height is split, and the remainder is
+re-drawn at the top of the next column, pin and dashed border and all.
+`display: inline-block` is the usual charm against that and **it is not enough
+in WebKit** — the reported symptom was exactly this, two orphaned note-bottoms
+with their own pins stranded under the board. Grid items never fragment, in any
+engine. The cost is the masonry: rows are ragged rather than packed, which for a
+corkboard is not a loss. Do not "restore" the columns without a WebKit test.
+
+⚠ **The clipped-note fade comes from a measurement, not a selector.** It was
+`:has(> :nth-child(3))` — fade when the body has three or more blocks — which is
+wrong for the common case, because a long note is usually one long paragraph. It
+clamped with a hard cut mid-line and nothing to say why. `StickyNote` measures
+`scrollHeight` against `clientHeight` and sets `.is-clipped`; a `ResizeObserver`
+re-measures, because a note that fits at first paint can overflow once the serif
+face swaps in.
 
 ⚠ **An assistant note is marked twice over**: a dashed border (the one border
 treatment nothing else in the app uses, legible before anything is read) and a

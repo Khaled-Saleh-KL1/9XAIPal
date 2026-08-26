@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import type { Sticky, StickyColor } from '../api';
@@ -64,7 +64,18 @@ export function StickyNote({
   const [editing, setEditing] = useState(note.body === '' && note.origin === 'user');
   const [draft, setDraft] = useState(note.body);
   const [armed, setArmed] = useState(false);
+  /**
+   * Whether the clamped body actually has more below it.
+   *
+   * ⚠ Measured, not inferred. This was a CSS heuristic — fade when the body has
+   * three or more block children — which is wrong for the common case: a long
+   * note is usually ONE long paragraph, so it clamped with a hard cut through
+   * the middle of a line and no fade to say why. CSS cannot ask "did this
+   * overflow", so the question is asked of the DOM.
+   */
+  const [clipped, setClipped] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (editing) ref.current?.focus({ preventScroll: true });
@@ -81,6 +92,27 @@ export function StickyNote({
     const t = setTimeout(() => setArmed(false), 3000);
     return () => clearTimeout(t);
   }, [armed]);
+
+  const measure = useCallback(() => {
+    const el = bodyRef.current;
+    // 2px of slack: sub-pixel line heights make an exactly-fitting body report
+    // a scrollHeight a fraction over its clientHeight.
+    setClipped(!!el && el.scrollHeight - el.clientHeight > 2);
+  }, []);
+
+  // Before paint, so a clipped note never shows one frame without its fade.
+  useLayoutEffect(measure, [measure, note.body, editing, pinned]);
+
+  // Fonts land after first paint and reflow the text; a note that fits at
+  // measure time can overflow once the serif face swaps in.
+  useEffect(() => {
+    if (!pinned) return;
+    const el = bodyRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pinned, measure]);
 
   const commit = () => {
     setEditing(false);
@@ -159,9 +191,10 @@ export function StickyNote({
         />
       ) : (
         <div
-          className="sticky-body md-body"
+          ref={bodyRef}
+          className={`sticky-body md-body${clipped ? ' is-clipped' : ''}`}
           onClick={() => { setDraft(note.body); setEditing(true); }}
-          title="Click to edit"
+          title={clipped ? 'Click to read and edit the rest' : 'Click to edit'}
         >
           {note.body ? (
             <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE}>
