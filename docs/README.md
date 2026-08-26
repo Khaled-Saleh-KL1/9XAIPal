@@ -26,7 +26,7 @@
 | Set an environment variable | [03-reference/configuration.md](03-reference/configuration.md) | `backend/app/core/config.py` |
 | Find a file on disk / a static URL | [03-reference/storage.md](03-reference/storage.md) | `ls backend/app/storage` |
 | Change the schema | [03-reference/migrations.md](03-reference/migrations.md) | restart the API; watch migration logs |
-| Test a release | [04-testing/test-plan.md](04-testing/test-plan.md) | `cd backend && POSTGRES_DB=scholarflow_test pytest -v` |
+| Test a release | [04-testing/test-plan.md](04-testing/test-plan.md) | `cd backend && POSTGRES_DB=9xaipal_test pytest -v` |
 | Know what's broken or missing by design | [roadmap.md](roadmap.md) | — |
 | Check whether an idea was already tried and rejected | [decisions.md](decisions.md) | — |
 | Read or write a plan | [plans/](plans/) | — |

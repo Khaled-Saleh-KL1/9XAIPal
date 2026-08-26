@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This directory contains local PostgreSQL infrastructure configuration for ScholarFlow.
+This directory contains local PostgreSQL infrastructure configuration for 9XAIPal.
 
 The database is expected to run through `backend/docker-compose.yml` and use the `pgvector/pgvector` image so the vector extension is available without manual host setup.
 

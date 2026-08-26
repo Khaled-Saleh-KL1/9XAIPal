@@ -11,15 +11,15 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "ScholarFlow"
+    app_name: str = "9XAIPal"
     debug: bool = False
 
     # PostgreSQL
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "scholarflow"
-    postgres_user: str = "scholarflow"
-    postgres_password: str = "scholarflow_dev_password"
+    postgres_db: str = "9xaipal"
+    postgres_user: str = "9xaipal"
+    postgres_password: str = "9xaipal_dev_password"
 
     @property
     def database_url(self) -> str:

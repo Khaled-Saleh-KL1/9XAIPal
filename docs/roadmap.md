@@ -97,12 +97,13 @@ The application code is more mature than the tooling around it. These are the ch
 - **Two pipelines exist**: `extraction/pipeline.py` (async, legacy) and `pipeline_sync.py` (used by
   Celery). `[historical]` The async in-process `BackgroundTasks` + `asyncio.Queue` design was
   replaced by Celery; the async pipeline survives as a fast path. One of them should go.
-- ~~**Naming is inconsistent across the repo**~~ — **done 2026-08-26.** Everything now says
-  `ScholarFlow`, including `POSTGRES_DB`, container names, and volume names. ⚠ An existing install
-  needs the one-time migration in
-  [migrations.md](03-reference/migrations.md#one-time-the-9xaipal--scholarflow-rename-2026-08-26):
-  a Docker volume cannot be renamed in place, so without it `docker compose up` comes up with an
-  empty library.
+- **Naming is deliberately split** — the product is `ScholarFlow` everywhere a person sees it (the
+  UI, the README, this documentation), and `9xaipal` everywhere a machine does (`POSTGRES_DB`, the
+  role, container and volume names, the Celery app). ⚠ Not an oversight to tidy up: the backend
+  identifiers are load-bearing. Renaming them once already discarded a live ingestion, because the
+  Celery app name is part of the task name on the wire — a worker running the old name received
+  `scholarflow.process_ingestion`, did not recognise it, and dropped the message. See
+  [decisions.md](decisions.md), 2026-08-26.
 
 ## Planned direction
 

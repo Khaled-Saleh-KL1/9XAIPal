@@ -2,7 +2,7 @@
 #
 # start-lan-server.sh
 # --------------------------------------------------------------------------
-# Turns this Mac into a TEMPORARY local server for ScholarFlow so another PC on
+# Turns this Mac into a TEMPORARY local server for 9XAIPal so another PC on
 # the same Wi-Fi/LAN can reach it for testing.
 #
 #   • Brings up the full Docker stack (API + UI on one port, Postgres, Redis,
@@ -39,7 +39,7 @@ MAX_UPLOAD_MB="${MAX_UPLOAD_MB:-102400}"
 
 # A throwaway override so we DON'T edit the tracked compose file or clobber any
 # existing docker-compose.override.yml. Passed explicitly with -f below.
-OVERRIDE_FILE="$(mktemp -t scholarflow-lan-override.XXXXXX.yml)"
+OVERRIDE_FILE="$(mktemp -t 9xaipal-lan-override.XXXXXX.yml)"
 
 # Helper: always drive compose with the same file set + the "server" profile
 # (the profile pulls in the one-shot frontend-build that produces the SPA).
@@ -102,7 +102,7 @@ services:
 YAML
 
 echo "============================================================"
-echo " ScholarFlow — temporary LAN server"
+echo " 9XAIPal — temporary LAN server"
 echo "============================================================"
 echo " Upload limit raised to ${MAX_UPLOAD_MB} MB (≈ no limit)."
 echo " Starting the stack and building the UI (first run is slower)..."
@@ -116,9 +116,9 @@ echo "==> Clearing any previous instance..."
 compose down --remove-orphans >/dev/null 2>&1 || true
 # Belt-and-suspenders: drop any stray containers using our fixed names, even if
 # they belong to a different compose context.
-docker rm -f scholarflow-api scholarflow-celery-worker scholarflow-postgres \
-              scholarflow-redis scholarflow-searxng scholarflow-frontend-build \
-              scholarflow-autoheal >/dev/null 2>&1 || true
+docker rm -f 9xaipal-api 9xaipal-celery-worker 9xaipal-postgres \
+              9xaipal-redis 9xaipal-searxng 9xaipal-frontend-build \
+              9xaipal-autoheal >/dev/null 2>&1 || true
 
 # Bring everything up. --build is required so the worker picks up the
 # MinerU image (Dockerfile.mineru); Docker layer-caches it after the first run.

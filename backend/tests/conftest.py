@@ -18,7 +18,7 @@ def _guard_destructive_db() -> None:
     The suite therefore only runs when POSTGRES_DB names a test database, or
     when the operator has explicitly said they accept the wipe:
 
-        POSTGRES_DB=scholarflow_test pytest
+        POSTGRES_DB=9xaipal_test pytest
         ALLOW_DESTRUCTIVE_TESTS=1 pytest      # I know, do it anyway
     """
     if os.getenv("ALLOW_DESTRUCTIVE_TESTS") == "1":
@@ -30,7 +30,7 @@ def _guard_destructive_db() -> None:
         f"\n\nRefusing to run: POSTGRES_DB={db!r} does not look like a test "
         "database, and every test truncates `documents CASCADE` — running "
         "here would delete your library.\n\n"
-        "  Use a scratch database:   POSTGRES_DB=scholarflow_test pytest\n"
+        "  Use a scratch database:   POSTGRES_DB=9xaipal_test pytest\n"
         "  Or accept the wipe:       ALLOW_DESTRUCTIVE_TESTS=1 pytest\n",
         returncode=2,
     )

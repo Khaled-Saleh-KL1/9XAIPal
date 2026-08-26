@@ -1,4 +1,4 @@
--- ScholarFlow Database Schema
+-- 9XAIPal Database Schema
 
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

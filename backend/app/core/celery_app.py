@@ -11,7 +11,7 @@ from app.core.config import settings
 
 
 celery_app = Celery(
-    "scholarflow",
+    "9xaipal",
     broker=settings.effective_celery_broker_url,
     backend=settings.effective_celery_result_backend,
     include=["app.workers.tasks"],

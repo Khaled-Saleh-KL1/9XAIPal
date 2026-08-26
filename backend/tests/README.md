@@ -3,7 +3,7 @@
 ## ⚠ How to run these
 
 ```bash
-POSTGRES_DB=scholarflow_test pytest
+POSTGRES_DB=9xaipal_test pytest
 ```
 
 **Every test truncates `documents CASCADE`.** That cascade takes chunks,
@@ -16,8 +16,8 @@ mean it).
 First-time setup of the scratch database:
 
 ```bash
-docker exec scholarflow-postgres psql -U scholarflow -d postgres -c 'CREATE DATABASE "scholarflow_test"'
-docker exec scholarflow-postgres psql -U scholarflow -d scholarflow_test \
+docker exec 9xaipal-postgres psql -U 9xaipal -d postgres -c 'CREATE DATABASE "9xaipal_test"'
+docker exec 9xaipal-postgres psql -U 9xaipal -d 9xaipal_test \
   -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
 ```
 

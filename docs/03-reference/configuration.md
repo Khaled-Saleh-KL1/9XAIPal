@@ -32,9 +32,9 @@ is silently ignored; if a setting seems not to apply, check the spelling first.
 | --- | --- | --- |
 | `POSTGRES_HOST` | `localhost` | |
 | `POSTGRES_PORT` | `5432` | |
-| `POSTGRES_DB` | `scholarflow` | |
-| `POSTGRES_USER` | `scholarflow` | |
-| `POSTGRES_PASSWORD` | `scholarflow_dev_password` | ⚠ Startup warns while this default is in place. Rotate before exposing the app to anything. |
+| `POSTGRES_DB` | `9xaipal` | |
+| `POSTGRES_USER` | `9xaipal` | |
+| `POSTGRES_PASSWORD` | `9xaipal_dev_password` | ⚠ Startup warns while this default is in place. Rotate before exposing the app to anything. |
 | `DB_POOL_SIZE` | `10` | SQLAlchemy pool. Raise for many concurrent `/ask`. |
 | `DB_MAX_OVERFLOW` | `15` | |
 

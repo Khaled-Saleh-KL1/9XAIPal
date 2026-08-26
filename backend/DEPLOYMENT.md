@@ -1,6 +1,6 @@
 # Deployment: "My Computer Is the Server"
 
-This document describes how to run the full ScholarFlow stack (API + UI + workers + infra) in containers so that **your machine acts as the server**.
+This document describes how to run the full 9XAIPal stack (API + UI + workers + infra) in containers so that **your machine acts as the server**.
 
 Ollama (the LLM/VLM/embeddings) can stay on the host, or any cloud API can take over — with `LLM_PROVIDER=auto` (default) the backend uses Ollama when it is reachable and otherwise falls back to the first cloud API key found in `.env` (OpenAI → Anthropic → Gemini → xAI → DeepSeek). See "AI Backend" below. The rest of the stack is fully containerized and async-ready for multiple concurrent users on the same machine.
 

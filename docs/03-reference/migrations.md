@@ -5,8 +5,7 @@
 > **Owns:** the migration procedure.
 > **Does not own:** what the tables contain ([database-schema.md](database-schema.md)).
 >
-> **Status:** current · **Last verified:** the rename runbook 2026-08-26 (written against the
-> live containers, **not** executed here — see its own warning); the rest 2026-07-25 against
+> **Status:** current · **Last verified:** 2026-07-25 against
 > [`database/migrations.py`](../../backend/app/database/migrations.py) (`main`, 9b75500)
 > **Verify with:** restart the API and read the migration log lines
 >
@@ -17,63 +16,6 @@
 > [roadmap.md](../roadmap.md).
 
 This project uses an "apply the SQL" approach rather than Alembic because it is a single-tenant local desktop tool.
-
----
-
-## One-time: the 9XAIPal → ScholarFlow rename (2026-08-26)
-
-⚠ **A library that already exists does not follow the rename by itself.** The repo now says
-`scholarflow` everywhere, including the compose **volume keys** and the `POSTGRES_*` defaults. A
-Docker named volume cannot be renamed in place, so the next `docker compose up` after pulling this
-change creates **empty** volumes and the app comes up with an empty library. The papers are not
-lost — they are still in `backend_9xaipal_postgres_data` — but nothing points at them.
-
-Do this once, with the stack stopped. It takes about a minute and leaves the old volumes untouched
-as a backup.
-
-```bash
-cd backend
-
-# 1. Rename the role and the databases, while the OLD names are still in .env.
-#    ⚠ Run this BEFORE stopping postgres — the rename happens inside a running server.
-docker compose stop api celery_worker autoheal
-docker exec -i 9xaipal-postgres psql -U 9xaipal -d postgres -v ON_ERROR_STOP=1 <<'SQL'
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity
- WHERE datname LIKE '9xaipal%' AND pid <> pg_backend_pid();
-ALTER DATABASE "9xaipal" RENAME TO scholarflow;
-ALTER DATABASE "9xaipal_test" RENAME TO scholarflow_test;   -- skip if you never ran the tests
-ALTER ROLE "9xaipal" RENAME TO scholarflow;
-ALTER ROLE scholarflow WITH PASSWORD 'scholarflow_dev_password';
-SQL
-
-# 2. Stop everything and copy the volumes to their new names.
-docker compose down
-for v in postgres redis; do
-  docker volume create "backend_scholarflow_${v}_data"
-  docker run --rm \
-    -v "backend_9xaipal_${v}_data:/from" \
-    -v "backend_scholarflow_${v}_data:/to" \
-    alpine sh -c 'cd /from && cp -a . /to'
-done
-
-# 3. Point .env at the new names (it is gitignored, so the rename did not touch it).
-sed -i '' 's/9xaipal/scholarflow/g' .env    # GNU sed: drop the ''
-
-# 4. Bring it back up and check the library is all there.
-docker compose up -d
-curl -s localhost:${API_PORT:-8000}/api/v1/papers | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["documents"]),"papers")'
-```
-
-⚠ **`ALTER ROLE … RENAME` and the password.** Postgres invalidates an `md5`-hashed password when
-the role is renamed, because the username is part of the hash. `scram-sha-256` (the PG14+ default,
-and what the `pgvector/pgvector:pg16` image uses) does not — but step 1 resets it anyway so the
-outcome does not depend on which one your volume was initialised with.
-
-⚠ **Keep `backend_9xaipal_*_data` until you have opened the app and seen your papers.** They are
-the only copy of the pre-rename state. Once you are satisfied:
-`docker volume rm backend_9xaipal_postgres_data backend_9xaipal_redis_data`.
-
-**Starting fresh instead?** Nothing to do — a new install creates `scholarflow` everywhere.
 
 ## After pulling latest code (especially after section summarization feature)
 

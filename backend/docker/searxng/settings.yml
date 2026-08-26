@@ -1,10 +1,10 @@
 use_default_settings: true
 
 general:
-  instance_name: "scholarflow-searxng"
+  instance_name: "9xaipal-searxng"
 
 server:
-  secret_key: "scholarflow-dev-secret-change-me"
+  secret_key: "9xaipal-dev-secret-change-me"
   limiter: false
   # Enable SearXNG's built-in image proxy. This makes SearXNG fetch and re-serve
   # images itself, which significantly reduces hotlinking / Referer blocking issues
