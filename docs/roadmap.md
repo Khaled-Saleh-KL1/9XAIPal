@@ -97,9 +97,12 @@ The application code is more mature than the tooling around it. These are the ch
 - **Two pipelines exist**: `extraction/pipeline.py` (async, legacy) and `pipeline_sync.py` (used by
   Celery). `[historical]` The async in-process `BackgroundTasks` + `asyncio.Queue` design was
   replaced by Celery; the async pipeline survives as a fast path. One of them should go.
-- **Naming is inconsistent across the repo** — the directory is `ScholarFlow`, everything inside
-  (README, database, containers, volumes) says `9XAIPal`. A rename must move
-  `POSTGRES_DB`, container names, and volume names together.
+- ~~**Naming is inconsistent across the repo**~~ — **done 2026-08-26.** Everything now says
+  `ScholarFlow`, including `POSTGRES_DB`, container names, and volume names. ⚠ An existing install
+  needs the one-time migration in
+  [migrations.md](03-reference/migrations.md#one-time-the-9xaipal--scholarflow-rename-2026-08-26):
+  a Docker volume cannot be renamed in place, so without it `docker compose up` comes up with an
+  empty library.
 
 ## Planned direction
 
@@ -115,11 +118,11 @@ The application code is more mature than the tooling around it. These are the ch
   still govern `INGEST_PROFILE=full` and books. Original design:
   [plans/paper-only-embedding-skip.md](plans/paper-only-embedding-skip.md).
 - `[planned]` **Alembic** for schema evolution, replacing best-effort `schema.sql` application.
-- `[planned]` **Cross-paper questions** — one question answered from every paper in the library,
-  each claim attributed to the paper it came from. The surface exists: the assistant panel's
-  "Across papers" tab ([`AssistantPanel.tsx`](../frontend/src/views/AssistantPanel.tsx)) is a
-  deliberate stub that states the level and routes back. The agent loop, the step trail, and
-  `paper_notes.scope` were all built to extend to a `library` scope.
+- ~~**Cross-paper questions**~~ — **shipped 2026-08-26** as the desk. A *study* (a named group of
+  papers, or the whole library) scopes a chat answered by
+  [`chat/study_agent.py`](../backend/app/chat/study_agent.py); citations are `[[P2:41]]` and expand
+  inline. Still open underneath it: the study index is heading spines only, so a paper MinerU found
+  no headings in can be searched but not browsed.
 - ~~Second PDF extractor (PaddleOCR-VL)~~ — **evaluated and rejected 2026-07-25.** MinerU 3.4.4
   produced correct two-column reading order with zero inversions and zero fragmented equations on
   the backend this app already uses; the premise did not reproduce. Measured results:

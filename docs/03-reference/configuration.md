@@ -32,9 +32,9 @@ is silently ignored; if a setting seems not to apply, check the spelling first.
 | --- | --- | --- |
 | `POSTGRES_HOST` | `localhost` | |
 | `POSTGRES_PORT` | `5432` | |
-| `POSTGRES_DB` | `9xaipal` | |
-| `POSTGRES_USER` | `9xaipal` | |
-| `POSTGRES_PASSWORD` | `9xaipal_dev_password` | ⚠ Startup warns while this default is in place. Rotate before exposing the app to anything. |
+| `POSTGRES_DB` | `scholarflow` | |
+| `POSTGRES_USER` | `scholarflow` | |
+| `POSTGRES_PASSWORD` | `scholarflow_dev_password` | ⚠ Startup warns while this default is in place. Rotate before exposing the app to anything. |
 | `DB_POOL_SIZE` | `10` | SQLAlchemy pool. Raise for many concurrent `/ask`. |
 | `DB_MAX_OVERFLOW` | `15` | |
 
@@ -136,6 +136,16 @@ How a question is answered when there are no embeddings. Detail:
 | `PAPER_AGENT_WEB_LIMIT` | `4` | Ceiling on results returned by one `WEB` call. Small on purpose: web extracts are long, and three good sources beat eight that crowd the paper's own text out of the prompt. |
 | `PAPER_AGENT_OPENING_BLOCKS` | `6` | How many opening blocks a whole-paper question is shown as orientation — normally title, authors, abstract. Unused on the anchored path, which shows the anchor's neighbours instead. |
 | `PAPER_AGENT_MAP_STRIDE` | `12` | Only used when a paper has **no detected headings**: sample every Nth block as a stand-in contents index, so the model still gets a map. |
+
+## Study agent
+
+Answering across a group of papers. Detail:
+[chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b--the-study-agent-the-desk).
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `STUDY_AGENT_MAX_STEPS` | `8` | Tool rounds a desk question gets. Higher than either paper-agent budget because the first round or two go on working out **which** papers the question turns on, before any of them has been read. |
+| `STUDY_MAX_PAPERS` | `24` | Ceiling on one study's membership, enforced with a `400` on `PUT /studies/{id}/papers`. The index is headings only, so the prompt cost is modest — but every paper is a full chunk load on every question. |
 
 ## Paper-only mode
 

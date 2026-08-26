@@ -19,20 +19,30 @@
 > **Verify with:** the `NOTE[...]` and `ASK[stepN]` log lines emitted on every question, and the
 > `step` SSE events on `POST /papers/{id}/notes/stream`
 
-## Two answering paths
+## Three answering paths
 
-There are now two, and they share nothing but the LLM client.
+Two of them are agents over the same tool layer; the third is the older router.
 
-| | **Paper agent** (`/notes`) | **Orchestrator** (`/ask`) |
-| --- | --- | --- |
-| Serves | the article reader's margin notes | books, and any remaining `/ask` caller |
-| Source | [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) | [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py) |
-| Retrieval | the anchor + the contents index, then `SECTION`/`SEARCH`/`READ` over chunks | LOCAL / GLOBAL / OVERVIEW / EXTERNAL |
-| Needs embeddings | ✗ | ✅ for GLOBAL |
-| Router | ✗ | ✅ |
-| Guardrail | ✗ | ✅ |
-| Compaction | ✗ | ✅ |
-| Persists to | `paper_notes` | `conversation_turns` + `ask_traces` |
+| | **Paper agent** (`/notes`) | **Study agent** (`/studies/…/chat`) | **Orchestrator** (`/ask`) |
+| --- | --- | --- | --- |
+| Serves | the article reader's margin notes | the desk — one scope, many papers | books, and any remaining `/ask` caller |
+| Source | [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) | [`chat/study_agent.py`](../../backend/app/chat/study_agent.py) | [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py) |
+| Scope | one paper | a study, or the whole library | one document |
+| Retrieval | the anchor + that paper's contents index | the **study index** — every paper's heading spine | LOCAL / GLOBAL / OVERVIEW / EXTERNAL |
+| Cites | `[[42]]` | `[[P2:42]]` | citation objects |
+| History | ✗ (one Q+A) | ✅ (a transcript) | ✅ |
+| Needs embeddings | ✗ | ✗ | ✅ for GLOBAL |
+| Router / guardrail / compaction | ✗ | ✗ | ✅ |
+| Persists to | `paper_notes` | `conversation_turns` (`study_id`) | `conversation_turns` + `ask_traces` |
+
+The first two share [`chat/agent_tools.py`](../../backend/app/chat/agent_tools.py) — everything
+between "the model asked for a section" and "here are the blocks". They differ only in what they
+are pointed at, how they name a block, and their prompts.
+
+⚠ **`prefix` is what keeps the two citation schemes apart.** A block number means nothing once
+there is more than one paper, so every formatter takes the prefix (`""` or `"P2:"`) rather than
+deciding for itself. Without that the two agents would drift into citing the same block two
+different ways, and the client could not tell which scheme it was rendering.
 
 ⚠ The paper agent deliberately drops routing, the guardrail, and compaction. A note is anchored to
 a place the reader is already looking at, so there is nothing to route; paper Q&A is in-scope by
@@ -328,6 +338,93 @@ reported). The catalog comes from [`llm/catalog.py`](../../backend/app/llm/catal
 ⚠ **A follow-up always uses its parent's `requested_model`, and the client cannot override it.**
 A thread that switched models halfway would destroy the comparison the picker exists for — you
 would no longer know which model said what.
+
+---
+
+# Part 1b — The study agent (the desk)
+
+## What a study is
+
+A named group of papers that scopes an answer. Not a folder: a paper can sit in several studies at
+once, and removing it from one takes nothing away from the library or the others.
+
+`study_id IS NULL` on a turn is the **library-wide** scope — every finished paper. That is a real
+scope, not a missing value; code that "repairs" it deletes the reader's main conversation. The
+route segment for it is the literal string `library`.
+
+## The study index
+
+The whole thing rests on one trade: the model gets **every paper's heading spine and nothing else**.
+
+```text
+STUDY INDEX:
+P1 — BDH-CQ: In-Context Learning with Recurrent Latent Reasoning (17 pages)
+   [[P1:6]] Abstract
+   [[P1:28]] 3 Introducing BDH-CQ
+     [[P1:32]] 3.2 In-context learning through recurrent memory
+P2 — Kimi K3: Open Frontier Intelligence (47 pages)
+   [[P2:29]] 2 Model Architecture
+     [[P2:33]] 2.1 Hybrid Attention
+   [[P2:261]] 5.4 Inference and Online Serving
+P3 — Unlimited OCR Works (14 pages)
+   [[P3:31]] 3. Methodology
+     [[P3:39]] 3.4. Reference Sliding Window Attention
+```
+
+Ten papers is easily a million tokens of body text; the spine of all ten is a few thousand. That is
+the entire reason a cross-paper agent is affordable — and it is the same bet the paper agent makes,
+taken at the point where there is no alternative.
+
+⚠ **A paper MinerU found no headings in still gets an entry**, with a note saying `SECTION` will not
+work on it. Omitting it would leave the model believing the study is smaller than it is.
+
+## Paper-qualified tools
+
+| Tool | Syntax | Scope |
+| --- | --- | --- |
+| `SECTION` | `SECTION: P2:31` | one paper's section |
+| `READ` | `READ: P1:40-52` | one paper's block range |
+| `SEARCH` | `SEARCH: inference cost` | **every paper in the study at once**, hits labelled by paper |
+| `WEB` | `WEB: ARC-AGI state of the art` | the public internet |
+| `THINK` | `THINK: P2 is the one that reports cost directly` | nothing — the reason, shown to the reader |
+
+⚠ **The P-numbers come from `study_papers.position`, and they are load-bearing.** They are how an
+answer names a paper, so re-ordering a study silently repoints every citation the reader has already
+read. That is why membership is written whole-collection (`PUT /studies/{id}/papers`) — the list
+order *is* the numbering.
+
+⚠ **Out-of-range paper numbers are dropped at plan time**, not at execution. A model that writes
+`P7` for a five-paper study is guessing, and fetching the wrong paper is worse than not fetching.
+
+⚠ **`run_search` de-duplicates on `(document_id, sequence_id)`, not `sequence_id`.** Across a study
+every paper has a block 12; keying on the number alone silently drops every paper's hit but the
+first.
+
+## The forced final turn can still call a tool
+
+The last round is told it has no tools left. It mostly obeys. When it does not, the tokens are
+already streaming to the reader, so stripping afterwards is too late — `tool> THINK: verify P3's
+cost claim… SECTION: P3:29` lands in the middle of the answer and stays there until a refetch
+quietly replaces it. **Observed, not hypothetical**: it happened on the first live desk question.
+
+[`agent_tools.stream_answer`](../../backend/app/chat/agent_tools.py) therefore filters in the
+stream: the moment `<tool` appears the generation has stopped being an answer, and everything from
+there is dropped from both the stream and the persisted text.
+
+⚠ It withholds the last few characters until the next token arrives, because the marker can be
+split across token boundaries (`"<to"` + `"ol>"`). Without that, a leak that straddles a boundary is
+emitted before it can be recognised.
+
+⚠ Both agents route through it. The paper agent had the same latent hole.
+
+## History, not compaction
+
+The desk carries the last `STUDY_HISTORY_TURNS` exchanges so "and the second one?" resolves. Old
+answers are trimmed to 700 characters: their job is to make pronouns resolve, not to re-supply
+evidence the model can fetch again.
+
+⚠ Deliberately **not** the orchestrator's compaction. That is a whole extra model call per
+question, and a desk conversation needing more than eight turns of memory is usually a new question.
 
 ---
 

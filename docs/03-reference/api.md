@@ -50,6 +50,21 @@ PATCH  /papers/{paper_id}/personal-notes/{note_id}
 DELETE /papers/{paper_id}/personal-notes/{note_id}
 GET    /papers/{paper_id}/decks
 PUT    /papers/{paper_id}/decks
+
+GET    /studies
+POST   /studies
+GET    /studies/{study_id}
+PATCH  /studies/{study_id}
+DELETE /studies/{study_id}
+PUT    /studies/{study_id}/papers
+GET    /studies/{study_id}/chat
+POST   /studies/{study_id}/chat/stream
+DELETE /studies/{study_id}/chat
+
+GET    /stickies
+POST   /stickies
+PATCH  /stickies/{sticky_id}
+DELETE /stickies/{sticky_id}
 POST   /papers/{paper_id}/ask
 POST   /papers/{paper_id}/ask/stream
 GET    /papers/{paper_id}/chat
@@ -576,6 +591,108 @@ The server reduces the submitted arrangement before storing it, and returns the 
 | A member listed in two decks | Kept by the first deck; dropped from the rest. |
 | A deck left with fewer than two members | Dropped entirely. |
 | `top` beyond the surviving member count | Clamped. |
+
+---
+
+## Studies
+
+Source: [endpoints/studies.py](../../backend/app/api/v1/endpoints/studies.py). Behaviour:
+[chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b--the-study-agent-the-desk).
+
+A **study** is a named group of papers that scopes an answer. Its chat lives in
+`conversation_turns` — the same table the book chat uses — because a desk conversation is a rolling
+transcript with follow-ups, not a standalone Q+A.
+
+⚠ **`library` is a valid `{study_id}`.** It means the library-wide scope: every finished paper, no
+group. Every endpoint below accepts it; `study_id IS NULL` on the turn rows says the same thing in
+the database. `PATCH` and `DELETE` do not — there is no row to change.
+
+### `GET /studies`
+
+```json
+{"studies": [{"id", "name", "description", "paper_count", "created_at", "updated_at"}]}
+```
+
+### `POST /studies`
+
+Body `{"name": "…", "description": "…"|null}` → the study. `201`.
+
+### `GET /studies/{study_id}`
+
+The study and its papers, **in citation order**.
+
+```json
+{
+  "study": {"id", "name", "description", "paper_count", ...},
+  "papers": [{"id", "title", "page_count", "status", "paper": 1}]
+}
+```
+
+`paper` is the `P<n>` the agent cites this paper by. For `library` the study block is synthetic
+(`id: "library"`, no timestamps) and cannot be renamed.
+
+### `PUT /studies/{study_id}/papers`
+
+Body `{"document_ids": [...]}` → `{"papers": [...]}`. **Replaces** membership; list order sets
+citation order.
+
+⚠ Whole-collection, like decks. The P-numbers the reader is looking at come from this order, so a
+partial update could repoint citations already on screen.
+
+⚠ `400` past `STUDY_MAX_PAPERS` (24). Every paper is loaded on every question.
+
+### `GET /studies/{study_id}/chat`
+
+```json
+{"turns": [{
+  "id", "role": "user"|"assistant", "content", "model",
+  "cited": [{"paper": 2, "document_id", "label", "sequence_id": 41}],
+  "agent_steps": [AgentStep],
+  "created_at"
+}]}
+```
+
+### `POST /studies/{study_id}/chat/stream`
+
+Body `{"question": "…", "model": null}`. SSE, **the same event shapes as the note stream** —
+`created` (carrying `turn_id`), `status`, `step`, `token`, `done`, `error` — so one client
+component renders both. `done` carries `turn_id`, `answer`, `model`, `cited`, `agent_steps`.
+
+⚠ The user's turn is stored **before** generation, so a failed model call still leaves the question
+in the transcript.
+
+### `DELETE /studies/{study_id}/chat`
+
+`204`. Clears the scope's transcript. The papers and the sticky notes stay.
+
+---
+
+## Sticky notes
+
+Source: [endpoints/stickies.py](../../backend/app/api/v1/endpoints/stickies.py).
+
+A note the reader keeps in front of them. No anchor; zero or more papers.
+
+⚠ **Zero papers is a scope, not an incomplete row.** An unscoped note is about nothing in
+particular and shows on every desk.
+
+| Route | Behaviour |
+| --- | --- |
+| `GET /stickies` | `{"stickies": [...]}`, pinned first then newest. Repeat `?document_id=` to narrow — the result then holds notes about those papers **plus every unscoped note**. |
+| `POST /stickies` | Body `{body?, color?, pinned?, document_ids?}` → the note. `201`. |
+| `PATCH /stickies/{id}` | Body `{body?, color?, pinned?, document_ids?}`. Omitted fields are left alone. |
+| `DELETE /stickies/{id}` | `204`. |
+
+```json
+{"id", "body", "color": "yellow|blue|green|pink|plain", "pinned": false,
+ "papers": [{"document_id", "label"}], "created_at", "updated_at"}
+```
+
+⚠ On `PATCH`, `document_ids: []` **clears** the scope (making the note global) while omitting the
+field leaves it untouched. Collapsing the two would make "about nothing in particular" unreachable.
+
+⚠ `color` is a name, not a hex value. The UI maps it to CSS variables so a note reads as paper in
+both themes; a stored hex is a glare in the dark one.
 
 ---
 

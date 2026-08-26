@@ -44,6 +44,11 @@ documents (1) ─────< (N) paper_notes
 documents (1) ─────< (N) reading_bookmarks
 documents (1) ─────< (N) personal_notes
             personal_notes ── anchor_chunk_id → chunks.id (SET NULL)
+documents (1) ─────< (N) study_papers >───── (1) studies
+                                          studies (1) ─────< (N) conversation_turns
+                                                              (study_id, NULL = whole library)
+documents (1) ─────< (N) sticky_note_papers >───── (1) sticky_notes
+
 documents (1) ─────< (N) note_decks
             note_decks ─────< (N) note_deck_members
                               note_deck_members ── ai_note_id       → paper_notes.id    ┐ exactly
@@ -73,6 +78,11 @@ erDiagram
     paper_notes        ||--o{ paper_notes        : "follow-up"
     documents          ||--o{ reading_bookmarks  : "cascade"
     documents          ||--o{ personal_notes     : "cascade"
+    documents          ||--o{ study_papers       : "cascade"
+    studies            ||--o{ study_papers       : "cascade"
+    studies            |o--o{ conversation_turns : "cascade, NULL = library scope"
+    documents          ||--o{ sticky_note_papers : "cascade"
+    sticky_notes       ||--o{ sticky_note_papers : "cascade"
     documents          ||--o{ note_decks         : "cascade"
     chunks             |o--o{ personal_notes     : "anchor, SET NULL"
     note_decks         ||--o{ note_deck_members  : "cascade"
@@ -311,6 +321,45 @@ survives, so a re-chunk degrades an anchor's precision instead of destroying the
 
 Indexes: `(document_id, anchor_sequence_id, created_at)` — the exact order the margin lays cards
 out in — and `(parent_note_id)` for thread loading.
+
+### `studies`, `study_papers`
+
+A named group of papers that scopes an answer. **Not a folder** — a paper can sit in several studies
+at once, and removing it from one takes nothing away from the library.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `studies.id` | `UUID` | PK. |
+| `studies.name` | `TEXT` | |
+| `studies.description` | `TEXT` | |
+| `study_papers.study_id` | `UUID` | FK → `studies.id` cascade. PK with `document_id`. |
+| `study_papers.document_id` | `UUID` | FK → `documents.id` cascade. |
+| `study_papers.position` | `INTEGER` | **The citation order.** Index in this list is the `P<n>` an answer names the paper by. |
+
+⚠ **`position` is load-bearing, not cosmetic.** Answers cite `[[P2:41]]`, so re-ordering a study
+repoints every citation the reader has already read. That is why membership is written
+whole-collection (`PUT /studies/{id}/papers`) — the list order *is* the numbering.
+
+### `sticky_notes`, `sticky_note_papers`
+
+A note the reader keeps in front of them, with no anchor.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `sticky_notes.id` | `UUID` | PK. |
+| `sticky_notes.body` | `TEXT` | Markdown, rendered by the shared pipeline. |
+| `sticky_notes.color` | `TEXT` | `yellow` \| `blue` \| `green` \| `pink` \| `plain`. A **name**, not a hex — the UI maps it to CSS variables so it survives the light/dark switch. |
+| `sticky_notes.pinned` | `BOOLEAN` | Sorts first. |
+| `sticky_note_papers` | | `(sticky_id, document_id)`, both cascade. |
+
+⚠ **Deliberately not `personal_notes`.** A personal note is anchored to a block in one document and
+lives in that document's margin; a sticky has no anchor, may name several papers or none, and lives
+on the desk. Sharing a table would give every sticky an `anchor_sequence_id` that means nothing and
+would surface stickies in the margin layout.
+
+⚠ **Zero rows in `sticky_note_papers` is a scope, not an incomplete row.** A note about nothing in
+particular shows on every desk. Code that treats an empty scope as "not yet assigned" hides exactly
+the notes the reader most wanted pinned.
 
 ## Personal reading state
 

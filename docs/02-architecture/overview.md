@@ -14,8 +14,9 @@
 > [runtime-topology.md](../01-orientation/runtime-topology.md) — ports and processes ·
 > [database-schema.md](../03-reference/database-schema.md) — tables and columns.
 >
-> **Status:** current · **Reflects code as of:** §1 and §6b 2026-08-18 against
-> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) (`8fb153b`); everything else
+> **Status:** current · **Reflects code as of:** §1 and §6b 2026-08-26 against
+> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) and
+> [`chat/study_agent.py`](../../backend/app/chat/study_agent.py); everything else
 > 2026-07-25 (`main`, 9b75500)
 
 ---
@@ -34,11 +35,13 @@ Three halves:
 2. **Reading** — two readers, chosen by `doc_kind`. A **paper** renders as a continuous article
    with a note margin either side. A **book** keeps the chapter-by-chapter reveal reader and its
    chat pane.
-3. **Asking** — two levels for papers, both served by the paper agent. **Anchored**: highlight a
-   passage, get a margin note answered from that passage plus the paper's contents index.
-   **Holistic**: open the panel (bottom-left, or `P`) and ask about the paper as a whole. Either
-   way an agentic `SECTION`/`SEARCH`/`READ`/`WEB` loop fetches what it needs, and every fetch is
-   shown to the reader. For books, the routed `/ask` orchestrator with its four context sources.
+3. **Asking** — three levels, all agentic, all showing their work. **Passage**: highlight text,
+   get a margin note answered from that passage plus the paper's contents index. **Paper** and
+   **across papers**: the **desk** (`#/desk`), where a *study* — a named group of papers, or the
+   whole library — scopes a rolling chat whose citations expand in place. For books, the routed
+   `/ask` orchestrator with its four context sources.
+4. **The desk** — the surface for reading papers *without opening them*: studies on the left, the
+   chat in the middle, sticky notes on the right.
 
 **Why local-first:** privacy (papers and chats never leave the machine), latency (LLM and vector
 search colocated with the data), cost (no per-token billing). The price is the cold-start latency
@@ -189,6 +192,9 @@ SQLAlchemy Core (`text()`), not the ORM. Do not expect model classes — there a
 | Security headers + rate limit | [`app/core/security.py`](../../backend/app/core/security.py) |
 | Route table | [`app/api/v1/router.py`](../../backend/app/api/v1/router.py) |
 | Paper answering (§6b) | [`app/chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) |
+| Cross-paper answering (§6b) | [`app/chat/study_agent.py`](../../backend/app/chat/study_agent.py) |
+| The tool layer both agents share | [`app/chat/agent_tools.py`](../../backend/app/chat/agent_tools.py) |
+| The desk (studies, chat, stickies) | [`frontend/src/views/DeskView.tsx`](../../frontend/src/views/DeskView.tsx) |
 | Note endpoints | [`app/api/v1/endpoints/notes.py`](../../backend/app/api/v1/endpoints/notes.py) |
 | Model catalog | [`app/llm/catalog.py`](../../backend/app/llm/catalog.py) |
 | MinerU glyph repair | [`app/extraction/glyph_repair.py`](../../backend/app/extraction/glyph_repair.py) |
@@ -249,9 +255,15 @@ Two paths that share only the LLM client.
 
 **Papers → the paper agent** (`/notes`). `anchor + question + the paper's contents index → an
 agentic SECTION/SEARCH/READ/WEB loop → answer → persist to paper_notes`. No router, no guardrail,
-no compaction, no embeddings. Two levels: an **anchored** note beside a passage, and a **holistic**
-question about the whole paper asked from the assistant panel. Every tool call is reported to the
-reader and persisted to `paper_notes.agent_steps`.
+no compaction, no embeddings.
+
+**Groups of papers → the study agent** (`/studies/{id}/chat`). `study index (every paper's heading
+spine) + question + history → the same loop, paper-qualified → answer → persist to
+conversation_turns`. Citations are `[[P2:41]]` and expand inline, which is what lets the desk serve
+reading without opening a document.
+
+Both share [`chat/agent_tools.py`](../../backend/app/chat/agent_tools.py), and both report every
+tool call to the reader and persist it (`paper_notes.agent_steps` / `conversation_turns.agent_steps`).
 
 | Mode | When | Cost |
 | --- | --- | --- |

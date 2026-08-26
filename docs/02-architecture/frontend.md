@@ -5,8 +5,8 @@
 > **Owns:** client-side state and view behavior.
 > **Does not own:** endpoint contracts ([api.md](../03-reference/api.md)).
 >
-> **Status:** current · **Last verified:** the library, the assistant panel and the agent trail
-> 2026-08-26, driven in a real browser against a live backend;
+> **Status:** current · **Last verified:** the library, the desk, and the agent trail 2026-08-26,
+> driven in a real browser against a live backend;
 > [`frontend/src/App.tsx`](../../frontend/src/App.tsx) 2026-08-18 (`main`, 79903be).
 > The ArticleReader's anchoring and table sections were verified 2026-08-18 against
 > [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) and
@@ -15,7 +15,7 @@
 > **Verify with:** `cd frontend && npm run build` (runs `tsc` first)
 
 Vite + React + Tailwind, no router library — a tiny state machine in
-[App.tsx](../../frontend/src/App.tsx) toggles between four views.
+[App.tsx](../../frontend/src/App.tsx) toggles between five views.
 
 ## Two readers, chosen by `doc_kind`
 
@@ -33,7 +33,7 @@ Nothing on the paper path mounts `ChatPane`.
 ## Top-level state ([App.tsx](../../frontend/src/App.tsx))
 
 ```ts
-type Route = 'library' | 'processing' | 'reading' | 'pdf-viewer';
+type Route = 'library' | 'processing' | 'reading' | 'pdf-viewer' | 'desk';
 ```
 
 Held in `useState<Route>`:
@@ -42,6 +42,7 @@ Held in `useState<Route>`:
 - **`processing`** → `<LibraryView>` underneath + `<ProcessingOverlay>` on top.
 - **`reading`** → `<ReadingView>` (dispatches to `<ArticleReader>` or `<BookReadingView>`).
 - **`pdf-viewer`** → reserved for an in-browser PDF viewer.
+- **`desk`** → `<DeskView>`. Deep-linkable per scope: `#/desk`, `#/desk/<studyId>`.
 
 `App.tsx` also owns:
 - `activePaper` — the `Paper` currently open in `ReadingView`.
@@ -375,22 +376,26 @@ Several per paper. Three surfaces, one state:
 frame to keep those surfaces honest, and blocks are laid out monotonically, so a scan meant one
 `getBoundingClientRect` per block per frame — several hundred forced reflows on a long paper.
 
-### The assistant panel (the holistic level)
+### Leaving for the desk
 
-[`AssistantPanel.tsx`](../../frontend/src/views/AssistantPanel.tsx) — one docked surface for
-questions about the paper as a whole, opened by the single button in the bottom-left corner or `P`.
+The one button in the bottom-left corner (or `P`) **navigates** to
+[the desk](#the-desk-viewsdeskviewtsx). It does not open anything here.
 
-⚠ **It replaced two floating buttons with one.** "Ask" and "Note" both anchored to whatever block
-happened to be at the top of the viewport — a worse version of what highlighting already does,
-offered more prominently. Passage-level work now belongs entirely to the selection pill and the
-`A` / `N` keys; the corner means exactly one thing.
+⚠ It has been three things in three iterations, and the reasons are worth keeping. First an "Ask"
+and a "Note" button, both anchoring to whatever block happened to be at the top of the viewport — a
+worse version of what highlighting already does, offered more prominently. Then one button opening
+a docked panel. Now a door: a question about the paper as a whole, or about several papers, is not
+something you do *on top of* a document you are reading. Passage-level work belongs entirely to the
+selection pill and the `A` / `N` keys.
 
-⚠ **Scope splits the notes before anything renders.**
-[`ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) derives `marginNotes`
-(`scope !== 'document'`) and `paperNotes_` (`scope === 'document'`) from one `notes` array, and the
-gutter's layout pass reads `marginPending`, never `pending`. A document-scope note carries the
-first block's sequence id only to satisfy a `NOT NULL` column — laid out in the margin it would
-pile onto the paper's title.
+⚠ **The scope it hands over is a study containing this paper — only if there is exactly one.** Two
+or more is ambiguous, and guessing between them is worse than landing on the library scope with the
+studies rail right there.
+
+⚠ **`scope='document'` notes still render in the reader's Marginalia index.** The panel that created
+them is gone and nothing makes new ones, but they belong to this paper, and dropping them from the
+index would make them unreachable rather than merely relocated. `ArticleReader` derives
+`marginNotes` (`scope !== 'document'`) for the gutter and folds both into `marginaliaRows`.
 
 ```text
                     ┌───────────────── one /notes fetch ─────────────────┐
@@ -400,13 +405,9 @@ pile onto the paper's title.
               groupNotes()                                        groupNotes()
                     │                                                    │
            ┌────────┴────────┐                                           │
-      gutter left      gutter right                              AssistantPanel
-      (positioned by anchor_sequence_id)                         (flow order, newest last)
+      gutter left      gutter right                          Marginalia index only
+      (positioned by anchor_sequence_id)                     (no gutter card, no composer)
 ```
-
-The panel's second tab, **Across papers**, is a deliberate stub: it states what the level will be
-and routes back. The level above "this paper" is cross-paper, and leaving the tab out would make
-the panel look finished at one level.
 
 ### The agent trail ([views/AgentTrail.tsx](../../frontend/src/views/AgentTrail.tsx))
 
@@ -456,6 +457,102 @@ Writes are optimistic with rollback, **except creating a personal note**, which 
 server. A card rendered under a temporary id cannot be dragged into a deck — deck membership is a
 foreign key. The composer keeps its draft until the save lands, so a failure loses nothing typed.
 
+## The desk ([views/DeskView.tsx](../../frontend/src/views/DeskView.tsx))
+
+A page, not a panel. Behaviour and the agent behind it:
+[chat-and-ask.md § Part 1b](chat-and-ask.md#part-1b--the-study-agent-the-desk).
+
+⚠ **It is a place to work on papers without opening them.** That is why it is a route rather than
+an overlay on the reader: an overlay implies the document underneath is the subject, and here it is
+not. The reader's corner button became a door to it.
+
+Three columns, each answering a different question:
+
+```text
+┌─────────────────┬───────────────────────────────────┬──────────────────┐
+│ what am I       │ what do they say?                 │ what do I think? │
+│ working on?     │                                   │                  │
+│                 │  ┌ user bubble ────────── right ┐ │  ┌ sticky ────┐  │
+│  Studies        │  └──────────────────────────────┘ │  │ any paper  │  │
+│   Whole library │                                   │  └────────────┘  │
+│   Reasoning…  3 │  ▸ How this was answered · 5      │  ┌ sticky ────┐  │
+│                 │  answer, full measure             │  │ P1         │  │
+│  In this study  │   …recurrent state [P1:35]        │  └────────────┘  │
+│   P1 BDH-CQ     │        └── click → the block,     │                  │
+│   P2 Kimi K3    │            inline, in place       │                  │
+│   P3 OCR        │                                   │                  │
+│                 │  READ FROM  P1 · P2 · P3          │                  │
+│  Rename Delete  ├───────────────────────────────────┤                  │
+│                 │  composer + model picker          │                  │
+└─────────────────┴───────────────────────────────────┴──────────────────┘
+     rail                    chat (elastic)                  board
+```
+
+### (rendered)
+
+```mermaid
+%%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
+flowchart LR
+    subgraph DeskView
+        RAIL["rail<br/>studies · papers"] -->|"setScope"| ST[["scope<br/>studyId | 'library'"]]
+        ST --> CHAT["StudyChat<br/>transcript"]
+        ST --> BOARD["StickyBoard"]
+        CHAT -->|"askStudyStream"| API(["/studies/{scope}/chat/stream"])
+        API -->|"step · token"| CHAT
+        CHAT --> CITE["CitationRef<br/>[[P2:41]]"]
+        CITE -->|"getChunk"| BLK([one block, inline])
+        CITE -.->|"open in reader"| RD([ArticleReader at ¶41])
+    end
+    classDef owned stroke:#3b82f6,stroke-width:2px
+    class RAIL,CHAT,BOARD,CITE owned
+```
+
+What to notice: the citation has two exits and the reader is the *optional* one. Everything the
+desk promises rests on the inline path being enough most of the time.
+
+⚠ **The chat's elastic column is the only one that grows.** A rail that widens with the window just
+holds more whitespace; below 1180px the board folds away first, because notes are a companion to
+the chat and the chat is what stops being usable when squeezed.
+
+### Citations that open where they sit
+
+[`CitationRef.tsx`](../../frontend/src/views/CitationRef.tsx) fetches one block on first expand and
+keeps it. A study answer routinely carries a dozen citations, and prefetching all of them would be
+a dozen requests for text that mostly never gets opened.
+
+⚠ **The markers become links before markdown runs, not fragments around it**
+([`StudyChat.tsx::withCitationLinks`](../../frontend/src/views/StudyChat.tsx)). Splitting the answer
+on its markers and rendering each fragment separately makes every fragment its own block: a citation
+mid-sentence then breaks the paragraph in two and strands the rest of the sentence — including a
+lone trailing full stop — on its own line. A `components.a` override swaps the link for the chip
+with the paragraph intact.
+
+⚠ **The peek is built from `<span>`s with `display: block`.** It renders inside a `<p>`, and a
+`<div>` there is invalid HTML that React will not nest cleanly.
+
+⚠ **A citation into a paper the study no longer holds renders struck-through, not as a button.** A
+dead control that looks like evidence is worse than one that says it is gone.
+
+### Sticky notes ([views/StickyBoard.tsx](../../frontend/src/views/StickyBoard.tsx))
+
+⚠ **A note with no papers is the important case, not the empty one.** What a reader most wants
+pinned — a question to come back to, a suspicion about the whole field — usually belongs to no
+single paper, so those show on *every* desk and the UI says "any paper" rather than leaving the
+scope blank as if something were missing.
+
+⚠ **Enter inserts a newline here**, unlike every other composer in the app. A sticky is a scrap you
+jot in several lines; sending on Enter would truncate half of them. ⌘/Ctrl+Enter commits, blur
+commits, Escape reverts.
+
+⚠ **A new sticky starts unscoped even inside a study.** Scoping is a decision, and pre-filling it
+would quietly hide the note from every other desk.
+
+### Autoscroll
+
+The transcript follows the newest turn **only when the reader is already at the bottom** (within
+120px). A long answer streaming in while they are reading an earlier turn must not drag the view
+away from what they are looking at.
+
 ## ChatPane ([views/ChatPane.tsx](../../frontend/src/views/ChatPane.tsx))
 
 ⚠ `[historical]` for papers — reached only from `BookReadingView`.
@@ -499,14 +596,18 @@ figures in LOCAL and GLOBAL responses.
   told apart by **shape and colour, not by a border tint** — a margin card is read peripherally.
 - [`views/AskComposer.tsx`](../../frontend/src/views/AskComposer.tsx) — the composer that opens on
   an anchor. Owns the model picker; never touches the network.
-- [`views/AssistantPanel.tsx`](../../frontend/src/views/AssistantPanel.tsx) — the holistic level.
+- [`views/DeskView.tsx`](../../frontend/src/views/DeskView.tsx) — the desk page.
 - [`views/AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx) — the tool calls behind an
-  answer, live and after the fact.
+  answer, live and after the fact. Shared by margin notes and the desk.
+- [`views/StudyChat.tsx`](../../frontend/src/views/StudyChat.tsx) — the desk's transcript.
+- [`views/StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx) — the reader's own notes.
+- [`views/CitationRef.tsx`](../../frontend/src/views/CitationRef.tsx) — a `[[P2:41]]` that opens
+  in place.
 - [`views/PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) — a paper's first page, with the
   placeholder that must survive a 204.
 - [`lib/titles.ts`](../../frontend/src/lib/titles.ts) — the one resolver for a paper's display name.
 - [`components/Icons.tsx`](../../frontend/src/components/Icons.tsx) — inline SVG icons.
-- [`components/LogoMark.tsx`](../../frontend/src/components/LogoMark.tsx) — the 9XAIPal wordmark.
+- [`components/LogoMark.tsx`](../../frontend/src/components/LogoMark.tsx) — the ScholarFlow wordmark.
 
 ## Styling
 
