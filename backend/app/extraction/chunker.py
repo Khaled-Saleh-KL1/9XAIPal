@@ -508,6 +508,52 @@ def _fence_code(text: str, lang: str) -> str:
     return f"```{fence_lang}\n{text}\n```"
 
 
+# Characters that must never reach the database.
+#
+# ⚠ NUL is the one that actually breaks: Postgres `text` cannot hold 0x00 at
+# all, and the insert dies with "A string literal cannot contain NUL (0x00)
+# characters" — taking the whole ingestion down at the very last step, after
+# MinerU has already done the expensive work. Observed on a real arXiv PDF.
+#
+# The rest of the C0 range goes too. It is never meaningful in extracted prose,
+# it survives into the reader as invisible junk that breaks text matching for
+# highlights, and a PDF that produced one control character usually produced
+# several. Tab, newline and carriage return are kept — they are layout.
+_CONTROL_CHARS = dict.fromkeys(
+    [c for c in range(0x20) if c not in (0x09, 0x0A, 0x0D)] + [0x7F]
+)
+
+
+def _scrub(value):
+    """Strip control characters from any string in a chunk's payload.
+
+    Recurses through the lists and dicts a chunk carries (``heading_path``,
+    ``table_json``) so nothing slips in via a nested value.
+    """
+    if isinstance(value, str):
+        return value.translate(_CONTROL_CHARS)
+    if isinstance(value, list):
+        return [_scrub(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub(v) for k, v in value.items()}
+    return value
+
+
+def _scrub_chunks(chunks: list[dict]) -> list[dict]:
+    """Last gate before a chunk can be persisted.
+
+    ⚠ Applied at the funnel both builders return through, so the pipeline AND
+    the ``/rechunk`` endpoint are covered by one call. Putting it at either
+    insert site instead would need the same fix twice, and the second one would
+    be the one somebody forgets.
+    """
+    for ch in chunks:
+        for key in ("markdown", "plain_text", "heading_path", "table_json"):
+            if key in ch and ch[key] is not None:
+                ch[key] = _scrub(ch[key])
+    return chunks
+
+
 def _renumber_sequences(chunks: list[dict]) -> list[dict]:
     """Reassign ``sequence_id`` to a gap-free 1..N run in append order.
 
@@ -944,7 +990,7 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
             heading_path, image_refs=[],
         ))
 
-    return _renumber_sequences(chunks)
+    return _scrub_chunks(_renumber_sequences(chunks))
 
 
 def create_chunks_from_markdown(markdown_content: str) -> list[dict]:
@@ -1093,7 +1139,7 @@ def create_chunks_from_markdown(markdown_content: str) -> list[dict]:
                     current_heading_path, image_refs=_image_refs(block), **extra
                 ))
 
-    return _renumber_sequences(chunks)
+    return _scrub_chunks(_renumber_sequences(chunks))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
