@@ -15,27 +15,36 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The persistent deployment directory. This is NOT where actions/checkout
+  # runs — it deletes and recreates its target directory on every single
+  # run, unconditionally (`clean: false` only skips an *additional* git-clean
+  # on top of that, it doesn't prevent it). Anything untracked living inside
+  # a checkout-managed directory — backend/.env (secrets), backend/app/
+  # storage/* (uploaded papers), backend/frontend-dist (the built SPA) — WILL
+  # be destroyed sooner or later if checkout and the live deployment share a
+  # directory. So they don't: checkout gets its own disposable workspace, and
+  # this directory receives only a one-way sync of the tracked files.
+  DEPLOY_DIR: /home/kl1/apps/9xaipal
+
 jobs:
   deploy:
     name: deploy
     runs-on: self-hosted
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
-        with:
-          # ⚠ actions/checkout defaults to `clean: true`, which runs
-          # `git clean -ffdx` BEFORE checking out — that deletes every
-          # untracked file, including backend/.env (secrets), backend/
-          # app/storage/* (uploaded papers, extracted content, logs) and
-          # backend/frontend-dist (the built SPA nginx serves). All three
-          # are gitignored on purpose because they're per-deployment state,
-          # not repo content. clean: false checks out the new commit without
-          # touching them.
-          clean: false
+
+      - name: Sync tracked files into the deployment directory
+        run: |
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='backend/.env' \
+            --exclude='backend/app/storage/' \
+            --exclude='backend/frontend-dist/' \
+            ./ "$DEPLOY_DIR"/
 
       - name: Build frontend
+        working-directory: ${{ env.DEPLOY_DIR }}/backend
         run: |
           docker run --rm \
             --user "$(id -u):$(id -g)" \
@@ -49,6 +58,7 @@ jobs:
                    rm -rf /dist/* && cp -r dist/* /dist/"
 
       - name: Build and restart containers
+        working-directory: ${{ env.DEPLOY_DIR }}/backend
         run: docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml up -d --build
 
       - name: Wait for health check
@@ -61,7 +71,7 @@ jobs:
             sleep 3
           done
           echo "::error::API did not become healthy within 60s of deploy."
-          docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml logs --tail=100 api
+          docker compose -f "$DEPLOY_DIR/backend/docker-compose.prod.yml" -f "$DEPLOY_DIR/backend/docker-compose.selfhost.yml" logs --tail=100 api
           exit 1
 
       - name: Reclaim disk space from old image layers
