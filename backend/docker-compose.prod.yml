@@ -128,6 +128,11 @@ services:
       EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}
       EXTRACTOR_VLM_CONCURRENCY: ${EXTRACTOR_VLM_CONCURRENCY:-3}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-true}
+       # Web search: Tavily when TAVILY_API_KEY is set (auto), else disabled
+       # now that SearXNG is gone from this deployment. Query strings reach
+       # Tavily's servers when this is active — see config.py's note.
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       STORAGE_ROOT: /data/storage
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
@@ -195,6 +200,11 @@ services:
       EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}
       EXTRACTOR_VLM_CONCURRENCY: ${EXTRACTOR_VLM_CONCURRENCY:-3}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-true}
+       # Web search: Tavily when TAVILY_API_KEY is set (auto), else disabled
+       # now that SearXNG is gone from this deployment. Query strings reach
+       # Tavily's servers when this is active — see config.py's note.
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       STORAGE_ROOT: /data/storage
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
