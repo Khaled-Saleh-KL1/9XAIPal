@@ -445,8 +445,14 @@ distinguishes the document title from everything else and stops, so `heading_pat
 `3 Training data` *and* for `3.1 ARC task formulation` — a contents list built from it renders as
 one flat column, which is what the reader saw. `level` now comes from
 [`services/outline.py::heading_level`](../../backend/app/services/outline.py), which reads the
-numeric prefix and falls back to `heading_path` for unnumbered headings. Four levels are styled;
-deeper ones clamp to `outline-l4`.
+numeric prefix and falls back to `heading_path` for unnumbered headings.
+
+⚠ **Depth is a CSS custom property, not a class per level.** It was
+`outline-l${min(level, 4)}` against four hand-written rules, which silently flattened anything
+deeper — a paper numbering `2.1.1.1` drew it level with `2.1.1`. One `calc()` off `--depth` handles
+any depth, and the step and the rail offset are the only two numbers involved, so they cannot drift
+apart the way four hand-written pairs could. Still capped at 6, but the cap is now about a 300px
+panel running out of room rather than about how many rules someone wrote.
 
 ⚠ **The guide rails are what make it readable, not the indent.** At an 18px step a third-level
 heading is 40px in, and in a 300px panel that reads as a ragged left edge rather than a hierarchy.
