@@ -1,0 +1,67 @@
+name: Deploy
+
+# Runs on the self-hosted runner living on the production box itself, after
+# every push to main. There is exactly one deploy target, so pushes queue
+# instead of overlapping (cancel-in-progress: false — never kill a deploy
+# that's already rebuilding containers mid-flight).
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # ⚠ actions/checkout defaults to `clean: true`, which runs
+          # `git clean -ffdx` BEFORE checking out — that deletes every
+          # untracked file, including backend/.env (secrets), backend/
+          # app/storage/* (uploaded papers, extracted content, logs) and
+          # backend/frontend-dist (the built SPA nginx serves). All three
+          # are gitignored on purpose because they're per-deployment state,
+          # not repo content. clean: false checks out the new commit without
+          # touching them.
+          clean: false
+
+      - name: Build frontend
+        run: |
+          docker run --rm \
+            -v "$(pwd)/../frontend:/src" \
+            -v "$(pwd)/frontend-dist:/dist" \
+            -w /src \
+            node:20-alpine \
+            sh -c "npm ci --prefer-offline --no-audit --progress=false && \
+                   VITE_API_BASE_URL=https://kl1-9xaipal.duckdns.org npm run build && \
+                   rm -rf /dist/* && cp -r dist/* /dist/"
+
+      - name: Build and restart containers
+        run: docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml up -d --build
+
+      - name: Wait for health check
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8000/api/v1/health >/dev/null; then
+              echo "Healthy after ${i} attempt(s)."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::API did not become healthy within 60s of deploy."
+          docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml logs --tail=100 api
+          exit 1
+
+      - name: Reclaim disk space from old image layers
+        if: always()
+        run: docker image prune -f
