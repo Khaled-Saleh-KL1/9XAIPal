@@ -60,8 +60,8 @@ const INDEX_STEPS: StepDef[] = [
   },
   {
     id: 4,
-    title: 'Summaries & figures',
-    sub: 'Section summaries + VLM figure descriptions (last phase)',
+    title: 'Summaries',
+    sub: 'Section summaries for the best possible answers',
     matches: ['summarizing'],
   },
 ];

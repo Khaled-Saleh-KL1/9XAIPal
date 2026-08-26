@@ -142,6 +142,13 @@ class Settings(BaseSettings):
     # hosted one may rate-limit. 1 restores the old sequential behaviour.
     vlm_max_concurrency: int = 4
 
+    # Whether ingestion auto-generates a VLM description for every figure.
+    # Each one is a cloud VLM call (see effective_vlm_model) — off saves that
+    # cost/time for readers who would rather look at the figure themselves.
+    # Section summaries are unaffected; this only skips the figure-describer
+    # phase.
+    generate_figure_descriptions: bool = True
+
     # ── Latency tuning ──────────────────────────────────────────────────────
     # Small, fast model used ONLY for cheap classification (router + guardrail).
     # Leave empty to reuse chat_model. Pointing this at a 1–3B model (e.g.

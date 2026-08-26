@@ -195,13 +195,17 @@ def generate_section_summaries(self, document_id: str) -> dict:
                 session.rollback()
 
             # Rich VLM descriptions for figures/diagrams — the [figure-describer]
-            # phase. Also non-fatal.
-            try:
-                fig_result = generate_figure_descriptions_sync(session, doc_uuid)
-                result["figure_descriptions"] = fig_result
-            except Exception:
-                logger.exception(f"[celery] Figure description generation failed for {document_id} (non-fatal)")
-                session.rollback()
+            # phase. Also non-fatal. Skippable via GENERATE_FIGURE_DESCRIPTIONS
+            # for readers who'd rather look at the figure themselves than pay
+            # a cloud VLM call per figure.
+            from app.core.config import settings
+            if settings.generate_figure_descriptions:
+                try:
+                    fig_result = generate_figure_descriptions_sync(session, doc_uuid)
+                    result["figure_descriptions"] = fig_result
+                except Exception:
+                    logger.exception(f"[celery] Figure description generation failed for {document_id} (non-fatal)")
+                    session.rollback()
 
             # This is the true end of the pipeline — NOW the document is complete.
             _mark_document_and_job_complete(session, doc_uuid)
