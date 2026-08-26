@@ -73,6 +73,7 @@ from app.database.repositories import chunks as chunk_repo
 from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
 from app.search import web as web_search
+from app.services.outline import indent_for
 
 logger = get_logger(__name__)
 
@@ -193,10 +194,16 @@ def _format_contents(chunks: list[dict]) -> str:
     for c in chunks:
         if c.get("chunk_type") != "heading":
             continue
-        depth = len(c.get("heading_path") or []) or 1
         title = (c.get("plain_text") or "").strip()
         if title:
-            lines.append(f"{'  ' * (depth - 1)}[[{c['sequence_id']}]] {title}")
+            # ⚠ Indent from the paper's own numbering, not heading_path — the
+            # extractor flattens every section to the same depth, so an index
+            # built from it hands the model a flat list and hides which
+            # subsection belongs to which section.
+            lines.append(
+                f"{indent_for(title, len(c.get('heading_path') or []))}"
+                f"[[{c['sequence_id']}]] {title}"
+            )
     if lines:
         return "\n".join(lines)
     return _format_block_map(chunks)

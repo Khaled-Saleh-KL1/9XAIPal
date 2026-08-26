@@ -212,7 +212,7 @@ export function MarginaliaPanel({
                 <button
                   key={entry.sequence_order}
                   type="button"
-                  className={`marg-row outline-l${Math.min(entry.level, 3)}${
+                  className={`marg-row outline-l${Math.min(entry.level, 4)}${
                     entry.sequence_order === currentSeq ? ' is-current' : ''
                   }`}
                   onClick={() => go(entry.sequence_order)}

@@ -440,6 +440,19 @@ an answer drew on anything outside the paper is the one distinction worth seeing
 Notes behind one search, replacing the headings-only overlay. Structure, marks and annotations are
 the same question asked three ways.
 
+⚠ **Contents nests by the paper's own numbering, not by `heading_path`.** MinerU's `text_level`
+distinguishes the document title from everything else and stops, so `heading_path` is depth 2 for
+`3 Training data` *and* for `3.1 ARC task formulation` — a contents list built from it renders as
+one flat column, which is what the reader saw. `level` now comes from
+[`services/outline.py::heading_level`](../../backend/app/services/outline.py), which reads the
+numeric prefix and falls back to `heading_path` for unnumbered headings. Four levels are styled;
+deeper ones clamp to `outline-l4`.
+
+⚠ **The guide rails are what make it readable, not the indent.** At an 18px step a third-level
+heading is 40px in, and in a 300px panel that reads as a ragged left edge rather than a hierarchy.
+A 1px rule per level, coloured `--accent` on the current section, does the work the indent alone
+cannot.
+
 ### Personal state and its migration
 
 Bookmarks, personal notes and decks are **server-owned**

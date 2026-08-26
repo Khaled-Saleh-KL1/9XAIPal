@@ -73,6 +73,7 @@ from app.database.repositories import stickies as sticky_repo
 from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
 from app.search import web as web_search
+from app.services.outline import indent_for
 
 logger = get_logger(__name__)
 
@@ -225,11 +226,13 @@ def _format_index(papers: list[dict], chunks_by_doc: dict) -> str:
             )
             continue
         for c in headings:
-            depth = len(c.get("heading_path") or []) or 1
             title = (c.get("plain_text") or "").strip()
             if not title:
                 continue
-            out.append(f"   {'  ' * (depth - 1)}[[P{i}:{c['sequence_id']}]] {title}")
+            # Same reason as the paper agent: the numbering is the only
+            # reliable statement of depth this data carries.
+            pad = indent_for(title, len(c.get("heading_path") or []))
+            out.append(f"   {pad}[[P{i}:{c['sequence_id']}]] {title}")
     return "\n".join(out)
 
 

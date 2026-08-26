@@ -830,10 +830,35 @@ body {
 }
 .marg-cta:hover { border-color: var(--accent); color: var(--accent); }
 /* Heading depth, shared with the old outline naming. */
+/* Four levels: the document title, its sections, their subsections, and one
+   more for papers that go to "6.6.1". Depth comes from the paper's own
+   numbering — see backend services/outline.py for why heading_path cannot.
+
+   ⚠ The rail is what makes the nesting readable, not the indent alone. At 18px
+   steps a subsection three levels down is only 54px in, and in a narrow panel
+   that reads as a ragged left edge rather than as a hierarchy. */
 .outline-l1 .marg-row-text { font-size: 15px; }
-.outline-l2 { padding-left: 26px; }
-.outline-l3 { padding-left: 44px; }
-.outline-l3 .marg-row-text { font-size: 13px; color: var(--muted); }
+.outline-l2 { padding-left: 22px; }
+.outline-l3 { padding-left: 40px; }
+.outline-l4 { padding-left: 58px; }
+.outline-l3 .marg-row-text,
+.outline-l4 .marg-row-text { font-size: 13px; color: var(--muted); }
+.outline-l2, .outline-l3, .outline-l4 { position: relative; }
+.outline-l2::before,
+.outline-l3::before,
+.outline-l4::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--border);
+}
+.outline-l2::before { left: 10px; }
+.outline-l3::before { left: 28px; }
+.outline-l4::before { left: 46px; }
+/* The current section keeps its rail visible against the highlight. */
+.marg-row.is-current::before { background: var(--accent); }
 
 /* ── Scroll region + two-column layout ───────────────────────── */
 .reader-scroll {
