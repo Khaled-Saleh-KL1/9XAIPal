@@ -2213,6 +2213,10 @@ body {
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr) 300px;
 }
+/* Hidden is a narrow rail, not display:none. The reader has to be able to get
+   it back, and a collapsed strip that still shows a count is the difference
+   between "put away" and "gone". */
+.desk-grid.is-board-hidden { grid-template-columns: 250px minmax(0, 1fr) 38px; }
 @media (max-width: 1180px) {
   /* The board folds away first: notes are a companion to the chat, and the
      chat is unusable below a certain width. */
@@ -2602,6 +2606,40 @@ body {
 .sticky.tone-pink   { --tone: color-mix(in oklab, oklch(0.80 0.13 350), var(--bg) 62%); }
 .sticky.tone-plain  { --tone: var(--bg-3); }
 .sticky.is-pinned { box-shadow: 0 4px 16px -8px rgba(0, 0, 0, 0.5); }
+.sticky.tone-orange { --tone: color-mix(in oklab, oklch(0.78 0.15 55), var(--bg) 60%); }
+
+/* An assistant note is legible as one before the badge is read: a dashed edge
+   is the one border treatment nothing else in the app uses. */
+.sticky.is-ai {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--fg), transparent 55%);
+}
+.sticky-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 2px 6px 2px 5px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--fg), transparent 88%);
+  color: color-mix(in oklab, var(--fg), transparent 25%);
+  white-space: nowrap;
+}
+.sticky-badge svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+.sticky-badge svg .eye { fill: currentColor; stroke: none; }
+.sticky-drop.is-armed {
+  opacity: 1;
+  color: #c0392b;
+  font-weight: 700;
+}
 
 .sticky-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
 .sticky-pin {
@@ -2650,7 +2688,10 @@ body {
   padding: 6px 8px;
   outline: none;
 }
-.sticky-foot { margin-top: 7px; }
+/* ⚠ min-width:0 and the overflow rules are load-bearing. A paper label is a
+   full paper title, and a flex/grid child defaults to min-width:auto — so
+   without this the chip pushes past the note's own edge instead of ellipsing. */
+.sticky-foot { margin-top: 7px; display: flex; min-width: 0; }
 .sticky-scope {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 9px;
@@ -2690,3 +2731,361 @@ body {
   font-size: 10.5px;
   color: var(--accent);
 }
+
+
+/* ── The universal board ─────────────────────────────────────────────────
+   A wall, not a list. The chat strip is a list because it sits beside a
+   transcript and has to stay narrow; this is the whole page, and the point is
+   seeing everything at once — which is a spatial task, so the notes are laid
+   out spatially. */
+.wall { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.wall-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 26px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.wall-head-title { min-width: 0; }
+.wall-head-title h2 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.wall-search {
+  margin-left: auto;
+  width: min(280px, 30vw);
+  font-size: 12.5px;
+  padding: 6px 11px;
+  border-radius: 7px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.wall-search:focus { border-color: var(--accent); }
+.wall-search::placeholder { color: var(--faint); }
+.wall-filters {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+}
+.wall-filter {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+.wall-filter.is-on { background: var(--bg); color: var(--fg); }
+.wall-add {
+  font-size: 12.5px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  white-space: nowrap;
+}
+
+/* The board surface. A woven tint rather than a photographic cork texture:
+   the app is a paper-and-ink palette, and a literal corkboard image would be
+   the one thing on screen pretending to be a photograph. */
+.wall-surface {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 26px;
+  background:
+    repeating-linear-gradient(45deg,
+      color-mix(in oklab, var(--bg-3), transparent 55%) 0 2px,
+      transparent 2px 5px),
+    repeating-linear-gradient(-45deg,
+      color-mix(in oklab, var(--bg-3), transparent 65%) 0 2px,
+      transparent 2px 5px),
+    var(--bg-2);
+}
+.wall-empty { max-width: 56ch; margin: 8vh auto 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
+.wall-empty p + p { margin-top: 10px; }
+
+/* Masonry by columns: notes are different heights and a grid would leave a
+   ragged band of whitespace under every short one. */
+.wall-grid {
+  columns: 260px;
+  column-gap: 18px;
+}
+.wall-grid .sticky {
+  /* ⚠ inline-block + width:100%, not block. A column-flow child that can be
+     split across a column break will be, and half a note at the bottom of one
+     column with its other half at the top of the next is unreadable. */
+  display: inline-block;
+  width: 100%;
+  margin: 0 0 18px;
+  padding: 16px 14px 12px;
+  font-size: 13px;
+  box-shadow: 0 10px 22px -14px rgba(0, 0, 0, 0.55);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+.wall-grid .sticky:hover {
+  /* Straighten on hover: the tilt is charm at rest and friction while reading. */
+  transform: rotate(0deg) translateY(-2px) !important;
+  box-shadow: 0 16px 30px -16px rgba(0, 0, 0, 0.6);
+  z-index: 2;
+  position: relative;
+}
+/* A long note is allowed to be long, but not to own the column. Clamped with
+   a fade, and clicking it opens the editor where the whole thing is visible. */
+.wall-grid .sticky-body {
+  min-height: 34px;
+  max-height: 320px;
+  overflow: hidden;
+  position: relative;
+  -webkit-mask-image: linear-gradient(var(--tone) 0 84%, transparent 100%);
+  mask-image: linear-gradient(var(--tone) 0 84%, transparent 100%);
+}
+/* Short notes must not be faded — the mask would dim the last line of a
+   two-line note for no reason. */
+.wall-grid .sticky-body:not(:has(> :nth-child(3))) {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.wall-grid .sticky-foot { max-width: 100%; }
+
+/* The tack. Drawn, not an image — it has to sit correctly in both themes. */
+.sticky-tack {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  width: 13px;
+  height: 13px;
+  margin-left: -6.5px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 35% 32%,
+      color-mix(in oklab, #fff, transparent 35%) 0 22%,
+      transparent 23%),
+    var(--accent);
+  box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.5);
+}
+.sticky.is-tacked { position: relative; }
+
+/* ── The chat strip, folded away ── */
+.board.is-collapsed {
+  padding: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.board-reopen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 0;
+  color: var(--muted);
+  transition: color 140ms ease, background 140ms ease;
+}
+.board-reopen:hover { color: var(--fg); background: var(--bg-3); }
+.board-reopen-glyph { font-size: 15px; line-height: 1; }
+.board-reopen-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  writing-mode: vertical-rl;
+}
+.board-reopen-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.board-hide {
+  font-size: 15px;
+  line-height: 1;
+  width: 20px;
+  color: var(--faint);
+}
+.board-hide:hover { color: var(--fg); }
+
+/* ── Desk tabs ── */
+.desk-tabs { display: flex; gap: 2px; margin-left: 10px; }
+.desk-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 7px;
+  color: var(--muted);
+  transition: background 140ms ease, color 140ms ease;
+}
+.desk-tab:hover { background: var(--bg-3); color: var(--fg-2); }
+.desk-tab.is-on { background: var(--bg-3); color: var(--fg); }
+
+/* ── The paper picker ─────────────────────────────────────────────────────
+   Two halves, because there are two facts to see: what is in the study and in
+   what order (the citation numbering), and what else the library holds. A flat
+   checkbox list showed neither. */
+.picker-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5vh 24px;
+  background: color-mix(in oklch, var(--fg), transparent 82%);
+  backdrop-filter: blur(3px);
+  animation: marg-fade 140ms ease;
+}
+.picker {
+  width: min(880px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.picker-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.picker-head h2 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 18px;
+  color: var(--fg);
+}
+.picker-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.picker-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 720px) { .picker-body { grid-template-columns: 1fr; } }
+.picker-col {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+.picker-col + .picker-col { border-left: 1px solid var(--border); background: var(--bg-2); }
+.picker-col-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.picker-col-head h3 {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+.picker-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--muted);
+}
+.picker-clear { margin-left: auto; font-size: 11px; color: var(--muted); }
+.picker-clear:hover { color: var(--accent); }
+.picker-hint { padding: 6px 2px; }
+.picker-search {
+  width: 100%;
+  font-size: 12.5px;
+  padding: 7px 11px;
+  margin-bottom: 10px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  outline: none;
+}
+.picker-search:focus { border-color: var(--accent); }
+.picker-chosen, .picker-available { list-style: none; margin: 0; padding: 0; }
+.picker-chosen li, .picker-available li { margin-bottom: 5px; }
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  color: var(--fg-2);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.picker-available .picker-row:hover { border-color: var(--accent); background: var(--bg); }
+.picker-row.is-chosen { background: var(--bg-2); border-color: var(--border); }
+.picker-col + .picker-col .picker-row.is-chosen { background: var(--bg); }
+.picker-num {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--accent);
+  width: 18px;
+  flex-shrink: 0;
+}
+.picker-row .paper-cover.is-thumb { width: 26px; }
+.picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-warn { color: var(--faint); font-size: 11px; }
+.picker-plus { color: var(--muted); font-size: 15px; line-height: 1; }
+.picker-order { display: flex; flex-direction: column; gap: 1px; }
+.picker-order button {
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--muted);
+}
+.picker-order button:hover:not(:disabled) { color: var(--accent); background: var(--bg-3); }
+.picker-order button:disabled { opacity: 0.25; }
+.picker-drop { font-size: 14px; line-height: 1; color: var(--faint); padding: 0 2px; }
+.picker-drop:hover { color: #c0392b; }
+.picker-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.picker-foot-note {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--faint);
+  margin-right: auto;
+}
+.picker-cancel {
+  font-size: 12.5px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.picker-cancel:hover { color: var(--fg); }
+.rail-choose {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--bg);
+}
+.rail-choose:hover { border-color: var(--accent); color: var(--accent); }
+.rail-order-hint { margin-top: 8px; font-size: 10.5px; line-height: 1.45; }

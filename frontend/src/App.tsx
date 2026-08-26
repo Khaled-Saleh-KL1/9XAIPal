@@ -48,15 +48,22 @@ type HashState =
   | { route: 'library' }
   | { route: 'reading'; paperId: string }
   | { route: 'pdf-viewer'; paperId: string }
-  | { route: 'desk'; scope: string };
+  | { route: 'desk'; scope: string; page: DeskPage };
+
+/** The desk's two pages. `notes` is the universal board. */
+type DeskPage = 'study' | 'notes';
 
 function parseHash(): HashState {
   const h = window.location.hash.replace(/^#\/?/, '');
   const [head, id] = h.split('/');
   if (head === 'paper' && id) return { route: 'reading', paperId: id };
   if (head === 'raw' && id) return { route: 'pdf-viewer', paperId: id };
-  // The desk is deep-linkable per scope: #/desk, or #/desk/<studyId>.
-  if (head === 'desk') return { route: 'desk', scope: id || 'library' };
+  // The desk is deep-linkable: #/desk, #/desk/<studyId>, or #/desk/notes for
+  // the universal board. `notes` is not a study id, so the two cannot collide.
+  if (head === 'desk') {
+    if (id === 'notes') return { route: 'desk', scope: 'library', page: 'notes' };
+    return { route: 'desk', scope: id || 'library', page: 'study' };
+  }
   return { route: 'library' };
 }
 
@@ -64,7 +71,8 @@ function writeHash(state: HashState) {
   let next = '#/library';
   if (state.route === 'reading') next = `#/paper/${state.paperId}`;
   else if (state.route === 'pdf-viewer') next = `#/raw/${state.paperId}`;
-  else if (state.route === 'desk') next = `#/desk/${state.scope}`;
+  else if (state.route === 'desk')
+    next = state.page === 'notes' ? '#/desk/notes' : `#/desk/${state.scope}`;
   if (window.location.hash !== next) window.history.replaceState(null, '', next);
 }
 
@@ -101,6 +109,7 @@ export function App() {
 
   // Which scope the desk opens on: a study id, or 'library'.
   const [deskScope, setDeskScope] = useState<string>('library');
+  const [deskPage, setDeskPage] = useState<DeskPage>('study');
   /**
    * A block to scroll to once the reader mounts.
    *
@@ -234,8 +243,9 @@ export function App() {
     }
   }, []);
 
-  const openDesk = useCallback((scope: string = 'library') => {
+  const openDesk = useCallback((scope: string = 'library', page: DeskPage = 'study') => {
     setDeskScope(scope);
+    setDeskPage(page);
     setRoute('desk');
   }, []);
 
@@ -282,6 +292,7 @@ export function App() {
     if (initial.route === 'library') return;
     if (initial.route === 'desk') {
       setDeskScope(initial.scope);
+      setDeskPage(initial.page);
       setRoute('desk');
       return;
     }
@@ -318,7 +329,12 @@ export function App() {
     const onHashChange = () => {
       const next = parseHash();
       if (next.route === 'library') { setRoute('library'); return; }
-      if (next.route === 'desk') { setDeskScope(next.scope); setRoute('desk'); return; }
+      if (next.route === 'desk') {
+        setDeskScope(next.scope);
+        setDeskPage(next.page);
+        setRoute('desk');
+        return;
+      }
       if (next.route === 'reading' && next.paperId !== activePaperId) {
         void openPaperById(next.paperId);
       }
@@ -333,13 +349,13 @@ export function App() {
     } else if (route === 'pdf-viewer' && viewingPdf) {
       writeHash({ route: 'pdf-viewer', paperId: viewingPdf.id });
     } else if (route === 'desk') {
-      writeHash({ route: 'desk', scope: deskScope });
+      writeHash({ route: 'desk', scope: deskScope, page: deskPage });
     } else if (route === 'library') {
       writeHash({ route: 'library' });
     }
     // 'processing' intentionally leaves the existing hash alone so a refresh
     // mid-upload returns to the library, not a half-baked processing state.
-  }, [route, activePaperId, viewingPdf, deskScope]);
+  }, [route, activePaperId, viewingPdf, deskScope, deskPage]);
 
   return (
     <>
@@ -368,6 +384,8 @@ export function App() {
       {route === 'desk' && (
         <DeskView
           initialScope={deskScope}
+          page={deskPage}
+          onPageChange={setDeskPage}
           onBack={() => setRoute('library')}
           onOpenPaper={openPaperById}
         />

@@ -287,7 +287,8 @@ export interface AgentStep {
   id: string;
   /** Which tool round this call belonged to, 1-based. */
   n: number;
-  tool: 'SECTION' | 'SEARCH' | 'READ' | 'WEB';
+  /** `NOTE` is a write, not a fetch — it pins to a board. */
+  tool: 'SECTION' | 'SEARCH' | 'READ' | 'WEB' | 'NOTE';
   arg: string;
   state: 'running' | 'done';
   /** The model's own one-line reason, on the first call of each round. */
@@ -1170,33 +1171,45 @@ export async function askStudyStream(
   return result;
 }
 
-// ── Sticky notes ─────────────────────────────────────────────────────────────
+// ── Sticky notes: two boards ─────────────────────────────────────────────────
 
-export type StickyColor = 'yellow' | 'blue' | 'green' | 'pink' | 'plain';
+export type StickyColor = 'yellow' | 'blue' | 'green' | 'pink' | 'orange' | 'plain';
+
+/**
+ * Which board a note lives on.
+ *
+ * ⚠ `board` is not redundant with `scope`. `scope: 'library'` already means the
+ * library-wide *chat*, so without the board a note beside that chat and a note
+ * on the universal board would be the same thing.
+ */
+export type StickyBoard = 'chat' | 'universal';
 
 export interface Sticky {
   id: string;
   body: string;
   color: StickyColor;
   pinned: boolean;
-  /** Papers this note is about. Empty = about nothing in particular. */
+  board: StickyBoard;
+  /** Study id, or `library`. Meaningless when `board === 'universal'`. */
+  scope: string;
+  /** Who wrote it. Assistant notes are badged and an edit cannot launder that. */
+  origin: 'user' | 'assistant';
+  author_model: string | null;
+  /** Papers this note references, if any. */
   papers: { document_id: string; label: string }[];
   created_at: string | null;
   updated_at: string | null;
 }
 
-/**
- * Stickies, pinned first then newest.
- *
- * ⚠ Passing `documentIds` returns notes about those papers **plus every
- * unscoped note** — an unscoped sticky is relevant everywhere.
- */
-export async function listStickies(documentIds?: string[]): Promise<Sticky[]> {
-  const qs = (documentIds || [])
-    .map((id) => `document_id=${encodeURIComponent(id)}`)
-    .join('&');
-  const res = await fetch(`${BASE}/stickies${qs ? `?${qs}` : ''}`);
-  if (!res.ok) throw new Error(`Stickies fetch failed: ${res.status}`);
+/** One board's notes, pinned first then newest. */
+export async function listStickies(
+  board: StickyBoard,
+  scope?: string,
+): Promise<Sticky[]> {
+  const qs = new URLSearchParams({ board });
+  if (board === 'chat') qs.set('scope', scope || LIBRARY_SCOPE);
+  const res = await fetch(`${BASE}/stickies?${qs}`);
+  if (!res.ok) throw new Error(`Notes fetch failed: ${res.status}`);
   return (await res.json()).stickies || [];
 }
 
@@ -1204,6 +1217,8 @@ export async function createSticky(input: {
   body?: string;
   color?: StickyColor;
   pinned?: boolean;
+  board: StickyBoard;
+  scope?: string;
   document_ids?: string[];
 }): Promise<Sticky> {
   const res = await fetch(`${BASE}/stickies`, {
@@ -1216,10 +1231,14 @@ export async function createSticky(input: {
 }
 
 /**
- * Patch a sticky. Omitted fields are left alone.
+ * Edit a note, or move it between boards.
  *
- * ⚠ `document_ids: []` clears the scope (making the note global);
- * omitting it leaves the scope untouched. The two are different requests.
+ * ⚠ Send `board` **and** `scope` together to move one. `board` alone is not
+ * enough: `scope: 'library'` is a real destination, not "unset".
+ *
+ * ⚠ `origin` is not patchable. A note the assistant wrote stays badged as the
+ * assistant's however often it is edited — the badge records where the claim
+ * came from, and an edit that launders it makes the badge worthless.
  */
 export async function updateSticky(
   stickyId: string,
@@ -1227,6 +1246,8 @@ export async function updateSticky(
     body?: string;
     color?: StickyColor;
     pinned?: boolean;
+    board?: StickyBoard;
+    scope?: string;
     document_ids?: string[];
   },
 ): Promise<Sticky> {
@@ -1239,6 +1260,7 @@ export async function updateSticky(
   return res.json();
 }
 
+/** ⚠ Reader-only. The assistant writes and edits notes but never removes one. */
 export async function deleteSticky(stickyId: string): Promise<void> {
   const res = await fetch(`${BASE}/stickies/${stickyId}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 404) throw new Error(`Delete failed: ${res.status}`);

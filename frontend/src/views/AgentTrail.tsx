@@ -21,6 +21,8 @@ const TOOL_GLYPH: Record<AgentStep['tool'], string> = {
   SEARCH: '⌕',
   READ: '¶',
   WEB: '⌘',
+  // A write, not a fetch — the only step that changes something.
+  NOTE: '✎',
 };
 
 /** The domain alone — a trail row has no space for a full URL. */
@@ -98,14 +100,17 @@ export function AgentTrail({
 
   const expanded = live || open;
   const web = steps.filter((s) => s.tool === 'WEB').length;
-  const paper = steps.length - web;
+  const wrote = steps.filter((s) => s.tool === 'NOTE').length;
+  const paper = steps.length - web - wrote;
 
-  // "3 fetches" says nothing about where the answer came from; naming the two
-  // kinds separately does, because "1 from the web" is the part a reader may
-  // want to weigh differently from the paper's own text.
+  // "3 fetches" says nothing about where the answer came from; naming the kinds
+  // separately does, because "1 from the web" is the part a reader may want to
+  // weigh differently from the paper's own text — and a note it pinned is
+  // something they will find later whether or not they read the trail now.
   const summary = [
     paper ? `${paper} from the paper` : '',
     web ? `${web} from the web` : '',
+    wrote ? `${wrote} note${wrote === 1 ? '' : 's'} pinned` : '',
   ].filter(Boolean).join(' · ');
 
   return (
