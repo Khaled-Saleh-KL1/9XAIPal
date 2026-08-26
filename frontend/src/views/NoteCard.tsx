@@ -9,7 +9,8 @@ import {
   useCardDrag,
   type CardDrag,
 } from './NoteChrome';
-import type { PaperNote } from '../api';
+import { AgentTrail } from './AgentTrail';
+import type { AgentStep, PaperNote } from '../api';
 
 /**
  * A margin note: one question, its answer, and any follow-ups, rendered as a
@@ -34,8 +35,12 @@ export interface PendingNote {
   question: string;
   answer: string;
   status: string | null;
+  /** Tool calls so far, upserted by id as `running` then `done` events land. */
+  steps: AgentStep[];
   error: string | null;
   parentNoteId: string | null;
+  /** Which surface renders this card: the gutter, or the assistant panel. */
+  scope: 'anchor' | 'document';
   marginSide: 'left' | 'right';
   /** The model this note was asked with, shown while it streams. */
   model: string | null;
@@ -92,11 +97,18 @@ function Answer({ text }: { text: string }) {
  * raw brackets sitting in the rendered answer.
  */
 function withCitationLinks(text: string): string {
-  return text.replace(/\[\[([0-9,;\s[\]]+?)\]\]/g, (whole, inner: string) => {
-    const seqs = inner.match(/\d+/g);
-    if (!seqs) return whole;
-    return seqs.map((seq) => `[¶${seq}](#blk-${seq})`).join(' ');
-  });
+  return text
+    .replace(/\[\[([0-9,;\s[\]]+?)\]\]/g, (whole, inner: string) => {
+      const seqs = inner.match(/\d+/g);
+      if (!seqs) return whole;
+      return seqs.map((seq) => `[¶${seq}](#blk-${seq})`).join(' ');
+    })
+    // ⚠ Sweep up markers that carry no block number — models given the WEB
+    // tool improvise "[[WEB]]" for a claim that came from outside the paper.
+    // There is nothing to link to, and left alone it renders as literal
+    // brackets mid-sentence. The trail below already names every page opened,
+    // so dropping the marker loses no information.
+    .replace(/\s*\[\[[^\]\d]*?\]\]/g, '');
 }
 
 function CitationChips({
@@ -119,6 +131,9 @@ function CitationChips({
 }
 
 function Quote({ kind, quote }: { kind: string; quote: string | null }) {
+  if (kind === 'document') {
+    return <div className="note-quote note-quote-figure">On the whole paper</div>;
+  }
   if (kind === 'figure') {
     return <div className="note-quote note-quote-figure">On this figure</div>;
   }
@@ -190,15 +205,23 @@ export function PendingNoteCard({
             <button type="button" onClick={onDismiss}>Dismiss</button>
           </div>
         </>
-      ) : note.answer ? (
-        // Still streaming: withhold a half-written LaTeX span so the reader
-        // doesn't watch raw markup type itself out and then snap into a symbol.
-        <Answer text={withCitationLinks(maskIncompleteMath(note.answer))} />
       ) : (
-        <div className="note-status">
-          <span className="note-dot" />
-          {note.status || 'Thinking…'}
-        </div>
+        <>
+          {/* The trail stays up while the answer types itself out. Collapsing
+              it the moment the first token lands would snatch away the only
+              record of the fetches at the exact moment they become checkable. */}
+          <AgentTrail steps={note.steps} live onJump={onJump} />
+          {note.answer ? (
+            // Still streaming: withhold a half-written LaTeX span so the reader
+            // doesn't watch raw markup type itself out and then snap into a symbol.
+            <Answer text={withCitationLinks(maskIncompleteMath(note.answer))} />
+          ) : (
+            <div className="note-status">
+              <span className="note-dot" />
+              {note.status || 'Thinking…'}
+            </div>
+          )}
+        </>
       )}
     </article>
   );
@@ -284,9 +307,17 @@ export function NoteCardView({
             )}
             <Answer text={withCitationLinks(reply.answer)} />
             <CitationChips cited={reply.cited_sequence_ids} onJump={onJump} />
+            <AgentTrail steps={reply.agent_steps} onJump={onJump} />
           </div>
         ))}
       </Collapsible>
+
+      {/* ⚠ Outside the Collapsible, deliberately. A long answer is clipped at
+          300px with a "show more"; a trail placed inside gets clipped with it,
+          so the one control that says how the answer was grounded is reachable
+          only by first expanding the thing you were trying to check. It is
+          collapsed by default anyway, so it costs one line here. */}
+      <AgentTrail steps={group.root.agent_steps} onJump={onJump} />
 
       <div className="note-footer">
         {composing ? (
@@ -326,11 +357,6 @@ export function NoteCardView({
               >
                 {group.root.margin_side === 'right' ? '←' : '→'}
               </button>
-            )}
-            {group.root.retrieval_mode === 'agent' && (
-              <span className="note-mode" title="This paper was too large to read at once, so the model searched it.">
-                searched
-              </span>
             )}
           </div>
         )}

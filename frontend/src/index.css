@@ -1394,8 +1394,243 @@ body {
   transition: border-color 140ms ease, color 140ms ease, transform 140ms ease;
 }
 .ask-fab:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
-.note-fab { border-color: color-mix(in oklab, var(--ok), var(--border-strong) 40%); }
-.note-fab:hover { border-color: var(--ok); color: var(--ok); }
+
+/* The one corner control. Reads as a mode switch rather than an action: it
+   toggles a surface, and the filled state says that surface is open. */
+.panel-fab { display: flex; align-items: center; gap: 8px; }
+.panel-fab-glyph { font-size: 11px; opacity: 0.65; }
+.panel-fab:hover .panel-fab-glyph { opacity: 1; }
+.panel-fab.is-on {
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  background: var(--accent);
+}
+.panel-fab.is-on .panel-fab-glyph { opacity: 1; }
+.panel-fab-count {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--muted);
+}
+.panel-fab.is-on .panel-fab-count {
+  background: color-mix(in oklab, var(--accent-fg), transparent 78%);
+  color: var(--accent-fg);
+}
+
+/* ── The agent trail ─────────────────────────────────────────────────────
+   What the model fetched before it answered. Live it is the progress
+   indicator; afterwards it is the audit trail, collapsed behind one line so
+   the answer keeps the top of the card. */
+.agent-trail { margin-top: 10px; }
+.trail-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  color: var(--faint);
+  padding: 3px 0;
+  transition: color 140ms ease;
+}
+.trail-toggle:hover { color: var(--muted); }
+.trail-caret { font-size: 8px; }
+.trail-count { margin-left: auto; opacity: 0.8; }
+
+.trail-steps {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 9px;
+  /* One continuous rule down the left: the calls are a sequence, and a border
+     per row would read as four unrelated boxes. */
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.trail-step { position: relative; padding-left: 10px; }
+.trail-think {
+  font-size: 11.5px;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.trail-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+.trail-glyph {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+/* A web fetch is the one that left the machine, so it is the one that gets a
+   different colour — the reader should be able to see at a glance whether an
+   answer drew on anything outside the paper. */
+.trail-step.tool-web .trail-glyph { color: var(--deck); }
+.trail-label { min-width: 0; overflow-wrap: anywhere; }
+.trail-result {
+  margin-left: auto;
+  padding-left: 8px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.trail-step.is-running .trail-label { color: var(--muted); }
+.trail-spinner {
+  margin-left: auto;
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+
+.trail-seqs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.trail-seq {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.trail-seq:hover { border-color: var(--accent); color: var(--accent); }
+.trail-more {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--faint);
+  align-self: center;
+}
+.trail-sources { list-style: none; margin: 5px 0 0; padding: 0; }
+.trail-sources li { margin-top: 2px; }
+.trail-sources a {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--deck);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── The assistant panel (the holistic level) ────────────────────────────
+   Docked LEFT, because the button that opens it is in the bottom-left corner
+   and a panel that flies in from the opposite side of the screen to the
+   control that summoned it reads as a different thing appearing. */
+.asst-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: color-mix(in oklch, var(--fg), transparent 88%);
+  animation: marg-fade 140ms ease;
+}
+.asst-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(440px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  box-shadow: 24px 0 60px -30px rgba(0, 0, 0, 0.35);
+  animation: asst-slide 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes asst-slide {
+  from { transform: translateX(-16px); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+.asst-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.asst-tabs { display: flex; gap: 4px; flex: 1; min-width: 0; }
+.asst-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  transition: background 140ms ease, color 140ms ease;
+}
+.asst-tab:hover { background: var(--bg-2); color: var(--fg-2); }
+.asst-tab.is-on { background: var(--bg-3); color: var(--fg); }
+.asst-soon {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--faint);
+}
+.asst-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* Cards here are laid out by flow, not by the gutter's absolute slots — the
+   card keeps its own `position: relative` (its spine is drawn against it). */
+.asst-list .note-card { width: auto; }
+.asst-empty {
+  padding: 26px 20px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.asst-empty p + p { margin-top: 10px; }
+.asst-empty-lead {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 17px;
+  line-height: 1.3;
+  color: var(--fg);
+}
+.asst-composer {
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.asst-composer textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 11px;
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.asst-composer textarea:focus { border-color: var(--accent); }
+.asst-composer textarea::placeholder { color: var(--faint); }
 
 .reader-notice {
   max-width: 680px;

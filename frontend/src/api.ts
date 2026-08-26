@@ -221,7 +221,20 @@ export async function getFullDocument(paperId: string): Promise<FullDocument> {
 
 // ── Notes (anchored margin annotations) ──────────────────────────────────────
 
-export type AnchorKind = 'text' | 'figure' | 'equation' | 'table' | 'block';
+/**
+ * What a note hangs off.
+ *
+ * `document` is the holistic level — the question is about the paper as a
+ * whole, asked from the assistant panel rather than from a selection. The
+ * server derives the note's `scope` from this, so the two can never disagree.
+ */
+export type AnchorKind =
+  | 'text'
+  | 'figure'
+  | 'equation'
+  | 'table'
+  | 'block'
+  | 'document';
 export type MarginSide = 'left' | 'right';
 
 // ── Model catalog ────────────────────────────────────────────────────────────
@@ -254,6 +267,37 @@ export interface NoteAnchor {
   image_url?: string | null;
 }
 
+/** A source the agent found on the web, listed under its WEB step. */
+export interface AgentSource {
+  title: string;
+  url: string;
+}
+
+/**
+ * One tool call the agent made, as the reader sees it.
+ *
+ * Arrives twice while streaming — `running` when the agent announces the call
+ * and `done` when it returns — keyed by `id` so the row updates in place.
+ * The observation itself (the blocks the model actually read) is deliberately
+ * not here: it is thousands of characters the card renders one line of.
+ */
+export interface AgentStep {
+  id: string;
+  /** Which tool round this call belonged to, 1-based. */
+  n: number;
+  tool: 'SECTION' | 'SEARCH' | 'READ' | 'WEB';
+  arg: string;
+  state: 'running' | 'done';
+  /** The model's own one-line reason, on the first call of each round. */
+  think: string | null;
+  label: string;
+  /** A short summary of what came back ("12 blocks · ¶31–¶48"). */
+  result: string;
+  /** Block numbers this call pulled in, so the reader can jump to them. */
+  seqs: number[];
+  sources: AgentSource[];
+}
+
 export interface PaperNote {
   id: string;
   anchor_sequence_id: number;
@@ -265,6 +309,10 @@ export interface PaperNote {
   answer: string;
   cited_sequence_ids: number[];
   retrieval_mode: string | null;
+  /** 'anchor' = a margin card. 'document' = asked about the whole paper. */
+  scope: 'anchor' | 'document';
+  /** How the answer was reached. Empty for notes written before this existed. */
+  agent_steps: AgentStep[];
   /** What the provider reported answering. Shown on the card. */
   model: string | null;
   /** What the reader picked. Follow-ups inherit this, never override it. */
@@ -303,8 +351,10 @@ export async function deleteNote(paperId: string, noteId: string): Promise<void>
 export interface NoteStreamHandlers {
   /** The note row exists — render the card now, before any answer arrives. */
   onCreated: (noteId: string) => void;
-  /** What the agent is doing ("Searching: …", "Reading blocks 40–52"). */
+  /** The phase the agent is in ("Reading the passage…", "Writing the answer…"). */
   onStatus: (message: string) => void;
+  /** One tool call, announced then completed. Upsert by `step.id`. */
+  onStep: (step: AgentStep) => void;
   /** Answer text, token by token. */
   onToken: (text: string) => void;
 }
@@ -315,6 +365,7 @@ export interface NoteResult {
   model: string;
   retrieval_mode: string | null;
   cited_sequence_ids: number[];
+  agent_steps: AgentStep[];
 }
 
 /**
@@ -377,6 +428,9 @@ export async function askNoteStream(
       case 'status':
         handlers.onStatus(String(ev.message ?? ''));
         break;
+      case 'step':
+        handlers.onStep(ev as unknown as AgentStep);
+        break;
       case 'token':
         handlers.onToken(String(ev.text ?? ''));
         break;
@@ -390,6 +444,7 @@ export async function askNoteStream(
           model: String(ev.model ?? ''),
           retrieval_mode: (ev.retrieval_mode as string) ?? null,
           cited_sequence_ids: (ev.cited_sequence_ids as number[]) || [],
+          agent_steps: (ev.agent_steps as AgentStep[]) || [],
         };
         break;
     }

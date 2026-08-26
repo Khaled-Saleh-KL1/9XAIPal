@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { IconBack, IconDoc } from '../components/Icons';
 import { ArticleBlock } from './ArticleBlock';
 import { AskComposer, type ComposerTarget } from './AskComposer';
+import { AssistantPanel } from './AssistantPanel';
 import { NoteCardView, PendingNoteCard, type NoteGroup, type PendingNote } from './NoteCard';
 import {
   PersonalNoteCard,
@@ -153,6 +154,42 @@ function stackDecks(
   return pruneDecks(next);
 }
 
+/**
+ * Flatten a flat note list into threads: each root note plus its follow-ups.
+ *
+ * ⚠ The rootOf walk is guarded against cycles. parent_note_id is a foreign key
+ * the server sets, so a cycle should be impossible — but "should be" is doing
+ * a lot of work for a loop that renders the reader's margin, and an infinite
+ * one hangs the tab rather than dropping a card.
+ */
+function groupNotes(notes: PaperNote[]): NoteGroup[] {
+  const byId = new Map(notes.map((n) => [n.id, n]));
+  const rootOf = (n: PaperNote): PaperNote => {
+    let cur = n;
+    const guard = new Set<string>();
+    while (cur.parent_note_id && byId.has(cur.parent_note_id) && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      cur = byId.get(cur.parent_note_id)!;
+    }
+    return cur;
+  };
+  const map = new Map<string, NoteGroup>();
+  for (const n of notes) {
+    if (n.parent_note_id) continue;
+    map.set(n.id, { root: n, replies: [] });
+  }
+  for (const n of notes) {
+    if (!n.parent_note_id) continue;
+    const group = map.get(rootOf(n).id);
+    if (group) group.replies.push(n);
+  }
+  return [...map.values()].sort(
+    (a, b) =>
+      a.root.anchor_sequence_id - b.root.anchor_sequence_id ||
+      (a.root.created_at || '').localeCompare(b.root.created_at || ''),
+  );
+}
+
 let clientIdSeq = 0;
 
 interface Props {
@@ -178,6 +215,8 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   const [tintedBlocks, setTintedBlocks] = useState<Set<number>>(new Set());
   const [progress, setProgress] = useState(0);
   const [panel, setPanel] = useState<'contents' | 'bookmarks' | 'notes' | null>(null);
+  // The holistic level, opened by the one button in the bottom-left corner.
+  const [assistant, setAssistant] = useState(false);
   const [layout, setLayout] = useState<Layout>(() => layoutFor(window.innerWidth));
   const wideEnough = layout !== 'inline';
 
@@ -381,33 +420,33 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   }, []);
 
   // ── Notes grouped into threads: a root plus its follow-ups ──────────────
-  const groups = useMemo<NoteGroup[]>(() => {
-    const byId = new Map(notes.map((n) => [n.id, n]));
-    const rootOf = (n: PaperNote): PaperNote => {
-      let cur = n;
-      const guard = new Set<string>();
-      while (cur.parent_note_id && byId.has(cur.parent_note_id) && !guard.has(cur.id)) {
-        guard.add(cur.id);
-        cur = byId.get(cur.parent_note_id)!;
-      }
-      return cur;
-    };
-    const map = new Map<string, NoteGroup>();
-    for (const n of notes) {
-      if (n.parent_note_id) continue;
-      map.set(n.id, { root: n, replies: [] });
-    }
-    for (const n of notes) {
-      if (!n.parent_note_id) continue;
-      const group = map.get(rootOf(n).id);
-      if (group) group.replies.push(n);
-    }
-    return [...map.values()].sort(
-      (a, b) =>
-        a.root.anchor_sequence_id - b.root.anchor_sequence_id ||
-        (a.root.created_at || '').localeCompare(b.root.created_at || ''),
-    );
-  }, [notes]);
+  //
+  // ⚠ Split by scope FIRST. Anchored notes belong in the gutter beside their
+  // passage; whole-paper notes belong in the assistant panel. They share a
+  // table and an endpoint but never a surface, and a document-scope note
+  // carries the first block's sequence id only to satisfy a NOT NULL column —
+  // laid out in the margin it would pile onto the paper's title.
+  const marginNotes = useMemo(
+    () => notes.filter((n) => n.scope !== 'document'),
+    [notes],
+  );
+  const paperNotes_ = useMemo(
+    () => notes.filter((n) => n.scope === 'document'),
+    [notes],
+  );
+
+  const groups = useMemo<NoteGroup[]>(() => groupNotes(marginNotes), [marginNotes]);
+  const holisticGroups = useMemo<NoteGroup[]>(() => groupNotes(paperNotes_), [paperNotes_]);
+
+  // The gutter lays out anchored pending cards; the panel owns its own.
+  const marginPending = useMemo(
+    () => pending.filter((p) => p.scope !== 'document'),
+    [pending],
+  );
+  const holisticPending = useMemo(
+    () => pending.filter((p) => p.scope === 'document'),
+    [pending],
+  );
 
   // ── Decks ───────────────────────────────────────────────────────────────
   //
@@ -615,7 +654,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         seq: g.root.anchor_sequence_id,
       });
     }
-    for (const p of pending) {
+    for (const p of marginPending) {
       bySide[sideOf(p.marginSide)].push({ key: p.clientId, seq: p.anchorSequenceId });
     }
     if (composer) {
@@ -656,7 +695,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     }
   }, [
     groups,
-    pending,
+    marginPending,
     composer,
     personalComposer,
     personalNotes,
@@ -713,7 +752,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     requestLayout,
     wideEnough,
     groups.length,
-    pending.length,
+    marginPending.length,
     composer,
     personalNotes.length,
     personalComposer,
@@ -1111,6 +1150,10 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         e.preventDefault();
         setPanel((p) => (p ? null : 'contents'));
       }
+      if (e.key === 'p') {
+        e.preventDefault();
+        setAssistant((v) => !v);
+      }
       if (e.key === 'Escape') {
         setComposer(null);
         setPersonalComposer(null);
@@ -1131,7 +1174,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
   // ── Asking ──────────────────────────────────────────────────────────────
   const runNote = useCallback(
     async (draft: PendingNote, anchor: {
-      kind: 'text' | 'figure' | 'equation' | 'table' | 'block';
+      kind: 'text' | 'figure' | 'equation' | 'table' | 'block' | 'document';
       sequence_id: number;
       chunk_id: string | null;
       quote: string | null;
@@ -1157,6 +1200,17 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
           {
             onCreated: (noteId) => patch((p) => ({ ...p, noteId })),
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
+            // ⚠ Upsert by id, never append. Every call arrives twice —
+            // `running` when the agent announces it, `done` when it returns —
+            // and appending would show each fetch as two rows, the first one
+            // spinning forever.
+            onStep: (step) =>
+              patch((p) => ({
+                ...p,
+                steps: p.steps.some((s) => s.id === step.id)
+                  ? p.steps.map((s) => (s.id === step.id ? step : s))
+                  : [...p.steps, step],
+              })),
             onToken: (text) => pacer.push(text),
           },
           undefined,
@@ -1273,8 +1327,10 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         question,
         answer: '',
         status: null,
+        steps: [],
         error: null,
         parentNoteId: null,
+        scope: 'anchor',
         marginSide: composer.marginSide,
         model: model || null,
       };
@@ -1290,6 +1346,67 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
     },
     [composer, model, runNote],
   );
+
+  /**
+   * Ask about the paper as a whole, from the panel.
+   *
+   * ⚠ It still carries an anchor_sequence_id — the paper's first block —
+   * because paper_notes.anchor_sequence_id is NOT NULL. Nothing positions by
+   * it; `scope: 'document'` is what decides where the answer lands, and the
+   * server derives that from `kind: 'document'`.
+   */
+  const askWholePaper = useCallback(
+    (question: string) => {
+      const firstSeq = doc?.blocks[0]?.sequence_order ?? 0;
+      const draft: PendingNote = {
+        clientId: `pending-${++clientIdSeq}`,
+        noteId: null,
+        anchorSequenceId: firstSeq,
+        anchorKind: 'document',
+        quote: null,
+        imageUrl: null,
+        question,
+        answer: '',
+        status: null,
+        steps: [],
+        error: null,
+        parentNoteId: null,
+        scope: 'document',
+        marginSide: 'right',
+        model: model || null,
+      };
+      void runNote(draft, {
+        kind: 'document',
+        sequence_id: firstSeq,
+        chunk_id: null,
+        quote: null,
+        image_url: null,
+      });
+    },
+    [doc, model, runNote],
+  );
+
+  const retryPending = useCallback(
+    (clientId: string) => {
+      const p = pending.find((x) => x.clientId === clientId);
+      if (!p) return;
+      void runNote(
+        { ...p, error: null, answer: '', status: null, steps: [] },
+        {
+          kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'table' | 'block' | 'document',
+          sequence_id: p.anchorSequenceId,
+          chunk_id: null,
+          quote: p.quote,
+          image_url: p.imageUrl,
+        },
+      );
+    },
+    [pending, runNote],
+  );
+
+  const dismissPending = useCallback((clientId: string) => {
+    setPending((prev) => prev.filter((x) => x.clientId !== clientId));
+  }, []);
 
   const submitFollowUp = useCallback(
     (parentNoteId: string, question: string) => {
@@ -1307,8 +1424,12 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         question,
         answer: '',
         status: null,
+        steps: [],
         error: null,
         parentNoteId,
+        // A follow-up belongs to the same surface as its parent — a follow-up
+        // to a whole-paper question stays in the panel.
+        scope: parent.scope,
         // A follow-up joins its parent's card, so it must share its margin.
         marginSide: parent.margin_side || 'right',
         // Shown while it streams. The server independently enforces this from
@@ -1471,7 +1592,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
           </div>
         ))}
 
-      {pending
+      {marginPending
         .filter((p) => sideOf(p.marginSide) === side)
         .map((p) => (
           <div
@@ -1483,7 +1604,7 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
               note={p}
               onJump={jumpTo}
               onRetry={() => {
-                const retry = { ...p, error: null, answer: '', status: null };
+                const retry = { ...p, error: null, answer: '', status: null, steps: [] };
                 void runNote(retry, {
                   kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'table' | 'block',
                   sequence_id: p.anchorSequenceId,
@@ -1789,24 +1910,45 @@ export function ArticleReader({ paperId, fallbackTitle, onBack }: Props) {
         )}
       </div>
 
+      {/* One button, one meaning: the holistic level.
+          ⚠ It replaced an "Ask" and a "Note" button that both anchored to
+          whatever block happened to be at the top of the viewport — a worse
+          version of what highlighting already does, offered more prominently.
+          Passage-level work now belongs entirely to the selection pill and the
+          A / N keys; the corner is the level above it. */}
       {!composer && !personalComposer && (
         <div className="reader-fabs">
           <button
-            className="ask-fab note-fab"
-            onClick={openPersonalComposerAtViewport}
-            title="Add your own note (N)"
+            className={`ask-fab panel-fab${assistant ? ' is-on' : ''}`}
+            onClick={() => setAssistant((v) => !v)}
+            title="Ask about the whole paper (P)"
+            aria-expanded={assistant}
           >
-            Note
-          </button>
-          <button
-            className="ask-fab"
-            onClick={openComposerAtViewport}
-            title="Ask about what you're reading (A)"
-          >
-            Ask
+            <span className="panel-fab-glyph" aria-hidden="true">◈</span>
+            Panel
+            {holisticGroups.length > 0 && (
+              <span className="panel-fab-count">{holisticGroups.length}</span>
+            )}
           </button>
         </div>
       )}
+
+      <AssistantPanel
+        open={assistant}
+        onClose={() => setAssistant(false)}
+        paperTitle={doc?.title || fallbackTitle}
+        groups={holisticGroups}
+        pending={holisticPending}
+        onAsk={askWholePaper}
+        onFollowUp={submitFollowUp}
+        onDelete={removeNote}
+        onRetry={retryPending}
+        onDismiss={dismissPending}
+        onJump={jumpTo}
+        catalog={catalog}
+        model={model}
+        onModelChange={chooseModel}
+      />
     </div>
   );
 }
