@@ -38,6 +38,8 @@ jobs:
       - name: Build frontend
         run: |
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
             -v "$(pwd)/../frontend:/src" \
             -v "$(pwd)/frontend-dist:/dist" \
             -w /src \
