@@ -310,6 +310,17 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
+    # ── Auth ─────────────────────────────────────────────────────────────────
+    # Shared secret gating self-service signup (POST /api/v1/auth/signup).
+    # Not open registration — friends need this code, distributed out-of-band.
+    # Empty disables signup entirely (login still works for existing users).
+    signup_invite_code: str = ""
+    # Session cookie name and sliding TTL. Refreshed on every authenticated
+    # request, so an active user is never logged out mid-session; an idle one
+    # expires this many seconds after their last request.
+    session_cookie_name: str = "9xaipal_session"
+    session_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+
     # Celery / Redis
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str | None = None

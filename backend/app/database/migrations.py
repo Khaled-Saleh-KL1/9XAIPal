@@ -51,6 +51,28 @@ async def _ensure_recent_columns() -> None:
     partially failed due to the fragile split-on-; runner.
     """
     critical_alters = [
+        # Multi-user support. users must be created (and its email index)
+        # before any of the ALTER ... REFERENCES users(id) statements below —
+        # order in this list matters, they run in one transaction in order.
+        """CREATE TABLE IF NOT EXISTS users (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            display_name TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email))",
+        # Owner columns, nullable at the DB level — see the comment beside
+        # documents.user_id in schema.sql for why. Application code requires
+        # user_id as a non-Optional argument on every create_* path.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
+        "ALTER TABLE studies ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
+        "ALTER TABLE sticky_notes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
+        "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
+        "CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_studies_user_id ON studies(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_sticky_notes_user_id ON sticky_notes(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_conversation_turns_user_id ON conversation_turns(user_id)",
         # From the rich extraction / quality phase
         "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_json JSONB",
         # Reading order LLM correction (two-column papers)

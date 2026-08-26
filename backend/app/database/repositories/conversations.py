@@ -1,4 +1,12 @@
-"""Conversation repository: chat turns and ask traces."""
+"""Conversation repository: chat turns and ask traces.
+
+Every read/write here is scoped by `user_id` directly on conversation_turns
+(not derived transitively from document_id), because a thread_root_turn_id or
+conversation_id can be supplied directly by the client (e.g.
+`GET /papers/{id}/chat?thread_root_turn_id=...`) — filtering only at the
+document level would still let a request naming someone else's turn id walk
+its subtree.
+"""
 
 import json
 from uuid import UUID
@@ -11,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 async def create_turn(
     session: AsyncSession,
     *,
+    user_id: UUID,
     conversation_id: UUID,
     document_id: Optional[UUID],
     role: str,
@@ -35,14 +44,15 @@ async def create_turn(
     citations_payload = json.dumps(citations) if citations is not None else None
     stmt = text("""
         INSERT INTO conversation_turns
-            (conversation_id, document_id, role, content, context_type, router_reason, model, citations, parent_turn_id)
+            (user_id, conversation_id, document_id, role, content, context_type, router_reason, model, citations, parent_turn_id)
         VALUES
-            (:conversation_id, :document_id, :role, :content, :context_type, :router_reason, :model, CAST(:citations AS JSONB), :parent_turn_id)
+            (:user_id, :conversation_id, :document_id, :role, :content, :context_type, :router_reason, :model, CAST(:citations AS JSONB), :parent_turn_id)
         RETURNING id, conversation_id, role, created_at, parent_turn_id
     """)
     result = await session.execute(
         stmt,
         {
+            "user_id": user_id,
             "conversation_id": conversation_id,
             "document_id": document_id,
             "role": role,
@@ -69,7 +79,12 @@ async def create_trace(
     completion_tokens: Optional[int] = None,
     latency_ms: Optional[int] = None,
 ) -> dict:
-    """Record an ask trace for debugging."""
+    """Record an ask trace for debugging.
+
+    Not independently user-scoped: it's a child of conversation_turns via
+    conversation_turn_id, which the caller already obtained from a
+    user-scoped create_turn/query.
+    """
     result = await session.execute(
         text("""
             INSERT INTO ask_traces
@@ -95,17 +110,17 @@ async def create_trace(
 
 
 async def get_conversation_history(
-    session: AsyncSession, conversation_id: UUID, limit: int = 20
+    session: AsyncSession, user_id: UUID, conversation_id: UUID, limit: int = 20
 ) -> list[dict]:
     """Fetch recent conversation turns."""
     result = await session.execute(
         text("""
             SELECT *, parent_turn_id FROM conversation_turns
-            WHERE conversation_id = :cid
+            WHERE conversation_id = :cid AND user_id = :user_id
             ORDER BY created_at DESC
             LIMIT :limit
         """),
-        {"cid": conversation_id, "limit": limit},
+        {"cid": conversation_id, "user_id": user_id, "limit": limit},
     )
     rows = [dict(r) for r in result.mappings().all()]
     rows.reverse()
@@ -113,7 +128,7 @@ async def get_conversation_history(
 
 
 async def list_turns_by_document(
-    session: AsyncSession, document_id: UUID, limit: int = 200
+    session: AsyncSession, user_id: UUID, document_id: UUID, limit: int = 200
 ) -> list[dict]:
     """Fetch all conversation turns for a given paper, oldest first."""
     result = await session.execute(
@@ -122,17 +137,18 @@ async def list_turns_by_document(
                    context_type, router_reason, model, citations, created_at,
                    parent_turn_id
             FROM conversation_turns
-            WHERE document_id = :doc_id
+            WHERE document_id = :doc_id AND user_id = :user_id
             ORDER BY created_at ASC
             LIMIT :limit
         """),
-        {"doc_id": document_id, "limit": limit},
+        {"doc_id": document_id, "user_id": user_id, "limit": limit},
     )
     return [dict(r) for r in result.mappings().all()]
 
 
 async def list_turns_by_conversation(
     session: AsyncSession,
+    user_id: UUID,
     document_id: UUID,
     conversation_id: UUID,
     limit: int = 200,
@@ -144,17 +160,17 @@ async def list_turns_by_conversation(
                    context_type, router_reason, model, citations, created_at,
                    parent_turn_id
             FROM conversation_turns
-            WHERE document_id = :doc_id AND conversation_id = :conv_id
+            WHERE document_id = :doc_id AND conversation_id = :conv_id AND user_id = :user_id
             ORDER BY created_at ASC
             LIMIT :limit
         """),
-        {"doc_id": document_id, "conv_id": conversation_id, "limit": limit},
+        {"doc_id": document_id, "conv_id": conversation_id, "user_id": user_id, "limit": limit},
     )
     return [dict(r) for r in result.mappings().all()]
 
 
 async def list_conversations_by_document(
-    session: AsyncSession, document_id: UUID
+    session: AsyncSession, user_id: UUID, document_id: UUID
 ) -> list[dict]:
     """Summarize all distinct conversations for a paper, most-recent first.
 
@@ -177,11 +193,11 @@ async def list_conversations_by_document(
                 LIMIT 1
               ) AS first_user_message
             FROM conversation_turns ct
-            WHERE ct.document_id = :doc_id
+            WHERE ct.document_id = :doc_id AND ct.user_id = :user_id
             GROUP BY ct.conversation_id
             ORDER BY MAX(ct.created_at) DESC
         """),
-        {"doc_id": document_id},
+        {"doc_id": document_id, "user_id": user_id},
     )
     return [dict(r) for r in result.mappings().all()]
 
@@ -193,6 +209,7 @@ async def list_conversations_by_document(
 
 async def get_main_chat(
     session: AsyncSession,
+    user_id: UUID,
     conversation_id: UUID,
 ) -> list[dict]:
     """Return ONLY the main linear chat turns for a conversation (parent_turn_id IS NULL).
@@ -207,16 +224,18 @@ async def get_main_chat(
                    parent_turn_id
             FROM conversation_turns
             WHERE conversation_id = :cid
+              AND user_id = :user_id
               AND parent_turn_id IS NULL
             ORDER BY created_at ASC
         """),
-        {"cid": conversation_id},
+        {"cid": conversation_id, "user_id": user_id},
     )
     return [dict(r) for r in result.mappings().all()]
 
 
 async def get_thread_subtree(
     session: AsyncSession,
+    user_id: UUID,
     root_turn_id: UUID,
 ) -> list[dict]:
     """Return the full history of a sub-thread rooted at the given user turn.
@@ -228,12 +247,14 @@ async def get_thread_subtree(
       This is the AI reply the user saw in the main chat.
     - Then recursively walk all proper descendants (parent_turn_id points into the set).
 
-    Result is ordered chronologically.
+    Result is ordered chronologically. Every query is scoped to `user_id`, so
+    a root_turn_id belonging to someone else returns an empty list rather
+    than their thread.
     """
     # 1. The root
     root_res = await session.execute(
-        text("SELECT * FROM conversation_turns WHERE id = :rid"),
-        {"rid": root_turn_id},
+        text("SELECT * FROM conversation_turns WHERE id = :rid AND user_id = :user_id"),
+        {"rid": root_turn_id, "user_id": user_id},
     )
     root_row = root_res.mappings().first()
     if not root_row:
@@ -258,6 +279,7 @@ async def get_thread_subtree(
             text("""
                 SELECT * FROM conversation_turns
                 WHERE conversation_id = :cid
+                  AND user_id = :user_id
                   AND parent_turn_id IS NULL
                   AND id <> :rid
                   AND role = 'assistant'
@@ -265,7 +287,7 @@ async def get_thread_subtree(
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
             """),
-            {"cid": conv_id, "rid": root_turn_id},
+            {"cid": conv_id, "rid": root_turn_id, "user_id": user_id},
         )
         first_ai = first_ai_res.mappings().first()
         if first_ai:
@@ -276,8 +298,8 @@ async def get_thread_subtree(
     while to_visit:
         current = to_visit.pop()
         children_res = await session.execute(
-            text("SELECT * FROM conversation_turns WHERE parent_turn_id = :pid"),
-            {"pid": current},
+            text("SELECT * FROM conversation_turns WHERE parent_turn_id = :pid AND user_id = :user_id"),
+            {"pid": current, "user_id": user_id},
         )
         for child in children_res.mappings():
             cid = child["id"]
@@ -293,6 +315,7 @@ async def get_thread_subtree(
 
 async def has_children(
     session: AsyncSession,
+    user_id: UUID,
     turn_id: UUID,
 ) -> bool:
     """Return True if this turn is the root of (or participates in) a sub-thread
@@ -302,10 +325,10 @@ async def has_children(
         text("""
             SELECT EXISTS (
                 SELECT 1 FROM conversation_turns
-                WHERE parent_turn_id = :tid
+                WHERE parent_turn_id = :tid AND user_id = :user_id
             ) AS has_children
         """),
-        {"tid": turn_id},
+        {"tid": turn_id, "user_id": user_id},
     )
     row = result.mappings().one()
     return bool(row["has_children"])
@@ -313,6 +336,7 @@ async def has_children(
 
 async def compute_turn_depth(
     session: AsyncSession,
+    user_id: UUID,
     turn_id: UUID,
 ) -> int:
     """Number of parent_turn_id hops from this turn up to a NULL parent.
@@ -329,15 +353,16 @@ async def compute_turn_depth(
             WITH RECURSIVE chain AS (
                 SELECT id, parent_turn_id, 0 AS depth
                 FROM conversation_turns
-                WHERE id = :tid
+                WHERE id = :tid AND user_id = :user_id
                 UNION ALL
                 SELECT t.id, t.parent_turn_id, c.depth + 1
                 FROM conversation_turns t
                 JOIN chain c ON t.id = c.parent_turn_id
+                WHERE t.user_id = :user_id
             )
             SELECT COALESCE(MAX(depth), 0) AS d FROM chain
         """),
-        {"tid": turn_id},
+        {"tid": turn_id, "user_id": user_id},
     )
     row = result.mappings().first()
     return int(row["d"]) if row else 0
@@ -345,6 +370,7 @@ async def compute_turn_depth(
 
 async def get_thread_message_count(
     session: AsyncSession,
+    user_id: UUID,
     root_turn_id: UUID,
 ) -> int:
     """Return the total number of messages (including the root user + first AI reply
@@ -358,20 +384,22 @@ async def get_thread_message_count(
     result = await session.execute(
         text("""
             WITH RECURSIVE thread_ids AS (
-                SELECT id FROM conversation_turns WHERE id = :root_id
+                SELECT id FROM conversation_turns WHERE id = :root_id AND user_id = :user_id
                 UNION ALL
                 SELECT t.id
                 FROM conversation_turns t
                 JOIN thread_ids ti ON t.parent_turn_id = ti.id
+                WHERE t.user_id = :user_id
             ),
             special_first_ai AS (
                 -- The original first assistant reply (parent IS NULL) that belongs
                 -- visually to this thread. Only applicable for main-chat roots.
                 SELECT t.id
                 FROM conversation_turns t
-                JOIN conversation_turns root ON root.id = :root_id
+                JOIN conversation_turns root ON root.id = :root_id AND root.user_id = :user_id
                 WHERE root.parent_turn_id IS NULL
                   AND t.parent_turn_id IS NULL
+                  AND t.user_id = :user_id
                   AND t.conversation_id = root.conversation_id
                   AND t.created_at >= root.created_at
                   AND t.id <> root.id
@@ -379,6 +407,7 @@ async def get_thread_message_count(
                   AND NOT EXISTS (
                       SELECT 1 FROM conversation_turns t2
                       WHERE t2.conversation_id = t.conversation_id
+                        AND t2.user_id = :user_id
                         AND t2.parent_turn_id IS NULL
                         AND t2.created_at >= root.created_at
                         AND t2.id <> root.id
@@ -394,8 +423,7 @@ async def get_thread_message_count(
                 SELECT id FROM special_first_ai
             ) all_ids
         """),
-        {"root_id": root_turn_id},
+        {"root_id": root_turn_id, "user_id": user_id},
     )
     row = result.mappings().one()
     return int(row["cnt"])
-

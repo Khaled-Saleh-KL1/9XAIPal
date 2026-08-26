@@ -24,7 +24,13 @@ aiofiles
 pypdf
 pymupdf               # PyMuPDF fallback when MinerU is unavailable (imported as 'fitz')
 
-# Background processing
+# Auth: Argon2id password hashing (OWASP-recommended default) + email
+# validation for pydantic's EmailStr (fastapi[standard] usually pulls this in
+# transitively, but pinning it directly avoids depending on that staying true).
+argon2-cffi>=23.1
+email-validator>=2.0
+
+# Background processing (redis>=5.0 also backs sessions via redis.asyncio — see app/core/redis.py)
 celery>=5.3
 redis>=5.0
 

@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_ask_limiter, get_ask_semaphore
+from app.api.deps import get_db, get_ask_limiter, get_ask_semaphore, get_current_user
 from app.api.errors import DocumentNotFound, ModelUnavailable, NoLLMConfigured
 from app.chat.orchestrator import handle_ask, handle_ask_stream
 from app.core.logging import get_logger
@@ -51,10 +51,10 @@ class AskPayload(BaseModel):
 
 
 async def _resolve_ask_target(
-    db: AsyncSession, paper_id: UUID, payload: AskPayload
+    db: AsyncSession, paper_id: UUID, payload: AskPayload, user_id: UUID
 ) -> tuple[dict, Optional[UUID]]:
     """Shared /ask pre-checks: 404, sub-thread depth cap, chunk resolution."""
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, user_id)
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
@@ -62,7 +62,7 @@ async def _resolve_ask_target(
     # Block any /ask whose target sub-thread would exceed MAX_SUB_THREAD_DEPTH.
     # This is defense-in-depth: the UI also hides the "Thread →" affordance at L3.
     if payload.thread_root_turn_id is not None:
-        root_chain = await conv_repo.compute_turn_depth(db, payload.thread_root_turn_id)
+        root_chain = await conv_repo.compute_turn_depth(db, user_id, payload.thread_root_turn_id)
         sub_depth = root_chain + 1
         if sub_depth > MAX_SUB_THREAD_DEPTH:
             raise HTTPException(
@@ -91,12 +91,14 @@ async def ask_paper(
     payload: AskPayload,
     db: AsyncSession = Depends(get_db),
     _limiter: None = Depends(get_ask_limiter),
+    current_user: dict = Depends(get_current_user),
 ):
     """Route a prompt to Local, Global, or External context and return an answer."""
-    doc, current_chunk_id = await _resolve_ask_target(db, paper_id, payload)
+    doc, current_chunk_id = await _resolve_ask_target(db, paper_id, payload, current_user["id"])
 
     result = await handle_ask(
         db,
+        user_id=current_user["id"],
         prompt=payload.query,
         document_id=paper_id,
         current_chunk_id=current_chunk_id,
@@ -124,6 +126,7 @@ async def ask_paper_stream(
     paper_id: UUID,
     payload: AskPayload,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Streaming /ask: same pipeline, answer delivered as Server-Sent Events.
 
@@ -132,7 +135,8 @@ async def ask_paper_stream(
     acquired inside the generator — a Depends-based limiter would release
     before the stream body even starts running.
     """
-    doc, current_chunk_id = await _resolve_ask_target(db, paper_id, payload)
+    doc, current_chunk_id = await _resolve_ask_target(db, paper_id, payload, current_user["id"])
+    user_id = current_user["id"]
 
     def sse(event: dict) -> str:
         return f"data: {json.dumps(event)}\n\n"
@@ -141,6 +145,7 @@ async def ask_paper_stream(
         async with get_ask_semaphore():
             try:
                 async for event in handle_ask_stream(
+                    user_id=user_id,
                     prompt=payload.query,
                     document_id=paper_id,
                     current_chunk_id=current_chunk_id,
@@ -195,6 +200,7 @@ async def get_paper_chat(
     # (includes the original branching user turn + its first AI reply + all descendants).
     thread_root_turn_id: Optional[UUID] = Query(default=None),
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Return saved chat turns for a paper, oldest first.
 
@@ -207,14 +213,14 @@ async def get_paper_chat(
       exactly which user turn to use as the root when the user clicks "Thread →".
     - Otherwise legacy behaviour (all turns for the paper).
     """
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
     if thread_root_turn_id is not None:
-        turns = await conv_repo.get_thread_subtree(db, thread_root_turn_id)
+        turns = await conv_repo.get_thread_subtree(db, current_user["id"], thread_root_turn_id)
         # Depth of this sub-thread = chain length of its root turn + 1.
-        root_chain = await conv_repo.compute_turn_depth(db, thread_root_turn_id)
+        root_chain = await conv_repo.compute_turn_depth(db, current_user["id"], thread_root_turn_id)
         sub_depth = root_chain + 1
         # Pair user→assistant inside the sub-thread so each pair becomes a
         # potential deeper sub-thread root. Suppress pairing for the root
@@ -242,9 +248,9 @@ async def get_paper_chat(
     if conversation_id is not None:
         # Main chat view must exclude sub-thread turns (parent_turn_id IS NOT NULL),
         # otherwise replies sent inside a tangent leak into the primary linear chat.
-        turns = await conv_repo.get_main_chat(db, conversation_id)
+        turns = await conv_repo.get_main_chat(db, current_user["id"], conversation_id)
     else:
-        turns = await conv_repo.list_turns_by_document(db, paper_id)
+        turns = await conv_repo.list_turns_by_document(db, current_user["id"], paper_id)
 
     # Post-process for the main chat view: attach the preceding user turn id
     # to every assistant turn. The frontend uses this as `thread_root_turn_id`
@@ -273,13 +279,14 @@ async def get_paper_chat(
 async def list_paper_conversations(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """List every distinct conversation thread for a paper, most-recent first."""
-    doc = await doc_service.get_document(db, paper_id)
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
-    rows = await conv_repo.list_conversations_by_document(db, paper_id)
+    rows = await conv_repo.list_conversations_by_document(db, current_user["id"], paper_id)
     return {
         "conversations": [
             {

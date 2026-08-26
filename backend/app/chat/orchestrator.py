@@ -56,6 +56,7 @@ class _AskPrep:
     identically regardless of transport.
     """
     prompt: str
+    user_id: UUID
     document_id: Optional[UUID]
     conversation_id: UUID
     parent_turn_id: Optional[UUID]
@@ -77,6 +78,7 @@ class _AskPrep:
 async def _prepare_ask(
     session: AsyncSession,
     *,
+    user_id: UUID,
     prompt: str,
     document_id: Optional[UUID] = None,
     current_chunk_id: Optional[UUID] = None,
@@ -94,6 +96,7 @@ async def _prepare_ask(
     is_sub_thread = bool(parent_turn_id or thread_root_turn_id)
     prep = _AskPrep(
         prompt=prompt,
+        user_id=user_id,
         document_id=document_id,
         conversation_id=conversation_id,
         parent_turn_id=parent_turn_id,
@@ -256,7 +259,7 @@ async def _prepare_ask(
     paper_title: Optional[str] = None
     if document_id:
         try:
-            doc = document or await get_document(session, document_id)
+            doc = document or await get_document(session, document_id, user_id)
             if doc:
                 paper_title = doc.get("original_filename") or doc.get("filename")
         except Exception:
@@ -330,7 +333,7 @@ async def _prepare_ask(
     if is_sub_thread and thread_root_turn_id:
         try:
             history_turns = await conv_repo.get_thread_subtree(
-                session, thread_root_turn_id
+                session, user_id, thread_root_turn_id
             )
             history_block = format_conversation_history(history_turns)
             if history_block:
@@ -339,7 +342,7 @@ async def _prepare_ask(
             logger.exception("Failed to load sub-thread history (non-fatal)")
     elif conversation_id:
         try:
-            history_turns = await get_conversation_history(session, conversation_id, limit=12)
+            history_turns = await get_conversation_history(session, user_id, conversation_id, limit=12)
             history_block = format_conversation_history(history_turns)
             if history_block:
                 context_text = history_block + "\n\n" + context_text
@@ -390,11 +393,11 @@ async def _handle_blocked(session: AsyncSession, prep: _AskPrep) -> AskResponse:
     """Persist and answer the guardrail-blocked (out-of-scope) case."""
     canned = "This is out of scope."
     await conv_repo.create_turn(
-        session, conversation_id=prep.conversation_id, document_id=prep.document_id,
+        session, user_id=prep.user_id, conversation_id=prep.conversation_id, document_id=prep.document_id,
         role="user", content=prep.prompt,
     )
     await conv_repo.create_turn(
-        session, conversation_id=prep.conversation_id, document_id=prep.document_id,
+        session, user_id=prep.user_id, conversation_id=prep.conversation_id, document_id=prep.document_id,
         role="assistant", content=canned,
         context_type="OUT_OF_SCOPE",
         router_reason="Topic outside IT scope (guardrail)",
@@ -491,6 +494,7 @@ async def _finalize_ask(
     try:
         user_turn = await conv_repo.create_turn(
             session,
+            user_id=prep.user_id,
             conversation_id=prep.conversation_id,
             document_id=prep.document_id,
             role="user",
@@ -511,6 +515,7 @@ async def _finalize_ask(
     try:
         assistant_turn = await conv_repo.create_turn(
             session,
+            user_id=prep.user_id,
             conversation_id=prep.conversation_id,
             document_id=prep.document_id,
             role="assistant",
@@ -550,7 +555,7 @@ async def _finalize_ask(
     # hallucination. Runs as a fire-and-forget background task with its OWN
     # session: the compaction summary is an LLM call that can take many seconds,
     # and it must never delay returning the answer to the user.
-    _schedule_compaction(prep.conversation_id, prep.document_id, prep.thread_root_turn_id)
+    _schedule_compaction(prep.user_id, prep.conversation_id, prep.document_id, prep.thread_root_turn_id)
 
     logger.info("ASK[done] returning answer (latency_ms=%d)", latency_ms)
 
@@ -569,6 +574,7 @@ async def _finalize_ask(
 async def handle_ask(
     session: AsyncSession,
     *,
+    user_id: UUID,
     prompt: str,
     document_id: Optional[UUID] = None,
     current_chunk_id: Optional[UUID] = None,
@@ -597,6 +603,7 @@ async def handle_ask(
     """
     prep = await _prepare_ask(
         session,
+        user_id=user_id,
         prompt=prompt,
         document_id=document_id,
         current_chunk_id=current_chunk_id,
@@ -681,6 +688,7 @@ def _ask_response_event(resp: AskResponse) -> dict:
 
 async def handle_ask_stream(
     *,
+    user_id: UUID,
     prompt: str,
     document_id: Optional[UUID] = None,
     current_chunk_id: Optional[UUID] = None,
@@ -708,6 +716,7 @@ async def handle_ask_stream(
     async with async_session_factory() as session:
         prep = await _prepare_ask(
             session,
+            user_id=user_id,
             prompt=prompt,
             document_id=document_id,
             current_chunk_id=current_chunk_id,
@@ -801,6 +810,7 @@ _background_tasks: set["asyncio.Task"] = set()
 
 
 def _schedule_compaction(
+    user_id: UUID,
     conversation_id: UUID,
     document_id: Optional[UUID],
     thread_root_turn_id: Optional[UUID],
@@ -811,7 +821,7 @@ def _schedule_compaction(
         try:
             async with async_session_factory() as bg_session:
                 await maybe_compact_conversation(
-                    bg_session, conversation_id, document_id,
+                    bg_session, user_id, conversation_id, document_id,
                     thread_root_turn_id=thread_root_turn_id,
                 )
         except Exception:
@@ -824,6 +834,7 @@ def _schedule_compaction(
 
 async def maybe_compact_conversation(
     session: AsyncSession,
+    user_id: UUID,
     conversation_id: UUID,
     document_id: Optional[UUID],
     *,
@@ -846,7 +857,7 @@ async def maybe_compact_conversation(
     if thread_root_turn_id:
         # Sub-thread compaction: use the subtree loader (it already includes
         # the special first AI reply even if it has parent=NULL).
-        history = await conv_repo.get_thread_subtree(session, thread_root_turn_id)
+        history = await conv_repo.get_thread_subtree(session, user_id, thread_root_turn_id)
         # Count user turns in *this subtree only* since the last compaction
         # that also belongs to the same subtree.
         user_turns_since = sum(
@@ -861,21 +872,23 @@ async def maybe_compact_conversation(
                 SELECT COUNT(*) AS user_turns_since_compaction
                 FROM conversation_turns
                 WHERE conversation_id = :cid
+                  AND user_id = :user_id
                   AND role = 'user'
                   AND parent_turn_id IS NULL
                   AND created_at > COALESCE(
                         (SELECT MAX(created_at) FROM conversation_turns
                          WHERE conversation_id = :cid
+                           AND user_id = :user_id
                            AND role = 'compaction'
                            AND parent_turn_id IS NULL),
                         '1970-01-01'::timestamptz
                       )
             """),
-            {"cid": conversation_id},
+            {"cid": conversation_id, "user_id": user_id},
         )
         row = result.mappings().first()
         user_turns_since = int(row["user_turns_since_compaction"]) if row else 0
-        history = await conv_repo.get_main_chat(session, conversation_id)
+        history = await conv_repo.get_main_chat(session, user_id, conversation_id)
 
     if user_turns_since < COMPACTION_THRESHOLD:
         return
@@ -909,6 +922,7 @@ async def maybe_compact_conversation(
     # (parent_turn_id = thread_root_turn_id for sub-threads, NULL for main)
     await conv_repo.create_turn(
         session,
+        user_id=user_id,
         conversation_id=conversation_id,
         document_id=document_id,
         role="compaction",

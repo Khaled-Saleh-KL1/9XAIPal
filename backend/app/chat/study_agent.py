@@ -398,6 +398,7 @@ async def _run_call(
     papers: list[dict],
     chunks_by_doc: dict,
     *,
+    user_id: UUID,
     study_id: Optional[UUID] = None,
     model_name: Optional[str] = None,
 ) -> dict:
@@ -474,6 +475,7 @@ async def _run_call(
         universal = call.get("board") == "universal"
         row = await sticky_repo.create_sticky(
             session,
+            user_id=user_id,
             body=call["arg"],
             board="universal" if universal else "chat",
             study_id=None if universal else study_id,
@@ -551,6 +553,7 @@ async def _pin_written_notes(
     session: AsyncSession,
     written: list[dict],
     *,
+    user_id: UUID,
     study_id: Optional[UUID],
     model_name: str,
     round_no: int,
@@ -575,8 +578,8 @@ async def _pin_written_notes(
     seen = {
         " ".join((n.get("body") or "").split()).lower()
         for n in await sticky_repo.list_stickies(
-            session, board="chat", study_id=study_id
-        ) + await sticky_repo.list_stickies(session, board="universal")
+            session, user_id=user_id, board="chat", study_id=study_id
+        ) + await sticky_repo.list_stickies(session, user_id=user_id, board="universal")
     }
     fresh: list[dict] = []
     for note in written:
@@ -589,6 +592,7 @@ async def _pin_written_notes(
     for i, note in enumerate(fresh[:2]):
         row = await sticky_repo.create_sticky(
             session,
+            user_id=user_id,
             body=note["body"],
             board=note["board"],
             study_id=None if note["board"] == "universal" else study_id,
@@ -620,6 +624,7 @@ async def _pin_written_notes(
 async def answer_study_question(
     session: AsyncSession,
     *,
+    user_id: UUID,
     papers: list[dict],
     question: str,
     history: Optional[list[dict]] = None,
@@ -737,6 +742,7 @@ async def answer_study_question(
                     yield {"type": "token", "text": answer}
                 async for ev in _pin_written_notes(
                     session, written,
+                    user_id=user_id,
                     study_id=study_id,
                     model_name=result.get("model", "") or (model or ""),
                     round_no=step + 1,
@@ -788,7 +794,7 @@ async def answer_study_question(
                 done_calls.add(sig)
                 done_call = await _run_call(
                     session, call, papers, chunks_by_doc,
-                    study_id=study_id, model_name=model or "",
+                    user_id=user_id, study_id=study_id, model_name=model or "",
                 )
             observations.append(done_call["observation"])
             event = step_event(
@@ -835,6 +841,7 @@ async def answer_study_question(
 
     async for ev in _pin_written_notes(
         session, written,
+        user_id=user_id,
         study_id=study_id,
         model_name=answered_by or (model or ""),
         round_no=rounds,

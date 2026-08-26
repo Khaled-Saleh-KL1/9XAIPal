@@ -72,10 +72,11 @@ async def _attach_papers(session: AsyncSession, rows: list[dict]) -> list[dict]:
 async def list_stickies(
     session: AsyncSession,
     *,
+    user_id: UUID,
     board: str = "universal",
     study_id: Optional[UUID] = None,
 ) -> list[dict]:
-    """One board's notes, pinned first then newest.
+    """One board's notes for this user, pinned first then newest.
 
     ⚠ ``IS NOT DISTINCT FROM`` rather than ``=`` for ``study_id``: the
     library-wide chat is keyed by NULL, and ``study_id = NULL`` matches nothing.
@@ -85,26 +86,29 @@ async def list_stickies(
         result = await session.execute(
             text("""
                 SELECT * FROM sticky_notes
-                WHERE board = 'universal'
+                WHERE board = 'universal' AND user_id = :user_id
                 ORDER BY pinned DESC, updated_at DESC
-            """)
+            """),
+            {"user_id": user_id},
         )
     else:
         result = await session.execute(
             text("""
                 SELECT * FROM sticky_notes
                 WHERE board = 'chat'
+                  AND user_id = :user_id
                   AND study_id IS NOT DISTINCT FROM :study_id
                 ORDER BY pinned DESC, updated_at DESC
             """),
-            {"study_id": study_id},
+            {"user_id": user_id, "study_id": study_id},
         )
     return await _attach_papers(session, [dict(r) for r in result.mappings().all()])
 
 
-async def get_sticky(session: AsyncSession, sticky_id: UUID) -> Optional[dict]:
+async def get_sticky(session: AsyncSession, sticky_id: UUID, user_id: UUID) -> Optional[dict]:
     result = await session.execute(
-        text("SELECT * FROM sticky_notes WHERE id = :id"), {"id": sticky_id}
+        text("SELECT * FROM sticky_notes WHERE id = :id AND user_id = :user_id"),
+        {"id": sticky_id, "user_id": user_id},
     )
     row = result.mappings().first()
     if not row:
@@ -132,6 +136,7 @@ async def _set_papers(
 async def create_sticky(
     session: AsyncSession,
     *,
+    user_id: UUID,
     body: str,
     board: str = "universal",
     study_id: Optional[UUID] = None,
@@ -145,12 +150,13 @@ async def create_sticky(
     result = await session.execute(
         text("""
             INSERT INTO sticky_notes
-                (body, board, study_id, color, pinned, origin, author_model)
+                (user_id, body, board, study_id, color, pinned, origin, author_model)
             VALUES
-                (:body, :board, :study_id, :color, :pinned, :origin, :author_model)
+                (:user_id, :body, :board, :study_id, :color, :pinned, :origin, :author_model)
             RETURNING *
         """),
         {
+            "user_id": user_id,
             "body": body,
             "board": board,
             # A universal note is tied to no conversation, so the scope is
@@ -170,6 +176,7 @@ async def create_sticky(
 async def update_sticky(
     session: AsyncSession,
     sticky_id: UUID,
+    user_id: UUID,
     *,
     body: Optional[str] = None,
     color: Optional[str] = None,
@@ -191,7 +198,7 @@ async def update_sticky(
     is otherwise indistinguishable from "not supplied".
     """
     sets = ["updated_at = NOW()"]
-    params: dict = {"id": sticky_id}
+    params: dict = {"id": sticky_id, "user_id": user_id}
     if body is not None:
         sets.append("body = :body")
         params["body"] = body
@@ -209,7 +216,7 @@ async def update_sticky(
         params["study_id"] = study_id if target == "chat" else None
 
     result = await session.execute(
-        text(f"UPDATE sticky_notes SET {', '.join(sets)} WHERE id = :id RETURNING *"),
+        text(f"UPDATE sticky_notes SET {', '.join(sets)} WHERE id = :id AND user_id = :user_id RETURNING *"),
         params,
     )
     row = result.mappings().first()
@@ -220,7 +227,7 @@ async def update_sticky(
     return (await _attach_papers(session, [dict(row)]))[0]
 
 
-async def delete_sticky(session: AsyncSession, sticky_id: UUID) -> bool:
+async def delete_sticky(session: AsyncSession, sticky_id: UUID, user_id: UUID) -> bool:
     """Remove a note.
 
     ⚠ **Reader-only.** Reached from `DELETE /stickies/{id}`, which the UI calls
@@ -228,6 +235,7 @@ async def delete_sticky(session: AsyncSession, sticky_id: UUID) -> bool:
     assistant writes and edits notes, and removing one is the reader's call.
     """
     result = await session.execute(
-        text("DELETE FROM sticky_notes WHERE id = :id"), {"id": sticky_id}
+        text("DELETE FROM sticky_notes WHERE id = :id AND user_id = :user_id"),
+        {"id": sticky_id, "user_id": user_id},
     )
     return (result.rowcount or 0) > 0

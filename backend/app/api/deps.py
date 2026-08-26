@@ -2,8 +2,9 @@
 
 import os
 from typing import AsyncIterator
+from uuid import UUID
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.connection import async_session_factory
@@ -19,6 +20,83 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 def get_settings() -> Settings:
     """Return app settings."""
     return settings
+
+
+# ------------------------------------------------------------------
+# Auth: session cookie -> current user.
+# ------------------------------------------------------------------
+
+
+async def get_current_user(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """The logged-in user, or 401 if the session cookie is missing/invalid/expired.
+
+    A cross-tenant resource access (a valid session hitting someone else's
+    paper/study/etc.) is NOT this dependency's job — that 404s at the point
+    the resource is loaded (see the endpoints' `_require_document`-style
+    helpers), not here. This only establishes "who is asking".
+    """
+    from app.core.auth import get_session_user_id
+    from app.database.repositories import users as user_repo
+
+    token = request.cookies.get(settings.session_cookie_name)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    user_id = await get_session_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Session expired — please log in again")
+
+    user = await user_repo.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Session expired — please log in again")
+
+    return user
+
+
+async def get_current_user_optional(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> dict | None:
+    """Like get_current_user, but returns None instead of 401 — for GET /auth/me,
+    which the frontend polls on load precisely to find out whether anyone is
+    logged in."""
+    try:
+        return await get_current_user(request, db)
+    except HTTPException:
+        return None
+
+
+# ------------------------------------------------------------------
+# Rate limiting for the auth endpoints specifically. The app-wide
+# RateLimitMiddleware (app/core/security.py) is deliberately generic and, per
+# its own docstring, isn't even correctly shared across the API's
+# --workers 2 processes — nowhere near tight enough to blunt credential
+# stuffing or invite-code brute-forcing. This is a separate, stricter,
+# Redis-backed limiter (Redis is already required for sessions), so it works
+# correctly regardless of worker count.
+# ------------------------------------------------------------------
+
+_AUTH_RATE_LIMIT = 10  # attempts
+_AUTH_RATE_WINDOW_SECONDS = 60
+
+
+async def enforce_auth_rate_limit(request: Request) -> None:
+    from app.core.redis import get_redis
+
+    ip = request.client.host if request.client else "unknown"
+    key = f"authrl:{ip}"
+    r = get_redis()
+    count = await r.incr(key)
+    if count == 1:
+        await r.expire(key, _AUTH_RATE_WINDOW_SECONDS)
+    if count > _AUTH_RATE_LIMIT:
+        ttl = await r.ttl(key)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many attempts — slow down and retry shortly.",
+            headers={"Retry-After": str(max(1, ttl))},
+        )
 
 
 # ------------------------------------------------------------------

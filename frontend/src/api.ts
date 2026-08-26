@@ -7,7 +7,7 @@
  *  - Hosted frontend: set VITE_API_BASE_URL to the backend's public origin.
  *    Otherwise the static host has no /api and every call 404s.
  */
-import type { ContextType } from './types';
+import type { ContextType, User } from './types';
 
 // Trailing slashes trimmed so `${API_ORIGIN}/api/v1` never doubles up.
 const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
@@ -1287,4 +1287,67 @@ export async function updateSticky(
 export async function deleteSticky(stickyId: string): Promise<void> {
   const res = await fetch(`${BASE}/stickies/${stickyId}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 404) throw new Error(`Delete failed: ${res.status}`);
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+//
+// The session is an httponly cookie — nothing here reads or stores a token.
+// `credentials: 'include'` is explicit (not just relying on fetch's
+// same-origin default) so these calls stay correct even if this app is ever
+// served from a different origin than the API. The other ~50 functions in
+// this file don't need it: this deployment is same-origin, so the browser
+// already sends the cookie for them without asking.
+
+async function _authError(res: Response, fallback: string): Promise<never> {
+  let detail = fallback;
+  try {
+    const body = await res.json();
+    if (body?.detail) detail = body.detail;
+  } catch {
+    // non-JSON error body — fall back to the generic message
+  }
+  throw new Error(detail);
+}
+
+export async function getMe(): Promise<User | null> {
+  const res = await fetch(`${BASE}/auth/me`, { credentials: 'include' });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.user;
+}
+
+export async function login(email: string, password: string): Promise<User> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) return _authError(res, 'Login failed');
+  return res.json();
+}
+
+export async function signup(
+  email: string,
+  password: string,
+  inviteCode: string,
+  displayName?: string,
+): Promise<User> {
+  const res = await fetch(`${BASE}/auth/signup`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      password,
+      invite_code: inviteCode,
+      display_name: displayName || undefined,
+    }),
+  });
+  if (!res.ok) return _authError(res, 'Sign up failed');
+  return res.json();
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
 }

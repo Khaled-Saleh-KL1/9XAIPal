@@ -51,15 +51,31 @@ async def search_similar_chunks(
     query_embedding: list[float],
     limit: int = 10,
     document_id: Optional[UUID] = None,
+    document_ids: Optional[list[UUID]] = None,
 ) -> list[dict]:
-    """Find the most similar chunks by cosine distance."""
-    filters = ""
+    """Find the most similar chunks by cosine distance, scoped to one document
+    (``document_id``) or several (``document_ids``, which wins).
+
+    ⚠ Neither given returns ``[]`` rather than scanning every document —
+    there is currently no legitimate caller of a fully unscoped vector search
+    (every real path already has a single owned document or an
+    already-ownership-filtered paper list), so this is a deliberate guardrail
+    against a future caller accidentally reintroducing a cross-tenant search,
+    not a behavior change for any existing one.
+    """
+    if not document_id and not document_ids:
+        return []
+
     params: dict = {
         "embedding": _vector_literal(query_embedding),
         "limit": limit,
     }
-
-    if document_id:
+    if document_ids:
+        # ANY(:ids), not IN (...) — see the identical note in
+        # search_chunks_fulltext below.
+        filters = "AND c.document_id = ANY(:document_ids)"
+        params["document_ids"] = list(document_ids)
+    else:
         filters = "AND c.document_id = :document_id"
         params["document_id"] = document_id
 
@@ -89,14 +105,22 @@ async def search_chunks_fulltext(
 ) -> list[dict]:
     """Keyword search over chunks via Postgres full-text search.
 
-    Scope is one document (``document_id``), several (``document_ids``, which
-    wins), or the whole library (neither).
+    Scope is one document (``document_id``) or several (``document_ids``,
+    which wins). Neither given returns ``[]`` — every real caller already has
+    a single owned document or an already-ownership-filtered paper list; an
+    unscoped "whole library" search was previously reachable here but had no
+    live caller relying on it, and left the door open for a future one to
+    accidentally scan every user's chunks. See the identical note on
+    search_similar_chunks above.
 
     Complements vector search: exact terms (equation numbers, acronyms, author
     names, dataset names) that embeddings blur are matched literally here.
     ``websearch_to_tsquery`` safely parses arbitrary user input (no tsquery
     syntax errors). The expression matches the GIN index created at startup.
     """
+    if not document_id and not document_ids:
+        return []
+
     filters = ""
     params: dict = {"q": query, "limit": limit}
     if document_ids:
