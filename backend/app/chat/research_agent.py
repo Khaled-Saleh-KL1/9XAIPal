@@ -6,7 +6,7 @@ to same model for synthesis" capability requested for knowledge-gap cases
 
 Design principles (to protect existing features):
 - Only triggered explicitly when the main model signals a research need.
-- Reuses all existing SearXNG infrastructure (biased queries, image search, ranking).
+- Reuses all existing web-search infrastructure (biased queries, image search, ranking).
 - Produces a clean, citable RESEARCH_FINDINGS block.
 - Never touches the normal LOCAL / GLOBAL / OVERVIEW paths.
 - Compaction, sequence_id citations, visible context, and multimodal remain untouched.
@@ -19,7 +19,7 @@ from typing import Any, Optional, Union
 from uuid import UUID
 
 from app.core.logging import get_logger
-from app.search.searxng_client import search, search_images
+from app.search.web import search, search_images
 from app.search.ranking import rank_results
 from app.chat.external_context import rewrite_query_for_papers, _wants_images
 

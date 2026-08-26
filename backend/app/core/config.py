@@ -234,7 +234,25 @@ class Settings(BaseSettings):
     # Changing this triggers an automatic re-embed of the library on next start.
     vector_dimension: int = 1024
 
-    # SearXNG
+    # ── Web search ──────────────────────────────────────────────────────────
+    # Which provider serves the EXTERNAL route, the research agent, and the
+    # paper agent's WEB tool. "auto" (default): Tavily when TAVILY_API_KEY is
+    # set, otherwise SearXNG. Pin to "tavily", "searxng", or "none".
+    #
+    # ⚠ This is a privacy setting as much as a quality one. SearXNG runs in the
+    # compose stack, so a query never leaves the host; Tavily is a third party
+    # and the query string does. Neither ever receives paper text, chunks, or
+    # chat history. See app/search/web.py.
+    web_search_provider: str = "auto"
+
+    # Tavily (https://tavily.com) — search built for agents: ranked, already
+    # extracted page content instead of a SERP that still needs scraping.
+    tavily_api_key: str = ""
+    # "basic" (one credit, fast) or "advanced" (two credits, deeper extraction
+    # and better recall on niche research queries).
+    tavily_search_depth: str = "basic"
+
+    # SearXNG — the previous default, kept as the local-only alternative.
     searxng_url: str = "http://localhost:8080"
 
     # Upload limits
