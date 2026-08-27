@@ -6,6 +6,7 @@ import {
   IconPin, IconSort, IconGrid, IconList, IconPencil, IconTrash,
 } from '../components/Icons';
 import { PaperCover } from './PaperCover';
+import { UserMenuInline } from '../components/UserMenu';
 import { displayTitle } from '../lib/titles';
 import { stageProgress } from '../lib/progress';
 import { listPapers, deletePaper, renamePaper, type PaperMeta } from '../api';
@@ -215,6 +216,8 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               <IconDoc className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />
               Raw files
             </button>
+            <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
+            <UserMenuInline />
           </div>
         </div>
       </header>
