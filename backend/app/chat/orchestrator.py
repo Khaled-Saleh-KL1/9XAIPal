@@ -1,6 +1,7 @@
 """Chat orchestrator: coordinates /ask workflow with multimodal support."""
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from uuid import UUID, uuid4
@@ -1001,19 +1002,32 @@ def _user_explicitly_mentioned_other_field(prompt: str) -> bool:
 def _filter_unused_web_citations(
     citations: list[Citation], answer: str
 ) -> list[Citation]:
-    """Keep all chunk citations; drop web citations whose URL isn't referenced
-    in the answer body. Stops off-domain SearXNG noise from polluting the chip
-    row beneath the answer."""
+    """Keep all chunk citations; drop web citations the model didn't end up
+    citing. Stops off-domain search noise from polluting the chip row beneath
+    the answer.
+
+    ⚠ Checks for the citation's "[Web:K]" marker, not its raw URL. This used
+    to check `c.url in answer_text`, but EXTERNAL_SYSTEM_PROMPT (prompts.py)
+    explicitly tells the model to cite web sources as "[Web:K]" and never
+    write the raw URL inline — so that check was always False and this
+    silently dropped every web citation on every external-search answer,
+    regardless of whether the model actually used it. K is 1-indexed over web
+    citations specifically (chunk citations, cited as "[[seq_id]]", sit
+    earlier in the same list but use a different marker entirely and don't
+    consume a K).
+    """
     if not citations:
         return citations
     answer_text = answer or ""
     filtered: list[Citation] = []
+    web_index = 0
     for c in citations:
         # Chunk citations have sequence_id but no url — always keep.
         if not c.url:
             filtered.append(c)
             continue
-        if c.url in answer_text:
+        web_index += 1
+        if re.search(rf"\[Web:\s*{web_index}\]", answer_text):
             filtered.append(c)
     return filtered
 

@@ -7,6 +7,7 @@ import { ReadingView } from './views/ReadingView';
 import { RawFilesPanel } from './views/RawFilesPanel';
 import { DeskView } from './views/DeskView';
 import { AuthView } from './views/AuthView';
+import { UserMenu } from './components/UserMenu';
 import { useAuth } from './contexts/AuthContext';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
@@ -365,7 +366,11 @@ export function App() {
 
   return (
     <>
-      <UserMenu />
+      {/* LibraryView embeds UserMenuInline directly in its own header — a
+          fixed corner control would land on top of its "Raw files" button on
+          normal (non-ultrawide) windows. Every other route has no header of
+          its own in that spot, so the floating version covers those. */}
+      {route !== 'library' && route !== 'processing' && <UserMenu />}
       {(route === 'library' || route === 'processing') && (
         <LibraryView
           onOpenPaper={openPaper}
@@ -451,43 +456,6 @@ export function App() {
         }}
       />
     </>
-  );
-}
-
-// ── User menu ────────────────────────────────────────────────────────────────
-// A small, self-contained corner control rather than something threaded into
-// LibraryView's own header — keeps the auth retrofit from having to touch
-// that (large, unrelated) file's existing props/layout.
-
-function UserMenu() {
-  const { user, logout } = useAuth();
-  const [open, setOpen] = useState(false);
-  if (!user) return null;
-
-  return (
-    <div className="fixed top-3 right-3 z-30">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="text-[12px] px-3 py-1.5 rounded-full"
-        style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--fg-2)' }}
-      >
-        {user.display_name || user.email}
-      </button>
-      {open && (
-        <div
-          className="mt-1 rounded-lg overflow-hidden absolute right-0"
-          style={{ background: 'var(--bg)', border: '1px solid var(--border)', boxShadow: '0 8px 24px -8px rgba(0,0,0,0.18)' }}
-        >
-          <button
-            onClick={() => { setOpen(false); void logout(); }}
-            className="text-[12px] px-4 py-2 whitespace-nowrap w-full text-left"
-            style={{ color: 'var(--fg)' }}
-          >
-            Log out
-          </button>
-        </div>
-      )}
-    </div>
   );
 }
 
