@@ -10,6 +10,7 @@
 > [ingestion-pipeline.md](ingestion-pipeline.md) — PDF → readable chunks ·
 > [chat-and-ask.md](chat-and-ask.md) — question → grounded answer ·
 > [ai-backend.md](ai-backend.md) — which model serves which call ·
+> [auth.md](auth.md) — sessions, signup, per-user data isolation ·
 > [frontend.md](frontend.md) — the React SPA ·
 > [runtime-topology.md](../01-orientation/runtime-topology.md) — ports and processes ·
 > [database-schema.md](../03-reference/database-schema.md) — tables and columns.

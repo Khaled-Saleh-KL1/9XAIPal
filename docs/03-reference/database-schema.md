@@ -6,16 +6,28 @@
 > **Does not own:** how the schema is applied ([migrations.md](migrations.md)), what the data
 > means in flow ([overview.md](../02-architecture/overview.md)).
 >
-> **Status:** current · **Last verified:** `documents.title` and `paper_notes.scope` /
-> `agent_steps` on 2026-08-26 against a live database (the migration was applied and the columns
-> read back); the rest 2026-07-28 against
-> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 5471870), and the
-> `paper_notes` anchor/retrieval columns 2026-08-18 (`8fb153b`) — against the file, **not** a live
-> database.
+> **Status:** current · **Last verified:** `users` and the `user_id` ownership columns on
+> `documents` / `studies` / `sticky_notes` / `conversation_turns` 2026-08-27 against
+> [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 502272b); `documents.title`
+> and `paper_notes.scope` / `agent_steps` on 2026-08-26 against a live database (the migration was
+> applied and the columns read back); the rest 2026-07-28 against the same schema file
+> (`main`, 5471870), and the `paper_notes` anchor/retrieval columns 2026-08-18 (`8fb153b`) —
+> against the file, **not** a live database.
 > **Verify with:** `\d+ <table>` in psql — the live database is authoritative
 >
-> ⚠ One FK deviates from the pattern: `conversation_turns.document_id` is `ON DELETE SET NULL`,
-> not `CASCADE`, so chat history survives paper deletion. Everything else cascades.
+> ⚠ One FK deviates from the `CASCADE` pattern: `conversation_turns.document_id` is
+> `ON DELETE SET NULL`, so chat history survives paper deletion.
+>
+> ⚠ **`user_id` is nullable at the DB level, non-optional at the API layer.** `documents`,
+> `studies`, `sticky_notes`, `conversation_turns` each carry a direct `user_id UUID REFERENCES
+> users(id) ON DELETE CASCADE`. It's nullable only because `schema.sql` is applied idempotently to
+> *any* deployment of this repo, including ones already holding rows with no safe default owner —
+> a `NOT NULL` add would fail outright there. Every INSERT path in application code requires
+> `user_id` as a non-`Optional` argument, so in practice it is never actually `NULL` on a row
+> created after multi-user support landed. See [auth.md](../02-architecture/auth.md) for why some
+> tables get a direct `user_id` column (the "top-level owner" tables above) while others —
+> `chunks`, `paper_notes`, `ask_traces`, etc. — scope ownership through a JOIN to one of these
+> instead.
 
 Canonical schema is in [database/schema.sql](../../backend/app/database/schema.sql).
 It is applied on startup by [database/migrations.py](../../backend/app/database/migrations.py)
@@ -26,6 +38,13 @@ Two Postgres extensions are required: `vector` (pgvector) and `uuid-ossp`.
 ## ERD
 
 ```
+users (1) ─────< (N) documents            (nullable FK — see ⚠ above)
+users (1) ─────< (N) studies
+users (1) ─────< (N) sticky_notes
+users (1) ─────< (N) conversation_turns
+      Every other table below scopes ownership through one of these four
+      (a JOIN to documents/studies/etc.), not its own user_id column.
+
 documents (1) ─────< (N) chunks ─────────< (1) chunk_embeddings
                         │ \───< (N) chunk_assets
                         │ \───< (N) figure_descriptions
@@ -64,6 +83,10 @@ neither an answer nor a note.
 ```mermaid
 %%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace'}}}%%
 erDiagram
+    users               |o--o{ documents          : "cascade, nullable FK"
+    users               |o--o{ studies            : "cascade, nullable FK"
+    users               |o--o{ sticky_notes       : "cascade, nullable FK"
+    users               |o--o{ conversation_turns : "cascade, nullable FK"
     documents          ||--o{ chunks             : "cascade"
     documents          ||--o{ ingestion_jobs     : "cascade"
     documents          ||--o{ section_summaries  : "cascade"
@@ -99,6 +122,23 @@ both — it is the one place they meet, and it owns neither.
 
 ## Tables
 
+### `users`
+
+One row per account. See [auth.md](../02-architecture/auth.md) for signup/login/session mechanics
+— this table is look-up only.
+
+| Column          | Type          | Notes                                                          |
+| --------------- | ------------- | --------------------------------------------------------------- |
+| `id`            | `UUID`        | PK, server-generated.                                            |
+| `email`         | `TEXT`        | Not `UNIQUE` itself — see the functional index below.            |
+| `password_hash` | `TEXT`        | Argon2id, via `argon2-cffi`. Never logged, never returned by any endpoint. |
+| `display_name`  | `TEXT`        | Optional, shown in the UI in place of the email when set.        |
+| `created_at`    | `TIMESTAMPTZ` | `DEFAULT NOW()`.                                                  |
+
+`CREATE UNIQUE INDEX idx_users_email_lower ON users (LOWER(email))` — case-insensitive uniqueness
+is the real invariant, enforced at the DB level rather than trusted to every future code path
+(password reset, "change email", …) to lowercase before insert.
+
 ### `documents`
 
 The library row.
@@ -106,6 +146,7 @@ The library row.
 | Column                      | Type        | Notes                                                 |
 | --------------------------- | ----------- | ----------------------------------------------------- |
 | `id`                        | `UUID`      | PK, server-generated.                                 |
+| `user_id`                   | `UUID`      | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
 | `filename`                  | `TEXT`      | The opaque `<uuid>.pdf` on disk under `documents/`.   |
 | `original_filename`         | `TEXT`      | What the user uploaded (used by `/raw`). ⚠ Never rewritten by a rename. |
 | `title`                     | `TEXT`      | Reader-chosen display name, `NULL` = no override. Set by `PATCH /papers/{id}`. Deliberately separate from `original_filename` so the uploaded name is never lost and `/raw` still hands back a file named the way it arrived. |
@@ -187,6 +228,7 @@ The append-only chat log.
 | Column            | Type          | Notes                                            |
 | ----------------- | ------------- | ------------------------------------------------ |
 | `id`              | `UUID`        | PK.                                              |
+| `user_id`         | `UUID`        | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
 | `conversation_id` | `UUID`        | Groups turns into a thread.                      |
 | `document_id`     | `UUID` (null) | FK → `documents.id`, **`SET NULL`** on delete.   |
 | `parent_turn_id`  | `UUID` (null) | FK → `conversation_turns.id` cascade (sub-threads). |
@@ -330,6 +372,7 @@ at once, and removing it from one takes nothing away from the library.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `studies.id` | `UUID` | PK. |
+| `studies.user_id` | `UUID` | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
 | `studies.name` | `TEXT` | |
 | `studies.description` | `TEXT` | |
 | `study_papers.study_id` | `UUID` | FK → `studies.id` cascade. PK with `document_id`. |
@@ -347,6 +390,7 @@ A note the reader keeps in front of them, with no anchor.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `sticky_notes.id` | `UUID` | PK. |
+| `sticky_notes.user_id` | `UUID` | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
 | `sticky_notes.body` | `TEXT` | Markdown, rendered by the shared pipeline. |
 | `sticky_notes.color` | `TEXT` | `yellow` \| `blue` \| `green` \| `pink` \| `orange` \| `plain`. A **name**, not a hex — the UI maps it to CSS variables so it survives the light/dark switch. |
 | `sticky_notes.pinned` | `BOOLEAN` | Sorts first. |

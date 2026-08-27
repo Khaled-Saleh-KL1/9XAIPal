@@ -3,7 +3,8 @@
 > **What this is:** the dispatcher for every doc in this repo. Find your task in the table, start
 > at the named doc, verify with the named command. This page routes; it never explains.
 >
-> **Status:** current · **Reflects code as of:** 2026-08-18 (`8fb153b`)
+> **Status:** current · **Reflects code as of:** 2026-08-27 (`502272b`) for the auth routing row
+> below; 2026-08-18 (`8fb153b`) for everything else
 > **Rule:** when a doc and the code disagree, **the code is authoritative** — and the doc is a
 > defect to be fixed in the same unit of work.
 
@@ -20,6 +21,7 @@
 | Trace a PDF from upload to readable | [02-architecture/ingestion-pipeline.md](02-architecture/ingestion-pipeline.md) | `tests/test_ingestion_pipeline.py` |
 | Understand how a question gets answered | [02-architecture/chat-and-ask.md](02-architecture/chat-and-ask.md) | `NOTE[...]` / `ASK[stepN]` log lines |
 | Know which model serves which call | [02-architecture/ai-backend.md](02-architecture/ai-backend.md) | `tests/test_provider_resolver.py` |
+| Understand sessions, signup, or per-user data scoping | [02-architecture/auth.md](02-architecture/auth.md) | `tests/test_auth_http.py`, `tests/test_ownership.py` |
 | Work on the React UI | [02-architecture/frontend.md](02-architecture/frontend.md) | `npm run build` |
 | Look up an endpoint | [03-reference/api.md](03-reference/api.md) | `localhost:8000/docs` |
 | Look up a table or column | [03-reference/database-schema.md](03-reference/database-schema.md) | `backend/app/database/schema.sql` |
