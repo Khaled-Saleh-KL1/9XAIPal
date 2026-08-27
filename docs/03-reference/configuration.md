@@ -213,6 +213,9 @@ surfaces as a logged `401` on the first real search.
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173` | Comma-separated. Add your LAN address when serving the dev UI to other machines. Irrelevant in single-port SPA mode (same origin). |
 | `RATE_LIMIT_PER_MINUTE` | `300` | Per-client-IP ceiling across `/api`. `0` disables. ⚠ In-memory and **per-process** — with `--workers 2` the real ceiling is 600. |
 | `SERVE_FRONTEND` | `true` (compose) | Serve the built SPA at `/` from the API container. |
+| `SIGNUP_INVITE_CODE` | (empty) | Shared secret gating `POST /auth/signup` — compared with `secrets.compare_digest`, not open registration. Empty **closes signup entirely**; existing accounts can still log in. See [auth.md](../02-architecture/auth.md). |
+| `SESSION_COOKIE_NAME` | `9xaipal_session` | Name of the httponly session cookie. |
+| `SESSION_TTL_SECONDS` | `2592000` (30 days) | Sliding session expiry — refreshed on every authenticated request, so an active user is never logged out mid-session. |
 
 ## MinerU weights
 

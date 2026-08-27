@@ -1,0 +1,265 @@
+# Deployment: public VPS with a real domain, nginx, and CI/CD
+
+This document describes a **different** scenario than [`DEPLOYMENT.md`](DEPLOYMENT.md) in this
+same directory: that one is "your own machine is the server" (local/LAN, no domain, no TLS, plain
+`http://localhost:8000`). This one is the real, live setup — a small VPS, a public domain,
+real HTTPS, and a push-to-deploy pipeline. It documents the actual production deployment as it
+exists today, so the next domain migration, cert renewal question, or "why is this container
+stuck" doesn't have to be re-derived from scratch.
+
+**No secrets live in this file, in code, or in CI/CD — ever.** Every credential
+(`OLLAMA_API_KEY`, `POSTGRES_PASSWORD`, `HF_TOKEN`, `TAVILY_API_KEY`, `SIGNUP_INVITE_CODE`, …)
+exists in exactly one place: the untracked `backend/.env` file on the server, `chmod 600`. Every
+reference below is to the variable *name*, never a value. See
+[configuration.md](../docs/03-reference/configuration.md) for the full list of names.
+
+**This deployment, concretely:** `https://9xaipal.kl1.site` — a DuckDNS free subdomain until
+2026-08-27, when it moved to a purchased domain (see §7 for exactly how that migration went). A
+domain and a server's public IP aren't secrets — same category of information as a phone book
+entry — so they're stated plainly here and in §6/§7 rather than genericized into a placeholder.
+
+---
+
+## 1. Architecture
+
+```text
+Browser
+   │  HTTPS (Let's Encrypt cert, certbot auto-renewal)
+   ▼
+nginx (host, :80/:443)
+   │  server_name <your-subdomain>
+   │  same-origin: SPA + /api on one origin, no CORS preflight, no mixed content
+   │
+   ├── /api/*, /static/*, /openapi.json, /docs*, /redoc*  ──► 127.0.0.1:8000 (api container)
+   └── everything else                                     ──► static files, backend/frontend-dist/
+
+api container (FastAPI, SERVE_FRONTEND=false, bound to 127.0.0.1 only — never exposed directly)
+   │
+   ├── postgres (pgvector)  ─┐
+   ├── redis                 ├─ internal Docker network only, not published to the host
+   └── celery_worker ────────┘
+          │
+          ├─► Ollama Cloud (chat + vision) — OLLAMA_BASE_URL=https://ollama.com
+          └─► this host's own local Ollama (embeddings) — host.docker.internal:11434
+
+autoheal container — watches every labeled container's healthcheck, restarts on "unhealthy"
+Docker daemon (enabled at boot) + restart:unless-stopped on every service
+  → survives a VPS reboot, a container crash, AND a container hang (see §4)
+
+Self-hosted GitHub Actions runner — lives on this same box, deploys on every push to main
+```
+
+Same-origin is a deliberate simplification, not an accident: `CORS_ORIGINS` stays empty in
+production because nginx serves the built SPA *and* proxies `/api` from the same public origin —
+there is no separate frontend host to allow.
+
+---
+
+## 2. Compose files
+
+Two files, combined with `-f`:
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml up -d --build
+```
+
+- **`docker-compose.prod.yml`** — the base. Written for Oracle Cloud's free-tier 1GB ARM VM, so it
+  defaults `EXTRACTOR_PROVIDER=vlm` (cloud-VLM extraction) — that box can't afford local
+  MinerU/torch.
+- **`docker-compose.selfhost.yml`** — the overlay this deployment actually needs, because this VPS
+  (6 CPU / 11GB RAM / x86_64, no GPU) can afford what Oracle's free tier can't:
+  - Builds `celery_worker` from `Dockerfile.mineru` instead of `Dockerfile.oracle` (adds MinerU +
+    torch + the OpenCV/runtime libs it needs).
+  - Passes `HF_TOKEN` as a Docker build **arg**, not just an environment variable — `docker
+    build` never sees `environment:`, only `docker run` does, and `Dockerfile.mineru`'s
+    `mineru-models-download` step runs at *build* time (avoids anonymous Hugging Face rate
+    limits on the ~5GB weight download).
+  - Sets `EXTRACTOR_PROVIDER=mineru` explicitly (the base file hardcodes `vlm` — this must
+    override it, not just leave it unset, since compose merges by key and an absent key in the
+    overlay would let the base value through).
+  - `MINERU_PAGE_BATCH_SIZE` — extracts large documents in page-range batches. This does double
+    duty: it bounds peak RAM (a huge book extracted in one pass can OOM-kill the worker), *and*
+    it's the granularity of the real extraction-progress reporting the UI shows (see
+    [`mineru_client.py`](app/extraction/mineru_client.py)'s `on_progress` callback,
+    [`pipeline_sync.py`](app/extraction/pipeline_sync.py)'s `update_job_progress_sync`) — a
+    smaller value means more visible progress movement during a long extraction, not just OOM
+    safety. `0` disables batching entirely.
+  - `WORKER_MEM_LIMIT` caps `celery_worker`'s memory so a huge PDF OOMs only that one container
+    (which then auto-restarts, see §4) instead of pressuring postgres/redis/api on the same box.
+
+---
+
+## 3. AI backend split
+
+Chat and vision run on **Ollama Cloud** (`OLLAMA_BASE_URL=https://ollama.com`, `OLLAMA_API_KEY`
+set) — a model large enough to be worth using can't run at usable speed on this CPU-only box.
+Embeddings run on **this host's own local Ollama** instead
+(`EMBEDDING_BASE_URL=http://host.docker.internal:11434/v1`, model `qwen3-embedding:0.6b`) — small,
+free, and fast enough locally that there's no reason to pay for it.
+
+⚠ **This split only works because of two host-level fixes that live outside this repo entirely —
+easy to forget when replicating this setup, and exactly the kind of thing that silently breaks
+everything downstream of it (`chunk_embeddings` staying empty with no obvious error) if missed:**
+
+1. **Ollama must bind to all interfaces, not just localhost.** By default `ollama serve` listens
+   on `127.0.0.1:11434` only — reachable from the host itself, but **never** from a Docker
+   container, since a container reaches the host through the Docker bridge gateway IP
+   (`docker network inspect <network> --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`), not
+   `127.0.0.1`. Fix via a systemd override (not in this repo):
+   ```
+   sudo mkdir -p /etc/systemd/system/ollama.service.d
+   sudo tee /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
+   [Service]
+   Environment="OLLAMA_HOST=0.0.0.0:11434"
+   EOF
+   sudo systemctl daemon-reload && sudo systemctl restart ollama
+   ```
+2. **The firewall must allow it, scoped to the Docker bridge only.** UFW's default policy is
+   deny-incoming except the ports explicitly opened (SSH, 80, 443) — port 11434 was never one of
+   them, since it was never reachable from outside the host before fix #1. Opening it to the
+   *whole internet* would be wrong (Ollama has no auth on this endpoint); scope it to the Docker
+   bridge subnet specifically:
+   ```
+   sudo ufw allow from <docker-bridge-subnet> to any port 11434 proto tcp
+   ```
+   Find the subnet with `docker network inspect <network> --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`.
+
+Verify end-to-end from inside the container that actually needs it, not just from the host shell
+(a host-shell `curl localhost:11434` succeeds via loopback regardless of either fix above, and
+proves nothing about container reachability):
+
+```bash
+docker exec <celery_worker container> python3 -c \
+  "import httpx; print(httpx.get('http://host.docker.internal:11434/api/version', timeout=5).text)"
+```
+
+### Embedding concurrency
+
+`EMBEDDING_MAX_CONCURRENCY` (default `2`) controls how many embedding batch requests run at once
+against local Ollama — measured directly on this hardware, not guessed:
+
+| Concurrency | Measured time for the same workload |
+| --- | --- |
+| 1 (sequential) | baseline |
+| **2 (current default)** | **best measured** — a single batch request only occupies ~2.8 of 6 cores, so a second one overlaps into genuinely idle capacity |
+| 3 | **~4x slower than 2**, not faster — real contention, not more parallelism |
+
+Don't casually raise this without re-measuring on the actual target hardware; the "more
+concurrency must be faster" intuition measurably does not hold past the sweet spot here.
+
+---
+
+## 4. Self-healing (crash *and* hang)
+
+Two independent mechanisms, both required — they cover different failure modes:
+
+1. **`restart: unless-stopped`** on every long-running service. Covers a container that **exits**
+   (crash, OOM-kill, uncaught panic). Does **not** cover a container that's still running but
+   stuck — Docker has no way to know a hung process from a healthy one just from "is the process
+   alive".
+2. **`autoheal`** (`willfarrell/autoheal`, Docker socket mounted) watches every container labeled
+   `autoheal=true` and restarts it if its healthcheck reports **unhealthy** — this is what catches
+   "running but hung".
+
+⚠ A `docker stop`/`docker kill` from the CLI is treated as *deliberate* and does **not** trigger
+`restart: unless-stopped` — that's correct Docker behavior, not a bug, and it means testing this
+guarantee requires actually crashing something (e.g. `kill -9` the container's real PID on the
+*host*, found via `docker inspect --format '{{.State.Pid}}' <container>` — a `docker exec kill`
+from *inside* the container's own PID namespace gets silently suppressed by the kernel, since a
+namespace's init process ignores signals sent to itself from within).
+
+---
+
+## 5. CI/CD — self-hosted runner, no secrets over the wire
+
+`.github/workflows/deploy.yml` runs on a **self-hosted** GitHub Actions runner living on this same
+box, triggered on every push to `main`. Deliberately self-hosted rather than GitHub-hosted:
+**no secret ever needs to leave the box** — `backend/.env` lives permanently on the server and is
+never read, echoed, or referenced by the workflow. `permissions: contents: read` is the workflow's
+entire GitHub-side permission footprint (plus `deployments: write`, purely cosmetic — it's what
+lets the job show up as a tracked GitHub Deployment with a status and a URL on the repo homepage).
+
+⚠ **`actions/checkout` unconditionally deletes and recreates its target directory on every run** —
+`clean: false` only skips an *additional* git-clean on top of that, it does not prevent the
+delete-and-recreate. This bit twice during initial setup: checking out directly into the live
+deployment directory destroyed `backend/.env` (secrets — gone) and the bind-mounted
+`backend/app` source the running `celery_worker` depended on, breaking it mid-flight. The fix,
+already in `deploy.yml`: checkout runs in the runner's own disposable workspace, and only a
+one-way `rsync -a --delete` (explicitly excluding `.git/`, `backend/.env`,
+`backend/app/storage/`, `backend/frontend-dist/`) syncs tracked files into the real
+`DEPLOY_DIR` — checkout and the live directory are never the same path.
+
+The deploy job also builds the frontend in a throwaway `node:20-alpine` container with
+`--user "$(id -u):$(id -g)"` — without it, files written by the containerized build come out
+root-owned on the host, which then blocks the *next* run's `actions/checkout` cleanup (and any
+manual `rm -rf`) with a permission error.
+
+`VITE_API_BASE_URL` (baked into the frontend bundle at build time) and the job's
+`environment.url` (the tracked GitHub Deployment link) both hardcode the current public domain —
+see §7 for what to update when that changes.
+
+---
+
+## 6. DNS and TLS
+
+One A record, on a **subdomain**, not the bare domain — e.g. `app.example.com`, not
+`example.com` — pointing at the server's public IP. Verify propagation before touching nginx:
+
+```bash
+dig +short @8.8.8.8 <subdomain> A
+dig +short @1.1.1.1 <subdomain> A
+```
+
+certbot (`--nginx` plugin) obtains the cert and installs a systemd timer that renews it
+automatically; nothing manual is needed after the initial issuance.
+
+---
+
+## 7. Migrating to a new domain
+
+This deployment has done exactly this once already (moved off a free DuckDNS subdomain onto a
+real purchased domain). The order matters — doing it out of order breaks nginx in a way that's
+easy to cause and mildly annoying to unwind:
+
+1. Add the DNS A record (§6), confirm it resolves.
+2. **Get the new cert before touching `server_name`**, using `certonly` mode — it only obtains
+   cert files, it does not edit nginx config at all, which sidesteps a chicken-and-egg problem:
+   ```
+   sudo certbot certonly --nginx -d <new-domain> --non-interactive --agree-tos -m <your-email>
+   ```
+   (`certbot --nginx -d <new-domain>`, *without* `certonly`, only works cleanly if `server_name`
+   already matches — otherwise its authenticator has no matching server block to attach the
+   ACME challenge to.)
+3. Update nginx: `server_name` to the new domain, and the two `ssl_certificate*` lines to the new
+   cert's path (`/etc/letsencrypt/live/<new-domain>/{fullchain,privkey}.pem`).
+   ⚠ **Don't blindly `sed` the old domain to the new one across the whole file in one pass** — the
+   `ssl_certificate` lines contain the old domain too (it's part of the cert *path*), so a global
+   find-replace repoints them at a cert file that doesn't exist yet, and `nginx -t` fails until
+   it's manually reverted. Change `server_name` first, confirm `nginx -t` still passes (it will —
+   nginx doesn't validate that a cert's path matches `server_name`), get the cert via step 2, *then*
+   repoint the cert paths as a second, separate change.
+4. `nginx -t && systemctl reload nginx`.
+5. Update the two repo references to the old domain — `.github/workflows/deploy.yml`'s
+   `environment.url` and its `VITE_API_BASE_URL` build arg — through a normal PR, same as any
+   other code change.
+6. Merge → the deploy pipeline rebuilds the frontend against the new domain and redeploys
+   automatically.
+7. Verify end-to-end: `curl https://<new-domain>/api/v1/health`, check the served bundle actually
+   references the new domain (`curl -s https://<new-domain>/ | grep -o '/assets/index-[^"]*\.js'`,
+   then grep that bundle for the domain string), confirm the old domain now fails TLS verification
+   (expected — the cert no longer covers it).
+8. If retiring the old domain's DNS provider entirely: remove its update cron job/script, and stop
+   pointing its A record here (or delete it) so nothing keeps quietly trying to renew a cert nobody
+   uses anymore.
+
+---
+
+## 8. Health & logs
+
+- Health (from the host): `curl -sf http://127.0.0.1:8000/api/v1/health` — never exposed directly
+  to the internet, only reachable on the box itself; the public path is always through nginx.
+- Health (public): `curl -sf https://<domain>/api/v1/health`
+- Logs: `docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml logs -f <service>`
+- Stack status: `docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml ps`
+- Deploy history: the repo's **Actions** tab, or the **Environments** widget on the repo homepage
+  (populated by `deploy.yml`'s `environment:` key).

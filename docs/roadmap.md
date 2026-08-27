@@ -58,14 +58,14 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Security
 
-- ⚠ **No authentication anywhere.** The API is open to any caller that can reach `:8000`. This is
-  acceptable on localhost and **not** acceptable in the LAN-server mode the repo ships a script
-  for. A shared-token header would be a small addition.
 - **Rate limiting is per-process and in-memory** — with `--workers 2` the real ceiling is double
   the configured value. Documented honestly in the middleware docstring; a known tradeoff, not a
   bug.
-- **Static mounts expose everything under `storage/`** at `/static/*`. Treat uploaded PDFs and
-  extracted assets as world-readable to anyone who can reach the API.
+- ⚠ **Static mounts bypass auth entirely.** `/static/{images,extracted,assets}` are plain
+  `StaticFiles` mounts (`app/main.py`) with no `get_current_user` dependency — the JSON API is
+  per-user isolated (see [auth.md](../02-architecture/auth.md)), but a caller who already knows or
+  guesses a file path reads it with no login and no ownership check. Paths are UUID-derived, not
+  sequential, so this is not trivially enumerable — but it is not access-controlled either.
 - **Default Postgres password** ships in `.env.example`. Startup warns, but nothing enforces.
 - **90 `except Exception` blocks** across the backend. Zero bare `except:`, which is good
   discipline — but that density means genuine failures can be logged and swallowed.

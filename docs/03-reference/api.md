@@ -5,18 +5,28 @@
 > **Owns:** endpoint paths, request/response shapes, status codes.
 > **Does not own:** why a route behaves as it does ([chat-and-ask.md](../02-architecture/chat-and-ask.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-28 against
-> [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870). The note anchor
-> payload was re-read 2026-08-18 against
+> **Status:** current · **Last verified:** the `/auth/*` routes 2026-08-27 against
+> [`endpoints/auth.py`](../../backend/app/api/v1/endpoints/auth.py) (`main`, 502272b); the rest
+> 2026-07-28 against [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870).
+> The note anchor payload was re-read 2026-08-18 against
 > [`endpoints/notes.py`](../../backend/app/api/v1/endpoints/notes.py) (`8fb153b`) — **not**
 > against live OpenAPI, which was not running.
 > **Verify with:** `http://localhost:8000/docs` (live OpenAPI, always authoritative)
+>
+> ⚠ Every route below except `/health` and `/auth/*` requires a logged-in session (an
+> `httponly` cookie — see [auth.md](../02-architecture/auth.md)) and is scoped to the caller's own
+> data. A request for a resource you don't own **404s**, not 403 — existence is never confirmed to
+> a non-owner.
 
 All endpoints live under the prefix **`/api/v1`** and are registered in
 [api/v1/router.py](../../backend/app/api/v1/router.py).
 
 ```
 GET    /health
+POST   /auth/signup
+POST   /auth/login
+POST   /auth/logout
+GET    /auth/me
 POST   /papers/upload
 GET    /papers
 GET    /papers/{paper_id}
@@ -111,6 +121,48 @@ is the one running.
 only way to verify a key is to spend a search credit, and this endpoint is the container
 healthcheck polled every 30 seconds. On `tavily` the field means "a key is configured"; a bad key
 surfaces as a logged `401` on the first real search.
+
+---
+
+## Auth
+
+Source: [endpoints/auth.py](../../backend/app/api/v1/endpoints/auth.py). See
+[auth.md](../02-architecture/auth.md) for the design (session mechanics, invite-code gating,
+password hashing).
+
+### `POST /auth/signup`
+
+Request:
+
+```json
+{ "email": "you@example.com", "password": "<8-200 chars>", "invite_code": "<shared secret>", "display_name": "optional" }
+```
+
+Response: `201 Created`, sets the session cookie, body is a `UserResponse` (`id`, `email`,
+`display_name`, `created_at` — never `password_hash`).
+
+Errors: `403` if `SIGNUP_INVITE_CODE` is unset (signup closed) or the code doesn't match
+(`secrets.compare_digest`, constant-time). `409` if the email is already registered.
+
+### `POST /auth/login`
+
+Request: `{ "email": "...", "password": "..." }`
+
+Response: `200 OK`, sets the session cookie, body is a `UserResponse`.
+
+`401 Invalid email or password` for both "no such account" and "wrong password" — the check runs
+a real Argon2 verify either way (against a precomputed dummy hash when the email doesn't exist),
+so the two cases take similar time and neither discloses whether an email is registered.
+
+### `POST /auth/logout`
+
+No body. `204 No Content`. Idempotent — logging out with no session, or an already-expired one,
+still succeeds.
+
+### `GET /auth/me`
+
+No auth required to call it — that's the point. `200 OK` with `{ "user": <UserResponse> | null }`.
+The frontend calls this once on load to decide whether to show the app or the login screen.
 
 ---
 

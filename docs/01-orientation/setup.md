@@ -199,8 +199,13 @@ other by service name on the compose network, so nothing inside the stack is aff
 timeout for large books, prints the exact LAN URL, streams logs, and tears the stack down on
 Ctrl+C — **without** `-v`, so data volumes and uploaded papers survive.
 
-⚠ LAN mode exposes an **unauthenticated** API to everyone on the network. There is no auth layer
-in this app at all. See [roadmap.md](../roadmap.md).
+The API requires a logged-in session (see [auth.md](../02-architecture/auth.md)) the same way in
+LAN mode as anywhere else — nothing disables `get_current_user` for it. The real gate is
+`SIGNUP_INVITE_CODE`: leave it set to something only people you trust have, since anyone on the
+LAN who obtains it can create their own account. Leaving it empty closes signup entirely (existing
+accounts can still log in) — the safer default for a LAN you don't fully control.
+⚠ `/static/{images,extracted,assets}` are the exception — those mounts have no auth check at all.
+See [roadmap.md](../roadmap.md).
 
 ---
 
