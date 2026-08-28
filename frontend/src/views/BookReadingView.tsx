@@ -11,6 +11,7 @@ import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import { displayTitle as paperDisplayTitle } from '../lib/titles';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
+import { UserMenuInline } from '../components/UserMenu';
 import { ChatPane } from './ChatPane';
 import {
   getNextChunk,
@@ -651,6 +652,8 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
               }}
             />
           </div>
+          <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
+          <UserMenuInline />
         </div>
       </header>
 

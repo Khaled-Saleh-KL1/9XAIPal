@@ -7,7 +7,6 @@ import { ReadingView } from './views/ReadingView';
 import { RawFilesPanel } from './views/RawFilesPanel';
 import { DeskView } from './views/DeskView';
 import { AuthView } from './views/AuthView';
-import { UserMenu } from './components/UserMenu';
 import { useAuth } from './contexts/AuthContext';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
@@ -366,11 +365,6 @@ export function App() {
 
   return (
     <>
-      {/* LibraryView embeds UserMenuInline directly in its own header — a
-          fixed corner control would land on top of its "Raw files" button on
-          normal (non-ultrawide) windows. Every other route has no header of
-          its own in that spot, so the floating version covers those. */}
-      {route !== 'library' && route !== 'processing' && <UserMenu />}
       {(route === 'library' || route === 'processing') && (
         <LibraryView
           onOpenPaper={openPaper}

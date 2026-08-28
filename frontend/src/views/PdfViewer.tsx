@@ -6,6 +6,7 @@ import { getStaticPdfUrl } from '../api';
 import { displayTitle } from '../lib/titles';
 import type { PaperMeta } from '../api';
 import { IconBack } from '../components/Icons';
+import { UserMenuInline } from '../components/UserMenu';
 
 // Set up PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -141,6 +142,8 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
           >
             <span className="text-[11px]">☐</span> Read structured
           </button>
+          <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
+          <UserMenuInline />
         </div>
       </header>
 

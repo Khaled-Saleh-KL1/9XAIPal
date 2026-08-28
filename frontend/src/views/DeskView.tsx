@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LogoMark } from '../components/LogoMark';
 import { IconBack, IconPencil, IconPlus, IconTrash } from '../components/Icons';
+import { UserMenuInline } from '../components/UserMenu';
 import { NoteWall } from './NoteWall';
 import { PaperPicker } from './PaperPicker';
 import { StickyBoard } from './StickyBoard';
@@ -401,6 +402,9 @@ export function DeskView({
             ? 'read across papers without opening them'
             : 'notes that outlived the question'}
         </span>
+        <div style={{ marginLeft: 'auto' }}>
+          <UserMenuInline />
+        </div>
       </header>
 
       {notice && (
