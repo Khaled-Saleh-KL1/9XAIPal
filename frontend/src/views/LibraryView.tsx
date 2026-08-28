@@ -181,24 +181,32 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
 
       {/* ── Fixed top bar ── */}
       <header className="shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="max-w-[1240px] mx-auto px-8 h-14 flex items-center gap-6">
-          <div className="flex items-center gap-2.5">
+        <div className="max-w-[1240px] mx-auto px-4 sm:px-8 h-14 flex items-center gap-3 sm:gap-6">
+          <div className="flex items-center gap-2.5 shrink-0">
             <LogoMark />
             <span className="text-[14px] font-medium tracking-tight" style={{ color: 'var(--fg)' }}>
               9XAIPal
             </span>
             <span
-              className="text-[11px] font-mono ml-1 px-1.5 py-0.5 rounded"
+              className="hidden sm:inline-block text-[11px] font-mono ml-1 px-1.5 py-0.5 rounded"
               style={{ color: 'var(--muted)', background: 'var(--bg-2)', border: '1px solid var(--border)' }}
             >
               local
             </span>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-[12px]" style={{ color: 'var(--muted)' }}>
+          {/*
+            This group can be wider than a phone screen (paper count, two
+            dividers, two labelled buttons, the user menu). min-w-0 lets it
+            actually shrink below that content width instead of pushing the
+            header wider; overflow-x-auto then makes the overflow a swipe
+            instead of a silent clip that leaves buttons unreachable, and
+            shrink-0 on every child stops them being individually crushed.
+          */}
+          <div className="ml-auto min-w-0 flex items-center gap-2 overflow-x-auto no-scrollbar hdr-scroll">
+            <span className="hidden sm:inline text-[12px]" style={{ color: 'var(--muted)' }}>
               {papers.length} papers · local
             </span>
-            <span className="mx-2 h-4 w-px" style={{ background: 'var(--border)' }} />
+            <span className="hidden sm:inline-block mx-2 h-4 w-px" style={{ background: 'var(--border)' }} />
             <button
               onClick={onOpenDesk}
               className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
@@ -224,13 +232,13 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
 
       {/* ── Fixed chrome: hero + dropzone + controls ── */}
       <div className="shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="max-w-[1240px] mx-auto px-8 pt-9 pb-5">
+        <div className="max-w-[1240px] mx-auto px-4 sm:px-8 pt-6 sm:pt-9 pb-5">
 
           {/* hero */}
-          <div className="flex items-baseline justify-between mb-7">
+          <div className="flex items-baseline justify-between mb-5 sm:mb-7">
             <div>
               <h1
-                className="font-serif text-[38px] leading-[1.05] tracking-[-0.018em]"
+                className="font-serif text-[28px] sm:text-[38px] leading-[1.05] tracking-[-0.018em]"
                 style={{ color: 'var(--fg)' }}
               >
                 Your library.
@@ -251,7 +259,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             onDragLeave={() => setOver(false)}
             onDrop={onDrop}
             onClick={() => onUpload()}
-            className={`dropzone${over ? ' is-over' : ''} cursor-pointer rounded-xl px-7 py-5 flex items-center gap-6`}
+            className={`dropzone${over ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-4 sm:py-5 flex items-center gap-3 sm:gap-6`}
             style={{ background: over ? undefined : 'var(--bg-2)' }}
           >
             <div
@@ -283,8 +291,8 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           </div>
 
           {/* controls row */}
-          <div className="mt-4 flex items-center gap-3">
-            <div className="relative flex-1 max-w-[380px]">
+          <div className="mt-4 flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[160px] max-w-[380px]">
               <IconSearch
                 className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5"
                 style={{ color: 'var(--muted)' }}

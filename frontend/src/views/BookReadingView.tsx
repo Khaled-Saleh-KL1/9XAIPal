@@ -151,13 +151,24 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   });
   const draggingRef = useRef(false);
   useEffect(() => {
-    function onMove(e: MouseEvent) {
-      if (!draggingRef.current || !splitRef.current) return;
+    function resizeTo(clientX: number) {
+      if (!splitRef.current) return;
       const rect = splitRef.current.getBoundingClientRect();
-      const fromRight = rect.right - e.clientX;
+      const fromRight = rect.right - clientX;
       const pct = (fromRight / rect.width) * 100;
       const clamped = Math.max(20, Math.min(75, pct));
       setChatWidthPct(clamped);
+    }
+    function onMove(e: MouseEvent) {
+      if (!draggingRef.current) return;
+      resizeTo(e.clientX);
+    }
+    function onTouchMove(e: TouchEvent) {
+      if (!draggingRef.current || e.touches.length === 0) return;
+      // The divider is the drag target, so the page itself must not also
+      // scroll/refresh underneath the reader's finger while it's held.
+      e.preventDefault();
+      resizeTo(e.touches[0].clientX);
     }
     function onUp() {
       if (!draggingRef.current) return;
@@ -168,11 +179,32 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
     }
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+    window.addEventListener('touchcancel', onUp);
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onUp);
+      window.removeEventListener('touchcancel', onUp);
     };
   }, [chatWidthPct]);
+
+  /**
+   * Below 820px the fixed side-by-side split (reading pane + chat pane, each
+   * a percentage of a viewport that's now only a few hundred px wide) leaves
+   * both unreadable rather than one usable — this is the "AI is not shown, I
+   * can't ask a question" report for books specifically. Below that width,
+   * show one pane at a time, full-width, with a toggle to switch.
+   */
+  const [narrow, setNarrow] = useState(() => window.innerWidth < 820);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < 820);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const [mobilePane, setMobilePane] = useState<'read' | 'chat'>('read');
 
   // ── Hydrate paper metadata + total chunk count, and re-poll while the
   // paper is still processing on the backend so the header stays honest.
@@ -558,12 +590,12 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
 
       {/* ── Top bar ── */}
       <header
-        className="shrink-0 px-6 h-13 py-2.5 flex items-center gap-4"
+        className="shrink-0 px-3 sm:px-6 h-13 py-2.5 flex items-center gap-2 sm:gap-4"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[12.5px]"
+          className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[12.5px]"
           style={{ color: 'var(--muted)' }}
           onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--fg)')}
           onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--muted)')}
@@ -571,7 +603,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
           <IconBack className="w-3.5 h-3.5" />
           <span>Library</span>
         </button>
-        <span className="h-4 w-px" style={{ background: 'var(--border)' }} />
+        <span className="shrink-0 h-4 w-px" style={{ background: 'var(--border)' }} />
         <div className="flex items-center gap-2 min-w-0">
           <IconDoc className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
           <span
@@ -593,7 +625,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
             </span>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-4">
+        <div className="ml-auto min-w-0 flex items-center gap-4 overflow-x-auto no-scrollbar hdr-scroll">
           {/* extractor pill — confirms which parser produced these chunks */}
           {meta?.extractor && (
             <ExtractorPill
@@ -637,11 +669,11 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
               }}
             />
           )}
-          <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
+          <span className="hidden sm:inline text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
             chunk {chunks.length} / {total || '?'}
           </span>
           <div
-            className="w-32 h-[3px] rounded-full overflow-hidden"
+            className="hidden sm:block w-32 h-[3px] rounded-full overflow-hidden"
             style={{ background: 'var(--bg-3)' }}
           >
             <div
@@ -663,11 +695,15 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
         {/* Left: reading pane */}
         <section
           className="relative flex flex-col min-h-0"
-          style={{
-            width: `calc(100% - ${chatWidthPct}% - 6px)`,
-            borderRight: '1px solid var(--border)',
-            background: 'var(--bg)',
-          }}
+          style={
+            narrow
+              ? { width: '100%', display: mobilePane === 'read' ? 'flex' : 'none', background: 'var(--bg)' }
+              : {
+                  width: `calc(100% - ${chatWidthPct}% - 6px)`,
+                  borderRight: '1px solid var(--border)',
+                  background: 'var(--bg)',
+                }
+          }
         >
           <div ref={readerRef} className="flex-1 overflow-y-auto thin-scroll">
             <div className="max-w-[680px] mx-auto px-10 pt-16 pb-40">
@@ -843,42 +879,53 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
           )}
         </section>
 
-        {/* Drag handle — 6px wide, full-height, becomes accent-colored on hover/drag */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          title="Drag to resize chat"
-          className="shrink-0 relative group cursor-col-resize select-none"
-          style={{ width: 6, background: 'var(--border)' }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            draggingRef.current = true;
-            document.body.style.cursor = 'col-resize';
-            document.body.style.userSelect = 'none';
-          }}
-          onDoubleClick={() => {
-            // double-click resets to default
-            setChatWidthPct(40);
-            try { localStorage.setItem('pal:chat:width', '40'); } catch { /* no-op */ }
-          }}
-        >
-          {/* Hover/drag indicator: a 2px accent stripe down the middle */}
+        {/* Drag handle — 6px wide, full-height, becomes accent-colored on hover/drag.
+            Only meaningful when both panes share the width, so it's dropped
+            entirely once one pane already takes the full screen. */}
+        {!narrow && (
           <div
-            className="absolute inset-y-0 left-1/2 -translate-x-1/2 transition-all"
-            style={{
-              width: 2,
-              background: draggingRef.current ? 'var(--accent)' : 'transparent',
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize chat"
+            className="shrink-0 relative group cursor-col-resize select-none"
+            style={{ width: 6, background: 'var(--border)' }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              draggingRef.current = true;
+              document.body.style.cursor = 'col-resize';
+              document.body.style.userSelect = 'none';
             }}
-          />
-          <style>{`
-            div[role="separator"]:hover > div { background: var(--accent); }
-          `}</style>
-        </div>
+            onTouchStart={() => {
+              draggingRef.current = true;
+            }}
+            onDoubleClick={() => {
+              // double-click resets to default
+              setChatWidthPct(40);
+              try { localStorage.setItem('pal:chat:width', '40'); } catch { /* no-op */ }
+            }}
+          >
+            {/* Hover/drag indicator: a 2px accent stripe down the middle */}
+            <div
+              className="absolute inset-y-0 left-1/2 -translate-x-1/2 transition-all"
+              style={{
+                width: 2,
+                background: draggingRef.current ? 'var(--accent)' : 'transparent',
+              }}
+            />
+            <style>{`
+              div[role="separator"]:hover > div { background: var(--accent); }
+            `}</style>
+          </div>
+        )}
 
         {/* Right: chat pane */}
         <div
           className="min-h-0 flex flex-col"
-          style={{ width: `${chatWidthPct}%` }}
+          style={
+            narrow
+              ? { width: '100%', display: mobilePane === 'chat' ? 'flex' : 'none' }
+              : { width: `${chatWidthPct}%` }
+          }
         >
           <ChatPane
             paperId={paperId}
@@ -887,6 +934,18 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
           />
         </div>
       </div>
+
+      {/* Phone/tablet: the only way in or out of the chat pane once it isn't
+          sharing the screen with the reading pane. */}
+      {narrow && (
+        <button
+          type="button"
+          className="mobile-pane-toggle"
+          onClick={() => setMobilePane((p) => (p === 'read' ? 'chat' : 'read'))}
+        >
+          {mobilePane === 'read' ? 'Ask AI' : '← Back to reading'}
+        </button>
+      )}
     </div>
   );
 }

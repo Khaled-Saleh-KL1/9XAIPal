@@ -253,6 +253,11 @@ body {
 .paper-card:focus-within .paper-actions,
 .paper-row:hover .paper-actions,
 .paper-row:focus-within .paper-actions { opacity: 1; }
+/* On a touch screen there is no hover to reveal these, so — same as
+   .card-grip — they simply stay. Otherwise rename/delete don't exist there. */
+@media (hover: none) {
+  .paper-actions { opacity: 1; }
+}
 .paper-actions button {
   display: flex;
   align-items: center;
@@ -332,6 +337,15 @@ body {
 .thin-scroll::-webkit-scrollbar          { width: 10px; height: 10px; }
 .thin-scroll::-webkit-scrollbar-thumb    { background: var(--border-strong); border-radius: 999px; border: 3px solid var(--bg); }
 .thin-scroll::-webkit-scrollbar-track   { background: transparent; }
+
+/* A toolbar that's wider than its viewport scrolls rather than clips — the
+   scrollbar itself would just be one more thing crowding a 52px-tall bar. */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+/* Pair with .no-scrollbar + overflow-x-auto on a header's trailing button
+   group: without this, flex's default shrink:1 crushes every child down to
+   fit instead of letting the group scroll, which is the point. */
+.hdr-scroll > * { flex-shrink: 0; }
 
 /* ── Dropzone ───────────────────────────────────────────────── */
 .dropzone {
@@ -492,6 +506,23 @@ body {
   border: 1px solid var(--border);
 }
 
+/* ── Book reader: mobile read/chat toggle ──────────────────────
+   Below 820px BookReadingView shows one pane at a time (see .narrow in that
+   component) — this is the only way to reach the other one. */
+.mobile-pane-toggle {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 30;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 18px;
+  border-radius: 999px;
+  color: var(--accent-fg);
+  background: var(--accent);
+  box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.45);
+}
+
 /* ── Ring animation (progress ring) ────────────────────────── */
 .ring-anim circle {
   transition: stroke-dashoffset 200ms ease;
@@ -528,6 +559,12 @@ body {
   backdrop-filter: blur(10px);
   z-index: 20;
 }
+@media (max-width: 640px) {
+  .reader-bar { padding: 0 12px; gap: 8px; }
+  /* Decorative read-progress percentage — the rail beneath already shows
+     this visually, so it's the first thing to go when space is tight. */
+  .reader-meta { display: none; }
+}
 .reader-back {
   display: flex;
   align-items: center;
@@ -553,6 +590,22 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
+}
+/* Phones: this group (bookmark, resume, contents, progress, user menu) can be
+   wider than the screen. Left un-scrollable, the excess just clips against
+   the bar's own overflow and whatever's rightmost — usually the user menu —
+   stops existing rather than becoming reachable another way. min-width: 0
+   is what lets a flex child shrink to less than its content size at all;
+   without it the row simply pushes the header wider instead of scrolling. */
+@media (max-width: 640px) {
+  .reader-bar-right {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .reader-bar-right::-webkit-scrollbar { display: none; }
+  .reader-bar-right > * { flex-shrink: 0; }
 }
 .reader-meta {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -913,6 +966,9 @@ body {
   display: grid;
   justify-content: center;
   gap: 0 44px;
+}
+@media (max-width: 480px) {
+  .reader-layout { padding: 44px 16px 45vh; }
 }
 .reader-layout.layout-inline {
   grid-template-columns: minmax(0, 680px);
@@ -2264,6 +2320,19 @@ body {
   border-left: 1px solid var(--border);
   padding-left: 12px;
 }
+@media (max-width: 640px) {
+  /* Purely decorative caption — drop it first. Everything else in this bar
+     is a control, so instead of letting it clip off-screen (where a button
+     simply stops existing) the bar scrolls horizontally to reach it. */
+  .desk-bar-sub { display: none; }
+  .desk-bar {
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .desk-bar::-webkit-scrollbar { display: none; }
+  .desk-bar > * { flex-shrink: 0; }
+}
 .desk-notice { margin: 10px 18px 0; }
 
 .desk-grid {
@@ -2285,6 +2354,52 @@ body {
 @media (max-width: 820px) {
   .desk-grid { grid-template-columns: minmax(0, 1fr); }
   .rail { display: none; }
+}
+
+/* Header button that reopens the rail once the grid has hidden it. Hidden
+   above 820px — the rail is just always there and this would be redundant. */
+.desk-rail-toggle {
+  display: none;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  background: var(--bg);
+}
+@media (max-width: 820px) {
+  .desk-rail-toggle { display: inline-flex; align-items: center; }
+}
+/* Slide-over: same .rail markup and behaviour as the desktop sidebar, just
+   pulled out of grid flow and pinned over the chat instead of beside it.
+   Scoped to the same breakpoint as the rest of this mobile treatment so
+   resizing across 820px with the drawer open can't strand it as a fixed
+   overlay on a desktop-width layout. */
+@media (max-width: 820px) {
+  .rail.is-mobile-open {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    top: 52px;
+    bottom: 0;
+    left: 0;
+    width: 82vw;
+    max-width: 320px;
+    z-index: 45;
+    box-shadow: 12px 0 32px -12px rgba(0, 0, 0, 0.35);
+  }
+}
+.rail-backdrop {
+  display: none;
+}
+@media (max-width: 820px) {
+  .rail-backdrop.is-on {
+    display: block;
+    position: fixed;
+    inset: 52px 0 0 0;
+    background: rgba(0, 0, 0, 0.32);
+    z-index: 44;
+  }
 }
 
 /* ── Rail: scopes and their papers ── */
