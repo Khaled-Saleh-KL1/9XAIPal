@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { IconBack, IconDoc } from '../components/Icons';
+import { UserMenuInline } from '../components/UserMenu';
 import { ArticleBlock } from './ArticleBlock';
 import { AskComposer, type ComposerTarget } from './AskComposer';
 import { NoteCardView, PendingNoteCard, type NoteGroup, type PendingNote } from './NoteCard';
@@ -1785,6 +1786,8 @@ export function ArticleReader({
           </button>
 
           <span className="reader-meta">{Math.round(progress * 100)}%</span>
+          <span className="reader-sep" />
+          <UserMenuInline />
         </div>
 
         {/* The rail doubles as a map: how far in you are, and where every mark
