@@ -1,16 +1,19 @@
 """Chunk endpoints: sequential reading by sequence_order."""
 
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
+from app.core.paths import documents_dir
 from app.api.errors import ChunkNotFound, DocumentNotFound
 from app.schemas.chunks import ChunkResponse, ChunkListResponse
 from app.services import chunks as chunk_service
 from app.services import documents as doc_service
 from app.services.outline import heading_level
+from app.services import book_outline
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import figure_descriptions as fig_desc_repo
 
@@ -243,68 +246,132 @@ async def get_chunk_by_sequence(
     return await _serialize_chunk(db, chunk)
 
 
+# A heading that is really a figure/table caption MinerU mislabelled. These
+# are never chapters, and on a figure-heavy book they can outnumber the real
+# ones — 6 of 18 on the book this filter was written against.
+_CAPTION_HEADING = re.compile(
+    r"^\s*(FIGURE|FIG\.?|TABLE|CHART|EXHIBIT|PLATE|BOX)\s*[\dIVXA-E]", re.IGNORECASE
+)
+
+
+def _is_plausible_chapter_heading(text: str) -> bool:
+    """Reject headings that cannot be a chapter opening.
+
+    Deliberately conservative — it only removes things that are *structurally*
+    not chapters, never anything judged on topic or style:
+
+    * figure/table captions (see `_CAPTION_HEADING`),
+    * ornamental dividers with no words at all ("* * *", "---"),
+    * speech attributions, which a layout extractor reads as headings because
+      they sit alone on their own line ("Ben laughed:", "Dirk responded:").
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if _CAPTION_HEADING.match(t):
+        return False
+    # Markdown escaping survives extraction, so strip it before deciding a
+    # divider has no words: "\\* \\* \\*" is punctuation, not a title.
+    if not re.search(r"[A-Za-z0-9]", t.replace("\\", "")):
+        return False
+    if t.endswith(":") and len(t.split()) <= 6:
+        return False
+    return True
+
+
 @router.get("/{paper_id}/chapters")
 async def list_chapters(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Derive chapter boundaries from the document's top-level headings.
+    """Chapter boundaries for the reader's "Book" mode.
 
-    Used by the reader's "Book" mode so the user can jump to a chapter
-    (incl. the front matter / introduction) instead of paging the whole book
-    linearly. Each chapter is a sequence range [start_sequence, end_sequence]
-    that the reader pages within.
+    Prefers the PDF's own embedded outline (the publisher's bookmark tree) and
+    falls back to deriving them from extracted headings only when the file has
+    none. See `services/book_outline.py` for why that order matters — heading
+    levels from a layout extractor are not a reliable chapter signal.
+
+    Each chapter is a `[start_sequence, end_sequence]` range the reader pages
+    within. `source` says which mechanism produced the list, so a surprising
+    contents panel can be diagnosed without re-deriving it by hand.
     """
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
-    all_headings = await chunk_repo.get_chapter_headings(db, paper_id)
     lo, hi = await chunk_repo.get_sequence_bounds(db, paper_id)
+    if hi == 0:
+        return {"paper_id": str(paper_id), "doc_kind": doc.get("doc_kind"),
+                "source": "none", "chapters": []}
 
     chapters: list[dict] = []
-    if hi == 0:
-        return {"paper_id": str(paper_id), "doc_kind": doc.get("doc_kind"), "chapters": []}
+    source = "headings"
 
-    # Pick the chapter level = the shallowest heading level that actually splits
-    # the document into 2+ parts. This avoids collapsing to a single "chapter"
-    # when MinerU marks the title as the only level-1 heading and the real
-    # sections as level-2 (the common case for papers and many books).
-    from collections import Counter
-    level_counts = Counter(h["level"] for h in all_headings if h.get("level"))
-    chapter_level = None
-    for lvl in sorted(level_counts):
-        if level_counts[lvl] >= 2:
-            chapter_level = lvl
-            break
-    if chapter_level is None and level_counts:
-        chapter_level = min(level_counts)  # only single headings exist; use shallowest
+    # ── Preferred: the PDF's embedded outline ──────────────────────────────
+    filename = doc.get("filename")
+    if filename:
+        entries = book_outline.read_pdf_outline(documents_dir() / filename)
+        if len(entries) >= 2:
+            page_starts = await chunk_repo.get_page_starts(db, paper_id)
+            candidate = book_outline.outline_to_chapters(
+                book_outline.collapse_outline(entries), page_starts, lo, hi
+            )
+            # One entry is not a table of contents — it is the title bookmark of
+            # a file whose outline was never filled in. Fall through to headings.
+            if len(candidate) >= 2:
+                chapters = candidate
+                source = "pdf_outline"
 
-    headings = [h for h in all_headings if h.get("level") == chapter_level] if chapter_level else []
+    # ── Fallback: derive from extracted headings ───────────────────────────
+    if not chapters:
+        all_headings = [
+            h for h in await chunk_repo.get_chapter_headings(db, paper_id)
+            if _is_plausible_chapter_heading(h.get("plain_text") or "")
+        ]
 
-    if not headings:
-        # No usable headings — present the whole document as one chapter.
-        chapters.append({"title": "Full document", "start_sequence": lo, "end_sequence": hi})
-    else:
-        # Content before the first chapter heading = front matter / preface.
-        if headings[0]["sequence_id"] > lo:
-            chapters.append({
-                "title": "Front matter",
-                "start_sequence": lo,
-                "end_sequence": headings[0]["sequence_id"] - 1,
-            })
-        for i, h in enumerate(headings):
-            start = h["sequence_id"]
-            end = headings[i + 1]["sequence_id"] - 1 if i + 1 < len(headings) else hi
-            title = (h.get("plain_text") or "").strip() or f"Chapter {i + 1}"
-            chapters.append({"title": title, "start_sequence": start, "end_sequence": end})
+        # Pick the chapter level = the shallowest heading level that actually
+        # splits the document into 2+ parts. This avoids collapsing to a single
+        # "chapter" when MinerU marks the title as the only level-1 heading and
+        # the real sections as level-2 (the common case for papers).
+        from collections import Counter
+        level_counts = Counter(h["level"] for h in all_headings if h.get("level"))
+        chapter_level = None
+        for lvl in sorted(level_counts):
+            if level_counts[lvl] >= 2:
+                chapter_level = lvl
+                break
+        if chapter_level is None and level_counts:
+            chapter_level = min(level_counts)  # only single headings exist; use shallowest
+
+        headings = [h for h in all_headings if h.get("level") == chapter_level] if chapter_level else []
+
+        if not headings:
+            # No usable headings — present the whole document as one chapter.
+            chapters.append({"title": "Full document", "level": 1,
+                             "start_sequence": lo, "end_sequence": hi})
+        else:
+            # Content before the first chapter heading = front matter / preface.
+            if headings[0]["sequence_id"] > lo:
+                chapters.append({
+                    "title": "Front matter",
+                    "level": 1,
+                    "start_sequence": lo,
+                    "end_sequence": headings[0]["sequence_id"] - 1,
+                })
+            for i, h in enumerate(headings):
+                start = h["sequence_id"]
+                end = headings[i + 1]["sequence_id"] - 1 if i + 1 < len(headings) else hi
+                title = (h.get("plain_text") or "").strip() or f"Chapter {i + 1}"
+                chapters.append({"title": title, "level": chapter_level or 1,
+                                 "start_sequence": start, "end_sequence": end})
 
     for idx, ch in enumerate(chapters):
         ch["index"] = idx
         ch["chunk_count"] = ch["end_sequence"] - ch["start_sequence"] + 1
 
-    return {"paper_id": str(paper_id), "doc_kind": doc.get("doc_kind"), "chapters": chapters}
+    return {"paper_id": str(paper_id), "doc_kind": doc.get("doc_kind"),
+            "source": source, "chapters": chapters}
 
 
 @router.get("/{paper_id}/figure-descriptions")
