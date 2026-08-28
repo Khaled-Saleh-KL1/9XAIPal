@@ -172,9 +172,16 @@ async def download_raw_paper(
     if not raw_path.exists():
         raise DocumentNotFound(str(paper_id))
 
+    # ⚠ Only the SUGGESTED save name changes here. `filename`/`original_filename`
+    # on the row are untouched (see rename_paper's docstring) — this is just the
+    # Content-Disposition header, so a rename can win here too without touching
+    # the on-disk key or losing the as-uploaded name from the database.
+    title = (doc.get("title") or "").strip()
+    download_name = f"{title}.pdf" if title else doc["original_filename"]
+
     return FileResponse(
         path=str(raw_path),
-        filename=doc["original_filename"],
+        filename=download_name,
         media_type="application/pdf",
     )
 
@@ -267,9 +274,11 @@ async def rename_paper(
     library and reader show a name. A blank title clears the override.
 
     ⚠ Renames the ROW, never the file. ``filename`` is the on-disk key that
-    documents/, extracted/, images/ and every chunk asset path are built from,
-    and ``original_filename`` is what /raw hands back when the reader downloads
-    the PDF. Touching either to satisfy a rename would break both.
+    documents/, extracted/, images/ and every chunk asset path are built from;
+    touching it to satisfy a rename would break all of them. ``/raw``'s
+    download name follows the rename instead (see download_raw_paper) —
+    that only changes the response header, not this row's stored
+    ``original_filename``, which stays the as-uploaded name.
     """
     doc = await doc_service.rename_document(db, paper_id, current_user["id"], payload.title)
     if not doc:

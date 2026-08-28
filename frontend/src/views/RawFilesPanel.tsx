@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import type { PaperMeta } from '../api';
 import { getRawPdfUrl } from '../api';
 import { IconSearch, IconDoc } from '../components/Icons';
+import { displayTitle } from '../lib/titles';
 
 interface Props {
   papers: PaperMeta[];
@@ -16,7 +17,14 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
   const filtered = useMemo(() => {
     if (!query) return papers;
     const q = query.toLowerCase();
-    return papers.filter((p) => p.original_filename.toLowerCase().includes(q));
+    // Match the renamed title (what's actually shown below) as well as the
+    // original filename — a reader searching after a rename types the name
+    // they see, but one who still remembers the arXiv id should find it too.
+    return papers.filter(
+      (p) =>
+        displayTitle(p).toLowerCase().includes(q) ||
+        p.original_filename.toLowerCase().includes(q),
+    );
   }, [papers, query]);
 
   if (!open) return null;
@@ -142,9 +150,21 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
           <div
             className="text-[13px] font-medium truncate"
             style={{ color: 'var(--fg)' }}
+            // The rename wins here too — a reader who renamed a book expects
+            // to see that name everywhere, "raw" or not. The real on-disk
+            // filename stays reachable on hover, same as the PDF viewer.
+            title={paper.original_filename}
           >
-            {paper.original_filename}
+            {displayTitle(paper)}
           </div>
+          {paper.title && paper.title.trim() && (
+            <div
+              className="text-[10.5px] font-mono truncate mt-0.5"
+              style={{ color: 'var(--muted)' }}
+            >
+              {paper.original_filename}
+            </div>
+          )}
           <div className="flex items-center gap-2 mt-1">
             <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
               {sizeMB} MB
@@ -196,7 +216,9 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
             </button>
             <a
               href={getRawPdfUrl(paper.id)}
-              download={paper.original_filename}
+              // Just a hint — the server has the last word via its own
+              // Content-Disposition header, which now agrees with this.
+              download={paper.title?.trim() ? `${paper.title.trim()}.pdf` : paper.original_filename}
               className="text-[11.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5 no-underline"
               style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
             >
