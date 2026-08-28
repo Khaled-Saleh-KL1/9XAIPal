@@ -4,6 +4,7 @@ import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
@@ -311,7 +312,13 @@ async def list_chapters(
     # ── Preferred: the PDF's embedded outline ──────────────────────────────
     filename = doc.get("filename")
     if filename:
-        entries = book_outline.read_pdf_outline(documents_dir() / filename)
+        # ⚠ Off the event loop. Opening and walking a PDF's outline tree is
+        # native-extension CPU + disk I/O, same cost class as the cover
+        # endpoint's page rasterization (see documents.py) — inline here it
+        # would stall every other request for its duration on each book-open.
+        entries = await run_in_threadpool(
+            book_outline.read_pdf_outline, documents_dir() / filename
+        )
         if len(entries) >= 2:
             page_starts = await chunk_repo.get_page_starts(db, paper_id)
             candidate = book_outline.outline_to_chapters(

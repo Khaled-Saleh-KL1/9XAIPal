@@ -707,13 +707,12 @@ async def answer_study_question(
 
     yield {"type": "status", "message": f"Reading the index of {len(papers)} papers…"}
 
-    # One query per paper, headings and all. The bodies are needed for
-    # section_range to resolve a heading to its range without a second trip.
-    chunks_by_doc: dict = {}
-    for doc in papers:
-        chunks_by_doc[doc["id"]] = await chunk_repo.get_all_document_chunks(
-            session, doc["id"]
-        )
+    # One query for every paper in the study, headings and all — not one
+    # round trip per paper. The bodies are needed for section_range to
+    # resolve a heading to its range without a second trip.
+    chunks_by_doc = await chunk_repo.get_all_chunks_for_documents(
+        session, [doc["id"] for doc in papers]
+    )
 
     rounds = max_steps or settings.study_agent_max_steps
     web_on = allow_web and web_search.is_configured()

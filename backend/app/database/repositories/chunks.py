@@ -169,6 +169,32 @@ async def get_all_document_chunks(session: AsyncSession, document_id: UUID) -> l
     return [dict(r) for r in result.mappings().all()]
 
 
+async def get_all_chunks_for_documents(
+    session: AsyncSession, document_ids: list[UUID]
+) -> dict[UUID, list[dict]]:
+    """Every chunk of several documents, grouped by document_id.
+
+    The multi-document twin of :func:`get_all_document_chunks` — the study
+    agent used to call that once per paper in the study (N serial round
+    trips before it can even start reasoning); this is the same data in one
+    query, same ``ANY(:ids)`` idiom already used elsewhere in this file.
+    """
+    if not document_ids:
+        return {}
+    result = await session.execute(
+        text("""
+            SELECT * FROM chunks
+            WHERE document_id = ANY(:document_ids)
+            ORDER BY document_id, sequence_id ASC
+        """),
+        {"document_ids": list(document_ids)},
+    )
+    by_doc: dict[UUID, list[dict]] = {doc_id: [] for doc_id in document_ids}
+    for row in result.mappings().all():
+        by_doc.setdefault(row["document_id"], []).append(dict(row))
+    return by_doc
+
+
 async def get_chunks_in_range(
     session: AsyncSession, document_id: UUID, start: int, end: int, limit: int
 ) -> list[dict]:

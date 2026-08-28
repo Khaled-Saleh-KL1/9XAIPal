@@ -24,6 +24,13 @@ export function TitleEditor({
 }) {
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLInputElement>(null);
+  // ⚠ Enter commits and (via the caller flipping its "renaming" state)
+  // unmounts this input on the next render — removing a focused element
+  // from the DOM can refire its blur synthetically, which would call
+  // onCommit a second time. Both calls carry the same draft, so this was
+  // never a data-corruption risk, just a wasted extra request; this stops
+  // it outright rather than relying on the caller to dedupe identical PATCHes.
+  const committed = useRef(false);
 
   useEffect(() => {
     // ⚠ preventScroll is load-bearing here too — a header rename can open
@@ -34,6 +41,12 @@ export function TitleEditor({
     ref.current?.select();
   }, []);
 
+  const commitOnce = (next: string) => {
+    if (committed.current) return;
+    committed.current = true;
+    onCommit(next);
+  };
+
   return (
     <input
       ref={ref}
@@ -41,12 +54,12 @@ export function TitleEditor({
       value={draft}
       onClick={(e) => e.stopPropagation()}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => onCommit(draft)}
+      onBlur={() => commitOnce(draft)}
       onKeyDown={(e) => {
         e.stopPropagation();
         if (e.key === 'Enter') {
           e.preventDefault();
-          onCommit(draft);
+          commitOnce(draft);
         }
         if (e.key === 'Escape') {
           e.preventDefault();
