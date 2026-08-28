@@ -1267,7 +1267,16 @@ function ChapterPicker({
               <span className="font-mono text-[11px] w-6 text-center" style={{ color: 'var(--muted)' }}>
                 {ch.index + 1}
               </span>
-              <span className="font-serif text-[15px] flex-1 min-w-0 truncate" style={{ color: 'var(--fg)' }}>
+              <span
+                className="font-serif text-[15px] flex-1 min-w-0 truncate"
+                style={{
+                  color: 'var(--fg)',
+                  // Indent nested outline entries so a book's sub-sections read
+                  // as belonging to the chapter above them, not as peers of it.
+                  paddingLeft: `${Math.max(0, (ch.level ?? 1) - 1) * 14}px`,
+                  opacity: (ch.level ?? 1) > 1 ? 0.8 : 1,
+                }}
+              >
                 {ch.title}
               </span>
               {started && (

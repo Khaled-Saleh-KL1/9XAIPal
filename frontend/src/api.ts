@@ -524,17 +524,26 @@ export interface Chapter {
   start_sequence: number;
   end_sequence: number;
   chunk_count: number;
+  /** Outline depth, 1 = top-level chapter. Used to indent nested sections. */
+  level?: number;
 }
 
 /** Fetch the chapter list (derived from top-level headings) for book navigation. */
-export async function getChapters(paperId: string): Promise<{ doc_kind: string | null; chapters: Chapter[] }> {
+export async function getChapters(
+  paperId: string,
+): Promise<{ doc_kind: string | null; source: string; chapters: Chapter[] }> {
   const res = await fetch(`${BASE}/papers/${paperId}/chapters`);
   if (!res.ok) {
-    if (res.status === 404) return { doc_kind: null, chapters: [] };
+    if (res.status === 404) return { doc_kind: null, source: 'none', chapters: [] };
     throw new Error(`Chapters fetch failed: ${res.status}`);
   }
   const body = await res.json();
-  return { doc_kind: body.doc_kind ?? null, chapters: body.chapters || [] };
+  return {
+    doc_kind: body.doc_kind ?? null,
+    // "pdf_outline" (the publisher's own bookmarks) or "headings" (derived).
+    source: body.source ?? 'headings',
+    chapters: body.chapters || [],
+  };
 }
 
 /** Fetch the total chunk count for a paper (and an optional first page). */

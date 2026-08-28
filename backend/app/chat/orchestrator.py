@@ -687,6 +687,137 @@ def _ask_response_event(resp: AskResponse) -> dict:
     }
 
 
+async def _stream_book_agent(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    prompt: str,
+    document_id: UUID,
+    current_chunk_id: Optional[UUID],
+    conversation_id: Optional[UUID],
+    parent_turn_id: Optional[UUID],
+    thread_root_turn_id: Optional[UUID],
+) -> AsyncIterator[dict]:
+    """Answer a question about a book with the paper agent, streaming.
+
+    ⚠ **Books used to take a different, weaker path than papers.** A paper
+    question goes to `chat/paper_agent.py`, which navigates with SECTION /
+    SEARCH / READ over the document's own contents index. A book question came
+    here instead, where the router picked one retrieval mode and committed to
+    it — usually GLOBAL, i.e. a single pgvector similarity pass. On a 322-page
+    book that reliably answered "the specific names are not listed in the
+    provided excerpts" to questions the book answers on one page, because
+    similarity search returns passages *about* a topic, not the passage that
+    enumerates it. The agent asks for the section it needs and reads it.
+
+    Same agent, same tools, same citation format as the paper path — so the
+    two readers now behave alike, which is the point.
+    """
+    from app.chat.paper_agent import answer_paper_question
+    from app.chat.router import RouterDecision
+    from app.database.repositories import chunks as chunk_repo
+
+    conversation_id = conversation_id or uuid4()
+    prep = _AskPrep(
+        prompt=prompt,
+        user_id=user_id,
+        document_id=document_id,
+        conversation_id=conversation_id,
+        parent_turn_id=parent_turn_id,
+        thread_root_turn_id=thread_root_turn_id,
+        is_sub_thread=bool(parent_turn_id or thread_root_turn_id),
+        start_time=time.time(),
+    )
+    prep.decision = RouterDecision(
+        context_type="AGENT",
+        reason="Book — answered by the paper agent (SECTION/SEARCH/READ)",
+    )
+
+    # Anchor on the block the reader currently has open, when there is one, so
+    # "what does this mean?" resolves against what they are looking at. With no
+    # anchor the agent takes its holistic path over the whole book.
+    anchor: dict = {"kind": "document", "sequence_id": None, "quote": None}
+    if current_chunk_id:
+        try:
+            chunk = await chunk_repo.get_chunk(session, current_chunk_id)
+            if chunk and chunk.get("document_id") == document_id:
+                anchor = {
+                    "kind": "block",
+                    "sequence_id": chunk.get("sequence_id"),
+                    "quote": None,
+                }
+        except Exception:
+            logger.exception("book agent: could not resolve the current block (non-fatal)")
+
+    # Prior turns of this conversation, as the agent's Q+A thread.
+    thread: list[dict] = []
+    try:
+        history = await get_conversation_history(session, user_id, conversation_id, limit=12)
+        pending_q: Optional[str] = None
+        for turn in history:
+            if turn.get("role") == "user":
+                pending_q = turn.get("content")
+            elif turn.get("role") == "assistant" and pending_q:
+                thread.append({"question": pending_q, "answer": turn.get("content") or ""})
+                pending_q = None
+    except Exception:
+        logger.exception("book agent: could not load conversation history (non-fatal)")
+
+    answer = ""
+    model = ""
+    cited: list[int] = []
+    async for event in answer_paper_question(
+        session,
+        document_id=document_id,
+        question=prompt,
+        anchor=anchor,
+        thread=thread,
+        max_steps=(
+            settings.paper_agent_holistic_max_steps
+            if anchor["kind"] == "document"
+            else None
+        ),
+    ):
+        etype = event.get("type")
+        if etype == "token":
+            yield {"type": "token", "text": event["text"]}
+        elif etype == "status":
+            yield {"type": "status", "message": event.get("message", "")}
+        elif etype == "step":
+            # The tool trail. ChatPane ignores unknown event types today, so
+            # this is additive — it is forwarded so the pane can show the
+            # agent's work later without another backend change.
+            yield event
+        elif etype == "done":
+            answer = event.get("answer", "") or ""
+            model = event.get("model", "") or ""
+            cited = event.get("cited") or []
+
+    # Citation chips: resolve the [[N]] markers the agent actually wrote.
+    if cited:
+        try:
+            rows = []
+            for seq in cited[:20]:
+                row = await chunk_repo.get_chunk_by_sequence(session, document_id, seq)
+                if row:
+                    rows.append(row)
+            prep.citations = citations_from_chunks(rows)
+        except Exception:
+            logger.exception("book agent: could not resolve citations (non-fatal)")
+
+    resp = await _finalize_ask(
+        session,
+        prep,
+        answer=answer,
+        model=model,
+        prompt_tokens=None,
+        completion_tokens=None,
+        research_performed=False,
+        research_summary=None,
+    )
+    yield _ask_response_event(resp)
+
+
 async def handle_ask_stream(
     *,
     user_id: UUID,
@@ -715,6 +846,29 @@ async def handle_ask_stream(
     persists nothing (same semantics as an aborted blocking /ask).
     """
     async with async_session_factory() as session:
+        # A book is answered by the paper agent, not by the router + pgvector
+        # path below — see _stream_book_agent for why.
+        if document_id:
+            doc_row = document
+            if doc_row is None:
+                try:
+                    doc_row = await get_document(session, document_id, user_id)
+                except Exception:
+                    logger.exception("could not load document for book routing (non-fatal)")
+            if (doc_row or {}).get("doc_kind") == "book":
+                async for event in _stream_book_agent(
+                    session,
+                    user_id=user_id,
+                    prompt=prompt,
+                    document_id=document_id,
+                    current_chunk_id=current_chunk_id,
+                    conversation_id=conversation_id,
+                    parent_turn_id=parent_turn_id,
+                    thread_root_turn_id=thread_root_turn_id,
+                ):
+                    yield event
+                return
+
         prep = await _prepare_ask(
             session,
             user_id=user_id,

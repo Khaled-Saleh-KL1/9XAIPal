@@ -281,6 +281,23 @@ async def get_chapter_headings(session: AsyncSession, document_id: UUID) -> list
     return [dict(r) for r in result.mappings().all()]
 
 
+async def get_page_starts(session: AsyncSession, document_id: UUID) -> list[tuple[int, int]]:
+    """``(sequence_id, page_start)`` for every chunk that has a page, in order.
+
+    Used to map a PDF outline's page numbers onto the sequence ids the reader
+    navigates by — see `services/book_outline.py`.
+    """
+    result = await session.execute(
+        text("""
+            SELECT sequence_id, page_start FROM chunks
+            WHERE document_id = :document_id AND page_start IS NOT NULL
+            ORDER BY sequence_id ASC
+        """),
+        {"document_id": document_id},
+    )
+    return [(int(r["sequence_id"]), int(r["page_start"])) for r in result.mappings().all()]
+
+
 async def get_sequence_bounds(session: AsyncSession, document_id: UUID) -> tuple[int, int]:
     """Return (min_sequence, max_sequence) for the document's chunks (0,0 if none)."""
     result = await session.execute(
