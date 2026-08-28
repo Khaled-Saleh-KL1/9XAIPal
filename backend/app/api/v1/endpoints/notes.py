@@ -20,6 +20,7 @@ from app.chat.paper_agent import answer_paper_question
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.connection import async_session_factory
+from app.database.repositories import assets as asset_repo
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import notes as note_repo
 from app.llm.catalog import resolve_requested_model
@@ -98,12 +99,20 @@ _IMAGE_URL_PREFIX = "/static/images/"
 
 
 def _to_storage_path(image_url: Optional[str]) -> Optional[str]:
-    """Turn a served image URL back into a chunk_assets.file_path."""
-    if not image_url:
+    """Turn a served image URL back into a chunk_assets.file_path.
+
+    ⚠ Only ever accepts the shape this app's own /static/images/ links use.
+    Anything else — an absolute path, a bare filename, a `../` escape — is
+    rejected here rather than passed through, because this string reaches
+    disk (see build_multimodal_messages) if it survives. This is layer one
+    of two: the caller separately verifies the result names a real,
+    owned chunk_assets row (asset_repo.file_path_belongs_to_document)
+    before it's ever used — this function alone is necessary but not
+    sufficient, since a forged path can still be shaped like a real one.
+    """
+    if not image_url or not image_url.startswith(_IMAGE_URL_PREFIX):
         return None
-    if image_url.startswith(_IMAGE_URL_PREFIX):
-        return image_url[len(_IMAGE_URL_PREFIX):]
-    return image_url
+    return image_url[len(_IMAGE_URL_PREFIX):]
 
 
 def _serialize_note(n: dict) -> dict:
@@ -217,6 +226,14 @@ async def create_note_stream(
     anchor_chunk_id = chunk["id"] if chunk else None
 
     image_path = _to_storage_path(anchor.image_url)
+    if image_path and not await asset_repo.file_path_belongs_to_document(db, image_path, paper_id):
+        # A forged or stale reference (an old tab open across a re-chunk, or
+        # a client sending a path that was never this paper's) — dropped the
+        # same way a chunk_id that no longer resolves is, not treated as an
+        # error. See _to_storage_path and file_path_belongs_to_document for
+        # why this check exists at all: it is the only thing standing
+        # between this client-supplied string and an arbitrary file read.
+        image_path = None
 
     # A follow-up belongs to its parent's card, so it inherits that side and —
     # more importantly — that model.
