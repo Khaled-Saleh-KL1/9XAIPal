@@ -57,3 +57,28 @@ async def get_assets_for_chunks(session: AsyncSession, chunk_ids: list[UUID]) ->
     )
     return [dict(r) for r in result.mappings().all()]
 
+
+async def file_path_belongs_to_document(
+    session: AsyncSession, file_path: str, document_id: UUID
+) -> bool:
+    """Whether ``file_path`` names a real chunk_assets row for THIS document.
+
+    ⚠ This is the check standing between a client-supplied "which image is
+    this note about" string and reading an arbitrary file off the server's
+    disk. See notes.py's _to_storage_path: a reader's browser only ever
+    round-trips a URL this app itself generated, but the request body is
+    still attacker-controlled, and a path that never matches a real, owned
+    asset here must never be opened — not stripped, not "best-effort",
+    rejected outright by the caller.
+    """
+    result = await session.execute(
+        text("""
+            SELECT 1 FROM chunk_assets ca
+            JOIN chunks c ON c.id = ca.chunk_id
+            WHERE ca.file_path = :file_path AND c.document_id = :document_id
+            LIMIT 1
+        """),
+        {"file_path": file_path, "document_id": document_id},
+    )
+    return result.first() is not None
+
