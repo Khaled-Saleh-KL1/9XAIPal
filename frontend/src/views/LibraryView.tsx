@@ -498,7 +498,7 @@ function PaperCard({
           </div>
 
           <div className="paper-meta">
-            <span>{paper.pages ? `${paper.pages}p` : '—'}</span>
+            <span>{paper.pages ? `${paper.pages}p` : '–'}</span>
             <span className="paper-dot">·</span>
             <span>{paper.added}</span>
             {paper.tags.map((t) => (
@@ -617,7 +617,7 @@ function PaperRow({
           <div className="paper-row-title" title={paper.title}>{paper.title}</div>
         )}
         <div className="paper-meta">
-          <span>{paper.pages ? `${paper.pages}p` : '—'}</span>
+          <span>{paper.pages ? `${paper.pages}p` : '–'}</span>
           <span className="paper-dot">·</span>
           <span>{paper.added}</span>
           {paper.tags.map((t) => (

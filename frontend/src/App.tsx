@@ -493,7 +493,7 @@ function UploadKindModal({
           >
             <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
             <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
-              Read chapter by chapter — pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
+              Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
             </div>
           </button>
           <button
@@ -505,7 +505,7 @@ function UploadKindModal({
           >
             <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
             <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
-              Linear reading, front to back — no chapter navigation. Best for articles and papers.
+              Linear reading, front to back, no chapter navigation. Best for articles and papers.
             </div>
           </button>
         </div>

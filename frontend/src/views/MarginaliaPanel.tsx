@@ -253,7 +253,7 @@ export function MarginaliaPanel({
                 )}
                 {!bookmarks.length && (
                   <p className="marg-hint">
-                    Or press <span className="kbd">B</span> while reading — with text selected it
+                    Or press <span className="kbd">B</span> while reading: with text selected it
                     marks that passage.
                   </p>
                 )}

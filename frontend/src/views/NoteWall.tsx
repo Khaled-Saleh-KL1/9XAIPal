@@ -104,7 +104,7 @@ export function NoteWall({
               <>
                 <p>
                   This board belongs to no conversation. It is where a thought
-                  goes when it outlives the question that produced it — a
+                  goes when it outlives the question that produced it: a
                   contradiction worth chasing, a definition you keep re-looking
                   up, a paper to find.
                 </p>

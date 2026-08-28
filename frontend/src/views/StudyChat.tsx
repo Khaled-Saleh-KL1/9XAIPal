@@ -213,7 +213,7 @@ export function StudyChat({
             <p>
               The assistant reads each paper's contents, fetches the sections your
               question turns on, and shows you every one it opened. Citations
-              expand where they sit — you can check a claim without leaving here.
+              expand where they sit, so you can check a claim without leaving here.
             </p>
             {papers.length > 0 && (
               <div className="chat-openers">

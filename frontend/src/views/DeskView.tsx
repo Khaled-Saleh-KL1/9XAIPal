@@ -300,7 +300,7 @@ export function DeskView({
     if (isLibrary || !study) return;
     const ok = window.confirm(
       `Delete "${study.name}"?\n\nIts chat goes with it. The papers stay in your ` +
-      `library, and its notes move to the universal board — only you delete a note.`,
+      `library, and its notes move to the universal board. Only you delete a note.`,
     );
     if (!ok) return;
     try {

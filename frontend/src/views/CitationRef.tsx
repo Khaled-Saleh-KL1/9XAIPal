@@ -53,7 +53,7 @@ export function CitationRef({
         type="button"
         className={`cite-chip${open ? ' is-open' : ''}`}
         onClick={toggle}
-        title={`${cite.label} — block ${cite.sequence_id}`}
+        title={`${cite.label}, block ${cite.sequence_id}`}
       >
         P{cite.paper}:{cite.sequence_id}
       </button>

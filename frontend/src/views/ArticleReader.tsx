@@ -371,7 +371,7 @@ export function ArticleReader({
           ].filter(Boolean);
           setNotice({
             tone: 'info',
-            text: `Moved ${parts.join(', ')} from this browser to the server — they now follow you to any device.`,
+            text: `Moved ${parts.join(', ')} from this browser to the server, so they now follow you to any device.`,
           });
         }
       })
@@ -1795,7 +1795,7 @@ export function ArticleReader({
             title={
               bookmarkedHere
                 ? 'Remove the bookmark here (B)'
-                : 'Bookmark where you are — select text first to mark that passage (B)'
+                : 'Bookmark where you are, or select text first to mark that passage (B)'
             }
           >
             <svg className="chip-glyph" viewBox="0 0 12 16" width="10" height="13" aria-hidden="true">
@@ -1983,7 +1983,7 @@ export function ArticleReader({
           <button
             className="ask-fab panel-fab"
             onClick={() => onOpenDesk(deskScope ?? 'library')}
-            title="Open the desk — ask across this paper and others (P)"
+            title="Open the desk: ask across this paper and others (P)"
           >
             <span className="panel-fab-glyph" aria-hidden="true">◈</span>
             Desk

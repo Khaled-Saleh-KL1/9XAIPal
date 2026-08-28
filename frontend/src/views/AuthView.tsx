@@ -56,7 +56,7 @@ export function AuthView() {
             {mode === 'login' ? 'Welcome back' : 'Create an account'}
           </div>
           <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
-            {mode === 'login' ? '9XAIPal — sign in to your library.' : 'You need an invite code to sign up.'}
+            {mode === 'login' ? '9XAIPal: sign in to your library.' : 'You need an invite code to sign up.'}
           </div>
         </div>
 

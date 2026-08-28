@@ -90,7 +90,7 @@ function ArticleBlockImpl({
       type="button"
       className="article-bookmark-flag"
       onClick={() => onClearBookmark(seq)}
-      title={`${bookmarkTitle} — click to remove this bookmark`}
+      title={`${bookmarkTitle}: click to remove this bookmark`}
       aria-label="Remove this bookmark"
     >
       <svg viewBox="0 0 12 16" width="12" height="16" aria-hidden="true">
