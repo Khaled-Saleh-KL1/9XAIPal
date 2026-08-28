@@ -188,12 +188,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             <span className="text-[14px] font-medium tracking-tight" style={{ color: 'var(--fg)' }}>
               9XAIPal
             </span>
-            <span
-              className="hidden sm:inline-block text-[11px] font-mono ml-1 px-1.5 py-0.5 rounded"
-              style={{ color: 'var(--muted)', background: 'var(--bg-2)', border: '1px solid var(--border)' }}
-            >
-              local
-            </span>
           </div>
           {/*
             This group can be wider than a phone screen (paper count, two
