@@ -12,6 +12,7 @@ import { displayTitle as paperDisplayTitle } from '../lib/titles';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
+import { TitleEditor } from '../components/TitleEditor';
 import { ChatPane } from './ChatPane';
 import {
   getNextChunk,
@@ -22,6 +23,7 @@ import {
   triggerReadingOrderReconstruction,
   reextractPaper,
   rechunkPaper,
+  renamePaper,
   getChapters,
   type ChunkData,
   type PaperMeta,
@@ -111,6 +113,8 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   const [atEnd, setAtEnd] = useState(false);
   const [meta, setMeta] = useState<PaperMeta | null>(null);
   const [totalChunks, setTotalChunks] = useState<number>(0);
+  /** Whether the header title is being edited in place. */
+  const [renamingTitle, setRenamingTitle] = useState(false);
 
   // ── Book mode: chapter-by-chapter navigation ───────────────────────────────
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -558,6 +562,25 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   }, [paperId]);
 
   const displayTitle = meta ? paperDisplayTitle(meta) : paper.title;
+
+  /**
+   * Rename from the reader itself, not just the library — a long uploaded
+   * filename turning into a real name is exactly the moment the reader is
+   * looking at the book, not the shelf. Optimistic: the header updates from
+   * the rename response immediately, no separate refetch needed.
+   */
+  const commitTitleRename = async (next: string) => {
+    setRenamingTitle(false);
+    const clean = next.trim();
+    if (clean === displayTitle) return;
+    try {
+      const updated = await renamePaper(paperId, clean);
+      setMeta(updated);
+    } catch (e) {
+      alert(`Rename failed: ${(e as Error).message}`);
+    }
+  };
+
   const displayPages = meta?.page_count ?? paper.pages ?? 0;
   const status = meta?.status ?? 'queued';
   const isReady = status === 'complete';
@@ -606,12 +629,25 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
         <span className="shrink-0 h-4 w-px" style={{ background: 'var(--border)' }} />
         <div className="flex items-center gap-2 min-w-0">
           <IconDoc className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
-          <span
-            className="font-serif text-[14.5px] tracking-tight truncate"
-            style={{ color: 'var(--fg)' }}
-          >
-            {displayTitle}
-          </span>
+          {renamingTitle ? (
+            <TitleEditor
+              value={displayTitle}
+              onCommit={commitTitleRename}
+              onCancel={() => setRenamingTitle(false)}
+              className="reader-title-input"
+              placeholder="Name this book…"
+            />
+          ) : (
+            <button
+              type="button"
+              className="font-serif text-[14.5px] tracking-tight truncate reader-title-btn"
+              style={{ color: 'var(--fg)' }}
+              onClick={() => setRenamingTitle(true)}
+              title="Rename this book"
+            >
+              {displayTitle}
+            </button>
+          )}
           {!isReady && (
             <span
               className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded shrink-0"

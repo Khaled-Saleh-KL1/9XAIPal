@@ -7,6 +7,7 @@ import {
 } from '../components/Icons';
 import { PaperCover } from './PaperCover';
 import { UserMenuInline } from '../components/UserMenu';
+import { TitleEditor } from '../components/TitleEditor';
 import { displayTitle } from '../lib/titles';
 import { stageProgress } from '../lib/progress';
 import { listPapers, deletePaper, renamePaper, type PaperMeta } from '../api';
@@ -400,58 +401,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
         </div>
       </main>
     </div>
-  );
-}
-
-// ── Rename control ────────────────────────────────────────────────────────────
-
-/**
- * Edit a title in place.
- *
- * Inline rather than in a modal: the reader is comparing this name against the
- * cover and the other cards around it, and a dialog covers exactly that
- * context. Enter commits, Escape reverts, blur commits — a click elsewhere
- * after typing a name means the name, not "discard it".
- */
-function TitleEditor({
-  value,
-  onCommit,
-  onCancel,
-}: {
-  value: string;
-  onCommit: (next: string) => void;
-  onCancel: () => void;
-}) {
-  const [draft, setDraft] = useState(value);
-  const ref = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
-  }, []);
-
-  return (
-    <input
-      ref={ref}
-      className="paper-title-input"
-      value={draft}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => onCommit(draft)}
-      onKeyDown={(e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          onCommit(draft);
-        }
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          onCancel();
-        }
-      }}
-      placeholder="Name this paper…"
-      aria-label="Paper title"
-    />
   );
 }
 

@@ -10,9 +10,19 @@ itself:
     SECTION: <seq>       the whole section a contents entry names
     READ: <start>-<end>  the actual markdown of a sequence range
     WEB: <terms>         the public internet, when the paper cannot answer
+    REMEMBER: <text>     a durable note about the READER, for next time
 
 It loops until it stops asking for tools or PAPER_AGENT_MAX_STEPS is spent,
 then answers.
+
+⚠ **A paper and a book get different prompts, not the same one with "paper"
+swapped for "book".** doc_kind selects a whole different _BASE_ROLE /
+_AGENT_SYSTEM / _WHOLE_SYSTEM / _ANSWER_SYSTEM — a book reader wants a
+conversation, not a citation-heavy margin annotation. See _for_kind below.
+
+⚠ **REMEMBER is the one write in this module, and the one place it does touch
+pgvector.** See chat/memory.py for why that is fine here even though the rest
+of retrieval deliberately avoids it.
 
 ⚠ **Every tool round is reported to the reader, not just logged.** The loop
 emits a ``step`` event per call — what it asked for, why it says it asked, and
@@ -53,9 +63,11 @@ from typing import AsyncIterator, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.agent_tools import (
+    REMEMBER_RE,
     THINK_RE,
     TOOL_BLOCK_RE,
     WEB_RE,
+    extract_remembers,
     format_block,
     format_blocks,
     format_search_results,
@@ -67,6 +79,7 @@ from app.chat.agent_tools import (
     stream_answer,
     strip_tool_block,
 )
+from app.chat.memory import format_memories, recall_memories, write_memory, write_remembered
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.repositories import chunks as chunk_repo
@@ -82,7 +95,7 @@ logger = get_logger(__name__)
 # Prompts
 # ─────────────────────────────────────────────────────────────────────────────
 
-_BASE_ROLE = """You are reading a research paper alongside the user and answering \
+_BASE_ROLE_PAPER = """You are reading a research paper alongside the user and answering \
 questions about it in the margin.
 
 How to answer:
@@ -100,12 +113,60 @@ give your own expert answer, clearly separated. Never invent what the paper says
 - If the user quoted a passage, they are asking about THAT passage. Read it in \
 the context of the surrounding text, and answer about it specifically."""
 
-_WHOLE_SYSTEM = _BASE_ROLE + """
+# ⚠ A book gets its own voice, not the paper prompt with a word swapped. The
+# original complaint this addresses: answers about a book came out reading
+# like margin annotations on a paper — terse, citation-heavy, allergic to
+# interpretation — because that is exactly what they were. A novel or a
+# nonfiction book invites a conversation, not an annotation; "ground every
+# claim" and "two to five sentences" are the wrong defaults for "what do you
+# make of this ending?".
+_BASE_ROLE_BOOK = """You are reading a book alongside the user and talking with them \
+about it — a reading companion, not an annotator.
+
+How to answer:
+- Answer what they actually asked, conversationally — like a well-read friend \
+who has read this book, not a lookup tool. No "great question", no restating \
+what they asked, no disclaimers about being an AI.
+- Match their register. A quick factual question ("who is Elena's brother?") \
+gets a quick answer. A question about theme, motivation, or meaning is worth \
+a real paragraph — this is a conversation, not a margin note, and a reader \
+asking "what do you make of this?" is inviting you to actually engage, not \
+just summarize what happened.
+- Ground plot, characters, and events in the book — never invent what \
+happens. When it helps the reader find a passage again, mark it with its \
+block number like [[42]], but do not force a citation onto every sentence: in \
+a book, unlike a paper, that reads as clinical rather than helpful. Save it \
+for a direct quote or a specific claim worth double-checking.
+- Math renders: write LaTeX as $inline$ or $$display$$, on the rare book \
+where it comes up.
+- If the book does not settle something — an ambiguous ending, an unstated \
+motive — say so, and then actually offer your own reading, clearly labeled as \
+one. A flat refusal to interpret anything is a worse answer than a clearly-\
+labeled opinion; interpreting is usually the point of discussing a book.
+- If the user quoted a passage, they are asking about THAT passage. Read it in \
+context and answer about it specifically."""
+
+_WHOLE_SYSTEM_PAPER = _BASE_ROLE_PAPER + """
 
 You have been given the COMPLETE paper below. Every block is numbered. \
 There is nothing else to look up — answer from what is here."""
 
-_AGENT_SYSTEM = _BASE_ROLE + """
+_WHOLE_SYSTEM_BOOK = _BASE_ROLE_BOOK + """
+
+You have been given the COMPLETE book below. Every block is numbered. \
+There is nothing else to look up — answer from what is here."""
+
+# The REMEMBER tool is identical in both variants — it is about the reader,
+# not the document — so it is written once and interpolated into each.
+_REMEMBER_BULLET = """
+- REMEMBER saves one short, durable note about the READER for future \
+conversations — a stated preference, their expertise level, a recurring \
+interest. Use it when they tell you something about themselves or how they \
+want to be helped, never for facts about the {noun} itself. Sparingly: most \
+questions produce nothing worth remembering."""
+_REMEMBER_EXAMPLE = "\nREMEMBER: reader prefers short, plain-language answers"
+
+_AGENT_SYSTEM_PAPER = _BASE_ROLE_PAPER + """
 
 You have not been given the paper. You have been given the passage the user is \
 pointing at, the blocks around it, and the paper's CONTENTS — its index, every \
@@ -125,7 +186,7 @@ block, no partial answer:
 THINK: the passage cites the training mixture but does not list it
 SECTION: 31
 SEARCH: sliding window attention
-READ: 40-52{web_example}
+READ: 40-52{web_example}{remember_example}
 </tool>
 
 - THINK is one short line saying why you are fetching. The reader sees it, so \
@@ -139,7 +200,7 @@ containing it, so a SEARCH hit can be handed straight to SECTION.
 - SEARCH finds blocks containing terms anywhere in the paper. Use the paper's \
 own vocabulary.
 - READ returns a block range verbatim. Use it for ranges you got from SEARCH \
-hits, or to widen around a block you already have.{web_help}
+hits, or to widen around a block you already have.{web_help}{remember_bullet}
 - Up to three lines of each. Every line in one block runs before you are \
 called again.
 
@@ -148,12 +209,55 @@ when you are told you have no rounds left — write the answer instead of a tool
 block. Do not mention the tools, the contents, the rounds, or this process to \
 the user: they can already see what you fetched."""
 
-# Appended to _AGENT_SYSTEM only when a web-search provider is configured. Kept
-# out of the base string so a machine with no provider is never told about a
-# tool whose calls would silently return nothing — a model that believes it can
-# check the internet and gets empty results every time stops trusting its own
-# observations and starts guessing.
-_WEB_HELP = """
+_AGENT_SYSTEM_BOOK = _BASE_ROLE_BOOK + """
+
+You have not been given the book. You have been given the passage the user is \
+pointing at, the blocks around it, and the book's CONTENTS — its index, every \
+chapter and heading with the block number it starts at.
+
+Answer a question the passage genuinely settles straight from the passage. \
+Otherwise go and get what you are missing — something established two \
+chapters earlier, a character's first appearance, how a scene the reader is \
+asking about actually played out. The contents tell you where to look, and \
+fetching the right chapter is always better than hedging about what you \
+"think" happens there. Prefer one precise fetch over three vague ones.
+
+To use a tool, emit a tool block and nothing else — no explanation outside the \
+block, no partial answer:
+
+<tool>
+THINK: checking how the reunion scene actually reads before describing it
+SECTION: 31
+SEARCH: the lighthouse
+READ: 40-52{web_example}{remember_example}
+</tool>
+
+- THINK is one short line saying why you are fetching. The reader sees it, so \
+write it for them: "checking what happened at the lighthouse", not "invoking \
+SEARCH". One per block, optional but expected.
+- SECTION takes a block number FROM THE CONTENTS and returns that entire \
+chapter or section, down to the next heading of the same or higher level. \
+This is the cheapest way to follow the index: name the chapter you want \
+rather than guessing a range. A number that is not a heading returns the \
+section containing it, so a SEARCH hit can be handed straight to SECTION.
+- SEARCH finds blocks containing terms anywhere in the book — a name, a \
+place, a phrase. Use the book's own vocabulary.
+- READ returns a block range verbatim. Use it for ranges you got from SEARCH \
+hits, or to widen around a block you already have.{web_help}{remember_bullet}
+- Up to three lines of each. Every line in one block runs before you are \
+called again.
+
+You get up to {max_steps} rounds of tools. When you have what you need — or \
+when you are told you have no rounds left — write the answer instead of a tool \
+block. Do not mention the tools, the contents, the rounds, or this process to \
+the user: they can already see what you fetched."""
+
+# Appended to an _AGENT_SYSTEM only when a web-search provider is configured.
+# Kept out of the base string so a machine with no provider is never told
+# about a tool whose calls would silently return nothing — a model that
+# believes it can check the internet and gets empty results every time stops
+# trusting its own observations and starts guessing.
+_WEB_HELP_PAPER = """
 - WEB searches the public internet. Use it ONLY for what the paper cannot \
 answer by construction: what a cited work actually did, what a term means in \
 the wider field, whether a claim has been superseded. Never use it for \
@@ -164,18 +268,51 @@ numbers in THIS paper and nothing else: never write [[WEB]], [[source]], or a \
 marker round anything that is not a block number. The reader is already shown \
 every page you opened, so the marker would be noise even if it rendered."""
 
-_WEB_EXAMPLE = "\nWEB: Longformer dilated attention results"
+_WEB_HELP_BOOK = """
+- WEB searches the public internet. Use it for real-world background the \
+book itself would not contain: a historical event it is based on, who a real \
+person it mentions actually was, what a place or a term means outside the \
+book. Never use it for plot, character, or interpretation — that is your job, \
+not the internet's.
+- Attribute a web-sourced claim IN THE SENTENCE — "in real life, …", \
+"historically, …". The [[n]] markers are block numbers in THIS book and \
+nothing else: never write [[WEB]], [[source]], or a marker round anything \
+that is not a block number."""
+
+_WEB_EXAMPLE_PAPER = "\nWEB: Longformer dilated attention results"
+_WEB_EXAMPLE_BOOK = "\nWEB: is the city of Meereen based on a real place"
 
 # The forced final turn. The tool instructions are gone — there is nothing left
-# to call — but so is _WHOLE_SYSTEM's claim to hold the complete paper, which
-# was never true on this path and invites the model to assert that something is
-# absent from a paper it only ever saw fragments of.
-_ANSWER_SYSTEM = _BASE_ROLE + """
+# to call — but so is _WHOLE_SYSTEM's claim to hold the complete document,
+# which was never true on this path and invites the model to assert that
+# something is absent from a document it only ever saw fragments of.
+_ANSWER_SYSTEM_PAPER = _BASE_ROLE_PAPER + """
 
 You are answering from the passage the user pointed at plus whatever you \
 gathered. You cannot look anything else up. Answer from what is in front of \
 you, and if it does not settle the question, say which part is unsettled \
 rather than assuming the paper is silent on it."""
+
+_ANSWER_SYSTEM_BOOK = _BASE_ROLE_BOOK + """
+
+You are answering from the passage the user pointed at plus whatever you \
+gathered. You cannot look anything else up. Answer from what is in front of \
+you, and if it does not settle the question, say which part is unsettled \
+rather than assuming the book never addresses it."""
+
+# One place to pick the right variant of each template. Falls back to the
+# paper prompt for any unrecognized doc_kind rather than raising — an unknown
+# kind is a reason to answer conservatively, not a reason to 500.
+_WHOLE_SYSTEM_BY_KIND = {"paper": _WHOLE_SYSTEM_PAPER, "book": _WHOLE_SYSTEM_BOOK}
+_AGENT_SYSTEM_BY_KIND = {"paper": _AGENT_SYSTEM_PAPER, "book": _AGENT_SYSTEM_BOOK}
+_ANSWER_SYSTEM_BY_KIND = {"paper": _ANSWER_SYSTEM_PAPER, "book": _ANSWER_SYSTEM_BOOK}
+_WEB_HELP_BY_KIND = {"paper": _WEB_HELP_PAPER, "book": _WEB_HELP_BOOK}
+_WEB_EXAMPLE_BY_KIND = {"paper": _WEB_EXAMPLE_PAPER, "book": _WEB_EXAMPLE_BOOK}
+
+
+def _for_kind(by_kind: dict, doc_kind: str) -> str:
+    return by_kind.get(doc_kind, by_kind["paper"])
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -238,8 +375,9 @@ def _format_block_map(chunks: list[dict]) -> str:
     )
 
 
-def _format_anchor(anchor: dict, window: list[dict]) -> str:
+def _format_anchor(anchor: dict, window: list[dict], *, doc_kind: str = "paper") -> str:
     """What the reader is pointing at, plus the text around it."""
+    noun = "book" if doc_kind == "book" else "paper"
     parts = []
     kind = anchor.get("kind") or "block"
     quote = (anchor.get("quote") or "").strip()
@@ -255,7 +393,7 @@ def _format_anchor(anchor: dict, window: list[dict]) -> str:
         parts.append(
             "THE READER IS ASKING ABOUT AN EQUATION. Explain what it says and "
             "what each symbol means, in terms of the surrounding text. A crop "
-            "of the equation as typeset in the paper is attached — trust the "
+            f"of the equation as typeset in the {noun} is attached — trust the "
             "image over the LaTeX transcription if they disagree, because the "
             "transcription is machine-generated and can be wrong."
         )
@@ -264,7 +402,7 @@ def _format_anchor(anchor: dict, window: list[dict]) -> str:
     elif kind == "table":
         parts.append(
             "THE READER IS ASKING ABOUT A TABLE — the whole table, not one "
-            "cell. A crop of it as typeset in the paper is attached. Trust the "
+            f"cell. A crop of it as typeset in the {noun} is attached. Trust the "
             "image over the transcription below if they disagree: the "
             "transcription is machine-generated and loses merged cells, "
             "spanning headers, and footnote markers. Read the caption and the "
@@ -276,24 +414,35 @@ def _format_anchor(anchor: dict, window: list[dict]) -> str:
     elif kind == "document":
         # The holistic level: asked from the panel, not from a passage. There is
         # no anchor to read "in context of", so the model is told the opposite
-        # of the anchored instruction — range over the whole paper rather than
-        # answering about one place in it.
-        parts.append(
-            "THE READER IS ASKING ABOUT THE PAPER AS A WHOLE, not about any "
-            "one passage. Nothing is highlighted. Answer at the level of the "
-            "paper: its argument, its method, its results, how its parts fit "
-            "together. Use the contents to decide which sections the question "
-            "actually turns on and fetch those — do not answer from the "
-            "opening blocks alone, and do not pad with a section-by-section "
-            "tour the reader did not ask for."
-        )
+        # of the anchored instruction — range over the whole document rather
+        # than answering about one place in it.
+        if doc_kind == "book":
+            parts.append(
+                "THE READER IS ASKING ABOUT THE BOOK AS A WHOLE, not about any "
+                "one passage. Nothing is highlighted. Answer at the level of the "
+                "book: its story or argument, its major throughlines, how its "
+                "parts fit together. Use the contents to decide which chapters "
+                "the question actually turns on and fetch those — do not answer "
+                "from the opening pages alone, and do not pad with a chapter-by-"
+                "chapter tour the reader did not ask for."
+            )
+        else:
+            parts.append(
+                "THE READER IS ASKING ABOUT THE PAPER AS A WHOLE, not about any "
+                "one passage. Nothing is highlighted. Answer at the level of the "
+                "paper: its argument, its method, its results, how its parts fit "
+                "together. Use the contents to decide which sections the question "
+                "actually turns on and fetch those — do not answer from the "
+                "opening blocks alone, and do not pad with a section-by-section "
+                "tour the reader did not ask for."
+            )
         if window:
-            parts.append("HOW THE PAPER OPENS:\n" + format_blocks(window))
+            parts.append(f"HOW THE {noun.upper()} OPENS:\n" + format_blocks(window))
         return "\n\n".join(parts)
     elif quote:
         parts.append("THE READER HIGHLIGHTED THIS PASSAGE:\n“" + quote + "”")
     else:
-        parts.append("The reader is currently reading around this point in the paper.")
+        parts.append(f"The reader is currently reading around this point in the {noun}.")
 
     if window:
         parts.append("SURROUNDING TEXT:\n" + format_blocks(window))
@@ -329,15 +478,18 @@ _SECTION_RE = re.compile(r"^\s*SECTION:\s*\[*\s*(\d+)", re.IGNORECASE | re.MULTI
 
 
 def _parse_tool_calls(reply: str) -> dict:
-    """Pull THINK / SECTION / SEARCH / READ / WEB out of a model reply.
+    """Pull THINK / SECTION / SEARCH / READ / WEB / REMEMBER out of a model reply.
 
     Only looks inside a <tool> block. A model that mentions "SEARCH:" while
     explaining something in prose must not accidentally trigger a round trip.
 
-    Returns ``{"think", "sections", "searches", "reads", "webs"}``. ``think``
-    carries no execution — it is the rationale line the reader sees.
+    Returns ``{"think", "sections", "searches", "reads", "webs", "remembers"}``.
+    ``think`` carries no execution — it is the rationale line the reader sees.
     """
-    empty = {"think": None, "sections": [], "searches": [], "reads": [], "webs": []}
+    empty = {
+        "think": None, "sections": [], "searches": [], "reads": [], "webs": [],
+        "remembers": [],
+    }
     match = TOOL_BLOCK_RE.search(reply)
     if not match:
         return empty
@@ -349,6 +501,8 @@ def _parse_tool_calls(reply: str) -> dict:
         "searches": [q.strip() for q in _SEARCH_RE.findall(body) if q.strip()][:3],
         "reads": [(int(a), int(b)) for a, b in _READ_RE.findall(body)][:3],
         "webs": [q.strip() for q in WEB_RE.findall(body) if q.strip()][:2],
+        # One per round, hard — most rounds should remember nothing at all.
+        "remembers": [q.strip() for q in REMEMBER_RE.findall(body) if q.strip()][:1],
     }
 
 
@@ -356,6 +510,7 @@ def _has_calls(calls: dict) -> bool:
     """Whether anything in this block actually executes. THINK alone does not."""
     return bool(
         calls["sections"] or calls["searches"] or calls["reads"] or calls["webs"]
+        or calls["remembers"]
     )
 
 
@@ -367,6 +522,8 @@ def _plan(calls: dict) -> list[dict]:
     indexed queries, WEB is a network round trip. Running the cheap ones first
     means the reader watches the trail fill in immediately instead of staring
     at one pending web row while three instant fetches wait behind it.
+    REMEMBER runs last of all, and not because it is slow — it is a write, so
+    the trail reads as "looked, then remembered" rather than the reverse.
     """
     plan: list[dict] = []
     for seq in calls["sections"]:
@@ -379,6 +536,8 @@ def _plan(calls: dict) -> list[dict]:
         plan.append({"tool": "SEARCH", "arg": query})
     for query in calls["webs"]:
         plan.append({"tool": "WEB", "arg": query})
+    for body in calls["remembers"]:
+        plan.append({"tool": "REMEMBER", "arg": body})
     return plan
 
 
@@ -397,6 +556,8 @@ def _pending_label(chunks: list[dict], call: dict) -> str:
         return f"Reading blocks {call['start']}–{call['end']}"
     if tool == "SEARCH":
         return f"Searching the paper for “{call['arg']}”"
+    if tool == "REMEMBER":
+        return "Remembering that for next time"
     return f"Searching the web for “{call['arg']}”"
 
 
@@ -405,6 +566,8 @@ async def _run_call(
     document_id: UUID,
     chunks: list[dict],
     call: dict,
+    *,
+    user_id: UUID,
 ) -> dict:
     """Execute one planned call and return it filled in.
 
@@ -458,6 +621,21 @@ async def _run_call(
         out["seqs"] = [h["sequence_id"] for h in hits]
         return out
 
+    if tool == "REMEMBER":
+        # Always global (document_id=None) — a one-line REMEMBER has no clean
+        # way to say "this is specific to this book", and a reader preference
+        # is the common case anyway. See chat/memory.py.
+        memory_id = await write_memory(
+            session, user_id=user_id, body=call["arg"], document_id=None, source="explicit"
+        )
+        out["observation"] = (
+            f"REMEMBERED: {call['arg']}" if memory_id
+            else f"REMEMBER: {call['arg']} — already remembered, skipped."
+        )
+        out["label"] = "Remembered that for next time"
+        out["result"] = "saved" if memory_id else "already knew that"
+        return out
+
     text, sources = await run_web(call["arg"])
     out["observation"] = text
     out["label"] = f"Searched the web for “{call['arg']}”"
@@ -498,8 +676,10 @@ async def answer_paper_question(
     session: AsyncSession,
     *,
     document_id: UUID,
+    user_id: UUID,
     question: str,
     anchor: dict,
+    doc_kind: str = "paper",
     thread: Optional[list[dict]] = None,
     image_paths: Optional[list[str]] = None,
     model: Optional[str] = None,
@@ -516,7 +696,12 @@ async def answer_paper_question(
 
     ``anchor`` is {kind, sequence_id, quote, image_path}; ``kind`` may be
     ``document`` for a question about the paper as a whole rather than a
-    passage in it. ``thread`` is the earlier Q+A at this anchor (for
+    passage in it. ``doc_kind`` is ``"paper"`` or ``"book"`` and selects an
+    entirely different prompt voice (see ``_for_kind`` above) — a book reader
+    gets a conversational companion, not a citation-heavy margin annotator.
+    ``user_id`` scopes memory recall/writes (see chat/memory.py) — it is
+    otherwise unused here, since a note's *ownership* was already checked
+    before this was called. ``thread`` is the earlier Q+A at this anchor (for
     follow-ups). ``model`` overrides the configured default, so two notes can
     put the same question to different models and be compared side by side.
     ``max_steps`` overrides PAPER_AGENT_MAX_STEPS — a holistic question ranges
@@ -530,11 +715,12 @@ async def answer_paper_question(
     "<tool>SEARCH: …" on screen. Generation time is unchanged — only the
     reveal is.
     """
+    noun = "book" if doc_kind == "book" else "paper"
     chunks = await chunk_repo.get_all_document_chunks(session, document_id)
     if not chunks:
         yield {
             "type": "done",
-            "answer": "This paper has no extracted text yet.",
+            "answer": f"This {noun} has no extracted text yet.",
             "model": "",
             "retrieval_mode": "empty",
             "cited": [],
@@ -570,8 +756,11 @@ async def answer_paper_question(
     )
 
     thread_block = _format_thread(thread or [])
-    anchor_block = _format_anchor(anchor, window)
+    anchor_block = _format_anchor(anchor, window, doc_kind=doc_kind)
     web_on = allow_web and web_search.is_configured()
+    memory_block = format_memories(
+        await recall_memories(session, user_id=user_id, document_id=document_id, question=question)
+    )
 
     logger.info(
         "NOTE[start] doc=%s blocks=%d tokens=%d mode=%s anchor=%s/%d web=%s model=%s",
@@ -582,39 +771,48 @@ async def answer_paper_question(
 
     # ── Strategy 1 (opt-in): show the model the entire paper. ───────────────
     if fits_whole:
-        yield {"type": "status", "message": "Reading the whole paper…"}
+        yield {"type": "status", "message": f"Reading the whole {noun}…"}
         parts = [anchor_block]
         if thread_block:
             parts.append(thread_block)
-        parts.append("THE COMPLETE PAPER:\n" + format_blocks(chunks))
+        if memory_block:
+            parts.append(memory_block)
+        parts.append(f"THE COMPLETE {noun.upper()}:\n" + format_blocks(chunks))
         messages = build_multimodal_messages(
             question,
-            system=_WHOLE_SYSTEM,
+            system=_for_kind(_WHOLE_SYSTEM_BY_KIND, doc_kind),
             context_text="\n\n---\n\n".join(parts),
             image_paths=image_paths or None,
         )
-        async for event in _stream_answer(messages, retrieval_mode="whole", model=model):
+        async for event in _stream_answer(
+            messages, retrieval_mode="whole", model=model,
+            session=session, user_id=user_id,
+        ):
             yield event
         return
 
     # ── Strategy 2 (default): the anchor, the contents, and the tools. ──────
     yield {
         "type": "status",
-        "message": "Reading the paper…" if anchor_kind == "document" else "Reading the passage…",
+        "message": f"Reading the {noun}…" if anchor_kind == "document" else "Reading the passage…",
     }
     rounds = max_steps or settings.paper_agent_max_steps
-    system = _AGENT_SYSTEM.format(
+    system = _for_kind(_AGENT_SYSTEM_BY_KIND, doc_kind).format(
         max_steps=rounds,
-        web_help=_WEB_HELP if web_on else "",
-        web_example=_WEB_EXAMPLE if web_on else "",
+        web_help=_for_kind(_WEB_HELP_BY_KIND, doc_kind) if web_on else "",
+        web_example=_for_kind(_WEB_EXAMPLE_BY_KIND, doc_kind) if web_on else "",
+        remember_bullet=_REMEMBER_BULLET.format(noun=noun),
+        remember_example=_REMEMBER_EXAMPLE,
     )
     base_parts = [
         anchor_block,
-        "PAPER CONTENTS (SECTION takes any of these block numbers):\n"
+        f"{noun.upper()} CONTENTS (SECTION takes any of these block numbers):\n"
         + _format_contents(chunks),
     ]
     if thread_block:
         base_parts.insert(1, thread_block)
+    if memory_block:
+        base_parts.append(memory_block)
     gathered: list[str] = []
     # The reader-facing record of every call, in order. Returned on `done` and
     # persisted with the note, so reopening it still shows how it was answered.
@@ -645,10 +843,21 @@ async def answer_paper_question(
 
         if not _has_calls(calls):
             answer = strip_tool_block(reply)
-            if answer:
-                # It answered instead of calling a tool. Emit what it wrote
-                # rather than paying for an identical second generation.
-                yield {"type": "token", "text": answer}
+            # ⚠ <remember> comes out here too, not just in the streamed path —
+            # this branch never touches stream_answer (it answered straight
+            # from the probe), so catching the tag only there would leave it
+            # sitting raw in the answer exactly when the reader asked
+            # something worth remembering.
+            answer, remembered = extract_remembers(answer)
+            answer = answer.strip()
+            if answer or remembered:
+                if answer:
+                    yield {"type": "token", "text": answer}
+                async for ev in write_remembered(
+                    session, remembered, user_id=user_id, n=step + 1,
+                    id_prefix=f"remember{step}", trail=trail,
+                ):
+                    yield ev
                 yield {
                     "type": "done",
                     "answer": answer,
@@ -674,7 +883,7 @@ async def answer_paper_question(
 
         observations: list[str] = []
         for i, call in enumerate(plan):
-            done_call = await _run_call(session, document_id, chunks, call)
+            done_call = await _run_call(session, document_id, chunks, call, user_id=user_id)
             observations.append(done_call["observation"])
             event = step_event(
                 f"s{step}-{i}", step + 1, done_call,
@@ -698,12 +907,14 @@ async def answer_paper_question(
     parts.append("You have no tool rounds left. Answer now with what you have.")
     messages = build_multimodal_messages(
         question,
-        system=_ANSWER_SYSTEM,  # no tool instructions — nothing left to call
+        # no tool instructions — nothing left to call
+        system=_for_kind(_ANSWER_SYSTEM_BY_KIND, doc_kind),
         context_text="\n\n---\n\n".join(parts),
         image_paths=image_paths or None,
     )
     async for event in _stream_answer(
-        messages, retrieval_mode="agent", model=model, steps=trail
+        messages, retrieval_mode="agent", model=model, steps=trail,
+        session=session, user_id=user_id,
     ):
         yield event
 
@@ -714,26 +925,45 @@ async def _stream_answer(
     retrieval_mode: str,
     model: Optional[str] = None,
     steps: Optional[list[dict]] = None,
+    session: AsyncSession,
+    user_id: UUID,
 ) -> AsyncIterator[dict]:
     """Stream one generation and close it out with a done event.
 
     ⚠ Goes through ``agent_tools.stream_answer`` rather than the LLM client
     directly, so a tool block the model emits on this turn — which it is told
-    it cannot call — never reaches the reader. See that function.
+    it cannot call — never reaches the reader. See that function. The same
+    pass also catches a ``<remember>`` tag: this is the forced final turn, so
+    REMEMBER-as-a-tool-line is never available here either, and this is the
+    other of the two places (with the "answered from the probe" branch above)
+    a model reaches for it anyway.
     """
     answer = ""
     answered_by = ""
-    async for event in stream_answer(messages, model=model, temperature=0.3):
+    remembered: list[str] = []
+    async for event in stream_answer(
+        messages, model=model, temperature=0.3, catch_remember=True
+    ):
         if event["type"] == "token":
             yield event
         else:
             answer = event.get("answer") or ""
             answered_by = event.get("model") or ""
+            remembered = event.get("remembers") or []
+
+    trail = steps if steps is not None else []
+    if remembered:
+        async for ev in write_remembered(
+            session, remembered, user_id=user_id, n=len(trail) + 1,
+            id_prefix="remember-final", trail=trail,
+        ):
+            yield ev
+
     yield {
         "type": "done",
         "answer": answer,
         "model": answered_by or (model or ""),
         "retrieval_mode": retrieval_mode,
         "cited": cited_sequences(answer),
-        "steps": steps or [],
+        "steps": trail,
     }

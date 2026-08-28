@@ -153,6 +153,111 @@ async def search_chunks_fulltext(
     return [dict(r) for r in result.mappings().all()]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent memory (see chat/memory.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def insert_memory(
+    session: AsyncSession,
+    user_id: UUID,
+    document_id: Optional[UUID],
+    body: str,
+    source: str,
+    embedding: list[float],
+    model_name: str,
+) -> UUID:
+    """Store one durable memory and return its id."""
+    result = await session.execute(
+        text("""
+            INSERT INTO agent_memories (user_id, document_id, body, source, embedding, embedding_model)
+            VALUES (:user_id, :document_id, :body, :source, CAST(:embedding AS vector), :model)
+            RETURNING id
+        """),
+        {
+            "user_id": user_id,
+            "document_id": document_id,
+            "body": body,
+            "source": source,
+            "embedding": _vector_literal(embedding),
+            "model": model_name,
+        },
+    )
+    return result.scalar_one()
+
+
+async def search_memories(
+    session: AsyncSession,
+    user_id: UUID,
+    query_embedding: list[float],
+    limit: int,
+    document_id: Optional[UUID],
+    min_similarity: float,
+) -> list[dict]:
+    """The reader's most relevant memories for a question, by cosine similarity.
+
+    Global memories (document_id IS NULL) are always included alongside ones
+    scoped to the given document — a preference stated while reading one book
+    is still true in the next.
+    """
+    params: dict = {
+        "user_id": user_id,
+        "embedding": _vector_literal(query_embedding),
+        "limit": limit,
+    }
+    if document_id:
+        scope = "AND (document_id = :document_id OR document_id IS NULL)"
+        params["document_id"] = document_id
+    else:
+        scope = "AND document_id IS NULL"
+
+    result = await session.execute(
+        text(f"""
+            SELECT id, document_id, body, source, created_at,
+                   1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
+            FROM agent_memories
+            WHERE user_id = :user_id {scope}
+            ORDER BY embedding <=> CAST(:embedding AS vector)
+            LIMIT :limit
+        """),
+        params,
+    )
+    rows = [dict(r) for r in result.mappings().all()]
+    return [r for r in rows if r["similarity"] >= min_similarity]
+
+
+async def find_similar_memory(
+    session: AsyncSession,
+    user_id: UUID,
+    document_id: Optional[UUID],
+    query_embedding: list[float],
+    min_similarity: float,
+) -> Optional[dict]:
+    """The closest existing memory in EXACTLY this scope, for write-time dedup.
+
+    ⚠ IS NOT DISTINCT FROM, not =: document_id is often NULL (global scope),
+    and NULL = NULL is NULL in SQL — a plain equality would silently exclude
+    every global memory from its own dedup check.
+    """
+    result = await session.execute(
+        text("""
+            SELECT id, body, 1 - (embedding <=> CAST(:embedding AS vector)) AS similarity
+            FROM agent_memories
+            WHERE user_id = :user_id AND document_id IS NOT DISTINCT FROM :document_id
+            ORDER BY embedding <=> CAST(:embedding AS vector)
+            LIMIT 1
+        """),
+        {
+            "user_id": user_id,
+            "document_id": document_id,
+            "embedding": _vector_literal(query_embedding),
+        },
+    )
+    row = result.mappings().first()
+    if row and row["similarity"] >= min_similarity:
+        return dict(row)
+    return None
+
+
 async def ensure_vector_dimension(session: AsyncSession) -> bool:
     """Sync the chunk_embeddings column to settings.vector_dimension.
 

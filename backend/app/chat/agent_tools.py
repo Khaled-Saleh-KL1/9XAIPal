@@ -64,6 +64,9 @@ TOOL_BLOCK_RE = re.compile(r"<tool>(.*?)(?:</tool>|$)", re.DOTALL | re.IGNORECAS
 # fetches it triggered. Not a tool: it executes nothing and costs no round.
 THINK_RE = re.compile(r"^\s*THINK:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 WEB_RE = re.compile(r"^\s*WEB:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+# A durable note about the READER, not the paper — see chat/memory.py. Shared
+# between both agents the same way WEB is: one line, one meaning, everywhere.
+REMEMBER_RE = re.compile(r"^\s*REMEMBER:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 def strip_tool_block(reply: str) -> str:
@@ -293,7 +296,10 @@ async def run_web(query: str, *, limit: Optional[int] = None) -> tuple[str, list
 
 # Longest prefix of a marker that could arrive split across two tokens. Held
 # back from the reader until the next token proves it is prose.
-_HOLD = len("</note>")
+# Longest of the closing tags stream_answer might be watching for (</remember>
+# is the longest today) — must cover whichever one is active so a split
+# boundary is never released to the reader half-formed.
+_HOLD = len("</remember>")
 
 # A note the model wants pinned, written inside its answer.
 #
@@ -335,17 +341,41 @@ def extract_notes(text: str) -> tuple[str, list[dict]]:
     return cleaned, notes
 
 
+# A durable memory the model wants kept, written inline — REMEMBER only exists
+# as a tool-block line, and a turn with no tools left (or one that just
+# answers straight from the probe) has no way to call it. Same fallback as
+# <note>, same reason: a model reaches for the marker whether the current turn
+# offers it or not.
+_REMEMBER_TAG_RE = re.compile(r"<remember(\s[^>]*)?>(.*?)</remember>", re.DOTALL | re.IGNORECASE)
+
+
+def extract_remembers(text: str) -> tuple[str, list[str]]:
+    """Pull `<remember>` blocks out of an answer, same shape as extract_notes."""
+    bodies: list[str] = []
+    for m in _REMEMBER_TAG_RE.finditer(text or ""):
+        body = (m.group(2) or "").strip()
+        if body:
+            bodies.append(body)
+    if not bodies:
+        return text, []
+    cleaned = _REMEMBER_TAG_RE.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned, bodies
+
+
 async def stream_answer(
     messages: list[dict],
     *,
     model: Optional[str] = None,
     temperature: float = 0.3,
     catch_notes: bool = False,
+    catch_remember: bool = False,
 ) -> AsyncIterator[dict]:
     """Stream the forced final answer, keeping markup out of the reader's view.
 
     Yields ``{"type": "token"}`` events and finally
-    ``{"type": "_final", "answer", "model", "notes"}`` for the caller to shape.
+    ``{"type": "_final", "answer", "model", "notes", "remembers"}`` for the
+    caller to shape.
 
     Two different filters, because two different things go wrong:
 
@@ -355,10 +385,13 @@ async def stream_answer(
     claim… SECTION: P3:29" — so the stream ends there. **Observed, not
     hypothetical**: it happened on the first live desk question.
 
-    ⚠ **A `<note>` block is skipped, not truncated.** It is a legitimate thing
-    the model wanted to say, it just belongs on the board rather than in the
-    prose — and it routinely comes *first*, so truncating at it would drop the
-    entire answer. The span is stepped over and the answer continues after it.
+    ⚠ **A `<note>` or `<remember>` block is skipped, not truncated.** Both are
+    a legitimate thing the model wanted to say, they just belong somewhere
+    other than the prose — and either routinely comes *first*, so truncating
+    there would drop the entire answer. The span is stepped over and the
+    answer continues after it. The two share this handling (rather than one
+    each) because a reply can carry both, and scanning for them independently
+    would race over which one "wins" the earlier position.
 
     Both hold back the last few characters until the next token arrives, because
     a marker can be split across token boundaries ("<no" + "te>").
@@ -366,7 +399,8 @@ async def stream_answer(
     buf = ""
     sent = 0          # how much of buf the reader has already seen
     leaked = False
-    skip_from = -1    # start of a `<note>` span we are stepping over
+    skip_from = -1    # start of a skipped span (a <note> or <remember>) we are stepping over
+    skip_close = ""   # its closing tag, so the two never get cross-matched
     answered_by = ""
 
     def emit_upto(limit: int) -> Optional[dict]:
@@ -393,24 +427,35 @@ async def stream_answer(
         buf += event["text"]
         low = buf.lower()
 
-        # Inside a note we are waiting for the closing tag, and nothing in
-        # between reaches the reader.
+        # Inside a skipped span we are waiting for ITS closing tag, and
+        # nothing in between reaches the reader.
         if skip_from >= 0:
-            close = low.find("</note>", skip_from)
+            close = low.find(skip_close, skip_from)
             if close == -1:
                 continue
-            sent = close + len("</note>")
+            sent = close + len(skip_close)
             skip_from = -1
+            skip_close = ""
             low = buf.lower()
 
         cut = low.find("<tool", sent)
-        note_at = low.find("<note", sent) if catch_notes else -1
 
-        if note_at != -1 and (cut == -1 or note_at < cut):
-            ev = emit_upto(note_at)
+        # Earliest of the two catch-tags that actually occurs, so a reply
+        # carrying both is stepped over left to right rather than always
+        # preferring one kind.
+        tag_at, tag_close = -1, ""
+        for candidate, close_tag in (
+            (low.find("<note", sent) if catch_notes else -1, "</note>"),
+            (low.find("<remember", sent) if catch_remember else -1, "</remember>"),
+        ):
+            if candidate != -1 and (tag_at == -1 or candidate < tag_at):
+                tag_at, tag_close = candidate, close_tag
+
+        if tag_at != -1 and (cut == -1 or tag_at < cut):
+            ev = emit_upto(tag_at)
             if ev:
                 yield ev
-            skip_from = note_at
+            skip_from, skip_close = tag_at, tag_close
             continue
 
         if cut != -1:
@@ -426,15 +471,20 @@ async def stream_answer(
 
     answer = strip_tool_block(buf) if leaked else buf
     notes: list[dict] = []
+    remembers: list[str] = []
     if catch_notes:
         answer, notes = extract_notes(answer)
+    if catch_remember:
+        answer, remembers = extract_remembers(answer)
     answer = answer.strip()
 
     if not leaked and skip_from < 0:
-        # Flush whatever was held back, minus anything the note pass removed.
+        # Flush whatever was held back, minus anything the tag passes removed.
         tail = buf[sent:]
         if catch_notes:
             tail, _ = extract_notes(tail)
+        if catch_remember:
+            tail, _ = extract_remembers(tail)
         if tail.strip():
             yield {"type": "token", "text": tail}
     if leaked:
@@ -442,4 +492,10 @@ async def stream_answer(
             "agent emitted a tool block on the forced final turn; %d chars dropped",
             len(buf) - len(answer),
         )
-    yield {"type": "_final", "answer": answer, "model": answered_by, "notes": notes}
+    yield {
+        "type": "_final",
+        "answer": answer,
+        "model": answered_by,
+        "notes": notes,
+        "remembers": remembers,
+    }

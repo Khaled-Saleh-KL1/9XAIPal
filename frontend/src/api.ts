@@ -334,8 +334,8 @@ export interface AgentStep {
   id: string;
   /** Which tool round this call belonged to, 1-based. */
   n: number;
-  /** `NOTE` is a write, not a fetch — it pins to a board. */
-  tool: 'SECTION' | 'SEARCH' | 'READ' | 'WEB' | 'NOTE';
+  /** `NOTE` and `REMEMBER` are writes, not fetches — they pin to a board / to memory. */
+  tool: 'SECTION' | 'SEARCH' | 'READ' | 'WEB' | 'NOTE' | 'REMEMBER';
   arg: string;
   state: 'running' | 'done';
   /** The model's own one-line reason, on the first call of each round. */
