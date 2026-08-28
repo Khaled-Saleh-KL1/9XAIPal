@@ -339,6 +339,12 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_status ON ingestion_jobs(status);
+-- Backs list_documents' "most recent job per document" LATERAL join (below)
+-- — without it, that subquery scans and sorts the whole table once per
+-- document row, on a table that only grows (job rows are never deleted).
+-- list_documents runs on every library poll.
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_document_created
+    ON ingestion_jobs(document_id, created_at DESC);
 
 -- ============================================================================
 -- Section Summaries: Pre-computed hierarchical overviews for high-quality
