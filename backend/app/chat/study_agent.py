@@ -49,20 +49,23 @@ from typing import AsyncIterator, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.agent_tools import (
+    REMEMBER_RE,
     THINK_RE,
     TOOL_BLOCK_RE,
     WEB_RE,
+    extract_notes,
+    extract_remembers,
     format_blocks,
     format_search_results,
     read_range,
     run_search,
     run_web,
-    extract_notes,
     section_range,
     step_event,
     stream_answer,
     strip_tool_block,
 )
+from app.chat.memory import format_memories, recall_memories, write_memory, write_remembered
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.repositories import chunks as chunk_repo
@@ -114,7 +117,7 @@ block, no partial answer:
 THINK: the comparison lives in P2's results table, and P1 defines the metric
 SECTION: P2:31
 SEARCH: sliding window attention
-READ: P1:40-52{web_example}
+READ: P1:40-52{web_example}{remember_example}
 </tool>
 
 - THINK is one short line saying why you are fetching. The reader sees it, so \
@@ -129,7 +132,7 @@ each hit came from. Use it when you do not know which paper holds something.
 - READ returns a block range from one paper, verbatim.{web_help}
 - NOTE pins a short note to this chat's board, where the reader will see it \
 beside the conversation. NOTE ALL pins it to the universal board instead, for \
-something that outlives this chat.
+something that outlives this chat.{remember_bullet}
 - Up to three lines of each. Every line in one block runs before you are \
 called again.
 
@@ -149,6 +152,17 @@ The [[P<n>:<block>]] markers are for papers in this study and nothing else: \
 never write [[WEB]] or a marker round anything that is not a paper block."""
 
 _WEB_EXAMPLE = "\nWEB: ARC-AGI state of the art 2026"
+
+# Identical tool in both agents — it is about the reader, not the documents —
+# so the bullet and example are written once here rather than duplicated.
+# See chat/memory.py.
+_REMEMBER_BULLET = """
+- REMEMBER saves one short, durable note about the READER for future \
+conversations — a stated preference, their expertise level, a recurring \
+interest. Use it when they tell you something about themselves or how they \
+want to be helped, never for facts about the papers themselves. Sparingly: \
+most questions produce nothing worth remembering."""
+_REMEMBER_EXAMPLE = "\nREMEMBER: reader prefers short, plain-language answers"
 
 
 # Appended to the tool instructions. Kept separate so the rules about when NOT
@@ -185,7 +199,15 @@ keeping, wrap it in a note tag anywhere in your reply:
 Plain <note> pins to this chat's board; board="all" pins to the universal one. \
 The tag is removed before the reader sees your reply and the text goes on the \
 board instead, so do NOT also say it in the answer. You cannot delete a note - \
-only the reader can."""
+only the reader can.
+
+If you learned something durable about the READER — not the papers — wrap it \
+the same way:
+
+<remember>reader prefers short, plain-language answers</remember>
+
+Also removed before the reader sees your reply. Rare — most answers write \
+nothing here."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -302,14 +324,14 @@ _NOTE_RE = re.compile(r"^\s*NOTE:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 def parse_tool_calls(reply: str) -> dict:
-    """Pull THINK / SECTION / SEARCH / READ / WEB out of a model reply.
+    """Pull THINK / SECTION / SEARCH / READ / WEB / REMEMBER out of a model reply.
 
     Only looks inside a <tool> block. A model that mentions "SEARCH:" while
     explaining something in prose must not accidentally trigger a round trip.
     """
     empty = {
         "think": None, "sections": [], "searches": [], "reads": [], "webs": [],
-        "notes": [], "notes_all": [],
+        "notes": [], "notes_all": [], "remembers": [],
     }
     match = TOOL_BLOCK_RE.search(reply)
     if not match:
@@ -326,6 +348,8 @@ def parse_tool_calls(reply: str) -> dict:
         # helpful thing to do will otherwise bury the board in one answer.
         "notes": [n.strip() for n in _NOTE_RE.findall(body) if n.strip()][:2],
         "notes_all": [n.strip() for n in _NOTE_ALL_RE.findall(body) if n.strip()][:2],
+        # One per round, hard — most rounds should remember nothing at all.
+        "remembers": [q.strip() for q in REMEMBER_RE.findall(body) if q.strip()][:1],
     }
 
 
@@ -333,7 +357,7 @@ def has_calls(calls: dict) -> bool:
     """Whether anything in this block actually executes. THINK alone does not."""
     return bool(
         calls["sections"] or calls["searches"] or calls["reads"] or calls["webs"]
-        or calls["notes"] or calls["notes_all"]
+        or calls["notes"] or calls["notes_all"] or calls["remembers"]
     )
 
 
@@ -366,12 +390,15 @@ def _plan(calls: dict, paper_count: int) -> list[dict]:
         plan.append({"tool": "SEARCH", "arg": query})
     for query in calls["webs"]:
         plan.append({"tool": "WEB", "arg": query})
-    # Notes last, and not because they are slow — they are a write, and running
-    # them after the reads keeps the trail reading as "looked, then wrote".
+    # Notes and REMEMBER last, and not because they are slow — they are
+    # writes, and running them after the reads keeps the trail reading as
+    # "looked, then wrote".
     for body in calls["notes"]:
         plan.append({"tool": "NOTE", "arg": body, "board": "chat"})
     for body in calls["notes_all"]:
         plan.append({"tool": "NOTE", "arg": body, "board": "universal"})
+    for body in calls["remembers"]:
+        plan.append({"tool": "REMEMBER", "arg": body})
     return plan
 
 
@@ -385,6 +412,8 @@ def _pending_label(call: dict, papers: list[dict], chunks_by_doc: dict) -> str:
     if tool == "NOTE":
         where = "the universal board" if call.get("board") == "universal" else "this chat"
         return f"Pinning a note to {where}"
+    if tool == "REMEMBER":
+        return "Remembering that for next time"
     name = _paper_label(papers[call["p"] - 1])
     if tool == "READ":
         return f"Reading {name} · blocks {call['start']}–{call['end']}"
@@ -498,6 +527,21 @@ async def _run_call(
         out["label"] = f"Pinned a note to {where}"
         out["result"] = "saved"
         out["note_id"] = str(row["id"])
+        return out
+
+    if tool == "REMEMBER":
+        # Always global (document_id=None) — a study spans several papers, so
+        # there is no single document to scope a REMEMBER to even if the
+        # model wanted to. See chat/memory.py.
+        memory_id = await write_memory(
+            session, user_id=user_id, body=call["arg"], document_id=None, source="explicit"
+        )
+        out["observation"] = (
+            f"REMEMBERED: {call['arg']}" if memory_id
+            else f"REMEMBER: {call['arg']} — already remembered, skipped."
+        )
+        out["label"] = "Remembered that for next time"
+        out["result"] = "saved" if memory_id else "already knew that"
         return out
 
     text, sources = await run_web(call["arg"])
@@ -677,6 +721,8 @@ async def answer_study_question(
         max_steps=rounds,
         web_help=_WEB_HELP if web_on else "",
         web_example=_WEB_EXAMPLE if web_on else "",
+        remember_bullet=_REMEMBER_BULLET,
+        remember_example=_REMEMBER_EXAMPLE,
     ) + _NOTE_HELP
 
     base_parts = ["STUDY INDEX:\n" + _format_index(papers, chunks_by_doc)]
@@ -686,6 +732,13 @@ async def answer_study_question(
     history_block = _format_history(history or [])
     if history_block:
         base_parts.append(history_block)
+    # Study memory is global only (document_id=None) — a study spans several
+    # papers, so there is no one document to scope recall to either.
+    memory_block = format_memories(
+        await recall_memories(session, user_id=user_id, document_id=None, question=question)
+    )
+    if memory_block:
+        base_parts.append(memory_block)
 
     logger.info(
         "STUDY[start] papers=%d blocks=%d web=%s model=%s",
@@ -731,13 +784,14 @@ async def answer_study_question(
 
         if not has_calls(calls):
             answer = strip_tool_block(reply)
-            # ⚠ Notes come out here too. This branch never touches
-            # stream_answer — the model answered straight from the probe — so
-            # extracting only in the streamed path left the raw tag in the
-            # answer precisely when the reader had asked for a note.
+            # ⚠ Notes (and remembers) come out here too. This branch never
+            # touches stream_answer — the model answered straight from the
+            # probe — so extracting only in the streamed path left the raw
+            # tag in the answer precisely when the reader had asked for one.
             answer, written = extract_notes(answer)
+            answer, remembered = extract_remembers(answer)
             answer = answer.strip()
-            if answer or written:
+            if answer or written or remembered:
                 if answer:
                     yield {"type": "token", "text": answer}
                 async for ev in _pin_written_notes(
@@ -747,6 +801,11 @@ async def answer_study_question(
                     model_name=result.get("model", "") or (model or ""),
                     round_no=step + 1,
                     trail=trail,
+                ):
+                    yield ev
+                async for ev in write_remembered(
+                    session, remembered, user_id=user_id, n=step + 1,
+                    id_prefix=f"remember{step}", trail=trail,
                 ):
                     yield ev
                 yield {
@@ -829,8 +888,9 @@ async def answer_study_question(
     answer = ""
     answered_by = ""
     written: list[dict] = []
+    remembered: list[str] = []
     async for event in stream_answer(
-        messages, model=model, temperature=0.3, catch_notes=True
+        messages, model=model, temperature=0.3, catch_notes=True, catch_remember=True
     ):
         if event["type"] == "token":
             yield event
@@ -838,6 +898,7 @@ async def answer_study_question(
             answer = event.get("answer") or ""
             answered_by = event.get("model") or ""
             written = event.get("notes") or []
+            remembered = event.get("remembers") or []
 
     async for ev in _pin_written_notes(
         session, written,
@@ -846,6 +907,11 @@ async def answer_study_question(
         model_name=answered_by or (model or ""),
         round_no=rounds,
         trail=trail,
+    ):
+        yield ev
+    async for ev in write_remembered(
+        session, remembered, user_id=user_id, n=rounds,
+        id_prefix="remember-final", trail=trail,
     ):
         yield ev
 

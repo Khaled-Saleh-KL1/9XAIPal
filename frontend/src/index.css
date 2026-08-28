@@ -585,6 +585,30 @@ body {
   text-overflow: ellipsis;
   max-width: 46ch;
 }
+/* The title doubles as the rename trigger — reset the <button> chrome it
+   otherwise carries, leaving only .reader-title's own look. */
+.reader-title-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  transition: color 140ms ease;
+}
+.reader-title-btn:hover { color: var(--accent); }
+.reader-title-input {
+  flex: 0 1 auto;
+  min-width: 160px;
+  max-width: 46ch;
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 14.5px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 6px;
+  outline: none;
+}
 .reader-bar-right {
   margin-left: auto;
   display: flex;

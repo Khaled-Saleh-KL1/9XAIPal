@@ -291,12 +291,14 @@ async def create_note_stream(
                     async for event in answer_paper_question(
                         session,
                         document_id=paper_id,
+                        user_id=current_user["id"],
                         question=payload.question,
                         anchor={
                             "kind": anchor.kind,
                             "sequence_id": anchor.sequence_id,
                             "quote": anchor.quote,
                         },
+                        doc_kind=doc.get("doc_kind") or "paper",
                         thread=thread,
                         image_paths=[image_path] if image_path else None,
                         model=requested_model,

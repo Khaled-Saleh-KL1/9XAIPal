@@ -220,6 +220,44 @@ CREATE TABLE IF NOT EXISTS sticky_note_papers (
 
 CREATE INDEX IF NOT EXISTS idx_sticky_note_papers_document ON sticky_note_papers (document_id);
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Agent memory
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- Durable, embedded observations the paper/book/study agents keep about a
+-- reader -- a stated preference, their level of expertise, a recurring
+-- interest -- so next week's conversation already knows it instead of the
+-- reader re-explaining themselves. See chat/memory.py.
+--
+-- source: 'explicit'  the agent chose to note it mid-conversation (REMEMBER
+--                      in a tool block, or a <remember> tag on a turn that
+--                      has no tools left -- same reason sticky_notes catches
+--                      a stray <note> tag: a model reaches for the marker
+--                      whether or not the current turn offers it as a tool)
+--         'distilled'  extracted after the fact from a compacted conversation
+--                      -- what lets memory grow on its own, not only when the
+--                      model happens to say REMEMBER
+--
+-- document_id NULL means the memory applies for this reader everywhere. Set,
+-- it only surfaces while they are in that paper/book. Retrieval checks both.
+CREATE TABLE IF NOT EXISTS agent_memories (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'explicit',
+    -- Embedded inline at write time (unlike chunk_embeddings, which is
+    -- populated by a background worker): a memory is one short sentence
+    -- written one at a time, not thousands of blocks from a fresh upload, so
+    -- there is no batch worth deferring.
+    embedding vector(1024) NOT NULL,  -- dimension is substituted from VECTOR_DIMENSION at migration time
+    embedding_model TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_memories_user ON agent_memories (user_id);
+CREATE INDEX IF NOT EXISTS idx_agent_memories_document ON agent_memories (document_id);
+
 -- Conversation turns
 -- Supports the nested sub-thread feature (tangents without polluting the main paper chat).
 -- Main linear chat turns have parent_turn_id IS NULL.

@@ -37,6 +37,7 @@ from app.chat.prompts import (
     detect_research_request,
 )
 from app.chat.research_agent import run_research_agent
+from app.chat.memory import distill_memories
 from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
 from app.database.connection import async_session_factory
@@ -772,8 +773,10 @@ async def _stream_book_agent(
     async for event in answer_paper_question(
         session,
         document_id=document_id,
+        user_id=user_id,
         question=prompt,
         anchor=anchor,
+        doc_kind="book",  # this branch only ever runs for doc_kind == "book"
         thread=thread,
         max_steps=(
             settings.paper_agent_holistic_max_steps
@@ -1094,8 +1097,23 @@ async def maybe_compact_conversation(
     )
     await session.commit()
 
+    # Piggyback memory distillation on the same checkpoint: it is already
+    # paying for one extra LLM call to re-read this transcript, so this is
+    # what lets memory grow on its own rather than only when the agent
+    # happens to say REMEMBER mid-conversation. See chat/memory.py.
+    try:
+        stored = await distill_memories(
+            session, user_id=user_id, document_id=document_id, conversation_text=history_text
+        )
+    except Exception:
+        logger.exception("ASK[compaction] memory distillation failed (non-fatal)")
+        stored = 0
+
     scope = f"thread_root={thread_root_turn_id}" if thread_root_turn_id else "main-chat"
-    logger.info("ASK[compaction] created compaction summary for conversation %s (%s)", conversation_id, scope)
+    logger.info(
+        "ASK[compaction] created compaction summary for conversation %s (%s); distilled %d memories",
+        conversation_id, scope, stored,
+    )
 
 
 def _last_compaction_time_in_thread(thread_turns: list[dict]) -> str:

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { IconBack, IconDoc } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
+import { TitleEditor } from '../components/TitleEditor';
+import { displayTitle } from '../lib/titles';
 import { ArticleBlock } from './ArticleBlock';
 import { AskComposer, type ComposerTarget } from './AskComposer';
 import { NoteCardView, PendingNoteCard, type NoteGroup, type PendingNote } from './NoteCard';
@@ -48,6 +50,7 @@ import {
   listStudies,
   moveNote as moveNoteApi,
   putDecks,
+  renamePaper,
   updatePersonalNote as updatePersonalNoteApi,
   type DocBlock,
   type FullDocument,
@@ -215,6 +218,8 @@ export function ArticleReader({
 }: Props) {
   const [doc, setDoc] = useState<FullDocument | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** Whether the header title is being edited in place. */
+  const [renamingTitle, setRenamingTitle] = useState(false);
   const [notes, setNotes] = useState<PaperNote[]>([]);
   /**
    * Whether the server's notes have arrived. Decks reference note ids, so
@@ -1534,6 +1539,25 @@ export function ArticleReader({
   // ── Render ──────────────────────────────────────────────────────────────
   const title = doc?.title || fallbackTitle;
 
+  /**
+   * Rename from the reader itself, not just the library — a long arXiv id
+   * turning into a name is exactly the moment the reader is looking at the
+   * paper, not the shelf. Optimistic: the header updates immediately, and
+   * next time the library loads it reads the same title straight from the
+   * database, no separate sync needed.
+   */
+  const commitTitleRename = async (next: string) => {
+    setRenamingTitle(false);
+    const clean = next.trim();
+    if (clean === title) return;
+    try {
+      const meta = await renamePaper(paperId, clean);
+      setDoc((prev) => (prev ? { ...prev, title: displayTitle(meta) } : prev));
+    } catch (e) {
+      setNotice({ text: `Could not rename: ${(e as Error).message}`, tone: 'error' });
+    }
+  };
+
   // Cards are rendered into whichever margin they belong to. Below the
   // two-gutter breakpoint sideOf() collapses everything to the right, so a
   // note saved on the left is still reachable on a narrow window.
@@ -1745,7 +1769,24 @@ export function ArticleReader({
         </button>
         <span className="reader-sep" />
         <IconDoc className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--muted)' }} />
-        <span className="reader-title">{title}</span>
+        {renamingTitle ? (
+          <TitleEditor
+            value={title}
+            onCommit={commitTitleRename}
+            onCancel={() => setRenamingTitle(false)}
+            className="reader-title-input"
+            placeholder="Name this paper…"
+          />
+        ) : (
+          <button
+            type="button"
+            className="reader-title reader-title-btn"
+            onClick={() => setRenamingTitle(true)}
+            title="Rename this paper"
+          >
+            {title}
+          </button>
+        )}
 
         <div className="reader-bar-right">
           <button

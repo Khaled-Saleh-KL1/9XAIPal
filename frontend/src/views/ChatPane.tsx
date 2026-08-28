@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo, type ImgHTMLAttributes, type AnchorHTMLAttributes } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, type ImgHTMLAttributes, type AnchorHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import type { ChatMessage } from '../types';
@@ -241,6 +241,25 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   // user switches papers or the pane unmounts, so a slow answer for the OLD
   // paper can never overwrite the NEW paper's chat state.
   const askAbortRef = useRef<AbortController | null>(null);
+
+  // ── Autoscroll ───────────────────────────────────────────────────────────
+  // ⚠ This pane had NO autoscroll at all — every message, including the one
+  // the reader just sent, landed below the fold with the view left wherever
+  // it happened to be. Against a pane that was scrolled to the bottom, that
+  // reads as the conversation jumping backward the instant you hit send.
+  // Same fix as StudyChat's: only follow new content when already at the
+  // bottom, and pin to the bottom the moment a question is sent.
+  const atBottom = useRef(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+  useLayoutEffect(() => {
+    if (!atBottom.current) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, streaming?.text, liveSteps.length, thinking]);
   // Close the picker when clicking outside of it.
   useEffect(() => {
     if (!pickerOpen) return;
@@ -265,6 +284,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
     setConversations([]);
     setPickerOpen(false);
     setThreadStack([]);
+    atBottom.current = true;
 
     (async () => {
       try {
@@ -313,6 +333,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
     setConversationId(null);
     setInput('');
     setPickerOpen(false);
+    atBottom.current = true;
     textareaRef.current?.focus();
   }, []);
 
@@ -322,6 +343,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
     setConversationId(convId);
     setMessages([]);
     setThreadStack([]); // always exit any sub-thread when switching top-level chats
+    atBottom.current = true;
     try {
       const { turns, maxDepth: md } = await getPaperChat(paperId, convId);
       setMaxDepth(md);
@@ -344,6 +366,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   // navigation transition so frontend depth never disagrees with the backend.
   const loadFromStack = useCallback(async (stack: ThreadFrame[]) => {
     if (!conversationId) return;
+    atBottom.current = true;
     const tail = stack.length > 0 ? stack[stack.length - 1].rootTurnId : null;
     try {
       const { turns, depth: serverDepth, maxDepth: md } = await getPaperChat(
@@ -408,6 +431,9 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
     // the text is empty but attachments are present.
     if ((!q && attachments.length === 0) || thinking) return;
     const wasNewChat = conversationId === null;
+    // Sending is always a reason to follow the conversation, even if the
+    // reader had scrolled up to reread something first.
+    atBottom.current = true;
 
     // Strip the data:image/...;base64, prefix; backend expects raw base64.
     const imagesB64 = attachments.map((a) => a.dataUrl.replace(/^data:[^,]+,/, ''));
@@ -665,7 +691,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
       </div>
 
       {/* message history */}
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto thin-scroll">
+      <div ref={scrollRef} onScroll={onScroll} className="flex-1 min-h-0 overflow-y-auto thin-scroll">
         <div className="px-6 py-6 space-y-6">
           {messages.length === 0 && (
             <p className="text-[13px]" style={{ color: 'var(--muted)' }}>
