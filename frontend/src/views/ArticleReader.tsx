@@ -1015,14 +1015,31 @@ export function ArticleReader({
           return;
         }
         const bounds = scroller.getBoundingClientRect();
+        // The group is centred on `left` (see .ask-pill-group's translateX).
+        // On a narrow phone a selection near either edge of the column would
+        // otherwise centre it partly off-screen — clamp so the full pill
+        // group (~260px, three pills) always stays reachable.
+        const halfGroupWidth = 130;
+        const rawLeft = cap.rect.left - bounds.left + cap.rect.width / 2;
+        const left = Math.min(
+          Math.max(rawLeft, halfGroupWidth + 8),
+          Math.max(halfGroupWidth + 8, bounds.width - halfGroupWidth - 8),
+        );
         setPill({
           top: cap.rect.bottom - bounds.top + scroller.scrollTop + 8,
-          left: cap.rect.left - bounds.left + cap.rect.width / 2,
+          left,
         });
       }, 10);
     };
     article.addEventListener('mouseup', onUp);
-    return () => article.removeEventListener('mouseup', onUp);
+    // A touch selection never fires mouseup — without this, the whole
+    // Ask/Note/Bookmark pill (the only way to ask the AI about a passage on
+    // a paper) simply never appears on a phone or tablet.
+    article.addEventListener('touchend', onUp);
+    return () => {
+      article.removeEventListener('mouseup', onUp);
+      article.removeEventListener('touchend', onUp);
+    };
   }, [doc]);
 
   /**

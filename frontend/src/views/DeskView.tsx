@@ -101,6 +101,13 @@ export function DeskView({
   const [boardHidden, setBoardHidden] = useState<boolean>(() => {
     try { return localStorage.getItem('pal:deskBoardHidden') === '1'; } catch { return false; }
   });
+  /**
+   * Below 820px the rail (scope/paper picker) is hidden by CSS to give the
+   * chat room to breathe — see `.desk-grid` in index.css. With nothing to
+   * bring it back, "Whole library" / "In this study" simply stop existing on
+   * a phone. This opens it as a slide-over instead.
+   */
+  const [railOpenMobile, setRailOpenMobile] = useState(false);
   const toggleBoard = useCallback(() => {
     setBoardHidden((v) => {
       const next = !v;
@@ -379,6 +386,15 @@ export function DeskView({
         <LogoMark />
         <span className="desk-bar-title">Desk</span>
 
+        <button
+          type="button"
+          className="desk-rail-toggle"
+          onClick={() => setRailOpenMobile(true)}
+          title="Studies and papers"
+        >
+          Papers
+        </button>
+
         <nav className="desk-tabs">
           <button
             type="button"
@@ -423,8 +439,14 @@ export function DeskView({
         />
       ) : (
         <div className={`desk-grid${boardHidden ? ' is-board-hidden' : ''}`}>
+          {/* Only does anything below 820px (see .rail-backdrop) — closes the
+              slide-over on an outside tap, same as tapping a scope does. */}
+          <div
+            className={`rail-backdrop${railOpenMobile ? ' is-on' : ''}`}
+            onClick={() => setRailOpenMobile(false)}
+          />
           {/* ── Scopes ── */}
-          <nav className="rail thin-scroll">
+          <nav className={`rail thin-scroll${railOpenMobile ? ' is-mobile-open' : ''}`}>
             <div className="rail-head">
               <h2>Studies</h2>
               <button type="button" className="board-add" onClick={newStudy} title="New study">
@@ -435,7 +457,7 @@ export function DeskView({
             <button
               type="button"
               className={`rail-row${isLibrary ? ' is-on' : ''}`}
-              onClick={() => setScope(LIBRARY_SCOPE)}
+              onClick={() => { setScope(LIBRARY_SCOPE); setRailOpenMobile(false); }}
             >
               <span className="rail-row-name">Whole library</span>
               <span className="rail-row-count">{library.length}</span>
@@ -446,7 +468,7 @@ export function DeskView({
                 key={s.id}
                 type="button"
                 className={`rail-row${scope === s.id ? ' is-on' : ''}`}
-                onClick={() => setScope(s.id)}
+                onClick={() => { setScope(s.id); setRailOpenMobile(false); }}
               >
                 <span className="rail-row-name">{s.name}</span>
                 <span className="rail-row-count">{s.paper_count}</span>

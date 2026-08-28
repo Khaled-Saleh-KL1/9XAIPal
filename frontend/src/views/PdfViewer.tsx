@@ -49,12 +49,12 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
       {/* ── Top bar ── */}
       <header
-        className="shrink-0 px-6 h-13 py-2.5 flex items-center gap-4"
+        className="shrink-0 px-3 sm:px-6 h-13 py-2.5 flex items-center gap-2 sm:gap-4"
         style={{ borderBottom: '1px solid var(--border)' }}
       >
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[12.5px]"
+          className="shrink-0 flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[12.5px]"
           style={{ color: 'var(--muted)' }}
           onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--fg)')}
           onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--muted)')}
@@ -62,9 +62,9 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
           <IconBack className="w-3.5 h-3.5" />
           <span>Library</span>
         </button>
-        <span className="h-4 w-px" style={{ background: 'var(--border)' }} />
+        <span className="hidden sm:block shrink-0 h-4 w-px" style={{ background: 'var(--border)' }} />
         <span
-          className="font-serif text-[14px] tracking-tight truncate"
+          className="hidden sm:inline font-serif text-[14px] tracking-tight truncate"
           style={{ color: 'var(--fg)' }}
           // The name the reader gave it, with the real filename on hover —
           // this view is about the file, so the filename stays reachable.
@@ -73,13 +73,21 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
           {displayTitle(paper)}
         </span>
         {paper.page_count && (
-          <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
+          <span className="hidden sm:inline shrink-0 text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
             {paper.page_count}p
           </span>
         )}
 
-        {/* page navigation */}
-        <div className="ml-auto flex items-center gap-2">
+        {/*
+          Prev/next, page input, zoom, "Read structured", and the user menu —
+          more controls than a phone is wide. min-w-0 + overflow-x-auto turns
+          the overflow into a swipe instead of a silent clip that leaves the
+          rightmost buttons (usually "Read structured" and log-out) unreachable.
+        */}
+        <div className="ml-auto min-w-0 flex items-center gap-2 overflow-x-auto no-scrollbar hdr-scroll">
+          <span className="sm:hidden font-serif text-[13px] truncate max-w-[80px]" style={{ color: 'var(--fg)' }}>
+            {displayTitle(paper)}
+          </span>
           <button
             onClick={() => goToPage(currentPage - 1)}
             disabled={currentPage <= 1}
