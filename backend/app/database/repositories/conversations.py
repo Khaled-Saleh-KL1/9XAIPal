@@ -28,6 +28,10 @@ async def create_turn(
     router_reason: Optional[str] = None,
     model: Optional[str] = None,
     citations: Optional[Any] = None,
+    # The agent's tool trail (SECTION/SEARCH/READ/WEB), when an agent answered
+    # this turn. Persisted so reopening a chat still shows how it got there —
+    # the same guarantee paper_notes.agent_steps gives the margin-note path.
+    agent_steps: Optional[Any] = None,
     # NEW for nested sub-threads: NULL for main linear chat turns.
     # Non-NULL = this turn belongs to a sub-thread and is a reply to the given parent.
     parent_turn_id: Optional[UUID] = None,
@@ -42,11 +46,12 @@ async def create_turn(
     always pass None so they remain visible in the primary linear history.
     """
     citations_payload = json.dumps(citations) if citations is not None else None
+    steps_payload = json.dumps(agent_steps) if agent_steps else None
     stmt = text("""
         INSERT INTO conversation_turns
-            (user_id, conversation_id, document_id, role, content, context_type, router_reason, model, citations, parent_turn_id)
+            (user_id, conversation_id, document_id, role, content, context_type, router_reason, model, citations, agent_steps, parent_turn_id)
         VALUES
-            (:user_id, :conversation_id, :document_id, :role, :content, :context_type, :router_reason, :model, CAST(:citations AS JSONB), :parent_turn_id)
+            (:user_id, :conversation_id, :document_id, :role, :content, :context_type, :router_reason, :model, CAST(:citations AS JSONB), CAST(:agent_steps AS JSONB), :parent_turn_id)
         RETURNING id, conversation_id, role, created_at, parent_turn_id
     """)
     result = await session.execute(
@@ -61,6 +66,7 @@ async def create_turn(
             "router_reason": router_reason,
             "model": model,
             "citations": citations_payload,
+            "agent_steps": steps_payload,
             "parent_turn_id": parent_turn_id,
         },
     )

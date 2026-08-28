@@ -63,6 +63,8 @@ export type ContextType =
   | 'RESEARCH';     // Model performed live iterative research (visible in history)
 
 export interface ChatMessage {
+  /** The agent's tool trail, when an agent answered (books). */
+  agentSteps?: import('./api').AgentStep[];
   // 'compaction' = synthetic system bubble inserted when the chat history
   // is auto-summarized to keep context focused.
   role: 'user' | 'assistant' | 'compaction';

@@ -94,6 +94,8 @@ export interface ChatTurn {
   content: string;
   context_type: ContextType | string | null;
   citations: Citation[] | null;
+  /** The agent's tool trail, when an agent answered this turn (books). */
+  agent_steps?: AgentStep[] | null;
   created_at: string | null;
 
   // === Sub-thread (nested tangent) support ===
@@ -648,6 +650,8 @@ export interface AskStreamHandlers {
   onStatus?: (message: string) => void;
   /** Discard the buffered answer — a research synthesis pass restreams it. */
   onReplace?: () => void;
+  /** One tool call from the agent (books). Emitted twice: running → done. */
+  onStep?: (step: AgentStep) => void;
 }
 
 /**
@@ -717,6 +721,9 @@ export async function askPaperStream(
         break;
       case 'status':
         handlers.onStatus?.(String(ev.message ?? ''));
+        break;
+      case 'step':
+        handlers.onStep?.(ev as unknown as AgentStep);
         break;
       case 'replace':
         handlers.onReplace?.();

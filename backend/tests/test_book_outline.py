@@ -80,3 +80,53 @@ def test_entries_past_the_last_chunk_are_dropped():
 
 def test_no_entries_yields_no_chapters():
     assert outline_to_chapters([], [(1, 1)], lo=1, hi=1) == []
+
+
+# ── Front/back matter grouping ────────────────────────────────────────────────
+
+from app.services.book_outline import group_matter
+
+
+def _ch(title, start, end, level=1):
+    return {"title": title, "level": level, "start_sequence": start, "end_sequence": end}
+
+
+def test_boilerplate_runs_collapse_at_both_ends():
+    out = group_matter([
+        _ch("Front matter", 1, 4), _ch("Praise", 5, 29), _ch("Title Page", 30, 37),
+        _ch("Copyright", 38, 45), _ch("Contents", 46, 62),
+        _ch("Introduction: Mrs. Chen", 63, 187),
+        _ch("1. Listening to the Air", 188, 353),
+        _ch("Epilogue: Putting it to Work", 354, 400),
+        _ch("Acknowledgments", 401, 413), _ch("Notes", 414, 436), _ch("Index", 437, 592),
+    ])
+    titles = [c["title"] for c in out]
+    assert titles[0].startswith("Front matter — Praise, Title Page, Copyright")
+    assert titles[-1].startswith("End matter — Acknowledgments, Notes, Index")
+    # Real reading content is untouched, one entry each.
+    assert titles[1:-1] == [
+        "Introduction: Mrs. Chen", "1. Listening to the Air",
+        "Epilogue: Putting it to Work",
+    ]
+    # The collapsed runs still span the full original sequence range.
+    assert (out[0]["start_sequence"], out[0]["end_sequence"]) == (1, 62)
+    assert (out[-1]["start_sequence"], out[-1]["end_sequence"]) == (401, 592)
+
+
+def test_introduction_and_epilogue_are_never_treated_as_boilerplate():
+    """They read like front/back matter but are real chapters."""
+    out = group_matter([
+        _ch("Introduction", 1, 10), _ch("1. Ch", 11, 20), _ch("Epilogue", 21, 30),
+    ])
+    assert [c["title"] for c in out] == ["Introduction", "1. Ch", "Epilogue"]
+
+
+def test_a_single_boilerplate_entry_keeps_its_own_name():
+    """Relabelling one page 'Front matter' tells the reader strictly less."""
+    out = group_matter([_ch("Contents", 1, 5), _ch("1. Ch", 6, 20)])
+    assert [c["title"] for c in out] == ["Contents", "1. Ch"]
+
+
+def test_an_all_boilerplate_document_is_left_alone():
+    src = [_ch("Contents", 1, 5), _ch("Index", 6, 20)]
+    assert group_matter(src) == src

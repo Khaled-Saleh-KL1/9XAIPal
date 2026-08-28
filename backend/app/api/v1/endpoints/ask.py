@@ -186,6 +186,7 @@ def _serialize_turn(t: dict) -> dict:
         "content": t["content"],
         "context_type": t.get("context_type"),
         "citations": t.get("citations"),
+        "agent_steps": t.get("agent_steps"),
         "created_at": t["created_at"].isoformat() if t.get("created_at") else None,
         # Sub-thread support (None for main linear chat turns)
         "parent_turn_id": str(t["parent_turn_id"]) if t.get("parent_turn_id") else None,

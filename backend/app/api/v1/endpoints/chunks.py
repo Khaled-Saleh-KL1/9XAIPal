@@ -366,6 +366,11 @@ async def list_chapters(
                 chapters.append({"title": title, "level": chapter_level or 1,
                                  "start_sequence": start, "end_sequence": end})
 
+    # Front/back apparatus collapses into one entry at each end, whichever
+    # mechanism produced the list — five clicks of Copyright/Dedication in
+    # front of a book is noise, not navigation.
+    chapters = book_outline.group_matter(chapters)
+
     for idx, ch in enumerate(chapters):
         ch["index"] = idx
         ch["chunk_count"] = ch["end_sequence"] - ch["start_sequence"] + 1
