@@ -5,8 +5,9 @@ import type { ChatMessage } from '../types';
 import { IconSend, IconSpinner } from '../components/Icons';
 import {
   askPaperStream, getPaperChat, listPaperConversations,
-  type Citation, type ConversationSummary,
+  type AgentStep, type Citation, type ConversationSummary,
 } from '../api';
+import { AgentTrail } from './AgentTrail';
 
 // Lightbox is opened by dispatching a CustomEvent — keeps the markdown
 // renderer at module scope (no React state needed) while letting the
@@ -160,6 +161,10 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   // In-progress streamed answer: text grows token by token; status carries a
   // transient line like "Researching the web…". null = no stream in flight.
   const [streaming, setStreaming] = useState<{ text: string; status: string | null } | null>(null);
+  // The agent's tool trail for the answer currently generating. Books are
+  // answered by the paper agent, which reports every fetch it makes; keyed by
+  // step id so the running→done update replaces rather than appends.
+  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   // Image attachments for the next /ask call. Stored as { dataUrl, name } so
   // we can show a thumbnail in the input area; we strip the data: prefix when
   // sending to the backend (Ollama wants raw base64).
@@ -277,6 +282,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
             role: t.role,
             text: t.content,
             refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
+            agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
             parentTurnId: t.parent_turn_id ?? undefined,
             threadRootTurnId: t.thread_root_turn_id ?? undefined,
           })));
@@ -323,6 +329,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
         role: t.role,
         text: t.content,
         refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
+        agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
         parentTurnId: t.parent_turn_id ?? undefined,
         threadRootTurnId: t.thread_root_turn_id ?? undefined,
       })));
@@ -354,6 +361,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
         role: t.role,
         text: t.content,
         refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
+        agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
         parentTurnId: t.parent_turn_id ?? undefined,
         threadRootTurnId: t.thread_root_turn_id ?? undefined,
       })));
@@ -439,6 +447,14 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
           onStatus: (msg) => setStreaming((prev) => ({ text: prev?.text ?? '', status: msg })),
           // A research synthesis pass restreams the answer from scratch.
           onReplace: () => setStreaming({ text: '', status: 'Rewriting with research findings…' }),
+          onStep: (step) =>
+            setLiveSteps((prev) => {
+              const i = prev.findIndex((p) => p.id === step.id);
+              if (i === -1) return [...prev, step];
+              const next = prev.slice();
+              next[i] = step;
+              return next;
+            }),
         },
         abort.signal,
       );
@@ -455,8 +471,10 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
           refs: citationsToRefs(res.citations),
           researchPerformed: res.research_performed,
           researchSummary: res.research_summary || undefined,
+          agentSteps: liveSteps.length ? liveSteps : undefined,
         },
       ]);
+      setLiveSteps([]);
       // Refetch so the freshly-created user/assistant turns gain their server
       // ids — without this the "Thread →" affordance never appears on a new
       // exchange (it depends on threadRootTurnId, which only the backend
@@ -469,6 +487,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
             role: t.role,
             text: t.content,
             refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
+            agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
             parentTurnId: t.parent_turn_id ?? undefined,
             threadRootTurnId: t.thread_root_turn_id ?? undefined,
           })));
@@ -676,6 +695,11 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
               />
             );
           })}
+          {liveSteps.length > 0 && (
+            <div className="mb-1">
+              <AgentTrail steps={liveSteps} live />
+            </div>
+          )}
           {streaming && streaming.text && (
             <MessageBubble m={{ role: 'assistant', text: streaming.text }} />
           )}
@@ -1046,6 +1070,11 @@ const MessageBubble = memo(function MessageBubble({
         </ReactMarkdown>
       </div>
 
+      {m.agentSteps && m.agentSteps.length > 0 && (
+        <div className="mt-1.5">
+          <AgentTrail steps={m.agentSteps} />
+        </div>
+      )}
       {m.researchPerformed && m.researchSummary && (
         <div className="text-[11px] font-mono mt-1" style={{ color: 'var(--muted)' }}>
           ↳ {m.researchSummary}

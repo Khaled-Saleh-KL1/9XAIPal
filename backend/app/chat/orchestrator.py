@@ -74,6 +74,8 @@ class _AskPrep:
     user_images_b64: Optional[list[str]] = None
     paper_title: Optional[str] = None
     use_research_aware: bool = False
+    # The agent's tool trail, when an agent answered (books). Empty otherwise.
+    agent_steps: list[dict] = field(default_factory=list)
 
 
 async def _prepare_ask(
@@ -525,6 +527,7 @@ async def _finalize_ask(
             router_reason=prep.decision.reason,
             model=model,
             citations=citations_payload,
+            agent_steps=prep.agent_steps or None,
             parent_turn_id=assistant_parent,
         )
         logger.info("ASK[step4b] assistant turn persisted id=%s (parent=%s)", assistant_turn.get("id"), assistant_parent)
@@ -792,6 +795,7 @@ async def _stream_book_agent(
             answer = event.get("answer", "") or ""
             model = event.get("model", "") or ""
             cited = event.get("cited") or []
+            prep.agent_steps = event.get("steps") or []
 
     # Citation chips: resolve the [[N]] markers the agent actually wrote.
     if cited:

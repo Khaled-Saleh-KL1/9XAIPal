@@ -162,3 +162,91 @@ def outline_to_chapters(
         end = starts[i + 1]["start_sequence"] - 1 if i + 1 < len(starts) else hi
         chapters.append({**c, "end_sequence": end})
     return chapters
+
+
+# Titles a publisher's outline uses for apparatus rather than reading content.
+# ⚠ Deliberately excludes "introduction", "foreword", "preface", "prologue",
+# "epilogue", "conclusion", "afterword" and "appendix": those ARE reading
+# content and each stays its own entry. Only the boilerplate collapses.
+_MATTER_TITLES = frozenset({
+    "praise", "advance praise", "title page", "half title", "cover",
+    "copyright", "copyright page", "dedication", "epigraph", "contents",
+    "table of contents", "also by", "frontispiece", "colophon", "imprint",
+    "acknowledgments", "acknowledgements", "notes", "endnotes", "index",
+    "about the author", "about the publisher", "bibliography", "references",
+    "further reading", "glossary", "credits", "permissions", "front matter",
+})
+
+
+def _is_matter(title: str) -> bool:
+    t = (title or "").strip().lower().rstrip(".:")
+    if t in _MATTER_TITLES:
+        return True
+    # "Also by Erin Meyer", "About the Author, Erin Meyer" — a known prefix
+    # followed by a name is still the same apparatus page.
+    return any(t.startswith(p + " ") for p in ("also by", "about the author", "praise for"))
+
+
+def _matter_title(label: str, parts: list[str]) -> str:
+    named = [p for p in parts if p.strip().lower() != "front matter"]
+    if not named:
+        return label
+    shown = ", ".join(named[:3])
+    return f"{label} — {shown}{'…' if len(named) > 3 else ''}"
+
+
+def group_matter(chapters: list[dict]) -> list[dict]:
+    """Collapse the boilerplate runs at each end into one entry apiece.
+
+    A publisher's outline lists Praise, Title Page, Copyright, Dedication and
+    Contents as separate destinations. They are real pages, but as *chapters*
+    they are five clicks of noise in front of the book — so a contiguous run of
+    them at the start becomes one "Front matter" entry, and likewise
+    Acknowledgments/Notes/Index/About the Author at the end become "End
+    matter". Everything between is untouched, one entry per section.
+
+    ⚠ Only collapses a run of 2+. A book whose outline has a single Contents
+    entry keeps it named, because relabelling one page "Front matter" tells
+    the reader strictly less than the page's own name did.
+    """
+    if len(chapters) < 2:
+        return chapters
+
+    n = len(chapters)
+    head = 0
+    while head < n and _is_matter(chapters[head]["title"]):
+        head += 1
+    tail = n
+    while tail > head and _is_matter(chapters[tail - 1]["title"]):
+        tail -= 1
+
+    # Everything is apparatus (a document with no named body): leave it alone
+    # rather than collapsing the whole list into one opaque entry.
+    if head >= tail:
+        return chapters
+
+    out: list[dict] = []
+    if head >= 2:
+        run = chapters[:head]
+        out.append({
+            "title": _matter_title("Front matter", [c["title"] for c in run]),
+            "level": 1,
+            "start_sequence": run[0]["start_sequence"],
+            "end_sequence": run[-1]["end_sequence"],
+        })
+    else:
+        out.extend(chapters[:head])
+
+    out.extend(chapters[head:tail])
+
+    if n - tail >= 2:
+        run = chapters[tail:]
+        out.append({
+            "title": _matter_title("End matter", [c["title"] for c in run]),
+            "level": 1,
+            "start_sequence": run[0]["start_sequence"],
+            "end_sequence": run[-1]["end_sequence"],
+        })
+    else:
+        out.extend(chapters[tail:])
+    return out
