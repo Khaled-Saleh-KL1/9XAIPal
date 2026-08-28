@@ -201,7 +201,7 @@ export function StickyNote({
               {note.body}
             </ReactMarkdown>
           ) : (
-            <span className="sticky-placeholder">Empty — click to write.</span>
+            <span className="sticky-placeholder">Empty, click to write.</span>
           )}
         </div>
       )}

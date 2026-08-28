@@ -99,7 +99,7 @@ interface Props {
 
 function extractorLabel(ex: string | null | undefined): { label: string; tone: 'good' | 'warn' | 'pending' } {
   if (ex === 'mineru') return { label: 'MinerU (full layout + math + footnotes)', tone: 'good' };
-  if (ex === 'pymupdf_fallback') return { label: 'PyMuPDF fallback (degraded — no math LaTeX, no table structure)', tone: 'warn' };
+  if (ex === 'pymupdf_fallback') return { label: 'PyMuPDF fallback (degraded: no math LaTeX, no table structure)', tone: 'warn' };
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
@@ -218,11 +218,11 @@ export function ProcessingOverlay({ file, status, progressFraction, errorMessage
           <span className="text-[12px] font-mono" style={{ color: 'var(--muted)' }}>
             {complete
               ? kind === 'book'
-                ? 'indexing complete — back to library'
-                : 'extracted — ready to read'
+                ? 'indexing complete, back to library'
+                : 'extracted, ready to read'
               : failed
               ? (errorMessage || 'pipeline failed').slice(0, 120)
-              : 'safe to leave — processing continues in the background'}
+              : 'safe to leave, processing continues in the background'}
           </span>
           <button
             onClick={onClose}

@@ -25,7 +25,7 @@ export const HAS_BACKEND =
     ['localhost', '127.0.0.1'].includes(window.location.hostname));
 
 export const NO_BACKEND_MESSAGE =
-  'No backend connected. This is a UI preview — run 9XAIPal locally, or set ' +
+  'No backend connected. This is a UI preview: run 9XAIPal locally, or set ' +
   'VITE_API_BASE_URL to a reachable backend (see the README).';
 
 export interface PaperMeta {

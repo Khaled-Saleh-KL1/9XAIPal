@@ -685,7 +685,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
               onRechunk={async () => {
                 if (!confirm(
                   'Re-chunk this paper from the cached extraction?\n\n' +
-                  'Fast (seconds) — re-runs only the chunker (gap-free sequencing, ' +
+                  'Fast (seconds): re-runs only the chunker (gap-free sequencing, ' +
                   'code/JSON blocks, inline math) on the already-extracted output. ' +
                   'Embeddings regenerate in the background afterward.'
                 )) return;
@@ -750,7 +750,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
                   className="text-[10.5px] font-mono uppercase tracking-[0.12em]"
                   style={{ color: 'var(--muted)' }}
                 >
-                  {displayPages > 0 ? `${displayPages} pages` : '— pages'}
+                  {displayPages > 0 ? `${displayPages} pages` : '– pages'}
                   {totalChunks > 0 ? ` · ${totalChunks} chunks` : ''}
                   {meta?.file_size_bytes
                     ? ` · ${(meta.file_size_bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -833,7 +833,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
                 <div className="mt-12 text-[12px] font-mono" style={{ color: 'var(--muted)' }}>
                   {isBook && activeChapter ? (
                     <div className="flex items-center gap-3">
-                      <span>— end of “{activeChapter.title}” —</span>
+                      <span>– end of “{activeChapter.title}” –</span>
                       <button
                         onClick={handleBackToChapters}
                         className="px-2.5 py-1 rounded-md"
@@ -843,7 +843,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
                       </button>
                     </div>
                   ) : (
-                    <span>— end of indexed chunks —</span>
+                    <span>– end of indexed chunks –</span>
                   )}
                 </div>
               )}
@@ -1340,7 +1340,7 @@ function ChapterPicker({
   if (chapters.length === 0) {
     return (
       <div className="text-[13px]" style={{ color: 'var(--muted)' }}>
-        No chapters detected yet. They appear once processing finishes — or read it as a paper.
+        No chapters detected yet. They appear once processing finishes, or read it as a paper.
       </div>
     );
   }
@@ -1407,7 +1407,7 @@ function ExtractorPill({
   const dotColor = isMineru ? 'var(--ok)' : isFallback ? '#f59e0b' : 'var(--muted)';
   const label = isMineru ? 'MinerU' : isFallback ? 'PyMuPDF fallback' : extractor;
   const title = isMineru
-    ? 'Parsed by MinerU — typed equations, footnotes, table structure.'
+    ? 'Parsed by MinerU: typed equations, footnotes, table structure.'
     : isFallback
     ? 'Parsed by PyMuPDF fallback (no math LaTeX, no table structure). Click to re-extract with MinerU.'
     : `Extractor: ${extractor}`;

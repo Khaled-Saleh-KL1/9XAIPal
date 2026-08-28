@@ -91,7 +91,7 @@ export function PaperPicker({
           <div>
             <h2>Papers in this study</h2>
             <p className="picker-sub">
-              The order is the numbering answers cite — P1 is the first here.
+              The order is the numbering answers cite: P1 is the first here.
             </p>
           </div>
           <button type="button" className="marg-close" onClick={onClose} aria-label="Close">
@@ -114,7 +114,7 @@ export function PaperPicker({
 
             {ids.length === 0 ? (
               <p className="marg-hint picker-hint">
-                Nothing yet. Add papers from the right — a study of one is fine,
+                Nothing yet. Add papers from the right: a study of one is fine,
                 and two is where the assistant starts comparing.
               </p>
             ) : (

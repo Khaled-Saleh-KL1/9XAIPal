@@ -71,7 +71,7 @@ export function StickyBoard({
           <div className="board-empty">
             <p>No notes on {scopeName} yet.</p>
             <p className="marg-hint">
-              These stay with this conversation. The assistant can pin here too —
+              These stay with this conversation. The assistant can pin here too,
               its notes are badged, and only you can remove one.
             </p>
           </div>
