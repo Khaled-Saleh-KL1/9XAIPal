@@ -1071,7 +1071,7 @@ function ApiChunkBlock({
               className="mt-2 font-serif text-[14px] leading-[1.5] italic"
               style={{ color: 'var(--fg-2)' }}
             >
-              {chunk.plain_text}
+              <InlineMd>{chunk.plain_text}</InlineMd>
             </div>
           )}
         </div>
@@ -1110,7 +1110,7 @@ function ApiChunkBlock({
           >
             Side Note
           </span>
-          <span className="italic">{text}</span>
+          <span className="italic"><InlineMd>{text}</InlineMd></span>
         </div>
       </div>
     );
@@ -1262,7 +1262,7 @@ function GranularUnit({
             </div>
           ) : unit.caption ? (
             <div className="mt-2 text-[13.5px] italic text-center max-w-[72ch]" style={{ color: 'var(--fg-2)' }}>
-              {unit.caption}
+              <InlineMd>{unit.caption}</InlineMd>
             </div>
           ) : null}
 
@@ -1308,7 +1308,7 @@ function GranularUnit({
           >
             Side Note
           </span>
-          <span className="italic">{unit.text}</span>
+          <span className="italic"><InlineMd>{unit.text}</InlineMd></span>
         </div>
       </div>
     );
