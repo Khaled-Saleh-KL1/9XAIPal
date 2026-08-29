@@ -39,6 +39,10 @@ aiofiles
 pypdf
 pymupdf               # page rasterisation for the VLM extractor + text fallback
 
+# Web article extraction (services/article_extraction.py) — architecture-
+# independent, needed regardless of which PDF extractor provider is active.
+trafilatura==2.2.0
+
 # Auth: Argon2id password hashing (OWASP-recommended default) + email
 # validation for pydantic's EmailStr (fastapi[standard] usually pulls this in
 # transitively, but pinning it directly avoids depending on that staying true).

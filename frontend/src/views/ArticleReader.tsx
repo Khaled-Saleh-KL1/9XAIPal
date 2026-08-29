@@ -1917,6 +1917,17 @@ export function ArticleReader({
                 {doc.page_count ? `${doc.page_count} pages` : ''}
                 {doc.page_count && doc.blocks.length ? ' · ' : ''}
                 {doc.blocks.length ? `${doc.blocks.length} blocks` : ''}
+                {doc.source_url && (doc.page_count || doc.blocks.length) ? ' · ' : ''}
+                {doc.source_url && (
+                  <a
+                    href={doc.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--accent)' }}
+                  >
+                    View original ↗
+                  </a>
+                )}
               </div>
             )}
             {doc?.blocks.map((block) => (

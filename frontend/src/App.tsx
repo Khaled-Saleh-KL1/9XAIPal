@@ -15,7 +15,8 @@ import { useAuth } from './contexts/AuthContext';
 const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
-import { uploadPaper, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
+import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
+import { ImportUrlModal } from './views/ImportUrlModal';
 import { displayTitle } from './lib/titles';
 import { stageProgress } from './lib/progress';
 
@@ -83,7 +84,10 @@ export function App() {
   // `kind` only changes reading navigation (chapters vs linear) and the
   // overlay's completion copy — every document runs the same backend
   // pipeline (see ProcessingOverlay's header comment).
-  const [uploadKind, setUploadKind] = useState<DocKind>('paper');
+  const [uploadKind, setUploadKind] = useState<DocKind | 'article'>('paper');
+  // Open state for the "paste a link" modal — the third pipeline's own entry
+  // point, parallel to kindPickerOpen for the file-upload pipeline.
+  const [importUrlOpen, setImportUrlOpen] = useState(false);
   const [layout, setLayout] = useState<LibraryLayout>('grid');
   // When set, the "Book or Research paper?" chooser is open.
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
@@ -135,6 +139,38 @@ export function App() {
     return () => clearInterval(id);
   }, [rawFilesOpen, refreshPapers]);
 
+  // Shared by every ingestion pipeline (file upload, URL import, …): poll
+  // /progress until a terminal state, without auto-closing the overlay — the
+  // user clicks "Back to library" themselves. The library list underneath
+  // refreshes on its own poll.
+  const pollUploadProgress = useCallback((paperId: string) => {
+    pollRef.current = setInterval(async () => {
+      try {
+        const progress = await getPaperProgress(paperId);
+        // Prefer the finer job_status (extracting / chunking / embedding) when available
+        const effectiveStatus = (progress.job_status || progress.status) as typeof uploadStatus;
+        setUploadStatus(effectiveStatus);
+        setUploadProgressFraction(progress.progress_fraction ?? null);
+        if (progress.error_message) {
+          setUploadError(progress.error_message);
+        }
+        if (progress.extractor) {
+          setUploadExtractor(progress.extractor);
+        }
+        if (progress.status === 'complete' || progress.status === 'failed') {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          // Once complete, the document is a keeper — drop the cancel handle
+          // so it can never be deleted by a later Cancel click.
+          if (progress.status === 'complete') uploadIdRef.current = null;
+          refreshPapers();
+        }
+      } catch {
+        // transient error — keep polling
+      }
+    }, 1000);
+  }, [refreshPapers]);
+
   // Real file upload handler
   const handleFileUpload = useCallback(async (file: File, kind: DocKind) => {
     setUploadingFile({
@@ -153,41 +189,50 @@ export function App() {
       const paperId = result.id;
       uploadIdRef.current = paperId;
       setActivePaperId(paperId);
-
-      // Poll the backend for real status. Stop polling once we hit a terminal
-      // state, but DON'T auto-close the overlay — let the user click "Back to
-      // library". The library list itself refreshes underneath.
-      pollRef.current = setInterval(async () => {
-        try {
-          const progress = await getPaperProgress(paperId);
-          // Prefer the finer job_status (extracting / chunking / embedding) when available
-          const effectiveStatus = (progress.job_status || progress.status) as typeof uploadStatus;
-          setUploadStatus(effectiveStatus);
-          setUploadProgressFraction(progress.progress_fraction ?? null);
-          if (progress.error_message) {
-            setUploadError(progress.error_message);
-          }
-          if (progress.extractor) {
-            setUploadExtractor(progress.extractor);
-          }
-          if (progress.status === 'complete' || progress.status === 'failed') {
-            if (pollRef.current) clearInterval(pollRef.current);
-            pollRef.current = null;
-            // Once complete, the document is a keeper — drop the cancel handle
-            // so it can never be deleted by a later Cancel click.
-            if (progress.status === 'complete') uploadIdRef.current = null;
-            refreshPapers();
-          }
-        } catch {
-          // transient error — keep polling
-        }
-      }, 1000);
+      pollUploadProgress(paperId);
     } catch (err) {
       console.error('Upload failed:', err);
       setUploadStatus('failed');
       setUploadError((err as Error).message || 'Upload request failed');
     }
-  }, [refreshPapers]);
+  }, [pollUploadProgress]);
+
+  // Web article import handler — the third pipeline, mirroring
+  // handleFileUpload exactly (same processing route + progress poll) but
+  // calling importArticleUrl instead of uploadPaper. The real page title
+  // isn't known until the fetch runs, so the overlay shows the URL's host
+  // as a placeholder the same way the backend placeholders
+  // original_filename with the URL itself until extraction finishes.
+  const handleArticleImport = useCallback(async (url: string) => {
+    let host = url;
+    try { host = new URL(url).hostname; } catch { /* keep the raw url */ }
+
+    setUploadingFile({ name: url, size: host, pages: 0 });
+    setUploadStatus('queued');
+    setUploadError(null);
+    setUploadExtractor(null);
+    setUploadKind('article');
+    setRoute('processing');
+
+    try {
+      const result = await importArticleUrl(url);
+      const paperId = result.id;
+      uploadIdRef.current = paperId;
+      setActivePaperId(paperId);
+      pollUploadProgress(paperId);
+    } catch (err) {
+      console.error('Import failed:', err);
+      setUploadStatus('failed');
+      setUploadError((err as Error).message || 'Import request failed');
+    }
+  }, [pollUploadProgress]);
+
+  // "Paste a link" affordance: open the modal, then kick off the import once
+  // a URL is actually submitted.
+  const submitImportUrl = useCallback((url: string) => {
+    setImportUrlOpen(false);
+    handleArticleImport(url);
+  }, [handleArticleImport]);
 
   // Step 1 of upload: ask whether this is a book or a research paper. A drop
   // already carries the file, so it comes in as `file` and we hold onto it;
@@ -369,6 +414,7 @@ export function App() {
         <LibraryView
           onOpenPaper={openPaper}
           onUpload={startUpload}
+          onImportUrl={() => setImportUrlOpen(true)}
           onOpenRawFiles={() => setRawFilesOpen(true)}
           onOpenDesk={() => openDesk('library')}
           layout={layout}
@@ -435,6 +481,13 @@ export function App() {
         <UploadKindModal
           onChoose={pickFileWithKind}
           onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
+        />
+      )}
+
+      {importUrlOpen && (
+        <ImportUrlModal
+          onImport={submitImportUrl}
+          onCancel={() => setImportUrlOpen(false)}
         />
       )}
 

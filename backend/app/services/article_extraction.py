@@ -1,0 +1,205 @@
+"""Fetch and extract a web article: the source a doc_kind='article' document
+is built from, the way a PDF is the source for doc_kind='paper'/'book'.
+
+Produces markdown text in exactly the shape create_chunks_from_markdown
+already expects (it's the existing PDF pipeline's own fallback chunker, used
+here unmodified — see extraction/chunker.py) plus an `asset_map` of
+{basename: url}, the same shape the PDF pipeline's own image linking already
+uses (there it maps a filename to a local relative path; here it maps to a
+full external URL instead — see database/repositories/assets.py's
+resolve_asset_url for the one place that distinction matters at read time).
+
+Sync throughout, matching the Celery worker's sync-everything convention
+(see core/celery_app.py's module docstring). Every network call carries a
+hard timeout: the production worker runs `--concurrency=1` (one task at a
+time, across every task type, with no global task_time_limit), so a slow or
+hanging site must fail cleanly within a bounded time rather than stalling
+paper/book processing queued behind it.
+
+⚠ Images are hotlinked, never downloaded — by request. The tradeoff this
+buys: no storage, no risk of pulling arbitrary bytes onto this server for an
+image, but also no way to attach one to a VLM call (see chat/paper_agent.py
+and notes.py's _to_storage_path, which only ever resolves this app's own
+/static/images/ URLs). A reader can see every image while reading; asking
+the AI to look closely at one specific photo isn't supported for articles.
+"""
+
+import re
+from dataclasses import dataclass, field
+
+import httpx
+import trafilatura
+
+from app.core.logging import get_logger
+from app.core.net_safety import resolves_to_private_address_sync
+
+logger = get_logger(__name__)
+
+PAGE_FETCH_TIMEOUT = 15.0
+IMAGE_CHECK_TIMEOUT = 5.0
+MAX_PAGE_BYTES = 8 * 1024 * 1024   # a page of prose, not a video
+MAX_IMAGES = 20
+# Below this, almost certainly a spacer GIF, a UI icon, or a tracking pixel —
+# not a figure worth showing in the reading flow. Found empirically: Wikipedia's
+# page-protection lock badge and a 1x1 transparent GIF both showed up as
+# "figures" in an unfiltered extraction during development.
+MIN_IMAGE_BYTES = 8 * 1024
+# Below this many characters, treat the extraction as failed rather than
+# publish a near-empty "paper" — the honest failure mode for a paywalled or
+# JS-rendered page trafilatura (a static-HTML extractor) can't see into.
+MIN_EXTRACTED_CHARS = 300
+
+USER_AGENT = "Mozilla/5.0 (compatible; 9XAIPalBot/1.0; +https://9xaipal.kl1.site)"
+
+
+class ArticleExtractionError(Exception):
+    """A page couldn't be imported — bad input or genuinely unreadable content.
+
+    Always carries a message safe to show the reader directly (no internal
+    detail leakage), matching how pipeline_sync's own failures are surfaced.
+    """
+
+
+@dataclass
+class ArticleExtraction:
+    title: str
+    markdown: str
+    # {basename: url} — the same shape the PDF pipeline's own asset_map
+    # already uses to link a markdown image reference to where the bytes
+    # live; resolve_asset_url is what makes a URL here serve correctly
+    # instead of being treated as a local images_dir()-relative path.
+    asset_map: dict = field(default_factory=dict)
+
+
+def _check_url_is_fetchable(url: str) -> None:
+    if not url.startswith(("http://", "https://")):
+        raise ArticleExtractionError("Only http:// and https:// links can be imported.")
+    if resolves_to_private_address_sync(url):
+        raise ArticleExtractionError("That address can't be imported.")
+
+
+# Known site-chrome text that trafilatura's static-HTML extraction sometimes
+# carries into the content — a short, deliberately conservative list, grown
+# the same way extraction/glyph_repair.py grew: a real quirk found on a real
+# page, not a guess. MediaWiki's "Appearance" panel toggle and a bare
+# "[edit]" section link were both observed leaking in during development.
+_NOISE_LINE_PATTERNS = [
+    re.compile(r"(?m)^\s*Appearance\s*$"),
+    re.compile(r"(?m)^\s*\[edit\]\s*$"),
+]
+
+
+def _clean_markdown(markdown: str) -> str:
+    for pattern in _NOISE_LINE_PATTERNS:
+        markdown = pattern.sub("", markdown)
+    return re.sub(r"\n{3,}", "\n\n", markdown).strip()
+
+
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((\S+?)\)")
+
+
+def _image_urls_in(markdown: str) -> list[str]:
+    seen: list[str] = []
+    for m in _MD_IMAGE_RE.finditer(markdown):
+        url = m.group(1)
+        if url not in seen:
+            seen.append(url)
+    return seen
+
+
+def _drop_image_refs(markdown: str, drop: set) -> str:
+    """Remove the `![alt](url)` syntax for every URL in `drop`, leaving kept
+    images and all other content untouched."""
+    def repl(m: re.Match) -> str:
+        return "" if m.group(1) in drop else m.group(0)
+    return _MD_IMAGE_RE.sub(repl, markdown)
+
+
+def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
+    """A real figure, plausibly — checked without ever downloading the image
+    body. A host that fails the same SSRF check the page itself passed, or
+    that reports (or is inferred to have) an implausibly small size, is
+    dropped rather than shown."""
+    if not url.startswith(("http://", "https://")):
+        return False
+    if resolves_to_private_address_sync(url):
+        return False
+    try:
+        # ⚠ Same User-Agent as the page fetch — found empirically: Wikimedia's
+        # image CDN (and likely others) answers a User-Agent-less HEAD with a
+        # 403 and a short text/plain body, whose Content-Length is small
+        # enough to look exactly like a real dropped icon. Every real image
+        # was being silently discarded for the wrong reason until this was
+        # caught by running this code against a live page, not just a mock.
+        headers = {"User-Agent": USER_AGENT}
+        resp = client.head(url, timeout=IMAGE_CHECK_TIMEOUT, follow_redirects=True, headers=headers)
+        length = resp.headers.get("content-length") if resp.is_success else None
+        if length is None:
+            # Some hosts don't answer HEAD usefully — a 1-byte ranged GET
+            # still never pulls the real image body.
+            resp = client.get(
+                url, timeout=IMAGE_CHECK_TIMEOUT,
+                headers={**headers, "Range": "bytes=0-0"},
+            )
+            if not resp.is_success:
+                return False
+            content_range = resp.headers.get("content-range", "")
+            length = content_range.split("/")[-1] if "/" in content_range else None
+        return length is not None and int(length) >= MIN_IMAGE_BYTES
+    except Exception:
+        return False
+
+
+def extract_article(url: str) -> ArticleExtraction:
+    """Fetch `url` and extract its readable content.
+
+    Raises ArticleExtractionError on any failure — an unreachable, paywalled,
+    or JS-only page fails the ingestion job with a clear message rather than
+    silently producing a near-empty document.
+    """
+    _check_url_is_fetchable(url)
+
+    try:
+        with httpx.Client(follow_redirects=True, timeout=PAGE_FETCH_TIMEOUT) as client:
+            resp = client.get(url, headers={"User-Agent": USER_AGENT})
+            resp.raise_for_status()
+            if len(resp.content) > MAX_PAGE_BYTES:
+                raise ArticleExtractionError("That page is too large to import.")
+            html = resp.text
+    except httpx.HTTPError as e:
+        raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
+
+    markdown = trafilatura.extract(
+        html,
+        url=url,
+        output_format="markdown",
+        include_images=True,
+        include_links=False,
+        with_metadata=True,
+    )
+    if not markdown or len(markdown.strip()) < MIN_EXTRACTED_CHARS:
+        raise ArticleExtractionError(
+            "Couldn't extract readable content from that page — it may require "
+            "a login, a subscription, or JavaScript to render."
+        )
+
+    meta = trafilatura.extract_metadata(html, default_url=url)
+    title = ((meta.title if meta else None) or "").strip() or url
+
+    markdown = _clean_markdown(markdown)
+
+    candidates = _image_urls_in(markdown)[:MAX_IMAGES]
+    with httpx.Client(follow_redirects=True) as client:
+        kept = {u for u in candidates if _is_worth_keeping(client, u)}
+
+    all_refs = _image_urls_in(markdown)
+    markdown = _drop_image_refs(markdown, {u for u in all_refs if u not in kept})
+    markdown = _clean_markdown(markdown)
+
+    # Same key shape create_chunks_from_markdown's own _image_refs() derives
+    # per chunk (the last path segment) — this is what lets the chunker's
+    # existing image-reference extraction line up with these URLs without
+    # any change to the chunker itself.
+    asset_map = {u.rsplit("/", 1)[-1]: u for u in kept}
+
+    return ArticleExtraction(title=title, markdown=markdown, asset_map=asset_map)

@@ -24,6 +24,11 @@ aiofiles
 pypdf
 pymupdf               # PyMuPDF fallback when MinerU is unavailable (imported as 'fitz')
 
+# Web article extraction (services/article_extraction.py). Pinned 2026-08-29:
+# 2.2.0 verified live against Wikipedia and static-HTML sites during
+# development — see the doc_kind='article' import pipeline.
+trafilatura==2.2.0
+
 # Auth: Argon2id password hashing (OWASP-recommended default) + email
 # validation for pydantic's EmailStr (fastapi[standard] usually pulls this in
 # transitively, but pinning it directly avoids depending on that staying true).

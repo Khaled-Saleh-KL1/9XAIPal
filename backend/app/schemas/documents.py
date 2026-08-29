@@ -4,7 +4,7 @@ from typing import Optional
 from uuid import UUID
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DocumentResponse(BaseModel):
@@ -20,8 +20,10 @@ class DocumentResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    extractor: Optional[str] = None  # "mineru" or "pymupdf_fallback"
-    doc_kind: Optional[str] = None  # "book" (chapter navigation) or "paper" (linear)
+    extractor: Optional[str] = None  # "mineru", "pymupdf_fallback", or "trafilatura"
+    doc_kind: Optional[str] = None  # "book" (chapter navigation), "paper" (linear), or "article"
+    # The page a doc_kind='article' row was imported from; None otherwise.
+    source_url: Optional[str] = None
     # Fine-grained processing stage from the most-recent ingestion job
     # (queued / extracting / chunking / embedding / complete / failed).
     # Lets the library show a live progress bar without per-card /progress calls.
@@ -39,6 +41,10 @@ class DocumentListResponse(BaseModel):
 class RenameDocumentRequest(BaseModel):
     # None or blank clears the override and restores the filename.
     title: Optional[str] = None
+
+
+class ImportArticleRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
 
 
 class DocumentUploadResponse(BaseModel):

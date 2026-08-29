@@ -21,13 +21,20 @@ from app.schemas.documents import (
     DocumentResponse,
     DocumentListResponse,
     DocumentUploadResponse,
+    ImportArticleRequest,
     RenameDocumentRequest,
 )
 from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
-from app.workers.tasks import process_ingestion, embed_document, generate_section_summaries, reconstruct_reading_order
+from app.workers.tasks import (
+    process_ingestion,
+    process_article_ingestion,
+    embed_document,
+    generate_section_summaries,
+    reconstruct_reading_order,
+)
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -151,6 +158,89 @@ async def upload_paper(
         raise HTTPException(
             status_code=500,
             detail=f"Upload failed: {type(exc).__name__}. Check the server logs for the full traceback.",
+        ) from exc
+
+
+@router.post("/import-url", response_model=DocumentUploadResponse, status_code=201)
+async def import_article(
+    payload: ImportArticleRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Import a web article by URL and read it exactly like a paper.
+
+    Always doc_kind='article' — this is a URL, never a file, so there is no
+    book/paper choice to make. The real page title and extractor label are
+    unknown until the fetch actually runs, so this creates the row with the
+    URL itself as a placeholder original_filename; the ingestion task
+    overwrites it with the page's real title once it has one (the same
+    "known only mid-pipeline" pattern /upload uses for `extractor`).
+
+    No file is written to disk here at all — unlike /upload, everything
+    happens inside the dispatched Celery task (see
+    extraction/pipeline_sync.py's run_article_pipeline_sync and
+    services/article_extraction.py for the actual fetch, SSRF guard, and
+    hard timeouts).
+    """
+    url = payload.url.strip()
+    if not url:
+        raise HTTPException(status_code=422, detail="A URL is required.")
+
+    try:
+        doc = await doc_service.create_document(
+            db,
+            user_id=current_user["id"],
+            filename=f"{uuid4().hex}.html",
+            original_filename=url,
+            doc_kind="article",
+            source_url=url,
+        )
+        await db.commit()
+
+        job = await create_ingestion_job(db, doc["id"])
+        await db.commit()
+
+        dispatch_ok = True
+        try:
+            process_article_ingestion.delay(str(doc["id"]), str(job["id"]), url)  # type: ignore[attr-defined]
+        except Exception as dispatch_exc:
+            logger.exception(f"Failed to dispatch process_article_ingestion for {doc['id']}")
+            dispatch_ok = False
+            try:
+                await update_doc_status_repo(
+                    db,
+                    doc["id"],
+                    "failed",
+                    error_message=(
+                        "Failed to queue ingestion task (Celery broker / Redis unreachable). "
+                        f"Original error: {dispatch_exc}"
+                    ),
+                )
+                await update_job_status_svc(
+                    db, job["id"], "failed", error_message=f"Dispatch failed: {dispatch_exc}",
+                )
+                await db.commit()
+            except Exception as mark_exc:
+                logger.error(f"Failed to record dispatch failure for doc {doc['id']}: {mark_exc}")
+
+        return DocumentUploadResponse(
+            id=doc["id"],
+            filename=doc["filename"],
+            status="processing" if dispatch_ok else "failed",
+            message=(
+                "Article queued for import"
+                if dispatch_ok
+                else "Document recorded but background ingestion could not be queued (Redis/Celery). See error details."
+            ),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Article import failed for {url}:\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Import failed: {type(exc).__name__}. Check the server logs for the full traceback.",
         ) from exc
 
 
