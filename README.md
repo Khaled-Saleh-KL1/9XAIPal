@@ -63,6 +63,7 @@ Everything runs locally by default. Your documents and conversations never leave
 
 ### Prerequisites
 - Python 3.11+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) *(`curl -LsSf https://astral.sh/uv/install.sh | sh`; a `pip install`-compatible package manager, just much faster)*
 - Node.js 18+
 - PostgreSQL 15+ *(or use the bundled Docker compose service)*
 - Redis *(or use the bundled Docker compose service)*
@@ -77,8 +78,8 @@ cd 9XAIPal
 ### 2. Start the backend
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
 
 # Copy and edit environment variables
 cp .env.example .env

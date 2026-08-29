@@ -133,22 +133,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: backend/requirements.lite.txt
+
+      # Same uv version pinned in every Dockerfile (Dockerfile, Dockerfile.lite,
+      # Dockerfile.mineru) — one less version to keep in sync by hand.
+      # enable-cache persists uv's own download cache across runs, same idea
+      # as setup-python's cache: pip did, just for the tool that replaces pip
+      # below.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.8"
+          enable-cache: true
+          cache-dependency-glob: "backend/requirements.lite.txt"
 
       # requirements.lite.txt is requirements.txt minus `mineru[core]` — the
       # only difference. mineru_client.py never imports the mineru PyPI
       # package (it shells out to the CLI), so nothing under test needs it,
-      # and `pip install -r requirements.txt` here was silently pulling in
-      # the full default CUDA torch wheel (~530MB) plus the entire NVIDIA
-      # CUDA toolkit dependency chain — never used, and a real source of CI
+      # and installing requirements.txt here was silently pulling in the
+      # full default CUDA torch wheel (~530MB) plus the entire NVIDIA CUDA
+      # toolkit dependency chain, never used, and a real source of CI
       # slowness/flakiness. Verified: the full suite passes identically
-      # against this lighter set.
+      # against this lighter set. `uv pip install --system` targets the
+      # actions/setup-python interpreter above, same as every Dockerfile's
+      # own `uv pip install --system` targets that image's interpreter.
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.lite.txt
-          pip install pytest pytest-asyncio httpx
+        run: uv pip install --system -r requirements.lite.txt pytest pytest-asyncio httpx
 
       - name: Run tests
         # `python -m pytest` puts the backend/ working dir on sys.path so the
