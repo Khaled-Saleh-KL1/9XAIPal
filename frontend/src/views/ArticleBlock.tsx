@@ -45,7 +45,7 @@ interface Props {
    * Open the composer on a block that cannot be reached by highlighting.
    * Figures are images, a KaTeX equation is a tree of spans that drag-selects
    * into gibberish, and a table drag-selects into a column of orphaned cell
-   * values with no header attached — all three need an explicit affordance.
+   * values with no header attached, so all three need an explicit affordance.
    */
   onAsk: (block: DocBlock, kind: 'figure' | 'equation' | 'table') => void;
   /** Clicking the ribbon lifts the bookmark off this block. */
@@ -162,7 +162,7 @@ function ArticleBlockImpl({
     /**
      * A table is a unit, and it gets its own scroll box.
      *
-     * A results table is routinely wider than a column of prose — ten model
+     * A results table is routinely wider than a column of prose: ten model
      * variants across six metrics does not fit, and the previous
      * `width: 100%` made it *fit anyway* by crushing every column until the
      * headers wrapped one letter per line. The box below scrolls instead: the
@@ -170,7 +170,7 @@ function ArticleBlockImpl({
      * would in the PDF. Vertical too, so a fifty-row table does not push the
      * rest of the paper off screen.
      *
-     * `tabIndex` is not decoration — a scroll container that only responds to
+     * `tabIndex` is not decoration: a scroll container that only responds to
      * a trackpad is unreachable by keyboard, and this one can hold the numbers
      * the whole paper is about.
      */
@@ -181,8 +181,8 @@ function ArticleBlockImpl({
      * MinerU emits `<table><tr><td>…` with no `<thead>`, so the parser that
      * fills `table_json` has nothing to put in `headers`. Rendering that
      * literally gives an empty `<thead>` and a header row that behaves like
-     * data: not bold, not tinted, and — since the sticky rule applies to `th`
-     * — scrolling a long table loses the column names entirely, which is the
+     * data: not bold, not tinted, and, since the sticky rule applies to `th`,
+     * scrolling a long table loses the column names entirely, which is the
      * exact failure the scroll box exists to prevent.
      *
      * A first row promoted in error costs one row of bold text. A header that
@@ -213,7 +213,7 @@ function ArticleBlockImpl({
       </table>
     ) : (
       // MinerU recovered no structure, so this is its raw <table> HTML or a
-      // markdown grid. Same scroller either way — the CSS targets the <table>.
+      // markdown grid. Same scroller either way: the CSS targets the <table>.
       <Md>{block.content_markdown}</Md>
     );
 

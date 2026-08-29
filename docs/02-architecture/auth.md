@@ -1,4 +1,4 @@
-# Auth — sessions, signup, and per-user data isolation
+# Auth: sessions, signup, and per-user data isolation
 
 > **What this is:** how a request becomes "logged in as user X", how signup is gated, and how
 > every other table in the app scopes itself to one user.
@@ -22,9 +22,9 @@
 
 ## Invariants
 
-1. Every route except `/health` and `/auth/*` itself requires a valid session — enforced by the
+1. Every route except `/health` and `/auth/*` itself requires a valid session: enforced by the
    `get_current_user` dependency, not by convention.
-2. A request for a resource the caller doesn't own **404s**, never 403 — a 403 would confirm the
+2. A request for a resource the caller doesn't own **404s**, never 403: a 403 would confirm the
    resource exists, just not to you. `get_current_user` only establishes *who is asking*; ownership
    is a separate check at the point each resource is loaded.
 3. The session is a random opaque token, never a JWT or anything the client can decode or forge.
@@ -85,7 +85,7 @@ flowchart TD
     class E403A,E409,E401 bad
 ```
 
-`SIGNUP_INVITE_CODE` gates account *creation*, not login — existing accounts always work,
+`SIGNUP_INVITE_CODE` gates account *creation*, not login: existing accounts always work,
 regardless of the invite code's current value. Comparison is `secrets.compare_digest`, not `==`:
 a shared secret compared on every attempt leaks how many leading characters matched via timing
 under a naive comparison.
@@ -95,10 +95,10 @@ Passwords are hashed with Argon2id (`argon2-cffi`'s `PasswordHasher`, default pa
 precomputed dummy hash (`_DUMMY_HASH`, hashed once at import time) stands in for a real one when
 the email isn't found, so both paths pay the same real Argon2 verify cost and take similar wall
 time. Skipping the verify for an unknown email would make lookups measurably faster than wrong
-passwords — a timing side-channel that discloses which emails are registered.
+passwords, a timing side-channel that discloses which emails are registered.
 
 `logout` (`POST /auth/logout`) is idempotent: no session, or an already-expired one, still
-succeeds. `GET /auth/me` needs no auth at all — the frontend calls it once on load specifically to
+succeeds. `GET /auth/me` needs no auth at all: the frontend calls it once on load specifically to
 find out whether anyone is logged in (`{"user": <UserResponse> | null}`).
 
 ---
@@ -113,19 +113,19 @@ redis.set(f"session:{token}", json({"user_id": ..., "created_at": ...}), ex=SESS
 ```
 
 ⚠ **Why opaque-and-server-side instead of a signed cookie.** A signed cookie needs no storage and
-no lookup — but it can't be revoked short of rotating the signing secret, which logs out every
+no lookup, but it can't be revoked short of rotating the signing secret, which logs out every
 user at once. Redis is already a hard dependency (Celery's broker), so an opaque token costs zero
 new infrastructure and buys real server-side revocation: `delete_session` removes exactly one
 key, exactly one user, immediately.
 
 **Sliding TTL.** `get_session_user_id` refreshes the key's expiry (`EXPIRE`) on every lookup, so
-an active user is never logged out mid-session — only `SESSION_TTL_SECONDS` (default 30 days) of
+an active user is never logged out mid-session: only `SESSION_TTL_SECONDS` (default 30 days) of
 *inactivity* expires it.
 
-**Cookie flags:** `httponly` (no JS access — defeats a whole class of XSS-driven token theft),
+**Cookie flags:** `httponly` (no JS access, defeats a whole class of XSS-driven token theft),
 `samesite=lax`, `secure=not settings.debug`. The `secure=not debug` inversion matters for local
 testing: a plain-HTTP test client (or `httpx.ASGITransport` in pytest) can't see a `Secure`
-cookie, so tests need `DEBUG=true` the same way a non-TLS dev server does — not a workaround, the
+cookie, so tests need `DEBUG=true` the same way a non-TLS dev server does, not a workaround, the
 correct behavior for a non-TLS target.
 
 `SameSite=Lax` is sufficient here without a separate CSRF token: `/auth/*` and every mutating
@@ -138,11 +138,11 @@ needs revisiting.
 every protected route carries: reads the cookie → `get_session_user_id` → loads the user row →
 401s if any step fails (`"Not logged in"` with no cookie, `"Session expired — please log in
 again"` for a missing/expired session or a user that no longer exists).
-`get_current_user_optional` is the same lookup but returns `None` instead of raising — used only
+`get_current_user_optional` is the same lookup but returns `None` instead of raising, used only
 by `GET /auth/me`.
 
 **Auth-specific rate limiting.** `enforce_auth_rate_limit` (`api/deps.py`) is a separate, stricter
-Redis-backed limiter on `/auth/signup` and `/auth/login` (10 attempts / 60s per client IP) —
+Redis-backed limiter on `/auth/signup` and `/auth/login` (10 attempts / 60s per client IP),
 deliberately not the app-wide `RateLimitMiddleware`, which is in-memory and per-process (see
 [roadmap.md](../roadmap.md)) and nowhere near tight enough to blunt credential stuffing or
 invite-code brute-forcing.
@@ -154,16 +154,16 @@ invite-code brute-forcing.
 Every resource in the app belongs to exactly one user. Two different scoping strategies, chosen
 per table:
 
-**Top-level owner tables** — `documents`, `studies`, `sticky_notes`, `conversation_turns` — carry
+**Top-level owner tables** (`documents`, `studies`, `sticky_notes`, `conversation_turns`) carry
 a direct `user_id` column (nullable at the DB level only; see the ⚠ in
 [database-schema.md](../03-reference/database-schema.md)). Every repository function for these
-takes `user_id` as a required argument and filters by it in the `WHERE` clause — there is no code
+takes `user_id` as a required argument and filters by it in the `WHERE` clause: there is no code
 path that lists or fetches one of these without a caller-supplied owner.
 
-**Child tables** — `chunks`, `paper_notes`, `chunk_embeddings`, `ask_traces`, and everything else
-that hangs off a `document_id`/`study_id`/etc. — have **no `user_id` column of their own**.
+**Child tables** (`chunks`, `paper_notes`, `chunk_embeddings`, `ask_traces`, and everything else
+that hangs off a `document_id`/`study_id`/etc.) have **no `user_id` column of their own**.
 Ownership is established once, at the endpoint boundary, by loading the parent resource scoped to
-the caller (e.g. `get_document(db, paper_id, current_user["id"])` — 404s if it doesn't exist *or*
+the caller (e.g. `get_document(db, paper_id, current_user["id"])`, which 404s if it doesn't exist *or*
 belongs to someone else), and every child lookup that follows within that request trusts the
 already-verified `document_id`/`study_id`. Re-checking ownership on every child row would be
 redundant: the parent lookup already proved the caller owns the whole subtree.
@@ -181,13 +181,13 @@ get_document_chunks(db, paper_id, ...)        ← trusts paper_id, no user_id ne
 ```
 
 ⚠ **Cross-tenant access 404s, not 403s.** A 403 on someone else's paper would confirm to a caller
-that the ID exists and belongs to *somebody* — information a non-owner has no business learning.
+that the ID exists and belongs to *somebody*, information a non-owner has no business learning.
 Every ownership check in the app raises the same `DocumentNotFound`/`StudyNotFound`-style 404 a
 truly nonexistent ID would.
 
 **Global-scan endpoints were the actual risk.** Before this retrofit, two code paths did an
 unscoped table scan with no owner filter at all: `search/vector` (a standalone endpoint, since
-removed entirely — paper-scoped search covers its use case) and `pgvector.py`'s
+removed entirely because paper-scoped search covers its use case) and `pgvector.py`'s
 `search_similar_chunks`/`search_chunks_fulltext`, which now return `[]` instead of scanning the
 whole table when called with no document filter, rather than silently searching every user's
 chunks.
@@ -198,15 +198,15 @@ chunks.
 
 - ⚠ **`/static/{images,extracted,assets}` bypass this entirely.** They're plain `StaticFiles`
   mounts (`app/main.py`), not FastAPI routes, so `get_current_user` never runs for them. A caller
-  who already has a file path (they're UUID-derived, not sequential — not trivially enumerable,
+  who already has a file path (they're UUID-derived, not sequential, so not trivially enumerable,
   but also not access-controlled) reads it with no login and no ownership check. See
   [roadmap.md](../roadmap.md).
-- **No password reset, no email verification.** Signup is invite-gated instead — the assumption is
+- **No password reset, no email verification.** Signup is invite-gated instead: the assumption is
   a small, trusted user set who can be handed a new invite code or a manual DB fix out of band, not
   self-service account recovery at scale.
 - **One shared `SIGNUP_INVITE_CODE`.** It's a single secret for every new signup, not a per-invite
-  token — anyone who has it can create an account, and it can't be revoked for one specific person
+  token: anyone who has it can create an account, and it can't be revoked for one specific person
   without rotating it for everyone waiting to sign up.
 - **Sessions don't survive a Redis flush.** Since the session store *is* Redis with no fallback,
-  clearing Redis (or Redis losing its data) logs out every user at once — the same blast radius a
+  clearing Redis (or Redis losing its data) logs out every user at once, the same blast radius a
   signing-secret rotation would have had, just from a different cause.

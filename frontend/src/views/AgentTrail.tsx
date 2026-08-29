@@ -6,7 +6,7 @@ import type { AgentStep } from '../api';
  *
  * The agent can spend six rounds fetching sections, searching the paper, and
  * reading the web before it writes a word. Without this that time is a spinner
- * and the answer arrives as an assertion — indistinguishable, from the
+ * and the answer arrives as an assertion: indistinguishable, from the
  * reader's side, from a model that made it up. The trail turns the answer into
  * something checkable: these sections, that search, this source.
  *
@@ -21,12 +21,12 @@ const TOOL_GLYPH: Record<AgentStep['tool'], string> = {
   SEARCH: '⌕',
   READ: '¶',
   WEB: '⌘',
-  // Writes, not fetches — the only steps that change something.
+  // Writes, not fetches: the only steps that change something.
   NOTE: '✎',
   REMEMBER: '✦',
 };
 
-/** The domain alone — a trail row has no space for a full URL. */
+/** The domain alone: a trail row has no space for a full URL. */
 function hostOf(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');
@@ -107,7 +107,7 @@ export function AgentTrail({
 
   // "3 fetches" says nothing about where the answer came from; naming the kinds
   // separately does, because "1 from the web" is the part a reader may want to
-  // weigh differently from the paper's own text — and a note it pinned, or
+  // weigh differently from the paper's own text, and a note it pinned, or
   // something it remembered, is something they will find later whether or not
   // they read the trail now.
   const summary = [

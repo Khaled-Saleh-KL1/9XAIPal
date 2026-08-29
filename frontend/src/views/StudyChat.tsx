@@ -11,7 +11,7 @@ import type { AgentStep, ModelCatalog, StudyPaper, StudyTurn } from '../api';
  *
  * ⚠ A transcript, not a list of notes. A margin note is one anchored Q+A and
  * stands alone; a desk conversation has follow-ups, pronouns, and "and the
- * second one?" — so it reads as a chat, and the server carries history.
+ * second one?", so it reads as a chat, and the server carries history.
  */
 
 /** A question in flight: what the agent is doing, and the answer so far. */
@@ -30,8 +30,8 @@ export interface PendingTurn {
  * ⚠ **A text transform before markdown, not a split around it.** Splitting the
  * answer on its markers and rendering each fragment separately makes every
  * fragment its own block: a citation mid-sentence then breaks the paragraph in
- * two and strands the rest of the sentence — including a lone trailing full
- * stop — on its own line. Turning the marker into an inline link keeps the
+ * two and strands the rest of the sentence, including a lone trailing full
+ * stop, on its own line. Turning the marker into an inline link keeps the
  * paragraph whole and lets `components.a` do the swap.
  *
  * ⚠ Matches a whole bracket blob, not one reference. Models group them as
@@ -257,7 +257,7 @@ export function StudyChat({
           <>
             <div className="msg is-user"><div className="msg-body">{pending.question}</div></div>
             <div className="msg is-assistant">
-              {/* Live, the trail IS the progress indicator — the answer has not
+              {/* Live, the trail IS the progress indicator: the answer has not
                   started yet and a bare spinner says nothing about what it is
                   doing across five papers. */}
               <AgentTrail steps={pending.steps} live />

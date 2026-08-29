@@ -14,15 +14,15 @@ interface Props {
 export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
   const [query, setQuery] = useState('');
 
-  // An imported article has no raw PDF behind it (see documents.source_url) —
-  // there is nothing this panel could open for one, so it never belongs here.
+  // An imported article has no raw PDF behind it (see documents.source_url),
+  // so there is nothing this panel could open for one, and it never belongs here.
   const rawPapers = useMemo(() => papers.filter((p) => p.doc_kind !== 'article'), [papers]);
 
   const filtered = useMemo(() => {
     if (!query) return rawPapers;
     const q = query.toLowerCase();
     // Match the renamed title (what's actually shown below) as well as the
-    // original filename — a reader searching after a rename types the name
+    // original filename, since a reader searching after a rename types the name
     // they see, but one who still remembers the arXiv id should find it too.
     return rawPapers.filter(
       (p) =>
@@ -154,7 +154,7 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
           <div
             className="text-[13px] font-medium truncate"
             style={{ color: 'var(--fg)' }}
-            // The rename wins here too — a reader who renamed a book expects
+            // The rename wins here too: a reader who renamed a book expects
             // to see that name everywhere, "raw" or not. The real on-disk
             // filename stays reachable on hover, same as the PDF viewer.
             title={paper.original_filename}
@@ -220,7 +220,7 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
             </button>
             <a
               href={getRawPdfUrl(paper.id)}
-              // Just a hint — the server has the last word via its own
+              // Just a hint: the server has the last word via its own
               // Content-Disposition header, which now agrees with this.
               download={paper.title?.trim() ? `${paper.title.trim()}.pdf` : paper.original_filename}
               className="text-[11.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5 no-underline"

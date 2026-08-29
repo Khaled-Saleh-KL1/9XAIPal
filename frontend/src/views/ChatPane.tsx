@@ -9,7 +9,7 @@ import {
 } from '../api';
 import { AgentTrail } from './AgentTrail';
 
-// Lightbox is opened by dispatching a CustomEvent — keeps the markdown
+// Lightbox is opened by dispatching a CustomEvent, which keeps the markdown
 // renderer at module scope (no React state needed) while letting the
 // ChatPane (or any other component) listen and show the overlay.
 type LightboxDetail = { src: string; alt?: string };
@@ -170,7 +170,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   // sending to the backend (Ollama wants raw base64).
   const [attachments, setAttachments] = useState<{ dataUrl: string; name: string }[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  // Lightbox state — opened when any chat image dispatches `pal:lightbox`.
+  // Lightbox state, opened when any chat image dispatches `pal:lightbox`.
   const [lightbox, setLightbox] = useState<LightboxDetail | null>(null);
 
   // === Sub-thread (nested tangent) state ===
@@ -243,7 +243,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   const askAbortRef = useRef<AbortController | null>(null);
 
   // ── Autoscroll ───────────────────────────────────────────────────────────
-  // ⚠ This pane had NO autoscroll at all — every message, including the one
+  // ⚠ This pane had NO autoscroll at all: every message, including the one
   // the reader just sent, landed below the fold with the view left wherever
   // it happened to be. Against a pane that was scrolled to the bottom, that
   // reads as the conversation jumping backward the instant you hit send.
@@ -272,7 +272,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
     return () => document.removeEventListener('mousedown', onDown);
   }, [pickerOpen]);
 
-  // Reset whenever the paper changes — each paper has its own threads only.
+  // Reset whenever the paper changes: each paper has its own threads only.
   useEffect(() => {
     let alive = true;
     askAbortRef.current?.abort();
@@ -308,7 +308,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
           })));
         }
       } catch {
-        // Backend hiccup — leave the pane empty and let the user retry.
+        // Backend hiccup, so leave the pane empty and let the user retry.
       }
     })();
 
@@ -324,7 +324,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
       const convs = await listPaperConversations(paperId);
       setConversations(convs);
     } catch {
-      // Non-fatal — picker just won't reflect the newest thread.
+      // Non-fatal: picker just won't reflect the newest thread.
     }
   }, [paperId]);
 
@@ -375,7 +375,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
         tail ?? undefined,
       );
       setMaxDepth(md);
-      // Server depth is authoritative — if it disagrees, trust it.
+      // Server depth is authoritative: if it disagrees, trust it.
       // (Should always equal stack.length; this guards against stale UI state.)
       if (serverDepth !== stack.length && tail === null) {
         // Main chat: server says 0, stack length must be 0.
@@ -502,7 +502,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
       ]);
       setLiveSteps([]);
       // Refetch so the freshly-created user/assistant turns gain their server
-      // ids — without this the "Thread →" affordance never appears on a new
+      // ids: without this the "Thread →" affordance never appears on a new
       // exchange (it depends on threadRootTurnId, which only the backend
       // emits). Scoped to the current sub-thread when applicable.
       if (newConvId) {
@@ -518,12 +518,12 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
             threadRootTurnId: t.thread_root_turn_id ?? undefined,
           })));
         } catch {
-          // non-fatal — the optimistic bubbles are already on screen
+          // non-fatal: the optimistic bubbles are already on screen
         }
       }
       if (wasNewChat) refreshConversations();
     } catch (err) {
-      // Deliberate abort (paper switch / unmount) — state was already reset.
+      // Deliberate abort (paper switch / unmount): state was already reset.
       if (err instanceof DOMException && err.name === 'AbortError') return;
       const detail = err instanceof Error ? err.message : String(err);
       setMessages((prev) => [
@@ -709,7 +709,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
                     ? messages[i + 1].threadRootTurnId
                     : undefined);
             // Hide the affordance when the user is already at the maximum
-            // allowed sub-thread depth — opening a deeper sub-thread would
+            // allowed sub-thread depth: opening a deeper sub-thread would
             // exceed the cap and the backend would reject it anyway.
             const canOpen = !!pairRoot && !atMaxDepth;
             return (
@@ -739,7 +739,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
         </div>
       </div>
 
-      {/* input — supports drag-drop / paste / file-picker for image attachments */}
+      {/* input: supports drag-drop / paste / file-picker for image attachments */}
       <div
         className="px-4 py-3 shrink-0 relative"
         style={{ borderTop: '1px solid var(--border)', background: 'var(--bg)' }}
@@ -752,7 +752,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
           for (const f of files) await ingestFile(f);
         }}
       >
-        {/* thumbnail strip — visible while images are attached, removable */}
+        {/* thumbnail strip: visible while images are attached, removable */}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2 px-1">
             {attachments.map((a, i) => (
@@ -802,7 +802,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
           >
             /ask
           </span>
-          {/* file-picker button (paperclip) — equivalent to drag-drop */}
+          {/* file-picker button (paperclip), equivalent to drag-drop */}
           <label
             className="cursor-pointer text-[14px] select-none pt-0.5"
             title="Attach image"
@@ -870,7 +870,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
         </div>
       </div>
 
-      {/* Fullscreen image lightbox — opens when any chat image is clicked.
+      {/* Fullscreen image lightbox, opens when any chat image is clicked.
           Click outside the image (or press Esc) to close. */}
       {lightbox && (
         <div
@@ -1073,7 +1073,7 @@ const MessageBubble = memo(function MessageBubble({
           </span>
         )}
 
-        {/* "Thread →" affordance — only shown on assistant turns that start a sub-thread */}
+        {/* "Thread →" affordance: only shown on assistant turns that start a sub-thread */}
         {openThread && (
           <button
             onClick={(e) => { e.stopPropagation(); openThread(); }}

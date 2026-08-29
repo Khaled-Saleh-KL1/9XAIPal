@@ -6,7 +6,7 @@ import type { ModelCatalog } from '../api';
  * The composer that opens in the margin when the reader highlights something.
  *
  * It shows what is being asked about, takes the question, and hands it up. It
- * never talks to the network — the reader owns the request so the resulting
+ * never talks to the network: the reader owns the request so the resulting
  * note can be placed and streamed into.
  */
 
@@ -45,8 +45,8 @@ export function AskComposer({
   useEffect(() => {
     // ⚠ preventScroll is load-bearing. The card is positioned by a transform
     // the gutter applies on layout; focusing before that lands makes the
-    // browser scroll to where the card momentarily is — the top of the
-    // gutter — and `scroll-behavior: smooth` then animates the whole article
+    // browser scroll to where the card momentarily is: the top of the
+    // gutter, and `scroll-behavior: smooth` then animates the whole article
     // back to the start of the paper while you are trying to type.
     ref.current?.focus({ preventScroll: true });
   }, [target.sequenceId, target.quote]);

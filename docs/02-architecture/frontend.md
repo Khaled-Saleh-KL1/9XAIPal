@@ -1,6 +1,6 @@
 # Frontend
 
-> **What this is:** the React SPA — routing, state, views, and how it talks to the API.
+> **What this is:** the React SPA: routing, state, views, and how it talks to the API.
 >
 > **Owns:** client-side state and view behavior.
 > **Does not own:** endpoint contracts ([api.md](../03-reference/api.md)).
@@ -14,11 +14,11 @@
 > remaining sections 2026-07-28 (`main`, 5471870).
 > **Verify with:** `cd frontend && npm run build` (runs `tsc` first)
 > **Cross-engine:** layout regressions here have been WebKit-only twice. Check
-> Safari, or drive it headlessly — `npx playwright install webkit`, then load
+> Safari, or drive it headlessly: `npx playwright install webkit`, then load
 > the page and assert no element reports more than one client rect
 > (`el.getClientRects().length > 1` means it fragmented).
 
-Vite + React + Tailwind, no router library — a tiny state machine in
+Vite + React + Tailwind, no router library: a tiny state machine in
 [App.tsx](../../frontend/src/App.tsx) toggles between five views.
 
 ## Two readers, chosen by `doc_kind`
@@ -49,10 +49,10 @@ Held in `useState<Route>`:
 - **`desk`** → `<DeskView>`. Deep-linkable per scope: `#/desk`, `#/desk/<studyId>`.
 
 `App.tsx` also owns:
-- `activePaper` — the `Paper` currently open in `ReadingView`.
-- `activePaperId` — the backend UUID.
-- `uploadingFile` — UX data for the processing overlay.
-- `pollRef` — the `setInterval` ref for status polling.
+- `activePaper`, the `Paper` currently open in `ReadingView`.
+- `activePaperId`: the backend UUID.
+- `uploadingFile`, UX data for the processing overlay.
+- `pollRef`: the `setInterval` ref for status polling.
 
 ## The fetch client ([api.ts](../../frontend/src/api.ts))
 
@@ -72,7 +72,7 @@ All calls go through `/api/v1` and are proxied by Vite to `http://localhost:8000
 | `getPersonalState(id)`  | `GET /papers/{id}/personal` → bookmarks + notes + decks |
 | `createBookmark(id, b)` / `deleteBookmark` / `renameBookmark` | `POST` / `DELETE` / `PATCH` `/papers/{id}/bookmarks` |
 | `createPersonalNote(id, n)` / `updatePersonalNote` / `deletePersonalNote` | `POST` / `PATCH` / `DELETE` `/papers/{id}/personal-notes` |
-| `putDecks(id, decks)`   | `PUT /papers/{id}/decks` — replaces the whole arrangement |
+| `putDecks(id, decks)`   | `PUT /papers/{id}/decks`: replaces the whole arrangement |
 | `listModels()`          | `GET /models` → `ModelCatalog`                      |
 | `askPaper(id, q, seq, conv)` | `POST /papers/{id}/ask` → `AskResponse` (book reader) |
 | `checkHealth()`         | `GET /health`                                       |
@@ -84,15 +84,15 @@ All functions throw on non-`2xx`.
 ## LibraryView ([views/LibraryView.tsx](../../frontend/src/views/LibraryView.tsx))
 
 A shelf, not a table. Every card leads with the paper's own first page, because at ten papers a
-filename tells them apart and at fifty it does not — and the filenames here are routinely arXiv
+filename tells them apart and at fifty it does not, and the filenames here are routinely arXiv
 ids. On mount, calls `listPapers()`. Features:
 
 - Drag-and-drop and click-to-upload dropzone. Both call the same `onUpload` prop; a drop
   passes the dropped `File`, a click passes nothing. See
   [Upload + processing](#upload--processing-apptsx).
-- **Cover thumbnails** — [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) renders
+- **Cover thumbnails**: [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) renders
   `GET /papers/{id}/cover`, the first page as a JPEG, rendered server-side on first request.
-- **Inline rename** — the pencil on hover swaps the title for an input. Enter commits, Escape
+- **Inline rename**: the pencil on hover swaps the title for an input. Enter commits, Escape
   reverts, blur commits.
 - Local search (substring match over title and authors).
 - Local sort cycle: `recent → title → pages`.
@@ -101,8 +101,8 @@ ids. On mount, calls `listPapers()`. Features:
 ### Renaming
 
 `PATCH /papers/{id}` sets `documents.title`, a display name that overrides the filename.
-[`lib/titles.ts::displayTitle`](../../frontend/src/lib/titles.ts) is the single resolver — a
-rename wins, else the filename minus `.pdf` — and every surface that shows a name uses it.
+[`lib/titles.ts::displayTitle`](../../frontend/src/lib/titles.ts) is the single resolver: a
+rename wins, else the filename minus `.pdf`, and every surface that shows a name uses it.
 
 ⚠ **A rename never touches disk.** `filename` is the on-disk key every storage path is built from,
 and `original_filename` is what `/raw` serves the download as. Renaming those to match a label
@@ -113,7 +113,7 @@ every 2.5–10s; a tick landing mid-edit would blow away the input being typed i
 (`renamingRef` in [LibraryView.tsx](../../frontend/src/views/LibraryView.tsx)).
 
 ⚠ **The card's open target is an inner `div`, not the `<article>`.** Rename and delete are real
-buttons, and a button nested inside something that is itself `role="button"` is invalid — assistive
+buttons, and a button nested inside something that is itself `role="button"` is invalid, so assistive
 tech announces the card as one control named "… 17p · read Rename this paper Delete this paper".
 Keeping the actions as siblings of the open target yields three correctly-named controls.
 
@@ -121,15 +121,15 @@ Keeping the actions as siblings of the open target yields three correctly-named 
 
 | Concern | Decision |
 | --- | --- |
-| When rendered | Lazily, on first `GET /cover` — never at ingestion. Ingestion is already the slow path the reader waits on, and a cover is worth nothing until the library is looked at. Papers ingested before covers existed get them for free. |
-| Cache | `storage/covers/<id>.jpg`, keyed by document id alone. A document's first page cannot change — re-extraction rewrites derived text, never the source PDF — so there is no invalidation problem. |
+| When rendered | Lazily, on first `GET /cover`, never at ingestion. Ingestion is already the slow path the reader waits on, and a cover is worth nothing until the library is looked at. Papers ingested before covers existed get them for free. |
+| Cache | `storage/covers/<id>.jpg`, keyed by document id alone. A document's first page cannot change: re-extraction rewrites derived text, never the source PDF, so there is no invalidation problem. |
 | Missing | The endpoint answers **204, not 404**. The grid asks for one cover per card; a wall of 404s makes a working library look broken. `<img>` reports 204 as a load error, so `PaperCover` must keep its `onError` fallback. |
 | Aspect | Fixed `1 / 1.294` with `object-position: top`. A Letter page and an A4 page are different shapes, and rows of mismatched heights read as a broken layout; cropping from the bottom keeps the title and authors. |
-| Off the event loop | `run_in_threadpool` — rasterising is 50–200ms of CPU in a native extension, and the grid requests every cover at once. |
+| Off the event loop | `run_in_threadpool`: rasterising is 50–200ms of CPU in a native extension, and the grid requests every cover at once. |
 
 ## Upload + processing ([App.tsx](../../frontend/src/App.tsx))
 
-### Getting in — two entry paths, one chooser
+### Getting in: two entry paths, one chooser
 
 Upload is two steps, and **the kind chooser always runs first**. Nothing can be uploaded without a
 `DocKind`: it decides which reader the document opens in and whether the embedding pass runs at all
@@ -139,7 +139,7 @@ the two entries is only *where the file comes from*.
 | Entry | `startUpload` receives | After the chooser (`pickFileWithKind`) |
 | --- | --- | --- |
 | Click the dropzone | nothing | Builds an `<input type=file accept=.pdf>` and clicks it |
-| Drop a PDF on it | the `File` off `e.dataTransfer` | Uploads `pendingFile` directly — **no picker** |
+| Drop a PDF on it | the `File` off `e.dataTransfer` | Uploads `pendingFile` directly, **no picker** |
 
 ```text
   click ──┐                                    ┌── pendingFile === null ──► native file picker ──┐
@@ -164,12 +164,12 @@ the chooser, and a path where a dropped file is uploaded *and* the picker opens.
 
 ⚠ **The drop handler must consume `e.dataTransfer` synchronously.** It reads the first PDF (by MIME
 type or `.pdf` extension) inside `onDrop` before any state update; the `DataTransfer` is neutered
-once the event handler returns, so a file plucked out later — for example after the modal
-resolves — is already gone.
+once the event handler returns, so a file plucked out later, for example after the modal
+resolves, is already gone.
 
 `pendingFile` is cleared on **both** exits from the modal: consumed on choose, discarded on cancel.
 A file left there would be silently uploaded by the *next* click-initiated upload instead of the
-one the user picked. **[untested]** — no test covers the upload entry path.
+one the user picked. **[untested]**: no test covers the upload entry path.
 
 ### Then the upload itself
 
@@ -188,7 +188,7 @@ Reading is scrolling. One `getFullDocument()` call returns every block; nothing 
 gated, or paced. Asking is anchoring: highlight something and the answer arrives as a card beside
 it.
 
-### Layout — three columns, always
+### Layout: three columns, always
 
 ```text
  ┌── margin ──┐ ┌────── article ──────┐ ┌── margin ──┐
@@ -202,7 +202,7 @@ it.
 ```
 
 ⚠ **The article column never moves.** Both margins are real grid columns whether or not they hold
-a card, so a note appearing cannot shift the text under the reader's eye — the most disruptive
+a card, so a note appearing cannot shift the text under the reader's eye, the most disruptive
 thing a margin can do. The cost is empty space on a paper with no notes.
 
 Three tiers by viewport width: `both` (≥1560px), `right-only` (≥1180px, left column present but
@@ -215,18 +215,18 @@ empty so centring holds), `inline` (below that, cards fall into normal flow unde
 | `text` | Drag-select inside a block → an "Ask" pill appears at the selection. |
 | `figure` | Hover a figure → "Ask about this figure". |
 | `equation` | Hover a formula → "Ask about this equation". |
-| `table` | Hover a table → "Ask about this table" — **or drag-select inside it**, which is promoted to the whole table. |
+| `table` | Hover a table → "Ask about this table", **or drag-select inside it**, which is promoted to the whole table. |
 | `block` | Press `A` with nothing selected → anchors to the block at the top of the viewport. |
 | `document` | Open the panel (the one bottom-left button, or `P`) → not anchored at all. See [The assistant panel](#the-assistant-panel-the-holistic-level). |
 
 Figures, equations and tables need an explicit affordance because none of them can be
-drag-selected usefully — one is an image, one a tree of KaTeX spans that selects into gibberish,
+drag-selected usefully: one is an image, one a tree of KaTeX spans that selects into gibberish,
 and the third selects into cell values stripped of the header and row label that give them meaning.
 
 ⚠ **A selection inside a table does not produce a `text` anchor.**
 [`ArticleReader.tsx::openComposerFromSelection`](../../frontend/src/views/ArticleReader.tsx) looks
 up the block behind the selection and, if it is a table, hands the whole table over instead. The
-quote "8.4 12.1 91.2 7B" is not a worse quote than usual — it is unanswerable in a way that looks
+quote "8.4 12.1 91.2 7B" is not a worse quote than usual: it is unanswerable in a way that looks
 answerable, which is the failure mode worth code to prevent. Both the ask composer and the
 personal-note composer apply the rule; a table anchor carries the table's transcription as its
 quote and the MinerU crop as its image, exactly like an equation.
@@ -265,12 +265,12 @@ watches `$\mathcal{P` type itself out and then snap into a symbol.
 | `heading` | `article-h1/2/3` by `heading_path` depth. |
 | `figure` | Centred image + caption, with a hover ask button. |
 | `math` | Centred KaTeX, horizontally scrollable, with a hover ask button. |
-| `table` | Real `<table>` from `table_json`, falling back to markdown — inside its own scroll box, with a hover ask button. See below. |
+| `table` | Real `<table>` from `table_json`, falling back to markdown, inside its own scroll box, with a hover ask button. See below. |
 | `code` | Fenced monospace block. |
 | `footnote` | Quiet side note with a rule. |
 | default | Serif prose at 20px/1.72. |
 
-Memoised — without it every keystroke in the composer would re-render the entire paper.
+Memoised: without it every keystroke in the composer would re-render the entire paper.
 
 #### Tables get their own scroll box
 
@@ -295,7 +295,7 @@ Two landmines in the CSS, both in [`index.css`](../../frontend/src/index.css):
   of them and the cue silently disappears. Only `th` gets a fill, and it needs one for the
   unrelated reason that it is sticky.
 - **`table_json.headers` is routinely empty, and the header row arrives as `rows[0]`.** MinerU
-  emits `<table><tr><td>…` with no `<thead>`, so the parser has nothing to put in `headers` — all
+  emits `<table><tr><td>…` with no `<thead>`, so the parser has nothing to put in `headers`. All
   eight tables in the 47-page sample paper come back that way. The renderer promotes `rows[0]`
   when `headers` is empty; without it the sticky rule pins an empty `<thead>` and a long table
   scrolls its column names away, which is the failure the box exists to prevent. Fixed in the
@@ -309,7 +309,7 @@ Two landmines in the CSS, both in [`index.css`](../../frontend/src/index.css):
 ### The margin's scarce resource, and decks
 
 Cards are placed at their anchor and then pushed **downward** past each other by
-`ArticleReader.tsx::layoutNotes` — a single top-to-bottom pass per margin, cursor never moving up.
+`ArticleReader.tsx::layoutNotes`, a single top-to-bottom pass per margin, cursor never moving up.
 That is what keeps the pass cheap, and it is also the whole problem: one long thread drags every
 later card a screen below the passage it annotates.
 
@@ -341,23 +341,23 @@ among its members** (`deckSeq`), so flipping through it never makes it drift.
 
 **Changing card is a card being turned over**, not a crossfade. `flipTo` runs a two-phase Y
 rotation on **one** element and swaps the content at the midpoint, where the card is ~86° to the
-viewer and unreadable — so the incoming face arrives from the opposite edge. Mounting two faces
+viewer and unreadable, so the incoming face arrives from the opposite edge. Mounting two faces
 would double every card's state (a follow-up composer, a collapse toggle) and leave the hidden one
 in the tab order. The stage height is pinned for the turn and eased to the new card's height on the
 way out, so a short card following a tall one cannot snap the margin upward mid-flip. Revealing a
-study card uses the same turn — that is the flashcard gesture.
+study card uses the same turn: that is the flashcard gesture.
 
 ⚠ `FLIP_OUT_MS` / `FLIP_IN_MS` in `DeckCard.tsx` **duplicate** the durations of the `deck-turn-*`
 keyframes in `index.css`. The swap is scheduled in JS, so the two must be changed together; a
 mismatch either swaps the text in plain view or leaves the card sitting on its edge.
 
-`stackDecks` is kept out of the component and pure because **its result is what gets written** —
+`stackDecks` is kept out of the component and pure because **its result is what gets written**:
 the whole arrangement is `PUT` in one request, so it must be correct on its own rather than as a
-sequence of state updates. Every drop — card→card, card→deck, deck→card, deck→deck — reduces to one
+sequence of state updates. Every drop (card→card, card→deck, deck→card, deck→deck) reduces to one
 sentence: whatever was sitting still keeps its place, and the dragged thing joins it.
 
 ⚠ **Dragging uses pointer events, not HTML5 drag-and-drop** ([`NoteChrome.tsx::useCardDrag`](../../frontend/src/views/NoteChrome.tsx)).
-DnD would give us a drag image and autoscroll for free, but it **does not exist on touch** — and
+DnD would give us a drag image and autoscroll for free, but it **does not exist on touch**, and
 this app is meant to be opened from a tablet over the LAN, where dragging one note onto another is
 exactly the gesture a finger expects. The dragged card gets `pointer-events: none` mid-drag so
 `elementFromPoint` reports what is *underneath* it; drop targets are found via `[data-drag-id]`.
@@ -369,16 +369,16 @@ deck a deck of flashcards rather than a folder.
 
 Several per paper. Three surfaces, one state:
 
-- **The bar** — a Bookmark chip that toggles the mark on the block at the top of the viewport, and
+- **The bar**: a Bookmark chip that toggles the mark on the block at the top of the viewport, and
   a Resume chip pointing at the newest mark (or saying "You're here" when you are on it).
-- **The progress rail** — a tick per bookmark at its position in the document, clickable. The rail
+- **The progress rail**: a tick per bookmark at its position in the document, clickable. The rail
   is a map, not just a fill; a single "resume" pointer hides every other mark you made.
-- **The article** — a ribbon in the margin of each bookmarked block, which also removes it. A wash
+- **The article**: a ribbon in the margin of each bookmarked block, which also removes it. A wash
   is easy to scroll past on a return visit; a silhouette is not.
 
 ⚠ `ArticleReader.tsx::topmostBlock` is a **binary search**, not a scan. It runs on every scroll
 frame to keep those surfaces honest, and blocks are laid out monotonically, so a scan meant one
-`getBoundingClientRect` per block per frame — several hundred forced reflows on a long paper.
+`getBoundingClientRect` per block per frame: several hundred forced reflows on a long paper.
 
 ### Leaving for the desk
 
@@ -386,13 +386,13 @@ The one button in the bottom-left corner (or `P`) **navigates** to
 [the desk](#the-desk-viewsdeskviewtsx). It does not open anything here.
 
 ⚠ It has been three things in three iterations, and the reasons are worth keeping. First an "Ask"
-and a "Note" button, both anchoring to whatever block happened to be at the top of the viewport — a
+and a "Note" button, both anchoring to whatever block happened to be at the top of the viewport, a
 worse version of what highlighting already does, offered more prominently. Then one button opening
 a docked panel. Now a door: a question about the paper as a whole, or about several papers, is not
 something you do *on top of* a document you are reading. Passage-level work belongs entirely to the
 selection pill and the `A` / `N` keys.
 
-⚠ **The scope it hands over is a study containing this paper — only if there is exactly one.** Two
+⚠ **The scope it hands over is a study containing this paper, only if there is exactly one.** Two
 or more is ambiguous, and guessing between them is worse than landing on the library scope with the
 studies rail right there.
 
@@ -422,7 +422,7 @@ What the model fetched before it answered, rendered from the `step` SSE events a
 | State | Behaviour |
 | --- | --- |
 | Streaming (`live`) | Always expanded, no toggle. The trail **is** the progress indicator; collapsing it leaves a blank card. |
-| Saved | Collapsed behind one line — "How this was answered · 2 from the paper · 1 from the web". |
+| Saved | Collapsed behind one line: "How this was answered · 2 from the paper · 1 from the web". |
 
 ⚠ **Upsert by `step.id`, never append** (`onStep` in `ArticleReader.tsx::runNote`). Each call
 arrives twice, `running` then `done`; appending renders every fetch as two rows, the first spinning
@@ -436,20 +436,20 @@ an answer drew on anything outside the paper is the one distinction worth seeing
 
 ### The Marginalia panel
 
-[`MarginaliaPanel.tsx`](../../frontend/src/views/MarginaliaPanel.tsx) — Contents, Bookmarks and
+[`MarginaliaPanel.tsx`](../../frontend/src/views/MarginaliaPanel.tsx): Contents, Bookmarks and
 Notes behind one search, replacing the headings-only overlay. Structure, marks and annotations are
 the same question asked three ways.
 
 ⚠ **Contents nests by the paper's own numbering, not by `heading_path`.** MinerU's `text_level`
 distinguishes the document title from everything else and stops, so `heading_path` is depth 2 for
-`3 Training data` *and* for `3.1 ARC task formulation` — a contents list built from it renders as
+`3 Training data` *and* for `3.1 ARC task formulation`, so a contents list built from it renders as
 one flat column, which is what the reader saw. `level` now comes from
 [`services/outline.py::heading_level`](../../backend/app/services/outline.py), which reads the
 numeric prefix and falls back to `heading_path` for unnumbered headings.
 
 ⚠ **Depth is a CSS custom property, not a class per level.** It was
 `outline-l${min(level, 4)}` against four hand-written rules, which silently flattened anything
-deeper — a paper numbering `2.1.1.1` drew it level with `2.1.1`. One `calc()` off `--depth` handles
+deeper: a paper numbering `2.1.1.1` drew it level with `2.1.1`. One `calc()` off `--depth` handles
 any depth, and the step and the rail offset are the only two numbers involved, so they cannot drift
 apart the way four hand-written pairs could. Still capped at 6, but the cap is now about a 300px
 panel running out of room rather than about how many rules someone wrote.
@@ -471,13 +471,13 @@ once:
 
 | Rule | Why |
 | --- | --- |
-| Concurrent loads of a paper share one in-flight promise | ⚠ StrictMode mounts every effect twice in development. Without this, both mounts find an empty server and both upload — every note imported in duplicate. This is how the bug was found. |
+| Concurrent loads of a paper share one in-flight promise | ⚠ StrictMode mounts every effect twice in development. Without this, both mounts find an empty server and both upload, every note imported in duplicate. This is how the bug was found. |
 | Bookmarks upsert by block, decks are a whole-collection replace | Idempotent on their own terms. |
-| Notes are matched on `(anchor, body)` before insert | They have no natural key. This also makes a half-finished run resumable — the second pass picks up where the first stopped. |
+| Notes are matched on `(anchor, body)` before insert | They have no natural key. This also makes a half-finished run resumable: the second pass picks up where the first stopped. |
 | `localStorage` is erased only after everything is stored | The worst available outcome is "still local, try again next open", never "some of them are gone". |
 
 Writes are optimistic with rollback, **except creating a personal note**, which waits for the
-server. A card rendered under a temporary id cannot be dragged into a deck — deck membership is a
+server. A card rendered under a temporary id cannot be dragged into a deck: deck membership is a
 foreign key. The composer keeps its draft until the save lands, so a failure loses nothing typed.
 
 ## The desk ([views/DeskView.tsx](../../frontend/src/views/DeskView.tsx))
@@ -546,8 +546,8 @@ a dozen requests for text that mostly never gets opened.
 ⚠ **The markers become links before markdown runs, not fragments around it**
 ([`StudyChat.tsx::withCitationLinks`](../../frontend/src/views/StudyChat.tsx)). Splitting the answer
 on its markers and rendering each fragment separately makes every fragment its own block: a citation
-mid-sentence then breaks the paragraph in two and strands the rest of the sentence — including a
-lone trailing full stop — on its own line. A `components.a` override swaps the link for the chip
+mid-sentence then breaks the paragraph in two and strands the rest of the sentence, including a
+lone trailing full stop, on its own line. A `components.a` override swaps the link for the chip
 with the paragraph intact.
 
 ⚠ **The peek is built from `<span>`s with `display: block`.** It renders inside a `<p>`, and a
@@ -571,28 +571,28 @@ Two boards, and the distinction is not cosmetic:
 | Where | a strip beside the transcript | its own page |
 | Scoped to | one conversation (`board='chat'` + `study_id`) | nothing |
 | Component | [`StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx) | [`NoteWall.tsx`](../../frontend/src/views/NoteWall.tsx) |
-| Layout | a list | a wall — tacked, tilted, masonry |
+| Layout | a list | a wall: tacked, tilted, masonry |
 
 ⚠ **`board` is not redundant with `scope`.** `scope: 'library'` already means
 the library-wide *chat*, so without the board a note beside that chat and a note
 on the universal board would be the same row.
 
 ⚠ **The tilt on the wall is derived from the note's id, never random.** A
-`Math.random()` rotation re-rolls on every render — every keystroke in the
+`Math.random()` rotation re-rolls on every render: every keystroke in the
 filter box would make the whole wall twitch. Same id, same angle, forever.
 
-⚠ **The wall is a CSS grid, not multi-column — and that is the whole point.**
+⚠ **The wall is a CSS grid, not multi-column, and that is the whole point.**
 It was `columns: 260px` for the masonry. Multi-column *fragments* its children:
 a note taller than the remaining column height is split, and the remainder is
 re-drawn at the top of the next column, pin and dashed border and all.
 `display: inline-block` is the usual charm against that and **it is not enough
-in WebKit** — the reported symptom was exactly this, two orphaned note-bottoms
+in WebKit**: the reported symptom was exactly this, two orphaned note-bottoms
 with their own pins stranded under the board. Grid items never fragment, in any
 engine. The cost is the masonry: rows are ragged rather than packed, which for a
 corkboard is not a loss. Do not "restore" the columns without a WebKit test.
 
 ⚠ **The clipped-note fade comes from a measurement, not a selector.** It was
-`:has(> :nth-child(3))` — fade when the body has three or more blocks — which is
+`:has(> :nth-child(3))`: fade when the body has three or more blocks, which is
 wrong for the common case, because a long note is usually one long paragraph. It
 clamped with a hard cut mid-line and nothing to say why. `StickyNote` measures
 `scrollHeight` against `clientHeight` and sets `.is-clipped`; a `ResizeObserver`
@@ -601,7 +601,7 @@ face swaps in.
 
 ⚠ **An assistant note is marked twice over**: a dashed border (the one border
 treatment nothing else in the app uses, legible before anything is read) and a
-badge naming the model. Drawn from `origin`, which the API refuses to patch — an
+badge naming the model. Drawn from `origin`, which the API refuses to patch, so an
 edit cannot launder a note into looking like the reader's own.
 
 ⚠ **Delete is the reader's alone**, and it is armed rather than instant. A note
@@ -611,14 +611,14 @@ asked to write again.
 ### Hiding the chat's notes
 
 The strip folds to a 38px rail, not to `display: none`. Collapsed is not the
-same as empty, so the rail still shows the count — the difference between "put
+same as empty, so the rail still shows the count: the difference between "put
 away" and "gone". The state is in `localStorage`: a reader who hid it wants it
 hidden tomorrow.
 
 ### Choosing a study's papers ([views/PaperPicker.tsx](../../frontend/src/views/PaperPicker.tsx))
 
 ⚠ **Order is not decoration here.** Answers cite `[[P2:41]]`, and the number
-comes from this list's order. So the dialog has two halves — what is in the
+comes from this list's order. So the dialog has two halves: what is in the
 study, in order and re-orderable, and what else the library holds. The flat
 checkbox list it replaced hid both facts: you could not see the numbering at all,
 and could not tell chosen from unchosen without reading every box.
@@ -639,13 +639,13 @@ away from what they are looking at.
 
 ## ChatPane ([views/ChatPane.tsx](../../frontend/src/views/ChatPane.tsx))
 
-⚠ `[historical]` for papers — reached only from `BookReadingView`.
+⚠ `[historical]` for papers: reached only from `BookReadingView`.
 
 Local state:
-- `messages: ChatMessage[]` — turn log.
-- `input: string` — textarea value.
-- `thinking: boolean` — while a request is in flight.
-- `conversationId: string | null` — persisted across turns.
+- `messages: ChatMessage[]`, turn log.
+- `input: string`: textarea value.
+- `thinking: boolean`, while a request is in flight.
+- `conversationId: string | null`: persisted across turns.
 
 `send()`:
 
@@ -671,27 +671,27 @@ figures in LOCAL and GLOBAL responses.
 
 ## Other components
 
-- [`views/NoteCard.tsx`](../../frontend/src/views/NoteCard.tsx) — a margin note: quote, question,
+- [`views/NoteCard.tsx`](../../frontend/src/views/NoteCard.tsx), a margin note: quote, question,
   answer, model tag, citation chips, follow-up box, margin-flip control.
-- [`views/PersonalNoteCard.tsx`](../../frontend/src/views/PersonalNoteCard.tsx) — the reader's own
+- [`views/PersonalNoteCard.tsx`](../../frontend/src/views/PersonalNoteCard.tsx), the reader's own
   note, plus the composer that writes one.
-- [`views/NoteChrome.tsx`](../../frontend/src/views/NoteChrome.tsx) — the furniture every card
+- [`views/NoteChrome.tsx`](../../frontend/src/views/NoteChrome.tsx), the furniture every card
   wears: the eyebrow (grip, tone dot, one word, `¶N`), the drag hook, the collapse clamp. Cards are
-  told apart by **shape and colour, not by a border tint** — a margin card is read peripherally.
-- [`views/AskComposer.tsx`](../../frontend/src/views/AskComposer.tsx) — the composer that opens on
+  told apart by **shape and colour, not by a border tint**, so a margin card is read peripherally.
+- [`views/AskComposer.tsx`](../../frontend/src/views/AskComposer.tsx): the composer that opens on
   an anchor. Owns the model picker; never touches the network.
-- [`views/DeskView.tsx`](../../frontend/src/views/DeskView.tsx) — the desk page.
-- [`views/AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx) — the tool calls behind an
+- [`views/DeskView.tsx`](../../frontend/src/views/DeskView.tsx): the desk page.
+- [`views/AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx): the tool calls behind an
   answer, live and after the fact. Shared by margin notes and the desk.
-- [`views/StudyChat.tsx`](../../frontend/src/views/StudyChat.tsx) — the desk's transcript.
-- [`views/StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx) — the reader's own notes.
-- [`views/CitationRef.tsx`](../../frontend/src/views/CitationRef.tsx) — a `[[P2:41]]` that opens
+- [`views/StudyChat.tsx`](../../frontend/src/views/StudyChat.tsx): the desk's transcript.
+- [`views/StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx): the reader's own notes.
+- [`views/CitationRef.tsx`](../../frontend/src/views/CitationRef.tsx): a `[[P2:41]]` that opens
   in place.
-- [`views/PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) — a paper's first page, with the
+- [`views/PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx): a paper's first page, with the
   placeholder that must survive a 204.
-- [`lib/titles.ts`](../../frontend/src/lib/titles.ts) — the one resolver for a paper's display name.
-- [`components/Icons.tsx`](../../frontend/src/components/Icons.tsx) — inline SVG icons.
-- [`components/LogoMark.tsx`](../../frontend/src/components/LogoMark.tsx) — the 9XAIPal wordmark.
+- [`lib/titles.ts`](../../frontend/src/lib/titles.ts): the one resolver for a paper's display name.
+- [`components/Icons.tsx`](../../frontend/src/components/Icons.tsx): inline SVG icons.
+- [`components/LogoMark.tsx`](../../frontend/src/components/LogoMark.tsx): the 9XAIPal wordmark.
 
 ## Styling
 

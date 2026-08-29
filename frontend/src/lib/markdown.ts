@@ -3,7 +3,7 @@
  * extracted paper content (ArticleBlock, NoteCard, BookReadingView, ChatPane).
  *
  * rehype-raw is needed because MinerU emits raw <table> HTML and models
- * occasionally emit inline HTML — but raw HTML without sanitization is an XSS
+ * occasionally emit inline HTML, but raw HTML without sanitization is an XSS
  * vector (a jailbroken model answer or hostile web-research snippet could
  * inject <script>/<iframe>/onerror handlers). rehype-sanitize runs after raw
  * parsing and strips everything outside the GitHub-style allowlist; the only

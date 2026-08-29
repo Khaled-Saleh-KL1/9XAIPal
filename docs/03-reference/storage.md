@@ -14,7 +14,7 @@
 > ⚠ Every file under the storage root is served publicly at `/static/*` with no auth. Treat
 > uploaded PDFs and extracted assets as world-readable to anyone who can reach the API.
 
-Everything that isn't in Postgres lives under the **storage root** —
+Everything that isn't in Postgres lives under the **storage root**:
 configurable via `settings.storage_root` (default `app/storage`). Paths
 are managed in [core/paths.py](../../backend/app/core/paths.py) and all
 subdirectories are created at startup by `ensure_storage_dirs()`.
@@ -65,14 +65,14 @@ The paper's first page, ~480px wide, rendered by PyMuPDF on the first
 else. It is the one directory safe to `rm -rf` to reclaim space.
 
 ⚠ Never invalidated: keyed by document id alone, because a document's first
-page cannot change — re-extraction and re-chunking rewrite derived text, never
+page cannot change: re-extraction and re-chunking rewrite derived text, never
 the source PDF. Deleting the paper deletes its cover.
 
 ### `assets/<doc_id>.pdf`
 A second copy of the upload, keyed by document ID so URLs are
 predictable. Used by:
-- `GET /papers/{id}/raw` — `FileResponse` with `Content-Disposition`.
-- `GET /static/assets/{id}.pdf` — direct static serving.
+- `GET /papers/{id}/raw`: `FileResponse` with `Content-Disposition`.
+- `GET /static/assets/{id}.pdf`: direct static serving.
 
 ### `logs/`
 Reserved for future structured logs. Not used at the moment.

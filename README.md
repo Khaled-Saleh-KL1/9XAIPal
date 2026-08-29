@@ -8,21 +8,21 @@
 
 **9XAIPal** is a local-first reading companion for **research papers, technical books, and long-form PDFs**. Drop a file and it structurally extracts headings, math, tables, and figures.
 
-A **paper** then reads as one continuous article. Highlight a passage, a figure, or an equation and ask about it — the answer arrives as a note in the margin, beside the thing it is about. A **book** keeps the chapter-by-chapter reader and its side chat.
+A **paper** then reads as one continuous article. Highlight a passage, a figure, or an equation and ask about it: the answer arrives as a note in the margin, beside the thing it is about. A **book** keeps the chapter-by-chapter reader and its side chat.
 
 ---
 
 ## Why I built it
 
-Reading dense material is cognitively expensive — whether it's a 12-page paper or a 600-page textbook. Most people skim and retain surprisingly little. Research in **cognitive load theory** and the **segmented learning** literature shows that breaking content into small, labeled units — and pairing it with **generative questioning** — significantly improves comprehension and retention over passive scrolling.
+Reading dense material is cognitively expensive, whether it's a 12-page paper or a 600-page textbook. Most people skim and retain surprisingly little. Research in **cognitive load theory** and the **segmented learning** literature shows that breaking content into small, labeled units, and pairing it with **generative questioning**, significantly improves comprehension and retention over passive scrolling.
 
 9XAIPal adapts to what you uploaded:
-- **Research papers** — the whole paper as an article, with questions anchored where you asked them. Nothing is gated behind a keypress; the interruption is yours to choose.
-- **Books** — read one *chapter* at a time. The system detects major chapter boundaries and lets you study an entire chapter as a single unit, so you stay in narrative flow while still avoiding wall-of-text overwhelm.
+- **Research papers**: the whole paper as an article, with questions anchored where you asked them. Nothing is gated behind a keypress; the interruption is yours to choose.
+- **Books**: read one *chapter* at a time. The system detects major chapter boundaries and lets you study an entire chapter as a single unit, so you stay in narrative flow while still avoiding wall-of-text overwhelm.
 
-Either way you learn by asking, not just by highlighting — and for papers the question and its answer stay pinned to the paragraph that provoked them.
+Either way you learn by asking, not just by highlighting, and for papers the question and its answer stay pinned to the paragraph that provoked them.
 
-Everything runs locally by default. Your documents and conversations never leave your machine — only a search query does, and only when a question needs the live web.
+Everything runs locally by default. Your documents and conversations never leave your machine: only a search query does, and only when a question needs the live web.
 
 ---
 
@@ -34,28 +34,28 @@ Everything runs locally by default. Your documents and conversations never leave
 | **API** | FastAPI + Pydantic v2 | Async Python backend, automatic validation, native OpenAPI docs |
 | **Database** | PostgreSQL 16 + **pgvector** | ACID document storage; native vector similarity search so no extra vector DB is needed |
 | **Embeddings** | Ollama (local) or OpenAI (cloud) | Local-first for privacy; cloud auto-fallback when the host is offline |
-| **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed — no config switching |
+| **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed, no config switching |
 | **PDF extraction** | **MinerU** 3.x (with PyMuPDF fallback) | State-of-the-art structural extraction: OCR, table recognition, equation → LaTeX |
 | **Background jobs** | Celery + Redis | Heavy extraction runs asynchronously so uploads never hang |
-| **Web search** | Tavily (default) or self-hosted SearXNG | Tavily returns ranked, already-extracted page text in one call, so the model reads sources instead of 280-character snippets. ⚠ It is a third party: the **query string** leaves the machine (never paper text, chunks, or chat history). Set `WEB_SEARCH_PROVIDER=searxng` to keep even the query local — see [configuration](docs/03-reference/configuration.md#web-search) |
+| **Web search** | Tavily (default) or self-hosted SearXNG | Tavily returns ranked, already-extracted page text in one call, so the model reads sources instead of 280-character snippets. ⚠ It is a third party: the **query string** leaves the machine (never paper text, chunks, or chat history). Set `WEB_SEARCH_PROVIDER=searxng` to keep even the query local, see [configuration](docs/03-reference/configuration.md#web-search) |
 | **Vector index** | pgvector HNSW | Fast approximate nearest neighbors inside Postgres; no extra service to run |
 
 ---
 
 ## Features
 
-- **Drag-and-drop PDF upload.** A paper is readable the moment MinerU and the chunker finish — no embedding pass, no summarization, nothing to wait for.
-- **Article reading for papers** — the whole document at once, in serif prose, with KaTeX math, extracted figures, and real tables that scroll in their own box with the header row pinned.
-- **Margin notes** — highlight text, or pick a figure, an equation, or a table, and ask. The answer streams into a card beside it, keeps the quote highlighted in the page, and offers jump chips back to the blocks it cites. Notes persist, thread with follow-ups, and can sit in either margin.
-- **Your own notes and bookmarks** — write a note beside any passage, and mark as many places as you like. Bookmarks show as ribbons in the text and as ticks on the progress rail, so the paper carries a map of where you have been. One panel puts contents, bookmarks and every note behind a single search.
-- **Decks** — drag one margin card onto another and they stack. The gutter's scarce resource is vertical space, and a deck spends one card's worth of it on several, so every card stays beside the passage that produced it. Turn on study mode and the deck hides each answer until you ask for it — the same stack becomes flashcards.
-- **Everything follows you** — notes, bookmarks and decks live in Postgres, not the browser, so a paper opened from another device on the network carries all of it.
-- **Answers from where you are asking** — the model is given what you highlighted, the lines around it, and the paper's table of contents. Not the paper. It reads a section, searches, or widens a range itself when the passage depends on something elsewhere, so the answer is about your sentence rather than a summary of the document.
-- **Pick the model per question** — any model Ollama can serve, local or cloud-hosted, chosen from the composer. Each answer is labelled, so you can ask two models the same thing and compare. Follow-ups stay on the model the note started with.
-- **Book mode** — chapter-by-chapter study with the side chat, smart context routing (`LOCAL` / `GLOBAL` / `OVERVIEW` / `EXTERNAL`), pre-computed summaries, VLM figure descriptions, and conversation compaction.
-- **Research agent** — iterative Observe → Reason → Act loop for deep external questions
-- **Reading-order reconstruction** — fixes two-column and complex-layout papers via LLM
-- **Glyph repair** — MinerU mangles inline math variables typeset with Unicode Mathematical Alphanumeric Symbols into `�`; the PDF is re-read to recover each one and re-emit it as LaTeX.
+- **Drag-and-drop PDF upload.** A paper is readable the moment MinerU and the chunker finish: no embedding pass, no summarization, nothing to wait for.
+- **Article reading for papers**: the whole document at once, in serif prose, with KaTeX math, extracted figures, and real tables that scroll in their own box with the header row pinned.
+- **Margin notes**: highlight text, or pick a figure, an equation, or a table, and ask. The answer streams into a card beside it, keeps the quote highlighted in the page, and offers jump chips back to the blocks it cites. Notes persist, thread with follow-ups, and can sit in either margin.
+- **Your own notes and bookmarks**: write a note beside any passage, and mark as many places as you like. Bookmarks show as ribbons in the text and as ticks on the progress rail, so the paper carries a map of where you have been. One panel puts contents, bookmarks and every note behind a single search.
+- **Decks**: drag one margin card onto another and they stack. The gutter's scarce resource is vertical space, and a deck spends one card's worth of it on several, so every card stays beside the passage that produced it. Turn on study mode and the deck hides each answer until you ask for it, and the same stack becomes flashcards.
+- **Everything follows you**: notes, bookmarks and decks live in Postgres, not the browser, so a paper opened from another device on the network carries all of it.
+- **Answers from where you are asking**: the model is given what you highlighted, the lines around it, and the paper's table of contents. Not the paper. It reads a section, searches, or widens a range itself when the passage depends on something elsewhere, so the answer is about your sentence rather than a summary of the document.
+- **Pick the model per question**: any model Ollama can serve, local or cloud-hosted, chosen from the composer. Each answer is labelled, so you can ask two models the same thing and compare. Follow-ups stay on the model the note started with.
+- **Book mode**: chapter-by-chapter study with the side chat, smart context routing (`LOCAL` / `GLOBAL` / `OVERVIEW` / `EXTERNAL`), pre-computed summaries, VLM figure descriptions, and conversation compaction.
+- **Research agent**: iterative Observe → Reason → Act loop for deep external questions
+- **Reading-order reconstruction**: fixes two-column and complex-layout papers via LLM
+- **Glyph repair**: MinerU mangles inline math variables typeset with Unicode Mathematical Alphanumeric Symbols into `�`; the PDF is re-read to recover each one and re-emit it as LaTeX.
 
 ---
 
@@ -66,7 +66,7 @@ Everything runs locally by default. Your documents and conversations never leave
 - Node.js 18+
 - PostgreSQL 15+ *(or use the bundled Docker compose service)*
 - Redis *(or use the bundled Docker compose service)*
-- Ollama *(optional — a cloud API key works instead)*
+- Ollama *(optional, a cloud API key works instead)*
 
 ### 1. Clone the repo
 ```bash
@@ -103,11 +103,11 @@ cd backend
 docker compose up -d --build
 ```
 Brings up Postgres, Redis, SearXNG, the Celery worker, the API, and a one-shot container that
-builds the SPA — then serves **the UI and the API on a single port**: <http://localhost:8000>.
+builds the SPA, then serves **the UI and the API on a single port**: <http://localhost:8000>.
 No Node or Python needed on the host. Ollama stays on your machine.
 
 If another project already holds `8000`, `5432`, `6379` or `8080`, override the host side in
-`backend/.env` — `API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`, `SEARXNG_PORT`.
+`backend/.env`: `API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`, `SEARXNG_PORT`.
 
 Just the infrastructure, if you want to run the app from source:
 ```bash
@@ -126,7 +126,7 @@ It builds the full stack, removes upload limits, prints the exact LAN URL, and t
 
 ## Documentation
 
-Full docs live in [`docs/`](docs/) — start at [`docs/README.md`](docs/README.md), which routes you
+Full docs live in [`docs/`](docs/): start at [`docs/README.md`](docs/README.md), which routes you
 to the right document by task.
 
 | Want to… | Go to |

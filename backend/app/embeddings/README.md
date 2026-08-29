@@ -4,7 +4,7 @@
 
 The `embeddings` directory owns embedding generation for global semantic
 retrieval. The backend (local Ollama or a cloud API) is chosen by
-`app.llm.resolver.resolve_embedding()` — see `app/llm/README.md`. Only
+`app.llm.resolver.resolve_embedding()`: see `app/llm/README.md`. Only
 Ollama and OpenAI can serve embeddings (Anthropic/xAI/DeepSeek have
 no embedding APIs).
 
@@ -14,7 +14,7 @@ the source of physical document order. They support similarity search only.
 Every stored vector carries the `embedding_model` that produced it. Vectors
 from different models are NOT comparable: the resolver pins the auto-detected
 choice per process, and startup (`core/lifecycle.py`) detects a stored-vs-
-active mismatch — with a pinned `EMBEDDING_PROVIDER` it wipes stale vectors
+active mismatch: with a pinned `EMBEDDING_PROVIDER` it wipes stale vectors
 and re-embeds the library automatically; in `auto` mode it only warns.
 
 ## Files

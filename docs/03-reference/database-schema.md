@@ -11,9 +11,9 @@
 > [`database/schema.sql`](../../backend/app/database/schema.sql) (`main`, 502272b); `documents.title`
 > and `paper_notes.scope` / `agent_steps` on 2026-08-26 against a live database (the migration was
 > applied and the columns read back); the rest 2026-07-28 against the same schema file
-> (`main`, 5471870), and the `paper_notes` anchor/retrieval columns 2026-08-18 (`8fb153b`) —
+> (`main`, 5471870), and the `paper_notes` anchor/retrieval columns 2026-08-18 (`8fb153b`):
 > against the file, **not** a live database.
-> **Verify with:** `\d+ <table>` in psql — the live database is authoritative
+> **Verify with:** `\d+ <table>` in psql, the live database is authoritative
 >
 > ⚠ One FK deviates from the `CASCADE` pattern: `conversation_turns.document_id` is
 > `ON DELETE SET NULL`, so chat history survives paper deletion.
@@ -21,12 +21,12 @@
 > ⚠ **`user_id` is nullable at the DB level, non-optional at the API layer.** `documents`,
 > `studies`, `sticky_notes`, `conversation_turns` each carry a direct `user_id UUID REFERENCES
 > users(id) ON DELETE CASCADE`. It's nullable only because `schema.sql` is applied idempotently to
-> *any* deployment of this repo, including ones already holding rows with no safe default owner —
-> a `NOT NULL` add would fail outright there. Every INSERT path in application code requires
+> *any* deployment of this repo, including ones already holding rows with no safe default owner,
+> so a `NOT NULL` add would fail outright there. Every INSERT path in application code requires
 > `user_id` as a non-`Optional` argument, so in practice it is never actually `NULL` on a row
 > created after multi-user support landed. See [auth.md](../02-architecture/auth.md) for why some
-> tables get a direct `user_id` column (the "top-level owner" tables above) while others —
-> `chunks`, `paper_notes`, `ask_traces`, etc. — scope ownership through a JOIN to one of these
+> tables get a direct `user_id` column (the "top-level owner" tables above) while others,
+> `chunks`, `paper_notes`, `ask_traces`, etc., scope ownership through a JOIN to one of these
 > instead.
 
 Canonical schema is in [database/schema.sql](../../backend/app/database/schema.sql).
@@ -38,7 +38,7 @@ Two Postgres extensions are required: `vector` (pgvector) and `uuid-ossp`.
 ## ERD
 
 ```
-users (1) ─────< (N) documents            (nullable FK — see ⚠ above)
+users (1) ─────< (N) documents            (nullable FK, see ⚠ above)
 users (1) ─────< (N) studies
 users (1) ─────< (N) sticky_notes
 users (1) ─────< (N) conversation_turns
@@ -118,24 +118,24 @@ which uses `SET NULL` (so a chat about a deleted paper survives).
 
 Two `documents` sub-trees, deliberately not merged: **`paper_notes`** is what the model answered,
 **`reading_bookmarks` / `personal_notes` / `note_decks`** are what the reader did. A deck spans
-both — it is the one place they meet, and it owns neither.
+both: it is the one place they meet, and it owns neither.
 
 ## Tables
 
 ### `users`
 
-One row per account. See [auth.md](../02-architecture/auth.md) for signup/login/session mechanics
-— this table is look-up only.
+One row per account. See [auth.md](../02-architecture/auth.md) for signup/login/session mechanics,
+this table is look-up only.
 
 | Column          | Type          | Notes                                                          |
 | --------------- | ------------- | --------------------------------------------------------------- |
 | `id`            | `UUID`        | PK, server-generated.                                            |
-| `email`         | `TEXT`        | Not `UNIQUE` itself — see the functional index below.            |
+| `email`         | `TEXT`        | Not `UNIQUE` itself, see the functional index below.            |
 | `password_hash` | `TEXT`        | Argon2id, via `argon2-cffi`. Never logged, never returned by any endpoint. |
 | `display_name`  | `TEXT`        | Optional, shown in the UI in place of the email when set.        |
 | `created_at`    | `TIMESTAMPTZ` | `DEFAULT NOW()`.                                                  |
 
-`CREATE UNIQUE INDEX idx_users_email_lower ON users (LOWER(email))` — case-insensitive uniqueness
+`CREATE UNIQUE INDEX idx_users_email_lower ON users (LOWER(email))`: case-insensitive uniqueness
 is the real invariant, enforced at the DB level rather than trusted to every future code path
 (password reset, "change email", …) to lowercase before insert.
 
@@ -146,7 +146,7 @@ The library row.
 | Column                      | Type        | Notes                                                 |
 | --------------------------- | ----------- | ----------------------------------------------------- |
 | `id`                        | `UUID`      | PK, server-generated.                                 |
-| `user_id`                   | `UUID`      | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
+| `user_id`                   | `UUID`      | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only: see the ⚠ at the top of this doc. |
 | `filename`                  | `TEXT`      | The opaque `<uuid>.pdf` on disk under `documents/`.   |
 | `original_filename`         | `TEXT`      | What the user uploaded (used by `/raw`). ⚠ Never rewritten by a rename. |
 | `title`                     | `TEXT`      | Reader-chosen display name, `NULL` = no override. Set by `PATCH /papers/{id}`. Deliberately separate from `original_filename` so the uploaded name is never lost and `/raw` still hands back a file named the way it arrived. |
@@ -228,7 +228,7 @@ The append-only chat log.
 | Column            | Type          | Notes                                            |
 | ----------------- | ------------- | ------------------------------------------------ |
 | `id`              | `UUID`        | PK.                                              |
-| `user_id`         | `UUID`        | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
+| `user_id`         | `UUID`        | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only: see the ⚠ at the top of this doc. |
 | `conversation_id` | `UUID`        | Groups turns into a thread.                      |
 | `document_id`     | `UUID` (null) | FK → `documents.id`, **`SET NULL`** on delete.   |
 | `parent_turn_id`  | `UUID` (null) | FK → `conversation_turns.id` cascade (sub-threads). |
@@ -252,7 +252,7 @@ Per-call telemetry attached to the assistant turn.
 | `conversation_turn_id`  | `UUID`        | FK → `conversation_turns.id`, cascade.          |
 | `context_type`          | `TEXT`        |                                                 |
 | `router_reason`         | `TEXT`        |                                                 |
-| `retrieved_chunk_ids`   | `UUID[]`      | Currently always null — reserved.               |
+| `retrieved_chunk_ids`   | `UUID[]`      | Currently always null, reserved.               |
 | `model`                 | `TEXT`        |                                                 |
 | `prompt_tokens`         | `INTEGER`     | From Ollama.                                    |
 | `completion_tokens`     | `INTEGER`     |                                                 |
@@ -318,7 +318,7 @@ VLM-generated technical descriptions of figures/diagrams.
 
 `UNIQUE(chunk_id, model)`.
 
-⚠ Only populated under `INGEST_PROFILE=full`. The fast profile never runs the VLM pass — a
+⚠ Only populated under `INGEST_PROFILE=full`. The fast profile never runs the VLM pass, so a
 question about a figure hands the image to the model live instead.
 
 ### `paper_notes`
@@ -337,22 +337,22 @@ surface notes in the chat-history endpoints.
 | `document_id`          | `UUID`        | FK → `documents.id` cascade.                              |
 | `anchor_chunk_id`      | `UUID`        | FK → `chunks.id` **SET NULL**. A convenience, not the anchor. |
 | `anchor_sequence_id`   | `INTEGER`     | **The durable anchor.** What the margin positions by.      |
-| `scope`                | `TEXT`        | `anchor` (default — a margin card beside a passage) or `document` (asked about the whole paper, from the assistant panel). Decides which surface renders it. |
-| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `table` (the whole table, including when the reader selected inside it) / `block` (no selection — anchored to what was in view) / `document` (the holistic level — not anchored at all). |
+| `scope`                | `TEXT`        | `anchor` (default: a margin card beside a passage) or `document` (asked about the whole paper, from the assistant panel). Decides which surface renders it. |
+| `anchor_kind`          | `TEXT`        | `text` (highlighted passage) / `figure` / `equation` / `table` (the whole table, including when the reader selected inside it) / `block` (no selection, anchored to what was in view) / `document` (the holistic level, not anchored at all). |
 | `anchor_quote`         | `TEXT`        | The exact highlighted text; re-located in the DOM to repaint the highlight. For an equation, its LaTeX. |
 | `anchor_image_path`    | `TEXT`        | Relative path under `images/` for figure and equation anchors. |
 | `question`             | `TEXT`        |                                                            |
-| `answer`               | `TEXT`        | `''` until generation completes — a failed call leaves a visible, retryable card. |
+| `answer`               | `TEXT`        | `''` until generation completes, so a failed call leaves a visible, retryable card. |
 | `cited_sequence_ids`   | `INTEGER[]`   | Blocks the answer referenced via `[[42]]` markers; renders as jump chips. |
-| `agent_steps`          | `JSONB`       | The trail of tool calls that produced the answer — one entry per `SECTION`/`SEARCH`/`READ`/`WEB`, with what was asked for, the model's stated reason, and a one-line summary of what came back. `NULL`/`[]` for notes predating 2026-08-26 and for answers that used no tool. Shape: [api.md `AgentStep`](api.md#post-papers_paper_idnotesstream). |
-| `retrieval_mode`       | `TEXT`        | `agent` (the default: anchor + contents index, with a SECTION/SEARCH/READ/WEB loop available) or `whole` (the whole paper was in the prompt — only reachable with `PAPER_WHOLE_DOCUMENT_CONTEXT`, and never for `scope='document'`). |
+| `agent_steps`          | `JSONB`       | The trail of tool calls that produced the answer: one entry per `SECTION`/`SEARCH`/`READ`/`WEB`, with what was asked for, the model's stated reason, and a one-line summary of what came back. `NULL`/`[]` for notes predating 2026-08-26 and for answers that used no tool. Shape: [api.md `AgentStep`](api.md#post-papers_paper_idnotesstream). |
+| `retrieval_mode`       | `TEXT`        | `agent` (the default: anchor + contents index, with a SECTION/SEARCH/READ/WEB loop available) or `whole` (the whole paper was in the prompt, only reachable with `PAPER_WHOLE_DOCUMENT_CONTEXT`, and never for `scope='document'`). |
 | `model`                | `TEXT`        | What the provider reported answering.                      |
 | `requested_model`      | `TEXT`        | What the reader picked. Authoritative for follow-ups.      |
 | `margin_side`          | `TEXT`        | `right` (default) or `left`.                               |
 | `parent_note_id`       | `UUID`        | FK → `paper_notes.id` cascade. Follow-ups chain here.      |
 | `created_at`           | `TIMESTAMPTZ` |                                                            |
 
-⚠ **A `scope='document'` row still carries an `anchor_sequence_id`** — the paper's first block —
+⚠ **A `scope='document'` row still carries an `anchor_sequence_id`**, the paper's first block,
 because the column is `NOT NULL`. Nothing positions by it, and margin-balancing
 (`notes.py::_choose_margin`) explicitly excludes these rows: they all share one sequence id, so
 counting them would make every note near the top of the paper look crowded.
@@ -361,18 +361,18 @@ counting them would make every note near the top of the paper look crowded.
 chunk row, so cascading would delete the reader's notes along with them. `anchor_sequence_id`
 survives, so a re-chunk degrades an anchor's precision instead of destroying the note.
 
-Indexes: `(document_id, anchor_sequence_id, created_at)` — the exact order the margin lays cards
-out in — and `(parent_note_id)` for thread loading.
+Indexes: `(document_id, anchor_sequence_id, created_at)`, the exact order the margin lays cards
+out in, and `(parent_note_id)` for thread loading.
 
 ### `studies`, `study_papers`
 
-A named group of papers that scopes an answer. **Not a folder** — a paper can sit in several studies
+A named group of papers that scopes an answer. **Not a folder**: a paper can sit in several studies
 at once, and removing it from one takes nothing away from the library.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `studies.id` | `UUID` | PK. |
-| `studies.user_id` | `UUID` | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
+| `studies.user_id` | `UUID` | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only: see the ⚠ at the top of this doc. |
 | `studies.name` | `TEXT` | |
 | `studies.description` | `TEXT` | |
 | `study_papers.study_id` | `UUID` | FK → `studies.id` cascade. PK with `document_id`. |
@@ -381,7 +381,7 @@ at once, and removing it from one takes nothing away from the library.
 
 ⚠ **`position` is load-bearing, not cosmetic.** Answers cite `[[P2:41]]`, so re-ordering a study
 repoints every citation the reader has already read. That is why membership is written
-whole-collection (`PUT /studies/{id}/papers`) — the list order *is* the numbering.
+whole-collection (`PUT /studies/{id}/papers`): the list order *is* the numbering.
 
 ### `sticky_notes`, `sticky_note_papers`
 
@@ -390,9 +390,9 @@ A note the reader keeps in front of them, with no anchor.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `sticky_notes.id` | `UUID` | PK. |
-| `sticky_notes.user_id` | `UUID` | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only — see the ⚠ at the top of this doc. |
+| `sticky_notes.user_id` | `UUID` | Owner. `REFERENCES users(id) ON DELETE CASCADE`, nullable at the DB level only: see the ⚠ at the top of this doc. |
 | `sticky_notes.body` | `TEXT` | Markdown, rendered by the shared pipeline. |
-| `sticky_notes.color` | `TEXT` | `yellow` \| `blue` \| `green` \| `pink` \| `orange` \| `plain`. A **name**, not a hex — the UI maps it to CSS variables so it survives the light/dark switch. |
+| `sticky_notes.color` | `TEXT` | `yellow` \| `blue` \| `green` \| `pink` \| `orange` \| `plain`. A **name**, not a hex: the UI maps it to CSS variables so it survives the light/dark switch. |
 | `sticky_notes.pinned` | `BOOLEAN` | Sorts first. |
 | `sticky_notes.board` | `TEXT` | `chat` (beside one conversation) or `universal` (the standalone board). |
 | `sticky_notes.study_id` | `UUID` (null) | FK → `studies.id`, **`SET NULL`**. Which chat, with NULL meaning the library-wide one. Always NULL when `board='universal'`. |
@@ -405,7 +405,7 @@ the library-wide *chat*, so without the column a note on that chat and a note on
 the universal board would be the same row.
 
 ⚠ **`study_id` is `SET NULL`, not `CASCADE`.** Deleting a study must not delete
-the reader's notes — only the reader removes a note. They move to the universal
+the reader's notes. Only the reader removes a note. They move to the universal
 board instead, and the delete confirmation says so.
 
 ⚠ **`origin='assistant'` is written only by `study_agent`**, through the
@@ -437,7 +437,7 @@ A place worth coming back to. Several per paper.
 | ------------- | ------------- | ------------------------------------------------------------ |
 | `id`          | `UUID`        | PK.                                                           |
 | `document_id` | `UUID`        | FK → `documents.id`, cascade.                                 |
-| `sequence_id` | `INTEGER`     | The durable anchor — same rule as `paper_notes`.              |
+| `sequence_id` | `INTEGER`     | The durable anchor, same rule as `paper_notes`.              |
 | `snippet`     | `TEXT`        | Preview of the block, cached at save time so the list renders without loading the document. A re-chunk can make it stale: a slightly wrong preview beats an empty one. |
 | `kind`        | `TEXT`        | `text / figure / equation / block`, for labelling the row.    |
 | `page`        | `INTEGER`     | Page the mark sits on, when known.                            |
@@ -446,7 +446,7 @@ A place worth coming back to. Several per paper.
 | `created_at`  | `TIMESTAMPTZ` |                                                               |
 | `updated_at`  | `TIMESTAMPTZ` |                                                               |
 
-⚠ **Unique on `(document_id, sequence_id)` — one mark per block, guaranteed.** The reader treats a
+⚠ **Unique on `(document_id, sequence_id)`: one mark per block, guaranteed.** The reader treats a
 second press on a bookmarked block as "actually, not here", so a duplicate is always a bug rather
 than an intent worth storing. `POST /bookmarks` is therefore an upsert, not an insert.
 
@@ -460,7 +460,7 @@ table would mean carrying eight unused columns into every endpoint that lists an
 | -------------------- | ------------- | ------------------------------------------------------ |
 | `id`                 | `UUID`        | PK.                                                     |
 | `document_id`        | `UUID`        | FK → `documents.id`, cascade.                           |
-| `anchor_chunk_id`    | `UUID`        | FK → `chunks.id`, **`SET NULL`** — same re-chunk reasoning as `paper_notes`. |
+| `anchor_chunk_id`    | `UUID`        | FK → `chunks.id`, **`SET NULL`**, same re-chunk reasoning as `paper_notes`. |
 | `anchor_sequence_id` | `INTEGER`     | The durable anchor.                                     |
 | `anchor_quote`       | `TEXT`        | The highlighted passage, re-located and painted on load. |
 | `body`               | `TEXT`        | Markdown, rendered by the same pipeline as an answer.   |
@@ -468,7 +468,7 @@ table would mean carrying eight unused columns into every endpoint that lists an
 | `created_at`         | `TIMESTAMPTZ` |                                                         |
 | `updated_at`         | `TIMESTAMPTZ` | Bumped on every edit.                                   |
 
-Index: `(document_id, anchor_sequence_id, created_at)` — the margin's layout order.
+Index: `(document_id, anchor_sequence_id, created_at)`, the margin's layout order.
 
 ### `note_decks`
 
@@ -498,7 +498,7 @@ Deck membership, in stacking order.
 | `ai_note_id`       | `UUID`    | FK → `paper_notes.id`, cascade.                            |
 | `personal_note_id` | `UUID`    | FK → `personal_notes.id`, cascade.                         |
 
-`CHECK ((ai_note_id IS NULL) <> (personal_note_id IS NULL))` — exactly one is set. A member is
+`CHECK ((ai_note_id IS NULL) <> (personal_note_id IS NULL))`: exactly one is set. A member is
 either an answer or a note, never both and never neither.
 
 ⚠ **Two nullable foreign keys rather than one polymorphic id, on purpose.** This buys real
@@ -510,7 +510,7 @@ to at most one deck"** a storage guarantee rather than something the client is t
 
 ⚠ That guarantee has a sharp edge for writers. The index does not care that the row it collides
 with is one the same statement is about to delete, so **membership must be cleared for the whole
-document before any row is inserted** — otherwise swapping two cards between two decks fails with a
+document before any row is inserted**, otherwise swapping two cards between two decks fails with a
 unique violation. See `personal.py::replace_decks` and
 `tests/test_personal_state.py::test_two_cards_can_swap_decks_in_one_write`.
 
@@ -527,7 +527,7 @@ queued ──► complete
       └──► failed
 ```
 
-**`ingestion_jobs.status`** — the path depends on `INGEST_PROFILE` and `doc_kind`.
+**`ingestion_jobs.status`**: the path depends on `INGEST_PROFILE` and `doc_kind`.
 
 ```
                                     ┌─ fast profile + doc_kind='paper' ─┐
@@ -542,5 +542,5 @@ any state ───────────────────────�
 
 ⚠ `chunking → complete` is the fast path, and it is the one place other than
 `generate_section_summaries` that sets completion. That is safe only because nothing is
-dispatched afterwards — see
+dispatched afterwards: see
 [`pipeline_sync.py`](../../backend/app/extraction/pipeline_sync.py).

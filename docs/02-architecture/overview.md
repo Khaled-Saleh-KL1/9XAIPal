@@ -7,13 +7,13 @@
 > direction → §4 code map → §5 architectural rules → §6 the two pipelines → §7 what never happens.
 >
 > **Companions (detail):**
-> [ingestion-pipeline.md](ingestion-pipeline.md) — PDF → readable chunks ·
-> [chat-and-ask.md](chat-and-ask.md) — question → grounded answer ·
-> [ai-backend.md](ai-backend.md) — which model serves which call ·
-> [auth.md](auth.md) — sessions, signup, per-user data isolation ·
-> [frontend.md](frontend.md) — the React SPA ·
-> [runtime-topology.md](../01-orientation/runtime-topology.md) — ports and processes ·
-> [database-schema.md](../03-reference/database-schema.md) — tables and columns.
+> [ingestion-pipeline.md](ingestion-pipeline.md): PDF → readable chunks ·
+> [chat-and-ask.md](chat-and-ask.md): question → grounded answer ·
+> [ai-backend.md](ai-backend.md): which model serves which call ·
+> [auth.md](auth.md): sessions, signup, per-user data isolation ·
+> [frontend.md](frontend.md): the React SPA ·
+> [runtime-topology.md](../01-orientation/runtime-topology.md): ports and processes ·
+> [database-schema.md](../03-reference/database-schema.md): tables and columns.
 >
 > **Status:** current · **Reflects code as of:** §1 and §6b 2026-08-26 against
 > [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) and
@@ -30,18 +30,18 @@ piece at a time while a side chat answers grounded, citation-backed questions.
 
 Three halves:
 
-1. **Library / upload** — drag a PDF, watch a live overlay, get a clickable card. A paper shows
+1. **Library / upload**: drag a PDF, watch a live overlay, get a clickable card. A paper shows
    two steps (`extracting → chunking`) and is done; a book continues through `embedding →
    summarizing`.
-2. **Reading** — two readers, chosen by `doc_kind`. A **paper** renders as a continuous article
+2. **Reading**: two readers, chosen by `doc_kind`. A **paper** renders as a continuous article
    with a note margin either side. A **book** keeps the chapter-by-chapter reveal reader and its
    chat pane.
-3. **Asking** — three levels, all agentic, all showing their work. **Passage**: highlight text,
+3. **Asking**. Three levels, all agentic, all showing their work. **Passage**: highlight text,
    get a margin note answered from that passage plus the paper's contents index. **Paper** and
-   **across papers**: the **desk** (`#/desk`), where a *study* — a named group of papers, or the
-   whole library — scopes a rolling chat whose citations expand in place. For books, the routed
+   **across papers**: the **desk** (`#/desk`), where a *study*, a named group of papers, or the
+   whole library, scopes a rolling chat whose citations expand in place. For books, the routed
    `/ask` orchestrator with its four context sources.
-4. **The desk** — the surface for reading papers *without opening them*: studies on the left, the
+4. **The desk** is the surface for reading papers *without opening them*: studies on the left, the
    chat in the middle, sticky notes on the right.
 
 **Why local-first:** privacy (papers and chats never leave the machine), latency (LLM and vector
@@ -49,12 +49,12 @@ search colocated with the data), cost (no per-token billing). The price is the c
 of a local model and the throughput of one machine.
 
 ⚠ That claim has two deliberate holes. The EXTERNAL chat route reaches the public internet, and
-so does the paper agent's `WEB` tool — both opt-in per question, one chosen by the router and one
-by the model. Everything else — extraction, embedding, retrieval, reading — is local.
+so does the paper agent's `WEB` tool, both opt-in per question, one chosen by the router and one
+by the model. Everything else, extraction, embedding, retrieval, reading, is local.
 
 ⚠ **Since 2026-08-26 the default web provider is Tavily, which is a third party.** SearXNG ran on
 localhost, so even a web search stayed on the machine; a Tavily query does not. Only the query
-string leaves. `WEB_SEARCH_PROVIDER=searxng` takes the trade back in one line — see
+string leaves. `WEB_SEARCH_PROVIDER=searxng` takes the trade back in one line: see
 [configuration.md § Web search](../03-reference/configuration.md#web-search).
 
 ---
@@ -63,7 +63,7 @@ string leaves. `WEB_SEARCH_PROVIDER=searxng` takes the trade back in one line �
 
 ```text
 ┌───────────────────────────────────────────────────────────────────────────┐
-│ Frontend — Vite + React 19 + Tailwind (hash-routed, no router library)    │
+│ Frontend: Vite + React 19 + Tailwind (hash-routed, no router library)    │
 │                                                                           │
 │   LibraryView ──► ReadingView ──┬──► ArticleReader  (doc_kind='paper')   │
 │        │ /papers                │      │ /document      │ /notes/stream  │
@@ -120,7 +120,7 @@ string leaves. `WEB_SEARCH_PROVIDER=searxng` takes the trade back in one line �
 ```mermaid
 %%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
 flowchart TD
-    subgraph FE["Frontend — Vite + React 19"]
+    subgraph FE["Frontend: Vite + React 19"]
         LV[LibraryView] --> RV{ReadingView<br/>doc_kind?}
         RV -->|paper| AR[ArticleReader<br/>+ margin notes]
         RV -->|book| BR[BookReadingView] --> CP[ChatPane]
@@ -172,13 +172,13 @@ endpoints  →  services  →  repositories  →  SQL
 | `services/` | Use cases, transactions, cross-cutting workflows | Raw SQL, HTTP concerns |
 | `database/repositories/` | Pure SQL via `sqlalchemy.text`, returns plain dicts | Business logic |
 | `schemas/` | Pydantic models mirroring the wire format | Persistence concerns |
-| `chat/`, `extraction/` | The two non-trivial pipelines | — |
+| `chat/`, `extraction/` | The two non-trivial pipelines | n/a |
 
 The dependency arrow only points right. An endpoint never imports a repository directly; a
 repository never imports a service.
 
 ⚠ Repositories return **plain dicts**, not ORM objects or pydantic models. The codebase uses
-SQLAlchemy Core (`text()`), not the ORM. Do not expect model classes — there are none.
+SQLAlchemy Core (`text()`), not the ORM. Do not expect model classes: there are none.
 
 ---
 
@@ -222,16 +222,16 @@ SQLAlchemy Core (`text()`), not the ORM. Do not expect model classes — there a
 Falsifiable claims. Each is a bug if violated.
 
 1. `sequence_id` is the source of truth for physical document order. **Vector similarity never
-   reorders it** — retrieval ranks, it does not renumber.
+   reorders it**: retrieval ranks, it does not renumber.
 2. API routers stay thin. Logic lives in `services/` or a pipeline module.
 3. MinerU extraction completes before embedding runs; embedding completes before section
    summarization runs. The chain is dispatched, not polled. Under `INGEST_PROFILE=fast` a paper
-   has no chain at all — it is complete once chunked.
+   has no chain at all: it is complete once chunked.
 4. `/ask` records the chosen route, the router's reason, the model, and latency for **every**
-   call — `ask_traces` has one row per assistant turn.
-4b. A note records the model that answered it and how it was grounded — `retrieval_mode`
+   call: `ask_traces` has one row per assistant turn.
+4b. A note records the model that answered it and how it was grounded: `retrieval_mode`
    (`agent` by default, `whole` only when whole-document context is switched on) **and
-   `agent_steps`, the full list of tool calls it made** — so two answers to the same question are
+   `agent_steps`, the full list of tool calls it made**, so two answers to the same question are
    always attributable, and an answer can be checked against the sections it actually read.
 5. The app works with no cloud service configured, provided Ollama is running.
 6. Conversation compaction fires at ≥ 5 user turns, so context never grows unbounded.
@@ -245,12 +245,12 @@ Falsifiable claims. Each is a bug if violated.
 
 ## 6. The two pipelines
 
-### 6a. Ingestion — detail in [ingestion-pipeline.md](ingestion-pipeline.md)
+### 6a. Ingestion: detail in [ingestion-pipeline.md](ingestion-pipeline.md)
 
 `upload → MinerU → structural chunks → assets → embeddings → summaries + figure descriptions`.
 Everything after the HTTP 201 runs in a Celery worker; the API never blocks on extraction.
 
-### 6b. Answering — detail in [chat-and-ask.md](chat-and-ask.md)
+### 6b. Answering: detail in [chat-and-ask.md](chat-and-ask.md)
 
 Two paths that share only the LLM client.
 
@@ -271,7 +271,7 @@ tool call to the reader and persist it (`paper_notes.agent_steps` / `conversatio
 | `agent` | **the default, at every paper size** | Up to `PAPER_AGENT_MAX_STEPS` tool rounds, then an answer |
 | `whole` | `PAPER_WHOLE_DOCUMENT_CONTEXT=true` **and** `SUM(token_count) <= WHOLE_PAPER_MAX_TOKENS` | One call, large prompt |
 
-⚠ The paper itself is not in the prompt on the default path — the model gets the anchored passage
+⚠ The paper itself is not in the prompt on the default path: the model gets the anchored passage
 and the heading spine, and fetches the rest. Size stopped being the deciding factor on 2026-08-18;
 see [chat-and-ask.md](chat-and-ask.md#the-paper-is-not-in-the-prompt).
 
@@ -293,13 +293,13 @@ chosen per question:
 1. **No document leaves the machine.** Paper text, chunks, and chat history are never sent to a
    web search provider. Only the query string goes out, and only on EXTERNAL or the paper agent's
    `WEB` tool. ⚠ Choosing a `:cloud` model in the note picker does send the paper to Ollama's
-   infrastructure — that is what the local/cloud split in the picker exists to make visible.
+   infrastructure, which is what the local/cloud split in the picker exists to make visible.
    ⚠ With `WEB_SEARCH_PROVIDER=tavily` (the default) the query reaches `api.tavily.com`; with
    `searxng` it reaches only the compose service.
 2. **No route except EXTERNAL and the `WEB` tool touches the network** (beyond the LLM host, which
    may be local).
-3. **Vector search never changes reading order** — see rule 1.
+3. **Vector search never changes reading order**: see rule 1.
 4. **A failed chat never marks a document failed.** Ingestion and chat are unrelated subsystems.
 5. **A missing AI backend never crashes startup.** It degrades to 503 on chat only.
 6. **`DELETE /papers/{id}` never deletes chat history.** `conversation_turns.document_id` is
-   `ON DELETE SET NULL` — deliberately, so conversations survive paper deletion.
+   `ON DELETE SET NULL`, deliberately, so conversations survive paper deletion.

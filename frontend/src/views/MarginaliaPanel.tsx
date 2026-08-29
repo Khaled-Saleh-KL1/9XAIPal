@@ -32,7 +32,7 @@ export interface MarginaliaRow {
  * Flatten markdown to something readable in a one-line preview.
  *
  * The list shows note bodies as plain text, and a personal note is written in
- * markdown — without this the reader's own emphasis comes back at them as
+ * markdown, so without this the reader's own emphasis comes back at them as
  * literal asterisks.
  */
 function plainPreview(markdown: string): string {
@@ -213,7 +213,7 @@ export function MarginaliaPanel({
                  * Depth as a custom property, not a class per level.
                  *
                  * ⚠ It was `outline-l${min(level, 4)}` against four hand-written
-                 * rules, which silently flattened anything deeper — a paper
+                 * rules, which silently flattened anything deeper: a paper
                  * numbering "2.1.1.1" rendered it level with "2.1.1". One
                  * calc() handles any depth.
                  *

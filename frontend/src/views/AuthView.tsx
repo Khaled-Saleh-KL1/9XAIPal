@@ -10,7 +10,7 @@ const inputStyle = {
 
 /**
  * The full-screen gate shown when no one is logged in. Not a modal over
- * content — there's nothing behind it to show. Styled per the same tokens
+ * content: there's nothing behind it to show. Styled per the same tokens
  * and dialog shape as UploadKindModal (App.tsx), the closest existing
  * precedent; this codebase has no form library, so inputs are plain
  * controlled <input>s matching LibraryView's search-box styling.
