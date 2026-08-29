@@ -16,7 +16,7 @@ const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
 import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
-import { ImportUrlModal } from './views/ImportUrlModal';
+import { IconLink } from './components/Icons';
 import { displayTitle } from './lib/titles';
 import { stageProgress } from './lib/progress';
 
@@ -85,11 +85,10 @@ export function App() {
   // overlay's completion copy — every document runs the same backend
   // pipeline (see ProcessingOverlay's header comment).
   const [uploadKind, setUploadKind] = useState<DocKind | 'article'>('paper');
-  // Open state for the "paste a link" modal — the third pipeline's own entry
-  // point, parallel to kindPickerOpen for the file-upload pipeline.
-  const [importUrlOpen, setImportUrlOpen] = useState(false);
   const [layout, setLayout] = useState<LibraryLayout>('grid');
-  // When set, the "Book or Research paper?" chooser is open.
+  // When set, the "Book, research paper, or article?" chooser is open —
+  // article is a third option inside it, not a separate entry point (see
+  // UploadKindModal below).
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
   // A file handed to us by a drag-and-drop. The kind chooser still has to run
   // (a drop can't say whether it's a book or a paper), so the file waits here
@@ -227,10 +226,12 @@ export function App() {
     }
   }, [pollUploadProgress]);
 
-  // "Paste a link" affordance: open the modal, then kick off the import once
-  // a URL is actually submitted.
+  // "Article by URL" is the third option inside the same kind-picker modal
+  // (UploadKindModal below) — closes it and kicks off the import. A pending
+  // drag-dropped file is discarded: it doesn't apply to a URL import.
   const submitImportUrl = useCallback((url: string) => {
-    setImportUrlOpen(false);
+    setKindPickerOpen(false);
+    setPendingFile(null);
     handleArticleImport(url);
   }, [handleArticleImport]);
 
@@ -414,7 +415,6 @@ export function App() {
         <LibraryView
           onOpenPaper={openPaper}
           onUpload={startUpload}
-          onImportUrl={() => setImportUrlOpen(true)}
           onOpenRawFiles={() => setRawFilesOpen(true)}
           onOpenDesk={() => openDesk('library')}
           layout={layout}
@@ -480,14 +480,8 @@ export function App() {
       {kindPickerOpen && (
         <UploadKindModal
           onChoose={pickFileWithKind}
+          onImportUrl={submitImportUrl}
           onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
-        />
-      )}
-
-      {importUrlOpen && (
-        <ImportUrlModal
-          onImport={submitImportUrl}
-          onCancel={() => setImportUrlOpen(false)}
         />
       )}
 
@@ -512,11 +506,38 @@ export function App() {
 
 function UploadKindModal({
   onChoose,
+  onImportUrl,
   onCancel,
 }: {
   onChoose: (kind: DocKind) => void;
+  onImportUrl: (url: string) => void;
   onCancel: () => void;
 }) {
+  // Article-by-URL lives as a third choice in the same modal rather than a
+  // separate button + separate popup — picking it swaps this modal's body
+  // for a URL field in place, instead of opening anything new.
+  const [mode, setMode] = useState<'choose' | 'url'>('choose');
+  const [url, setUrl] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const urlInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (mode === 'url') urlInputRef.current?.focus();
+  }, [mode]);
+
+  const submitUrl = () => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      setError('Paste a link first.');
+      return;
+    }
+    if (!/^https?:\/\//i.test(trimmed)) {
+      setError('Only http:// and https:// links can be imported.');
+      return;
+    }
+    onImportUrl(trimmed);
+  };
+
   return (
     <div
       className="fixed inset-0 z-40 flex items-center justify-center px-6"
@@ -528,45 +549,118 @@ function UploadKindModal({
         style={{ background: 'var(--bg)', border: '1px solid var(--border)', boxShadow: '0 20px 60px -20px rgba(0,0,0,0.18)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-7 pt-7 pb-2">
-          <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
-            What are you adding?
-          </div>
-          <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
-            This sets how you read it. You can re-process later if you pick wrong.
-          </div>
-        </div>
-        <div className="px-7 py-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button
-            onClick={() => onChoose('book')}
-            className="text-left rounded-xl p-4 transition-colors"
-            style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
-          >
-            <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
-            <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
-              Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
+        {mode === 'choose' ? (
+          <>
+            <div className="px-7 pt-7 pb-2">
+              <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
+                What are you adding?
+              </div>
+              <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
+                This sets how you read it. You can re-process later if you pick wrong.
+              </div>
             </div>
-          </button>
-          <button
-            onClick={() => onChoose('paper')}
-            className="text-left rounded-xl p-4 transition-colors"
-            style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
-          >
-            <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
-            <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
-              Linear reading, front to back, no chapter navigation. Best for articles and papers.
+            <div className="px-7 py-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                onClick={() => onChoose('book')}
+                className="text-left rounded-xl p-4 transition-colors"
+                style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
+              >
+                <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
+                <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
+                  Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
+                </div>
+              </button>
+              <button
+                onClick={() => onChoose('paper')}
+                className="text-left rounded-xl p-4 transition-colors"
+                style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
+              >
+                <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
+                <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
+                  Linear reading, front to back, no chapter navigation. Best for articles and papers.
+                </div>
+              </button>
+              <button
+                onClick={() => setMode('url')}
+                className="sm:col-span-2 text-left rounded-xl p-4 flex items-center gap-3 transition-colors"
+                style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
+              >
+                <div
+                  className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                  style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
+                >
+                  <IconLink className="w-3.5 h-3.5" style={{ color: 'var(--fg-2)' }} />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Article by URL</div>
+                  <div className="text-[12px] mt-0.5 leading-[1.5]" style={{ color: 'var(--muted)' }}>
+                    Paste a link — reads exactly like a paper, with margin notes, search, and the AI panel.
+                  </div>
+                </div>
+              </button>
             </div>
-          </button>
-        </div>
-        <div className="px-7 py-3.5 flex items-center" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
-          <button onClick={onCancel} className="ml-auto text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
-            Cancel
-          </button>
-        </div>
+            <div className="px-7 py-3.5 flex items-center" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
+              <button onClick={onCancel} className="ml-auto text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                Cancel
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="px-7 pt-7 pb-2">
+              <button
+                onClick={() => setMode('choose')}
+                className="text-[12px] mb-2"
+                style={{ color: 'var(--muted)' }}
+              >
+                ← Back
+              </button>
+              <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
+                Article by URL
+              </div>
+              <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
+                Paste a link — it reads exactly like a paper, with margin notes, search, and the AI panel.
+              </div>
+            </div>
+            <div className="px-7 py-5">
+              <input
+                ref={urlInputRef}
+                value={url}
+                onChange={(e) => { setUrl(e.target.value); setError(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') submitUrl(); }}
+                placeholder="https://example.com/an-article"
+                className="w-full px-3 py-2.5 rounded-md text-[13px]"
+                style={{
+                  background: 'var(--bg-2)',
+                  border: `1px solid ${error ? '#ef4444' : 'var(--border)'}`,
+                  color: 'var(--fg)',
+                  outline: 'none',
+                }}
+              />
+              {error && (
+                <div className="text-[12px] mt-2" style={{ color: '#ef4444' }}>{error}</div>
+              )}
+            </div>
+            <div className="px-7 py-3.5 flex items-center gap-3" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
+              <button onClick={onCancel} className="text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
+                Cancel
+              </button>
+              <button
+                onClick={submitUrl}
+                className="ml-auto text-[12.5px] px-3 py-1.5 rounded-md"
+                style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
+              >
+                Import
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
