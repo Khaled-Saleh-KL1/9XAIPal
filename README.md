@@ -63,7 +63,7 @@ Everything runs locally by default. Your documents and conversations never leave
 
 ### Prerequisites
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) *(`curl -LsSf https://astral.sh/uv/install.sh | sh`; a `pip install`-compatible package manager, just much faster)*
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) *(`curl -LsSf https://astral.sh/uv/install.sh | sh`; the Python package/project manager this repo uses exclusively)*
 - Node.js 18+
 - PostgreSQL 15+ *(or use the bundled Docker compose service)*
 - Redis *(or use the bundled Docker compose service)*
