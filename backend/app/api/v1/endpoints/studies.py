@@ -38,6 +38,7 @@ from app.database.repositories import stickies as sticky_repo
 from app.database.repositories import studies as study_repo
 from app.llm.catalog import resolve_requested_model
 from app.services import documents as doc_service
+from app.services import image_service
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -220,6 +221,15 @@ async def delete_study(
         raise HTTPException(status_code=404, detail="No such study")
     await db.commit()
 
+    # The study's chat just went with it (conversation_turns.study_id
+    # CASCADEs) — any research images that chat downloaded are now
+    # unreachable from any UI. Reclaim them immediately rather than waiting
+    # for the next restart's sweep. Best-effort: never blocks the response.
+    try:
+        await image_service.sweep_orphaned_research_images(db)
+    except Exception:
+        logger.exception("Orphaned research-image sweep failed after study delete (non-fatal)")
+
 
 @router.put("/{study_id}/papers")
 async def set_study_papers(
@@ -272,6 +282,14 @@ async def clear_chat(
     sid, _ = await _resolve_scope(db, study_id, current_user["id"])
     await study_repo.clear_turns(db, current_user["id"], sid)
     await db.commit()
+
+    # Same reasoning as delete_study: this scope's conversation_id just lost
+    # every turn that referenced it, so any research images it downloaded are
+    # now orphaned. Reclaim them now instead of waiting for a restart.
+    try:
+        await image_service.sweep_orphaned_research_images(db)
+    except Exception:
+        logger.exception("Orphaned research-image sweep failed after chat clear (non-fatal)")
 
 
 @router.post("/{study_id}/chat/stream")

@@ -25,11 +25,14 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import shutil
+import time
 from pathlib import Path
 from typing import Optional, Union
 from uuid import UUID
 
 import httpx
+from sqlalchemy import text
 
 from app.core.logging import get_logger
 from app.core.net_safety import resolves_to_private_address
@@ -97,6 +100,12 @@ async def fetch_image_via_proxy(url: str) -> tuple[bytes, str, str]:
     # Very simple cache: if we have a file starting with the hash, use it.
     for existing in cache_dir.glob(f"{cache_key}.*"):
         if existing.is_file():
+            # Bump mtime on every hit so prune_stale_proxy_cache() ages out by
+            # last USE, not last write — a popular image stays cached indefinitely.
+            try:
+                existing.touch()
+            except OSError:
+                pass
             content = existing.read_bytes()
             # Best-effort content type from extension
             ctype = mimetypes.guess_type(str(existing))[0] or "application/octet-stream"
@@ -169,3 +178,73 @@ async def download_and_store_research_image(
 def build_research_image_url(conversation_id: Union[UUID, str], filename: str) -> str:
     """Returns the stable static URL the frontend can use for a locally-persisted research image."""
     return f"/static/images/research/{conversation_id}/{filename}"
+
+
+# ── Storage cleanup ──────────────────────────────────────────────────────────
+#
+# Neither cache above is touched by document deletion (documents.py's
+# delete_paper) — deliberately: conversation_id belongs to a (user, study)
+# chat scope, never to a document, so a document's own delete has no correct
+# way to know which research-image folders it would even be safe to remove.
+# Both are instead swept independently, keyed to their own real lifecycle.
+
+# A cached proxy image with no read in this long is very unlikely to be asked
+# for again; re-fetching a genuine repeat is cheap (the whole point of this
+# being a cache, not permanent storage).
+PROXY_CACHE_MAX_AGE_DAYS = 30
+
+
+def prune_stale_proxy_cache(max_age_days: int = PROXY_CACHE_MAX_AGE_DAYS) -> int:
+    """Delete proxy-cache files not read (see the touch() on cache hit above)
+    in over `max_age_days`. Best-effort and synchronous — no DB row anywhere
+    tracks this cache, so there is nothing to keep in sync with. Returns the
+    count removed."""
+    cache_dir = _proxy_cache_dir()
+    cutoff = time.time() - max_age_days * 86400
+    removed = 0
+    for f in cache_dir.iterdir():
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        except OSError as e:
+            logger.warning("Could not prune proxy cache file %s: %s", f, e)
+    if removed:
+        logger.info("Pruned %d stale proxy-cache image(s)", removed)
+    return removed
+
+
+async def sweep_orphaned_research_images(session) -> int:
+    """Remove research-image folders whose conversation_id no longer has any
+    conversation_turns row.
+
+    A folder here is durable, not a cache — it exists exactly as long as the
+    chat history that references it. conversation_turns rows for a
+    conversation_id disappear when the study they belong to is deleted
+    (CASCADE), when the chat is cleared (studies.py's clear_chat), or when
+    every turn in it is deleted one at a time — at that point the images are
+    unreachable from any UI and this is what finally reclaims the disk space.
+    Best-effort and idempotent: safe to call after either of those actions, or
+    on a schedule (currently: once per backend startup, see lifecycle.py).
+    """
+    research_dir = research_images_dir()
+    if not research_dir.exists():
+        return 0
+
+    on_disk = {p.name for p in research_dir.iterdir() if p.is_dir()}
+    if not on_disk:
+        return 0
+
+    result = await session.execute(text("SELECT DISTINCT conversation_id FROM conversation_turns"))
+    live = {str(row[0]) for row in result.fetchall()}
+
+    removed = 0
+    for name in on_disk - live:
+        try:
+            shutil.rmtree(research_dir / name)
+            removed += 1
+        except OSError as e:
+            logger.warning("Could not remove orphaned research-image folder %s: %s", name, e)
+    if removed:
+        logger.info("Swept %d orphaned research-image folder(s)", removed)
+    return removed
