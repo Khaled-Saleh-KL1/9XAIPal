@@ -9,6 +9,13 @@
  * parsing and strips everything outside the GitHub-style allowlist; the only
  * extensions are the math classes KaTeX needs (KaTeX itself runs after
  * sanitization, so its generated spans are unaffected).
+ *
+ * errorColor: formula extraction (MinerU's OCR, or a model transcribing a
+ * paper's equations) occasionally produces LaTeX KaTeX cannot parse — a
+ * genuinely malformed source, not a bug we can fix by retrying. KaTeX's own
+ * default then renders the raw TeX source in alarming red (#cc0000); this
+ * points it at the app's muted-text color instead (see .katex-error in
+ * index.css for the rest of the calmer, code-like treatment).
  */
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -40,5 +47,5 @@ export const MARKDOWN_REMARK: PluggableList = [remarkGfm, remarkMath];
 export const MARKDOWN_REHYPE: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, SANITIZE_SCHEMA],
-  rehypeKatex,
+  [rehypeKatex, { errorColor: 'var(--muted)' }],
 ];
