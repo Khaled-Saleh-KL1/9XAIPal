@@ -55,37 +55,37 @@ there is no separate frontend host to allow.
 
 ---
 
-## 2. Compose files
+## 2. Compose file
 
-Two files, combined with `-f`:
+One file — `docker-compose.prod.yml` is this deployment directly, not a generic base plus an
+overlay for this specific box:
 
 ```bash
-docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml up -d --build
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-- **`docker-compose.prod.yml`** — the base. Written for Oracle Cloud's free-tier 1GB ARM VM, so it
-  defaults `EXTRACTOR_PROVIDER=vlm` (cloud-VLM extraction) — that box can't afford local
-  MinerU/torch.
-- **`docker-compose.selfhost.yml`** — the overlay this deployment actually needs, because this VPS
-  (6 CPU / 11GB RAM / x86_64, no GPU) can afford what Oracle's free tier can't:
-  - Builds `celery_worker` from `Dockerfile.mineru` instead of `Dockerfile.oracle` (adds MinerU +
-    torch + the OpenCV/runtime libs it needs).
-  - Passes `HF_TOKEN` as a Docker build **arg**, not just an environment variable — `docker
-    build` never sees `environment:`, only `docker run` does, and `Dockerfile.mineru`'s
-    `mineru-models-download` step runs at *build* time (avoids anonymous Hugging Face rate
-    limits on the ~5GB weight download).
-  - Sets `EXTRACTOR_PROVIDER=mineru` explicitly (the base file hardcodes `vlm` — this must
-    override it, not just leave it unset, since compose merges by key and an absent key in the
-    overlay would let the base value through).
-  - `MINERU_PAGE_BATCH_SIZE` — extracts large documents in page-range batches. This does double
-    duty: it bounds peak RAM (a huge book extracted in one pass can OOM-kill the worker), *and*
-    it's the granularity of the real extraction-progress reporting the UI shows (see
-    [`mineru_client.py`](app/extraction/mineru_client.py)'s `on_progress` callback,
-    [`pipeline_sync.py`](app/extraction/pipeline_sync.py)'s `update_job_progress_sync`) — a
-    smaller value means more visible progress movement during a long extraction, not just OOM
-    safety. `0` disables batching entirely.
-  - `WORKER_MEM_LIMIT` caps `celery_worker`'s memory so a huge PDF OOMs only that one container
-    (which then auto-restarts, see §4) instead of pressuring postgres/redis/api on the same box.
+Worth knowing about what it does, since none of it is obvious from the file alone:
+
+- `celery_worker` builds from `Dockerfile.mineru` (adds MinerU + torch + the OpenCV/runtime libs
+  it needs) — this VPS (6 CPU / 11GB RAM / x86_64, no GPU) has the CPU/RAM for real local
+  extraction, so there's no need for a cloud-VLM fallback. `api` builds from the lighter
+  `Dockerfile.lite` instead — it never runs MinerU itself (`celery_worker` does all extraction),
+  so its image has no reason to carry torch/OpenCV too.
+- `HF_TOKEN` is passed as a Docker build **arg**, not just an environment variable — `docker
+  build` never sees `environment:`, only `docker run` does, and `Dockerfile.mineru`'s
+  `mineru-models-download` step runs at *build* time (avoids anonymous Hugging Face rate
+  limits on the ~5GB weight download).
+- `MINERU_PAGE_BATCH_SIZE` — extracts large documents in page-range batches. This does double
+  duty: it bounds peak RAM (a huge book extracted in one pass can OOM-kill the worker), *and*
+  it's the granularity of the real extraction-progress reporting the UI shows (see
+  [`mineru_client.py`](app/extraction/mineru_client.py)'s `on_progress` callback,
+  [`pipeline_sync.py`](app/extraction/pipeline_sync.py)'s `update_job_progress_sync`) — a
+  smaller value means more visible progress movement during a long extraction, not just OOM
+  safety. `0` disables batching entirely.
+- `WORKER_MEM_LIMIT` (default `7G`) caps `celery_worker`'s memory so a huge PDF OOMs only that
+  one container (which then auto-restarts, see §4) instead of pressuring postgres/redis/api on
+  the same box. There is no swap on this box, so a real overrun hits this hard rather than
+  degrading gracefully — that's deliberate, the same isolation tradeoff as the paragraph above.
 
 ---
 
@@ -159,7 +159,10 @@ Two independent mechanisms, both required — they cover different failure modes
    alive".
 2. **`autoheal`** (`willfarrell/autoheal`, Docker socket mounted) watches every container labeled
    `autoheal=true` and restarts it if its healthcheck reports **unhealthy** — this is what catches
-   "running but hung".
+   "running but hung". `celery_worker`'s own healthcheck is `celery inspect ping`, which
+   round-trips through the broker (Redis) rather than just checking the process is alive — it
+   answers even under a busy `--concurrency=1` extraction as long as the worker's control-plane
+   thread is genuinely responsive, and only that is what autoheal restarts on.
 
 ⚠ A `docker stop`/`docker kill` from the CLI is treated as *deliberate* and does **not** trigger
 `restart: unless-stopped` — that's correct Docker behavior, not a bug, and it means testing this
@@ -168,26 +171,75 @@ guarantee requires actually crashing something (e.g. `kill -9` the container's r
 from *inside* the container's own PID namespace gets silently suppressed by the kernel, since a
 namespace's init process ignores signals sent to itself from within).
 
+**Outside Docker entirely**, two more processes need the same guarantee and didn't have it by
+default: nginx and the actions-runner both ship with no `Restart=` policy (nginx's is Debian's
+package default; the runner's own generated unit has none either), so either one dying used to
+mean no automatic recovery regardless of how healthy every container was. Fixed with a systemd
+drop-in on each:
+
+```bash
+sudo mkdir -p /etc/systemd/system/nginx.service.d
+sudo tee /etc/systemd/system/nginx.service.d/override.conf <<'UNIT'
+[Service]
+Restart=on-failure
+RestartSec=5
+UNIT
+
+sudo mkdir -p /etc/systemd/system/actions.runner.Khaled-Saleh-KL1-9XAIPal.ovh-server.service.d
+sudo tee /etc/systemd/system/actions.runner.Khaled-Saleh-KL1-9XAIPal.ovh-server.service.d/override.conf <<'UNIT'
+[Service]
+Restart=always
+RestartSec=5
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl restart nginx actions.runner.Khaled-Saleh-KL1-9XAIPal.ovh-server.service
+```
+
 ---
 
-## 5. CI/CD — self-hosted runner, no secrets over the wire
+## 5. CI/CD — self-hosted runner, no secrets over the wire, gated on CI, self-healing on failure
 
 `.github/workflows/deploy.yml` runs on a **self-hosted** GitHub Actions runner living on this same
-box, triggered on every push to `main`. Deliberately self-hosted rather than GitHub-hosted:
-**no secret ever needs to leave the box** — `backend/.env` lives permanently on the server and is
-never read, echoed, or referenced by the workflow. `permissions: contents: read` is the workflow's
-entire GitHub-side permission footprint (plus `deployments: write`, purely cosmetic — it's what
-lets the job show up as a tracked GitHub Deployment with a status and a URL on the repo homepage).
+box. Deliberately self-hosted rather than GitHub-hosted: **no secret ever needs to leave the box**
+— `backend/.env` lives permanently on the server and is never read, echoed, or referenced by the
+workflow. `permissions: contents: read` is the workflow's entire GitHub-side permission footprint
+(plus `deployments: write`, purely cosmetic — it's what lets the job show up as a tracked GitHub
+Deployment with a status and a URL on the repo homepage).
+
+**Trigger: gated on CI actually passing, not the raw push.** `deploy.yml` and `.github/workflows/
+ci.yml` used to be two independent workflows both triggered by `push: main` with no ordering
+between them — a push that failed CI would still deploy, and since this repo's branch protection
+has `enforce_admins: false`, a direct push bypassing a PR entirely would deploy with zero
+verification. `deploy.yml` now triggers on `workflow_run` for CI's completion, gated on
+`conclusion == 'success'` — a deploy can only happen once CI's own run for that exact commit has
+actually passed, regardless of how the commit reached `main`. Every commit reference in the
+workflow uses `github.event.workflow_run.head_sha`, not `github.sha` — for a `workflow_run`-
+triggered job, `github.sha` resolves to the default branch's current tip, which is only guaranteed
+to match the validated commit if nothing else pushed in the gap between CI finishing and this job
+starting.
 
 ⚠ **`actions/checkout` unconditionally deletes and recreates its target directory on every run** —
 `clean: false` only skips an *additional* git-clean on top of that, it does not prevent the
 delete-and-recreate. This bit twice during initial setup: checking out directly into the live
 deployment directory destroyed `backend/.env` (secrets — gone) and the bind-mounted
 `backend/app` source the running `celery_worker` depended on, breaking it mid-flight. The fix,
-already in `deploy.yml`: checkout runs in the runner's own disposable workspace, and only a
-one-way `rsync -a --delete` (explicitly excluding `.git/`, `backend/.env`,
-`backend/app/storage/`, `backend/frontend-dist/`) syncs tracked files into the real
-`DEPLOY_DIR` — checkout and the live directory are never the same path.
+already in `deploy.yml`: checkout runs in the runner's own disposable workspace (`fetch-depth: 0`
+— full history, not just this commit, needed for the rollback below), and only a one-way
+`rsync -a --delete` (explicitly excluding `.git/`, `backend/.env`, `backend/app/storage/`,
+`backend/frontend-dist/`, `.last-good-sha`) syncs tracked files into the real `DEPLOY_DIR` —
+checkout and the live directory are never the same path.
+
+**Automatic rollback on a failed deploy.** The actual build+restart+health-check sequence lives in
+`scripts/deploy-once.sh`, not inline in the workflow — one script, so the rollback path below can
+call the exact same sequence instead of a second, hand-maintained copy of it drifting out of sync.
+After a deploy passes its health check, its commit is recorded as `$DEPLOY_DIR/.last-good-sha`. If
+a *future* deploy builds cleanly (it passed CI, after all) but breaks at runtime — `docker compose
+up -d --build` had already replaced the old, working containers by the time the health check
+fails — the workflow restores `$DEPLOY_DIR` to `.last-good-sha` (via `git worktree add` against
+the runner's full history) and re-runs `deploy-once.sh` against it. The workflow still reports
+failure either way — a step already failed, and nothing in the rollback changes that — this only
+decides whether the *site* stays down while the bad commit gets a fix.
 
 The deploy job also builds the frontend in a throwaway `node:20-alpine` container with
 `--user "$(id -u):$(id -g)"` — without it, files written by the containerized build come out
@@ -259,7 +311,10 @@ easy to cause and mildly annoying to unwind:
 - Health (from the host): `curl -sf http://127.0.0.1:8000/api/v1/health` — never exposed directly
   to the internet, only reachable on the box itself; the public path is always through nginx.
 - Health (public): `curl -sf https://<domain>/api/v1/health`
-- Logs: `docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml logs -f <service>`
-- Stack status: `docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml ps`
+- Logs: `docker compose -f docker-compose.prod.yml logs -f <service>` — every container is capped
+  at 50MB (10MB × 5 files, `json-file` driver) via the compose file's `x-logging` anchor, so an
+  unattended box's disk doesn't slowly fill from log growth alone. No `/etc/docker/daemon.json`
+  default exists on this box, so a service added without the anchor would log unbounded.
+- Stack status: `docker compose -f docker-compose.prod.yml ps`
 - Deploy history: the repo's **Actions** tab, or the **Environments** widget on the repo homepage
   (populated by `deploy.yml`'s `environment:` key).

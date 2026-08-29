@@ -1,18 +1,18 @@
-# Runtime dependencies for the 9XAIPal backend as deployed on the Oracle
-# Always-Free ARM VM (EXTRACTOR_PROVIDER=vlm).
+# Runtime dependencies for anything that never runs MinerU: the api service
+# (Dockerfile.lite — PDF extraction is celery_worker's job alone, via
+# Dockerfile.mineru + the full requirements.txt) and CI's test suite.
 #
 # This is requirements.txt MINUS `mineru[core]`.
 #
 # Why: MinerU is never imported by app/ — it is invoked as a CLI subprocess
-# (see `mineru_binary` in app/core/config.py). On the Oracle deployment
-# EXTRACTOR_PROVIDER=vlm routes all PDF extraction to Qwen3-VL on Ollama
-# Cloud, so the `mineru` CLI is never called. Installing it anyway would drag
-# in torch/OpenCV/transformers — multi-hundred-MB wheels with patchy aarch64
-# support — turning a ~2 minute build into a very long and fragile one on a
-# 4-core ARM box, for code that never runs.
+# (see `mineru_binary` in app/core/config.py), by celery_worker alone.
+# Installing it anyway drags in torch/OpenCV/transformers — the full default
+# CUDA torch wheel alone is ~530MB, plus the entire NVIDIA CUDA toolkit
+# dependency chain — for code neither the api container nor a CI test run
+# ever calls.
 #
-# PDF page rasterisation for the VLM path, and the degraded text-only
-# fallback (ALLOW_PYMUPDF_FALLBACK), both come from pymupdf, which IS here.
+# The degraded text-only fallback (ALLOW_PYMUPDF_FALLBACK) comes from
+# pymupdf, which IS here.
 #
 # Keep in sync with requirements.txt when adding non-MinerU dependencies.
 
