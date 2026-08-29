@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, type DragEvent } from 'react';
 import type { Paper, LibraryLayout, SortKey } from '../types';
 import { LogoMark } from '../components/LogoMark';
 import {
-  IconSearch, IconPlus, IconUpload, IconDoc, IconLink,
+  IconSearch, IconPlus, IconUpload, IconDoc,
   IconPin, IconSort, IconGrid, IconList, IconPencil, IconTrash,
 } from '../components/Icons';
 import { PaperCover } from './PaperCover';
@@ -17,8 +17,6 @@ interface Props {
   /** Called with the dropped file when the source is a drag-and-drop, and with
    *  nothing when the user clicked (the file is chosen later, in a picker). */
   onUpload: (file?: File) => void;
-  /** Opens the "paste a link" modal for the web article import pipeline. */
-  onImportUrl: () => void;
   onOpenRawFiles: () => void;
   onOpenDesk: () => void;
   layout: LibraryLayout;
@@ -45,7 +43,7 @@ function metaToPaper(m: PaperMeta): Paper {
   };
 }
 
-export function LibraryView({ onOpenPaper, onUpload, onImportUrl, onOpenRawFiles, onOpenDesk, layout, setLayout }: Props) {
+export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout }: Props) {
   const [over, setOver] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
@@ -277,22 +275,13 @@ export function LibraryView({ onOpenPaper, onUpload, onImportUrl, onOpenRawFiles
               <div className="text-[10.5px] font-mono" style={{ color: 'var(--muted)' }}>
                 PDF · large books OK · stays on this machine
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={(e) => { e.stopPropagation(); onImportUrl(); }}
-                  className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
-                  style={{ background: 'var(--bg)', color: 'var(--fg-2)', border: '1px solid var(--border)' }}
-                >
-                  <IconLink className="w-3.5 h-3.5" /> Paste a link
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onUpload(); }}
-                  className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
-                  style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
-                >
-                  <IconPlus className="w-3.5 h-3.5" /> Add paper
-                </button>
-              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); onUpload(); }}
+                className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
+                style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
+              >
+                <IconPlus className="w-3.5 h-3.5" /> Add paper
+              </button>
             </div>
           </div>
 
