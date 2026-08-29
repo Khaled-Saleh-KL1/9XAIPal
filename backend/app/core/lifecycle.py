@@ -129,6 +129,22 @@ async def _check_embedding_model_switch(session) -> None:
     await _requeue_all_embeddings(session)
 
 
+async def _clean_up_storage(session) -> None:
+    """Reclaim disk space nothing else is watching. Never fatal — a failure
+    here must not block startup."""
+    from app.services.image_service import prune_stale_proxy_cache, sweep_orphaned_research_images
+
+    try:
+        prune_stale_proxy_cache()
+    except Exception:
+        logger.exception("Proxy-cache prune failed (non-fatal)")
+
+    try:
+        await sweep_orphaned_research_images(session)
+    except Exception:
+        logger.exception("Orphaned research-image sweep failed (non-fatal)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan: startup and shutdown.
@@ -187,6 +203,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Dimension unchanged — but the embedding MODEL may have switched
             # (e.g. moving the library from Ollama to a cloud embedder).
             await _check_embedding_model_switch(session)
+
+        # Two storage caches nothing else ever ages out (see the "Storage
+        # cleanup" section of image_service.py): research images left behind
+        # by a cleared/deleted chat, and stale entries in the general image
+        # proxy cache. Cheap, best-effort, and — since neither is a heavy
+        # migration — safe to just run on every boot rather than needing its
+        # own schedule.
+        await _clean_up_storage(session)
 
     logger.info("9XAIPal backend ready")
     yield
