@@ -15,22 +15,34 @@ def normalize_markdown(text: str) -> str:
     return text.strip()
 
 
-# A run of 3+ bare-numeric <sup> tags separated only by whitespace. MinerU's
-# layout model sometimes attributes a chart's own axis tick labels (rendered
-# as small baseline-shifted text inside the figure) to the surrounding
-# img_caption field instead of discarding them, e.g. one real caption becomes
+# A run of 3+ short <sup> tags separated only by whitespace. MinerU's layout
+# model sometimes attributes small decorative text baked into a figure (axis
+# tick labels, panel markers like "(a)", unit annotations) to the surrounding
+# img_caption field instead of discarding it, e.g. one real caption becomes
 # "<sup>0.0</sup> <sup>0.2</sup> ... <sup>1.0 0.0</sup> ... Fig. 2: ...".
-# A genuine superscript in prose (a footnote marker, an exponent like
-# 10<sup>-4</sup>) never appears as part of a run this long, so the run length
-# is what distinguishes leaked tick labels from real superscripted text.
-_AXIS_TICK_RUN = re.compile(r"(?:<sup>\s*[\d.\s]+?\s*</sup>\s*){3,}")
+#
+# The content inside each tag is deliberately NOT restricted to digits — a
+# leaked axis label can be "-10", "50%", "(a)", "10dB", etc. What actually
+# distinguishes leaked chart chrome from real superscripted prose is the
+# SHAPE: 3+ consecutive <sup> tags with nothing but whitespace between them.
+# A genuine superscript (a footnote marker, an exponent like 10<sup>-4</sup>)
+# is always separated from the next one by real words or punctuation — prose
+# never strings three bare superscripts back to back with only spaces
+# between — so the run length and adjacency, not the tag content, is what
+# makes stripping safe.
+_LEAKED_SUP_RUN = re.compile(r"(?:<sup>\s*[^<>]{0,30}\s*</sup>\s*){3,}")
 
 
-def strip_axis_tick_noise(text: str) -> str:
-    """Remove chart axis-tick-label runs leaked into a figure/chart caption."""
+def strip_leaked_sup_run(text: str) -> str:
+    """Remove runs of 3+ adjacent, whitespace-only-separated <sup> tags.
+
+    These are decorative figure/chart text MinerU misattributed to a caption
+    field, never a real superscript — an isolated <sup> (a footnote marker,
+    an exponent) is left untouched.
+    """
     if "<sup>" not in text:
         return text
-    text = _AXIS_TICK_RUN.sub(" ", text)
+    text = _LEAKED_SUP_RUN.sub(" ", text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 

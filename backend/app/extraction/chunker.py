@@ -22,7 +22,7 @@ from app.extraction.normalizer import (
     estimate_tokens,
     extract_plain_text,
     normalize_markdown,
-    strip_axis_tick_noise,
+    strip_leaked_sup_run,
 )
 
 _IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
@@ -995,7 +995,7 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
             img_name = img_path.rsplit("/", 1)[-1] if img_path else ""
             cap_key = "img_caption" if etype == "image" else "chart_caption"
             caption = " ".join(_flatten(entry.get(cap_key) or entry.get("img_caption") or []))
-            caption = strip_axis_tick_noise(caption)
+            caption = strip_leaked_sup_run(caption)
             md_parts = []
             if img_name:
                 md_parts.append(f"![{caption}]({img_name})")
@@ -1010,6 +1010,7 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
 
         if etype == "table":
             caption = " ".join(_flatten(entry.get("table_caption") or []))
+            caption = strip_leaked_sup_run(caption)
             body = entry.get("table_body") or ""
             img_path = entry.get("img_path") or ""
             img_name = img_path.rsplit("/", 1)[-1] if img_path else ""
