@@ -56,19 +56,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --index-strategy unsafe-best-match \
       -r requirements.txt
 
-# Hugging Face token for the download below, passed via --build-arg (compose
-# `environment:` only reaches a *running* container, never a `docker build`
-# step). Optional — anonymous downloads work too, just more likely to hit
-# rate limits. ⚠ Build args land in image layer history (`docker history`),
-# fine for a personal read-only HF token on a private box; use BuildKit
-# `--mount=type=secret` instead if that image is ever pushed somewhere shared.
-ARG HF_TOKEN=""
-ENV HF_TOKEN=${HF_TOKEN}
+# Hugging Face token for the download below, via a BuildKit secret mount —
+# NOT a build ARG/ENV. An ARG/ENV value is permanently readable in this
+# image's layer history (`docker history --no-trunc`) and in `docker inspect`
+# of any container run from it, forever, in every copy of the image; a secret
+# mount exists only inside this one RUN step and is never written to any
+# layer. See docker-compose.prod.yml's `secrets:` block for how the value
+# actually reaches this step (sourced from HF_TOKEN in backend/.env).
+# Optional — anonymous downloads work too, just more likely to hit rate
+# limits.
 
 # Pre-download the pipeline models INTO the image so the first upload doesn't
 # stall on a multi-GB download. Non-interactive (both -s and -m supplied).
 # Baked into the image layer — no volume to shadow it.
-RUN mineru-models-download -s huggingface -m pipeline
+RUN --mount=type=secret,id=hf_token \
+    sh -c 'HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null || true)"; export HF_TOKEN; mineru-models-download -s huggingface -m pipeline'
 
 # Patch MinerU's CLI HTTP timeout (default read=60s) so long-running
 # extractions (large books, 500+ pages) don't trip a 60s polling timeout
