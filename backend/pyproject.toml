@@ -1,0 +1,98 @@
+[project]
+name = "9xaipal-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+# Runtime dependencies every deployment needs, regardless of PDF extractor.
+# The `mineru` extra below is the one thing that's actually optional — see
+# its own comment.
+dependencies = [
+    # Web framework & server
+    "fastapi[standard]",
+    "uvicorn[standard]",
+    "python-multipart",
+
+    # Data validation & settings
+    "pydantic>=2.0",
+    "pydantic-settings",
+
+    # HTTP client (Ollama / cloud LLM APIs)
+    "httpx",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg",
+    "psycopg2-binary",       # sync driver used by Celery workers
+    "pgvector",
+
+    # File & PDF handling
+    "aiofiles",
+    "pypdf",
+    "pymupdf",               # PyMuPDF fallback when MinerU is unavailable (imported as 'fitz')
+
+    # Web article extraction (services/article_extraction.py). Pinned
+    # 2026-08-29: 2.2.0 verified live against Wikipedia and static-HTML
+    # sites during development, see the doc_kind='article' import pipeline.
+    "trafilatura==2.2.0",
+
+    # Auth: Argon2id password hashing (OWASP-recommended default) + email
+    # validation for pydantic's EmailStr (fastapi[standard] usually pulls
+    # this in transitively, but pinning it directly avoids depending on
+    # that staying true).
+    "argon2-cffi>=23.1",
+    "email-validator>=2.0",
+
+    # Background processing (redis>=5.0 also backs sessions via
+    # redis.asyncio, see app/core/redis.py)
+    "celery>=5.3",
+    "redis>=5.0",
+]
+
+# MinerU is the only genuinely optional dependency, and the only reason this
+# project has more than one build variant at all (Dockerfile.lite for the api
+# service, which never runs it, vs. Dockerfile.mineru for celery_worker,
+# which does all extraction). torch/torchvision are listed here too, even
+# though mineru[core] already pulls them in transitively: `tool.uv.sources`
+# below only overrides a package's source for dependencies THIS project
+# declares directly, not ones inherited purely through another package's own
+# metadata (verified: without this, torch silently resolved from PyPI's
+# default CUDA build instead of the CPU-only index, and the whole
+# NVIDIA/cuda-toolkit dependency chain came back).
+#
+# PDF extraction — the primary extractor, invoked as the `mineru` CLI.
+# Pinned 2026-07-25: 3.4.4 verified working on Apple Silicon (host, no CUDA,
+# no Docker). Keep the `pipeline` backend that mineru_client.py passes: the
+# `hybrid-engine` measured 8.5x slower with worse heading classification,
+# and its default `--effort medium` silently disables image/chart analysis,
+# which the figure pipeline depends on. See docs/plans/pdf-parser-evaluation.md.
+# First run downloads ~5 GB of model weights; set HF_TOKEN if rate-limited.
+[project.optional-dependencies]
+mineru = ["mineru[core]>=3.4.4", "torch", "torchvision"]
+
+# Test-only. httpx is already a runtime dependency above (used as the actual
+# HTTP client), so only the test framework itself belongs here.
+[dependency-groups]
+test = ["pytest", "pytest-asyncio"]
+
+# CPU-only wheels for torch/torchvision, scoped to exactly those two
+# packages via `explicit = true` + tool.uv.sources below, not a blanket
+# `--index-strategy unsafe-best-match` — verified this resolves the genuine
+# +cpu build (torch.cuda.is_available() is False, zero nvidia-* packages
+# anywhere in the lockfile) without risking any OTHER package accidentally
+# resolving from this index.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[tool.uv]
+# Every actual install of this project happens inside a Linux container
+# (Dockerfile*, CI, and Docker Desktop's own Linux VM on macOS/Windows) —
+# never solve for other platforms. Without this, uv's resolver forks the
+# lockfile across platform-marker branches trying to satisfy every
+# platform at once, which is what caused the CPU-index pin above to get
+# silently bypassed on the Linux branch specifically in the first place.
+environments = ["sys_platform == 'linux'"]

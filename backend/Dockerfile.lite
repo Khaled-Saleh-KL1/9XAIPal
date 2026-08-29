@@ -2,16 +2,19 @@
 # service (PDF extraction is celery_worker's job alone, via Dockerfile.mineru;
 # api never touches it) and mirrors what CI installs for the test suite.
 #
-# Differs from the default Dockerfile in two ways:
+# Installs the base dependency set from pyproject.toml/uv.lock, without the
+# `mineru` extra — mineru[core] (and the torch/torchvision it pulls in) is
+# the only thing this image skips. Every remaining dependency ships
+# prebuilt manylinux wheels, so the build is quick and needs no compiler for
+# the Python packages themselves.
 #
-#   1. Installs requirements.lite.txt — requirements.txt without
-#      `mineru[core]`. Nothing in app/ imports MinerU; it is only ever shelled
-#      out to, by celery_worker alone.
-#   2. Drops the PyTorch CPU extra-index. Nothing here pulls torch at all, so
-#      there is no reason to carry an index for it.
-#
-# Every remaining dependency ships prebuilt manylinux wheels, so the build is
-# quick and needs no compiler for the Python packages themselves.
+# `uv sync` is the whole point of the lockfile: it diffs uv.lock against
+# what's already installed and only fetches what changed, instead of
+# `uv pip install`'s "reinstall everything in this list" every time — see
+# uv.lock's own history for the CPU-torch-wheel index scoping this depends
+# on (verified: torch.cuda.is_available() is False, zero nvidia-* packages
+# anywhere, without the `mineru` extra selected here at all so it's moot for
+# this image regardless).
 
 FROM python:3.11-slim
 
@@ -19,7 +22,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
-    UV_HTTP_TIMEOUT=600
+    UV_HTTP_TIMEOUT=600 \
+    # Install into the system interpreter below, not a project-local .venv —
+    # keeps `CMD`/`uvicorn`/`celery` working unprefixed, same as `uv pip
+    # install --system` did before.
+    UV_PROJECT_ENVIRONMENT=/usr/local
 
 WORKDIR /app
 
@@ -33,9 +40,9 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.lite.txt ./
+COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -r requirements.lite.txt
+    uv sync --locked --no-install-project
 
 COPY app ./app
 

@@ -25,7 +25,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # because MinerU's post-processing stage reuses the HF HTTP client and
     # would otherwise surface as "All connection attempts failed" when it
     # tries to reach the optional LLM-aided VLM endpoint.
-    MINERU_BAKED_INTO_IMAGE=1
+    MINERU_BAKED_INTO_IMAGE=1 \
+    # Install into the system interpreter below, not a project-local .venv —
+    # keeps `CMD`/`celery` working unprefixed, same as `uv pip install
+    # --system` did before.
+    UV_PROJECT_ENVIRONMENT=/usr/local
 
 WORKDIR /app
 
@@ -44,17 +48,19 @@ RUN apt-get update \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the full dependency set (incl. mineru + torch) with uv. The shared
-# cache mount means torch/mineru are pulled from uv's cache (already populated
-# by the API image build) instead of re-downloading.
-#
-# ⚠ Reads requirements.txt, not a uv.lock — see the note in Dockerfile.
-COPY requirements.txt ./
+# Install the full dependency set (incl. mineru + torch) via uv.lock's
+# `mineru` extra. The shared cache mount means an unchanged uv.lock rebuilds
+# in seconds, and adding ONE new dependency only downloads that one, not the
+# whole set — the specific thing a flat requirements.txt couldn't do, since
+# any change to it invalidated this entire RUN step's Docker layer cache
+# regardless of the underlying uv cache mount. torch/torchvision resolve
+# from the CPU-only index declared in pyproject.toml (see its own comment
+# for why torch has to be listed there directly, not just inherited
+# through mineru): verified torch.cuda.is_available() is False and zero
+# nvidia-* packages land anywhere in this image.
+COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-      --extra-index-url https://download.pytorch.org/whl/cpu \
-      --index-strategy unsafe-best-match \
-      -r requirements.txt
+    uv sync --locked --no-install-project --extra mineru
 
 # Hugging Face token for the download below, via a BuildKit secret mount —
 # NOT a build ARG/ENV. An ARG/ENV value is permanently readable in this

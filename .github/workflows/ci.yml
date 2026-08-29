@@ -136,30 +136,27 @@ jobs:
 
       # Same uv version pinned in every Dockerfile (Dockerfile, Dockerfile.lite,
       # Dockerfile.mineru) — one less version to keep in sync by hand.
-      # enable-cache persists uv's own download cache across runs, same idea
-      # as setup-python's cache: pip did, just for the tool that replaces pip
-      # below.
+      # enable-cache persists uv's own download cache across runs.
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.10.8"
           enable-cache: true
-          cache-dependency-glob: "backend/requirements.lite.txt"
+          cache-dependency-glob: "backend/uv.lock"
 
-      # requirements.lite.txt is requirements.txt minus `mineru[core]` — the
-      # only difference. mineru_client.py never imports the mineru PyPI
-      # package (it shells out to the CLI), so nothing under test needs it,
-      # and installing requirements.txt here was silently pulling in the
-      # full default CUDA torch wheel (~530MB) plus the entire NVIDIA CUDA
-      # toolkit dependency chain, never used, and a real source of CI
-      # slowness/flakiness. Verified: the full suite passes identically
-      # against this lighter set. `uv pip install --system` targets the
-      # actions/setup-python interpreter above, same as every Dockerfile's
-      # own `uv pip install --system` targets that image's interpreter.
+      # The `test` dependency-group (pytest, pytest-asyncio) from
+      # pyproject.toml, without the `mineru` extra: mineru_client.py never
+      # imports the mineru PyPI package (it shells out to the CLI), so
+      # nothing under test needs it, and installing it here would silently
+      # pull in the full default CUDA torch wheel (~530MB) plus the entire
+      # NVIDIA CUDA toolkit dependency chain, never used, and a real source
+      # of CI slowness/flakiness. `uv sync` diffs against uv.lock instead of
+      # reinstalling everything on every run, the way `uv pip install` did:
+      # verified locally, an unchanged lock resyncs in ~1s, and adding one
+      # new dependency only downloads that one.
       - name: Install dependencies
-        run: uv pip install --system -r requirements.lite.txt pytest pytest-asyncio httpx
+        run: uv sync --locked --no-install-project --group test
 
       - name: Run tests
-        # `python -m pytest` puts the backend/ working dir on sys.path so the
-        # `app` package imports without an editable install of the heavy
-        # (torch/MinerU) pyproject dependencies.
-        run: python -m pytest -q
+        # `.venv/bin/python -m pytest` puts the backend/ working dir on
+        # sys.path so the `app` package imports without an editable install.
+        run: .venv/bin/python -m pytest -q
