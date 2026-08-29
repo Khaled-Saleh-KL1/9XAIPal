@@ -25,8 +25,9 @@ env:
   # run, unconditionally (`clean: false` only skips an *additional* git-clean
   # on top of that, it doesn't prevent it). Anything untracked living inside
   # a checkout-managed directory — backend/.env (secrets), backend/app/
-  # storage/* (uploaded papers), backend/frontend-dist (the built SPA) — WILL
-  # be destroyed sooner or later if checkout and the live deployment share a
+  # storage/* (uploaded papers), backend/frontend-dist (the built SPA),
+  # .last-good-sha (this workflow's own rollback marker, see below) — WILL be
+  # destroyed sooner or later if checkout and the live deployment share a
   # directory. So they don't: checkout gets its own disposable workspace, and
   # this directory receives only a one-way sync of the tracked files.
   DEPLOY_DIR: /home/kl1/apps/9xaipal
@@ -44,7 +45,13 @@ jobs:
       name: production
       url: https://9xaipal.kl1.site
     steps:
+      # fetch-depth: 0 (full history, not just this commit) is what makes
+      # the rollback step below possible — it needs to `git worktree add` an
+      # EARLIER commit than the one just pushed, which a shallow clone
+      # wouldn't have on disk.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Sync tracked files into the deployment directory
         run: |
@@ -53,38 +60,60 @@ jobs:
             --exclude='backend/.env' \
             --exclude='backend/app/storage/' \
             --exclude='backend/frontend-dist/' \
+            --exclude='.last-good-sha' \
             ./ "$DEPLOY_DIR"/
 
-      - name: Build frontend
-        working-directory: ${{ env.DEPLOY_DIR }}/backend
-        run: |
-          docker run --rm \
-            --user "$(id -u):$(id -g)" \
-            -e HOME=/tmp \
-            -v "$(pwd)/../frontend:/src" \
-            -v "$(pwd)/frontend-dist:/dist" \
-            -w /src \
-            node:20-alpine \
-            sh -c "npm ci --prefer-offline --no-audit --progress=false && \
-                   VITE_API_BASE_URL=https://9xaipal.kl1.site npm run build && \
-                   rm -rf /dist/* && cp -r dist/* /dist/"
+      # Everything a deploy attempt actually does — build the frontend,
+      # build+restart the containers, poll the health check — lives in one
+      # script (scripts/deploy-once.sh) so the rollback path below can call
+      # the EXACT same sequence instead of a second, hand-maintained copy of
+      # it drifting out of sync in this file.
+      - name: Deploy
+        id: deploy
+        run: bash "$DEPLOY_DIR/scripts/deploy-once.sh"
 
-      - name: Build and restart containers
-        working-directory: ${{ env.DEPLOY_DIR }}/backend
-        run: docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml up -d --build
+      # Only reached if the step above actually succeeded — this commit is
+      # now the one to fall back to if some FUTURE deploy breaks. Excluded
+      # from the rsync above, so it survives every future sync untouched.
+      - name: Record this commit as the last known-good deploy
+        if: success()
+        run: echo "${{ github.sha }}" > "$DEPLOY_DIR/.last-good-sha"
 
-      - name: Wait for health check
+      # The deploy above passed CI, built cleanly, and still failed its own
+      # health check at runtime — the OLD, working containers are already
+      # gone by this point (docker compose up already replaced them), so
+      # without this the site would simply stay down until a human notices
+      # and pushes a fix. Instead: restore $DEPLOY_DIR to the last commit
+      # that DID pass its health check, and run the exact same deploy
+      # sequence against it. The job still reports failure either way (a
+      # step above already failed, and nothing here changes that) — this
+      # only decides whether the SITE is down while that gets investigated.
+      - name: Automatic rollback to the last known-good commit
+        if: failure() && steps.deploy.outcome == 'failure'
         run: |
-          for i in $(seq 1 20); do
-            if curl -sf http://127.0.0.1:8000/api/v1/health >/dev/null; then
-              echo "Healthy after ${i} attempt(s)."
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::API did not become healthy within 60s of deploy."
-          docker compose -f "$DEPLOY_DIR/backend/docker-compose.prod.yml" -f "$DEPLOY_DIR/backend/docker-compose.selfhost.yml" logs --tail=100 api
-          exit 1
+          if [ ! -f "$DEPLOY_DIR/.last-good-sha" ]; then
+            echo "::error::Deploy of ${{ github.sha }} failed and there is no previous known-good deploy recorded — nothing to roll back to. This is likely the first deploy under this workflow; manual intervention is required."
+            exit 0
+          fi
+          GOOD_SHA=$(cat "$DEPLOY_DIR/.last-good-sha")
+          echo "::warning::Deploy of ${{ github.sha }} failed its health check. Rolling back to last known-good commit $GOOD_SHA."
+
+          git worktree add /tmp/rollback-src "$GOOD_SHA"
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='backend/.env' \
+            --exclude='backend/app/storage/' \
+            --exclude='backend/frontend-dist/' \
+            --exclude='.last-good-sha' \
+            /tmp/rollback-src/ "$DEPLOY_DIR"/
+          git worktree remove /tmp/rollback-src --force
+
+          if bash "$DEPLOY_DIR/scripts/deploy-once.sh"; then
+            echo "::notice::Rollback to $GOOD_SHA restored service. ${{ github.sha }} is still broken and needs a fix — the site is running the last good version in the meantime."
+          else
+            echo "::error::Rollback to $GOOD_SHA ALSO failed its health check. The box needs manual attention now — this is no longer just a bad commit."
+            exit 1
+          fi
 
       - name: Reclaim disk space from old image layers
         if: always()
