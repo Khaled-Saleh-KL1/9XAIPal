@@ -71,10 +71,12 @@ Worth knowing about what it does, since none of it is obvious from the file alon
   extraction, so there's no need for a cloud-VLM fallback. `api` builds from the lighter
   `Dockerfile.lite` instead — it never runs MinerU itself (`celery_worker` does all extraction),
   so its image has no reason to carry torch/OpenCV too.
-- `HF_TOKEN` is passed as a Docker build **arg**, not just an environment variable — `docker
-  build` never sees `environment:`, only `docker run` does, and `Dockerfile.mineru`'s
-  `mineru-models-download` step runs at *build* time (avoids anonymous Hugging Face rate
-  limits on the ~5GB weight download).
+- `HF_TOKEN` reaches `Dockerfile.mineru`'s `mineru-models-download` step (which runs at *build*
+  time, avoiding anonymous Hugging Face rate limits on the ~5GB weight download) via a BuildKit
+  build-time **secret**, not a build arg or an environment variable — either of those ends up
+  permanently readable in `docker history --no-trunc` and in `docker inspect` of any container
+  run from the image; a secret exists only inside that one `RUN` step and is never written to a
+  layer. `docker-compose.prod.yml`'s `secrets:` block sources it from `HF_TOKEN` in this file.
 - `MINERU_PAGE_BATCH_SIZE` — extracts large documents in page-range batches. This does double
   duty: it bounds peak RAM (a huge book extracted in one pass can OOM-kill the worker), *and*
   it's the granularity of the real extraction-progress reporting the UI shows (see
@@ -82,10 +84,12 @@ Worth knowing about what it does, since none of it is obvious from the file alon
   [`pipeline_sync.py`](app/extraction/pipeline_sync.py)'s `update_job_progress_sync`) — a
   smaller value means more visible progress movement during a long extraction, not just OOM
   safety. `0` disables batching entirely.
-- `WORKER_MEM_LIMIT` (default `7G`) caps `celery_worker`'s memory so a huge PDF OOMs only that
+- `WORKER_MEM_LIMIT` (default `6G`) caps `celery_worker`'s memory so a huge PDF OOMs only that
   one container (which then auto-restarts, see §4) instead of pressuring postgres/redis/api on
   the same box. There is no swap on this box, so a real overrun hits this hard rather than
-  degrading gracefully — that's deliberate, the same isolation tradeoff as the paragraph above.
+  degrading gracefully; that's deliberate, the same isolation tradeoff as the paragraph above.
+  Kept at 6G rather than higher: this box also hosts a portfolio site and another small app
+  alongside 9XAIPal, so the remaining ~5GB matters more than it would on a single-purpose box.
 
 ---
 
