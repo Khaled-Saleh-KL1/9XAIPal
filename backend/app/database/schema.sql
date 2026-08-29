@@ -54,9 +54,18 @@ CREATE TABLE IF NOT EXISTS documents (
     -- text-only fallback.
     extractor TEXT,
 
-    -- Whether this document is a "book" (chapter-by-chapter reading navigation)
-    -- or a "paper" (linear reading). Chosen by the user at upload time.
+    -- Whether this document is a "book" (chapter-by-chapter reading navigation),
+    -- a "paper" (linear reading), or an "article" (an imported web page --
+    -- also linear, but with its own conversational prompt voice, see
+    -- chat/paper_agent.py's _BY_KIND dicts). Chosen by the user at upload
+    -- time for a file, or fixed to 'article' for a URL import.
     doc_kind TEXT NOT NULL DEFAULT 'paper',
+
+    -- The page a doc_kind='article' row was imported from. NULL for anything
+    -- uploaded as a file. Lets the reader jump back to the live page — there
+    -- is no raw PDF behind an article to fall back to the way /raw does for
+    -- everything else.
+    source_url TEXT,
 
     -- A reader-chosen display name, set from the library's rename control.
     -- NULL means no override: the UI falls back to original_filename, which is

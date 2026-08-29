@@ -7,6 +7,21 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+def resolve_asset_url(file_path: str) -> str:
+    """Turn a chunk_assets.file_path into a URL the reader can load.
+
+    Almost always a path relative to images_dir() (e.g. "<doc_id>/<uuid>.png"),
+    served under the /static/images/ mount — that's every extracted-PDF
+    figure. A web article's images are hotlinked rather than downloaded (see
+    services/article_extraction.py), so file_path is sometimes already a
+    full external URL for those rows; passed through unchanged rather than
+    getting "/static/images/" glued onto the front of an http(s) URL.
+    """
+    if file_path.startswith(("http://", "https://")):
+        return file_path
+    return f"/static/images/{file_path}"
+
+
 async def create_asset(
     session: AsyncSession,
     *,

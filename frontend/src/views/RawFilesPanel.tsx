@@ -14,18 +14,22 @@ interface Props {
 export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
   const [query, setQuery] = useState('');
 
+  // An imported article has no raw PDF behind it (see documents.source_url) —
+  // there is nothing this panel could open for one, so it never belongs here.
+  const rawPapers = useMemo(() => papers.filter((p) => p.doc_kind !== 'article'), [papers]);
+
   const filtered = useMemo(() => {
-    if (!query) return papers;
+    if (!query) return rawPapers;
     const q = query.toLowerCase();
     // Match the renamed title (what's actually shown below) as well as the
     // original filename — a reader searching after a rename types the name
     // they see, but one who still remembers the arXiv id should find it too.
-    return papers.filter(
+    return rawPapers.filter(
       (p) =>
         displayTitle(p).toLowerCase().includes(q) ||
         p.original_filename.toLowerCase().includes(q),
     );
-  }, [papers, query]);
+  }, [rawPapers, query]);
 
   if (!open) return null;
 
@@ -56,7 +60,7 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
             className="text-[11px] font-mono px-1.5 py-0.5 rounded"
             style={{ color: 'var(--muted)', background: 'var(--bg-2)', border: '1px solid var(--border)' }}
           >
-            {papers.length} / {papers.length}
+            {filtered.length} / {rawPapers.length}
           </span>
           <button
             onClick={onClose}
@@ -97,7 +101,7 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
             Stored at ~/.scholarflow/raw/
           </span>
           <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
-            {formatTotalSize(papers)}
+            {formatTotalSize(rawPapers)}
           </span>
         </div>
 

@@ -14,6 +14,22 @@ logger = get_logger(__name__)
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
+def _strip_line_comments(sql: str) -> str:
+    """Remove `-- ...` line comments before the file is split on `;`.
+
+    ⚠ This is not optional. A semicolon written inside a plain prose comment
+    (nothing exotic — just an ordinary sentence that happens to need one) has
+    twice now desynced the naive split-on-`;` below: the comment becomes a
+    fragment of the PRECEDING statement's "end", and everything after it
+    becomes the START of the NEXT statement — which is no longer valid SQL,
+    so that CREATE TABLE silently fails, and every later statement that
+    references the table it was supposed to create fails right behind it.
+    schema.sql has no string literals containing `--`, so a straight
+    per-line truncation is safe here without a real SQL tokenizer.
+    """
+    return "\n".join(line[: line.find("--")] if "--" in line else line for line in sql.split("\n"))
+
+
 async def apply_migrations() -> None:
     """Apply schema.sql idempotently.
 
@@ -26,6 +42,7 @@ async def apply_migrations() -> None:
     # Fresh installs must create the embedding column at the configured
     # dimension (existing DBs are re-typed by ensure_vector_dimension).
     schema_sql = re.sub(r"vector\(\d+\)", f"vector({settings.vector_dimension})", schema_sql)
+    schema_sql = _strip_line_comments(schema_sql)
     statements = [s.strip() for s in schema_sql.split(";") if s.strip()]
 
     for i, stmt in enumerate(statements, 1):
@@ -81,8 +98,11 @@ async def _ensure_recent_columns() -> None:
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_updated_at TIMESTAMPTZ",
         # Extractor provenance ("mineru" / "pymupdf_fallback") shown in the UI.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS extractor TEXT",
-        # Book vs. research-paper reading mode (chosen at upload).
+        # Book vs. research-paper reading mode (chosen at upload). 'article' is
+        # a third value, for an imported web page.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_kind TEXT NOT NULL DEFAULT 'paper'",
+        # The page a doc_kind='article' row was imported from; NULL otherwise.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_url TEXT",
         # Paper-only mode: was the embedding pass run, or skipped because the
         # document fits whole in the chat model's context? Defaults to
         # 'embedded' so existing rows keep their behaviour on upgrade.

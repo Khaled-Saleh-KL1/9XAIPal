@@ -7,6 +7,9 @@ from sqlalchemy import CursorResult, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+VALID_DOC_KINDS = ("book", "paper", "article")
+
+
 async def create_document(
     session: AsyncSession,
     *,
@@ -15,25 +18,30 @@ async def create_document(
     original_filename: str,
     file_size_bytes: Optional[int] = None,
     doc_kind: str = "paper",
+    source_url: Optional[str] = None,
 ) -> dict:
     """Insert a new document record.
 
     user_id is a required, non-Optional argument (not enforced at the DB
     level — see the column comment in schema.sql) so a missing owner is a
     TypeError at call time, not a silently-NULL row discovered later.
+
+    source_url is only ever set for doc_kind='article' (an imported web
+    page) — NULL for anything uploaded as a file.
     """
     result = await session.execute(
         text("""
-            INSERT INTO documents (user_id, filename, original_filename, file_size_bytes, doc_kind)
-            VALUES (:user_id, :filename, :original_filename, :file_size_bytes, :doc_kind)
-            RETURNING id, filename, original_filename, file_size_bytes, doc_kind, status, created_at
+            INSERT INTO documents (user_id, filename, original_filename, file_size_bytes, doc_kind, source_url)
+            VALUES (:user_id, :filename, :original_filename, :file_size_bytes, :doc_kind, :source_url)
+            RETURNING id, filename, original_filename, file_size_bytes, doc_kind, source_url, status, created_at
         """),
         {
             "user_id": user_id,
             "filename": filename,
             "original_filename": original_filename,
             "file_size_bytes": file_size_bytes,
-            "doc_kind": doc_kind if doc_kind in ("book", "paper") else "paper",
+            "doc_kind": doc_kind if doc_kind in VALID_DOC_KINDS else "paper",
+            "source_url": source_url,
         },
     )
     return dict(result.mappings().one())

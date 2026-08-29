@@ -15,7 +15,12 @@ from app.core.celery_app import celery_app
 from app.core.logging import get_logger
 from app.core.paths import documents_dir
 from app.database.connection import sync_session, sync_engine
-from app.extraction.pipeline_sync import run_pipeline_sync, update_document_status_sync, update_job_status_sync
+from app.extraction.pipeline_sync import (
+    run_pipeline_sync,
+    run_article_pipeline_sync,
+    update_document_status_sync,
+    update_job_status_sync,
+)
 from app.embeddings.service_sync import embed_document_chunks_sync
 from app.extraction.jobs import JobStatus
 from app.summarization.section_summarizer_sync import generate_and_store_section_summaries_sync
@@ -106,6 +111,42 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dic
         raise
     
     logger.info(f"[celery] process_ingestion done document={document_id}")
+    return {"document_id": document_id, "job_id": job_id, "status": "complete"}
+
+
+@celery_app.task(
+    name="9xaipal.process_article_ingestion",
+    bind=True,
+    max_retries=0,
+    acks_late=True,
+)
+def process_article_ingestion(self, document_id: str, job_id: str, url: str) -> dict:
+    """Fetch a web article and run the same chunking/embedding pipeline a PDF
+    gets, via run_article_pipeline_sync. A separate task (not a branch inside
+    process_ingestion) on purpose: this one depends on an arbitrary external
+    server responding, which a PDF already sitting on disk never does — a
+    hanging fetch here fails only this task, not the PDF pipeline's own.
+    """
+    logger.info(f"[celery] process_article_ingestion start document={document_id} job={job_id}")
+
+    sync_engine.dispose()
+
+    doc_uuid = UUID(document_id)
+    job_uuid = UUID(job_id)
+
+    try:
+        with sync_session() as session:
+            run_article_pipeline_sync(
+                session,
+                document_id=doc_uuid,
+                job_id=job_uuid,
+                url=url,
+            )
+    except Exception as exc:
+        logger.exception(f"[celery] process_article_ingestion failed document={document_id}: {exc}")
+        raise
+
+    logger.info(f"[celery] process_article_ingestion done document={document_id}")
     return {"document_id": document_id, "job_id": job_id, "status": "complete"}
 
 

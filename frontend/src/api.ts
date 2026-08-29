@@ -40,8 +40,10 @@ export interface PaperMeta {
   error_message: string | null;
   created_at: string;
   updated_at: string | null;
-  extractor?: string | null;            // "mineru" | "pymupdf_fallback"
-  doc_kind?: string | null;             // "book" | "paper"
+  extractor?: string | null;            // "mineru" | "pymupdf_fallback" | "trafilatura"
+  doc_kind?: string | null;             // "book" | "paper" | "article"
+  /** The page a doc_kind='article' row was imported from. null otherwise. */
+  source_url?: string | null;
   reading_order?: number[] | null;
   // Fine-grained pipeline stage for in-flight papers (queued | extracting |
   // chunking | embedding | complete | failed). Drives the library's live
@@ -182,6 +184,31 @@ export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<
   return res.json();
 }
 
+/**
+ * Import a web article by URL — the third ingestion pipeline, alongside
+ * uploadPaper. Always doc_kind='article' on the backend, so there is no
+ * `kind` to pass here the way uploadPaper has one.
+ */
+export async function importArticleUrl(url: string): Promise<{ id: string; status: string }> {
+  if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
+  const res = await fetch(`${BASE}/papers/import-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) {
+    let detail = `Import failed: ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      // body not JSON or no detail; keep status-only message
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export async function getPaperProgress(paperId: string): Promise<ProgressResponse> {
   const res = await fetch(`${BASE}/papers/${paperId}/progress`);
   if (!res.ok) throw new Error(`Progress check failed: ${res.status}`);
@@ -253,6 +280,8 @@ export interface FullDocument {
   status: string;
   page_count: number | null;
   extractor: string | null;
+  /** The page a doc_kind='article' row was imported from. null otherwise. */
+  source_url: string | null;
   blocks: DocBlock[];
   outline: OutlineEntry[];
   total: number;

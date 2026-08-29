@@ -23,6 +23,9 @@ export function IconUpload(p: IconProps) {
 export function IconDoc(p: IconProps) {
   return <svg {...base} {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></svg>;
 }
+export function IconLink(p: IconProps) {
+  return <svg {...base} {...p}><path d="M9 17H7A5 5 0 0 1 7 7h2" /><path d="M15 7h2a5 5 0 1 1 0 10h-2" /><path d="M8 12h8" /></svg>;
+}
 export function IconPin(p: IconProps) {
   return <svg {...base} {...p}><path d="M12 17v5" /><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z" /></svg>;
 }

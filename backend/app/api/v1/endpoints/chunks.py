@@ -63,8 +63,7 @@ def _shape_chunk_for_reader(chunk: dict, image_url: str | None) -> dict:
 async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
     """Shape a single chunk row for the reader, attaching its image URL if any.
 
-    file_path is stored relative to images_dir() (e.g. "<doc_id>/<uuid>.png"),
-    which is mounted at /static/images.
+    See asset_repo.resolve_asset_url for what file_path can be.
     """
     from app.database.repositories import assets as asset_repo
     assets = await asset_repo.get_assets_for_chunk(db, chunk["id"])
@@ -72,7 +71,7 @@ async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
     if assets:
         for a in assets:
             if a.get("asset_type") == "image":
-                image_url = f"/static/images/{a['file_path']}"
+                image_url = asset_repo.resolve_asset_url(a["file_path"])
                 break
 
     return _shape_chunk_for_reader(chunk, image_url)
@@ -112,7 +111,7 @@ async def get_full_document(
         chunk_assets = by_chunk.get(c["id"], [])
         image_url = next(
             (
-                f"/static/images/{a['file_path']}"
+                asset_repo.resolve_asset_url(a["file_path"])
                 for a in chunk_assets
                 if a.get("asset_type") == "image" and a.get("file_path")
             ),
@@ -152,6 +151,10 @@ async def get_full_document(
         "status": doc.get("status"),
         "page_count": doc.get("page_count"),
         "extractor": doc.get("extractor"),
+        # The page a doc_kind='article' row was imported from. NULL for
+        # anything uploaded as a file — there is no raw PDF behind an article
+        # for the reader to fall back to the way /raw does for everything else.
+        "source_url": doc.get("source_url"),
         "blocks": blocks,
         "outline": outline,
         "total": len(blocks),
@@ -218,7 +221,7 @@ async def get_chunks_range(
     for c in chunks:
         image_url = next(
             (
-                f"/static/images/{a['file_path']}"
+                asset_repo.resolve_asset_url(a["file_path"])
                 for a in by_chunk.get(c["id"], [])
                 if a.get("asset_type") == "image" and a.get("file_path")
             ),

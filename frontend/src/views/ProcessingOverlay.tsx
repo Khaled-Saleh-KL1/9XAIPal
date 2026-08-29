@@ -51,6 +51,24 @@ const EXTRACT_STEPS: StepDef[] = [
   },
 ];
 
+// An article's step 1 is a page fetch + readability pass, not a layout/math
+// parse — MinerU never runs for doc_kind='article' (see
+// article_extraction.py), so the PDF-specific sub-copy above would be wrong.
+const ARTICLE_EXTRACT_STEPS: StepDef[] = [
+  {
+    id: 1,
+    title: 'Fetching the page',
+    sub: 'Reading the article and pulling out its real images',
+    matches: ['queued', 'extracting'],
+  },
+  {
+    id: 2,
+    title: 'Chunking',
+    sub: 'Splitting the article into structural units',
+    matches: ['chunking'],
+  },
+];
+
 const INDEX_STEPS: StepDef[] = [
   {
     id: 3,
@@ -90,9 +108,9 @@ interface Props {
   /** Real progress within `status` (pages extracted / total while extracting). */
   progressFraction?: number | null;
   errorMessage?: string | null;
-  extractor?: string | null;   // "mineru" | "pymupdf_fallback" | null while pending
+  extractor?: string | null;   // "mineru" | "pymupdf_fallback" | "trafilatura" | null while pending
   /** Only affects completion copy below — reading navigation, not the pipeline. */
-  kind?: 'book' | 'paper';
+  kind?: 'book' | 'paper' | 'article';
   onClose: () => void;
   onCancel: () => void;
 }
@@ -100,13 +118,14 @@ interface Props {
 function extractorLabel(ex: string | null | undefined): { label: string; tone: 'good' | 'warn' | 'pending' } {
   if (ex === 'mineru') return { label: 'MinerU (full layout + math + footnotes)', tone: 'good' };
   if (ex === 'pymupdf_fallback') return { label: 'PyMuPDF fallback (degraded: no math LaTeX, no table structure)', tone: 'warn' };
+  if (ex === 'trafilatura') return { label: 'trafilatura (readable content + real images, hotlinked)', tone: 'good' };
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
 export function ProcessingOverlay({ file, status, progressFraction, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
-  const steps = [...EXTRACT_STEPS, ...INDEX_STEPS];
+  const steps = kind === 'article' ? [...ARTICLE_EXTRACT_STEPS, ...INDEX_STEPS] : [...EXTRACT_STEPS, ...INDEX_STEPS];
   const overall = failed ? 0 : stageProgress(status, null, progressFraction);
 
   return (
@@ -138,7 +157,7 @@ export function ProcessingOverlay({ file, status, progressFraction, errorMessage
               {file.name}
             </div>
             <div className="text-[12px] mt-1" style={{ color: 'var(--muted)' }}>
-              {file.size} · runs locally
+              {kind === 'article' ? file.size : `${file.size} · runs locally`}
             </div>
           </div>
           {!complete && !failed && (
