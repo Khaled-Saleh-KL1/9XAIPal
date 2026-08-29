@@ -27,7 +27,7 @@ docker run --rm \
          rm -rf /dist/* && cp -r dist/* /dist/"
 
 echo "Building and restarting containers..."
-(cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml up -d --build)
+(cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build)
 
 echo "Waiting for health check..."
 for i in $(seq 1 20); do
@@ -39,5 +39,5 @@ for i in $(seq 1 20); do
 done
 
 echo "::error::API did not become healthy within 60s of deploy."
-(cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml -f docker-compose.selfhost.yml logs --tail=200 api)
+(cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml logs --tail=200 api)
 exit 1

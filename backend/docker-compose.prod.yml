@@ -1,8 +1,8 @@
-# 9XAIPal — production VM deployment
+# 9XAIPal — production deployment (6 CPU / 11GB RAM / x86_64, no GPU)
 # ---------------------------------------------------------------------------
-# A self-contained stack for the production server. It runs the WHOLE
-# backend — API + Celery worker + Postgres + Redis — on one box, so the app
-# is "entirely on the web" and does NOT depend on your local machine.
+# The one and only deployment target — a self-contained stack running the
+# WHOLE backend (API + Celery worker + Postgres + Redis) on one box, so the
+# app is "entirely on the web" and does NOT depend on your local machine.
 #   • No SearXNG — web search goes through Ollama Cloud's own web-search
 #     capability instead of a self-hosted search engine. Every SearXNG call
 #     in app code (app/search/searxng_client.py) already catches all
@@ -11,11 +11,24 @@
 #     running this service is a safe, code-change-free way to disable it.
 #
 # Key differences from docker-compose.yml (local dev):
-#   • EXTRACTOR_PROVIDER=vlm  → PDF extraction uses a CLOUD VLM (gemma4:31b on
-#     Ollama Cloud) instead of the local MinerU/torch pipeline. Both app
-#     services build from `Dockerfile.oracle`, which installs
-#     requirements.oracle.txt (requirements.txt without `mineru[core]`) — so
-#     no torch/OpenCV wheels and no multi-GB model download on the box.
+#   • celery_worker builds from Dockerfile.mineru (adds MinerU + torch + the
+#     OpenCV/runtime libs it needs) — same as local dev, real local
+#     extraction with full table/equation/figure fidelity, not a cloud VLM.
+#     `HF_TOKEN` is passed as a Docker build **arg**, not just an environment
+#     variable — `docker build` never sees `environment:`, only `docker run`
+#     does, and Dockerfile.mineru's model-download step runs at *build* time
+#     (avoids anonymous Hugging Face rate limits on the ~5GB weight download).
+#   • api builds from the lighter Dockerfile.lite instead — it never runs
+#     MinerU itself (celery_worker does all extraction), so there is no
+#     reason for its image to carry torch/OpenCV too.
+#   • MINERU_PAGE_BATCH_SIZE extracts large documents in page-range batches:
+#     bounds peak RAM (an unbatched extraction of a huge book can OOM-kill
+#     the worker) and doubles as the granularity of the real
+#     extraction-progress reporting the UI shows.
+#   • WORKER_MEM_LIMIT caps celery_worker's own memory so a huge PDF OOMs
+#     only that one container (which then auto-restarts, see the
+#     `restart: unless-stopped` + `autoheal` note below) instead of
+#     pressuring postgres/redis/api on the same box.
 #   • OLLAMA_BASE_URL=https://ollama.com + OLLAMA_API_KEY → chat AND vision
 #     both run on Ollama Cloud with gemma4:31b (it is multimodal).
 #     NOTE: qwen3-vl:235b was RETIRED by Ollama on 2026-06-16.
@@ -102,14 +115,16 @@ services:
       autoheal: "true"
 
   # ------------------------------------------------------------------
-  # Celery worker — runs the ingestion pipeline. Builds from Dockerfile.oracle
-  # (no MinerU, no torch) because EXTRACTOR_PROVIDER=vlm does all PDF
-  # extraction on Ollama Cloud.
+  # Celery worker — runs the ingestion pipeline. Builds from Dockerfile.mineru
+  # for real local extraction (full table/equation/figure fidelity), same as
+  # local dev.
   # ------------------------------------------------------------------
   celery_worker:
     build:
       context: .
-      dockerfile: Dockerfile.oracle
+      dockerfile: Dockerfile.mineru
+      args:
+        HF_TOKEN: ${HF_TOKEN:-}
     container_name: 9xaipal-celery-worker
     logging: *default-logging
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=1
@@ -138,14 +153,13 @@ services:
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
       CHAT_NUM_PREDICT: ${CHAT_NUM_PREDICT:-0}
-       # ── Extraction: cloud VLM, no local MinerU ─────────────────────────
-      EXTRACTOR_PROVIDER: vlm
+       # ── Extraction: local MinerU (this box has the CPU/RAM for it) ─────
+      EXTRACTOR_PROVIDER: mineru
       INGEST_PROFILE: ${INGEST_PROFILE:-full}
-      EXTRACTOR_VLM_MODEL: ${EXTRACTOR_VLM_MODEL:-gemma4:31b}
-      EXTRACTOR_VLM_DPI: ${EXTRACTOR_VLM_DPI:-300}
-      EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}
-      EXTRACTOR_VLM_CONCURRENCY: ${EXTRACTOR_VLM_CONCURRENCY:-3}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-true}
+       # Extract large documents in page-range batches so peak RAM stays
+       # bounded regardless of length. 0 disables batching.
+      MINERU_PAGE_BATCH_SIZE: ${MINERU_PAGE_BATCH_SIZE:-100}
        # Web search: Tavily when TAVILY_API_KEY is set (auto), else disabled
        # now that SearXNG is gone from this deployment. Query strings reach
        # Tavily's servers when this is active — see config.py's note.
@@ -181,6 +195,18 @@ services:
     restart: unless-stopped
     labels:
       autoheal: "true"
+    # Headroom for MinerU extraction on a book-length PDF while leaving
+    # enough of the box's 11GB total for postgres/redis/api/autoheal/OS/host
+    # Ollama. There is no swap on this box, so a real overrun hits this limit
+    # hard — by design: it OOM-kills only this one container, which then
+    # auto-restarts (see the healthcheck note above), instead of the box
+    # coming under memory pressure everywhere at once. Raise if extraction of
+    # large books gets OOM-killed under real multi-user load; lower if other
+    # services feel starved.
+    deploy:
+      resources:
+        limits:
+          memory: ${WORKER_MEM_LIMIT:-7G}
 
   # ------------------------------------------------------------------
   # API — FastAPI backend. Does NOT serve the SPA (SERVE_FRONTEND=false);
@@ -189,7 +215,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile.oracle
+      dockerfile: Dockerfile.lite
     container_name: 9xaipal-api
     logging: *default-logging
     command: >
@@ -228,13 +254,10 @@ services:
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
       CHAT_NUM_PREDICT: ${CHAT_NUM_PREDICT:-0}
       GUARDRAIL_SKIP_IN_PAPER: ${GUARDRAIL_SKIP_IN_PAPER:-true}
-       # ── Extraction: cloud VLM ──────────────────────────────────────────
-      EXTRACTOR_PROVIDER: vlm
+       # api never extracts PDFs itself (celery_worker does); kept in sync
+       # so nothing reports a stale/contradictory provider.
+      EXTRACTOR_PROVIDER: mineru
       INGEST_PROFILE: ${INGEST_PROFILE:-full}
-      EXTRACTOR_VLM_MODEL: ${EXTRACTOR_VLM_MODEL:-gemma4:31b}
-      EXTRACTOR_VLM_DPI: ${EXTRACTOR_VLM_DPI:-300}
-      EXTRACTOR_VLM_MAX_PAGES: ${EXTRACTOR_VLM_MAX_PAGES:-0}
-      EXTRACTOR_VLM_CONCURRENCY: ${EXTRACTOR_VLM_CONCURRENCY:-3}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-true}
        # Web search: Tavily when TAVILY_API_KEY is set (auto), else disabled
        # now that SearXNG is gone from this deployment. Query strings reach
