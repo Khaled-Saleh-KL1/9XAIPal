@@ -3,7 +3,7 @@ import { StickyNote } from './StickyNote';
 import type { Sticky, StickyColor } from '../api';
 
 /**
- * The universal board — notes that belong to no conversation.
+ * The universal board: notes that belong to no conversation.
  *
  * ⚠ **A wall, not a list.** The chat strip is a list because it sits beside a
  * transcript and has to stay narrow; this is the whole page, and the point of
@@ -11,7 +11,7 @@ import type { Sticky, StickyColor } from '../api';
  * they are laid out spatially: tacked to a board, tilted, in a masonry flow.
  *
  * ⚠ **The tilt is derived from the note's id, never random.** A `Math.random()`
- * rotation re-rolls on every render — every keystroke in the filter box would
+ * rotation re-rolls on every render, so every keystroke in the filter box would
  * make the whole wall twitch. Same id, same angle, forever.
  */
 

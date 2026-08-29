@@ -1,7 +1,7 @@
 /**
  * Painting note anchors onto the article without touching the DOM.
  *
- * A note's anchor is a quote — the exact text the reader highlighted. To show
+ * A note's anchor is a quote: the exact text the reader highlighted. To show
  * it again after a reload we have to find that string inside the rendered
  * block and draw on it.
  *
@@ -63,7 +63,7 @@ function normalizeWithMap(raw: string): { text: string; map: number[] } {
  *
  * Matching is whitespace-insensitive because the quote was captured from
  * rendered text (where a line break is a space) while the DOM may hold the
- * source spacing. Returns null when the quote is not present — after a
+ * source spacing. Returns null when the quote is not present, since after a
  * re-chunk the anchored text may genuinely be gone.
  */
 export function findQuoteRange(block: HTMLElement, quote: string): Range | null {
@@ -176,7 +176,7 @@ export function paintAnchors(
   return unmatched;
 }
 
-/** Drop all painted anchors — call on unmount so highlights don't leak. */
+/** Drop all painted anchors: call on unmount so highlights don't leak. */
 export function clearAnchors(): void {
   const highlights = registry();
   if (!highlights) return;

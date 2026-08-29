@@ -1,6 +1,6 @@
-# Plan — Ollama on localhost, gemma4 cloud as the chat model
+# Plan: Ollama on localhost, gemma4 cloud as the chat model
 
-> **What this is:** the model-wiring decision for this machine — Ollama pinned at
+> **What this is:** the model-wiring decision for this machine: Ollama pinned at
 > `localhost:11434`, chat served by the `gemma4:31b-cloud` tag, classification and embedding kept
 > local. Applied, not proposed: `backend/.env` exists and every model below was verified
 > responding.
@@ -9,8 +9,8 @@
 > §4 verification → §5 sharp edges → §6 Docker delta.
 >
 > **Companions (detail):**
-> [ai-backend.md](../02-architecture/ai-backend.md) — how `llm/resolver.py` picks a provider ·
-> [configuration.md](../03-reference/configuration.md) — canonical env-var table.
+> [ai-backend.md](../02-architecture/ai-backend.md): how `llm/resolver.py` picks a provider ·
+> [configuration.md](../03-reference/configuration.md): canonical env-var table.
 >
 > **Status:** current · **Reflects code as of:** 2026-07-25 (`main`, ad43845)
 > **Verified with:** `POST localhost:11434/api/chat` and `/api/embed` against all three models.
@@ -51,11 +51,11 @@ flowchart LR
 Three consequences:
 
 1. **`ollama signin` is a hard prerequisite.** Without it the cloud tag 401s while every local
-   model keeps working — a confusing half-broken state.
+   model keeps working, a confusing half-broken state.
 2. **The app is not offline-capable in this configuration**, despite `LLM_PROVIDER=ollama`. The
    "everything runs locally" claim in the README does not hold for chat while this tag is active.
 3. **The cloud-key fallback chain never fires.** Pinning to `ollama` means a `gemma4` outage
-   returns an error rather than silently rerouting to OpenAI/Anthropic. That is the intent — see
+   returns an error rather than silently rerouting to OpenAI/Anthropic. That is the intent: see
    §3.
 
 ---
@@ -68,16 +68,16 @@ Written to `backend/.env` (gitignored). Deltas from `.env.example` defaults only
 | --- | --- | --- |
 | `LLM_PROVIDER` | `ollama` | Default `auto` silently falls through to any cloud key present. A provider that changes mid-session is the hardest failure in this app to diagnose. Pinned = loud. |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Same as default; stated explicitly because the compose services deliberately override it to `host.docker.internal`. |
-| `CHAT_MODEL` | `gemma4:31b-cloud` | Default is `gemma4:26b`. The cloud tag has **vision** (the 26b tag does not — verified via `/api/tags`), which the LOCAL route needs to answer "what does this figure show?". |
+| `CHAT_MODEL` | `gemma4:31b-cloud` | Default is `gemma4:26b`. The cloud tag has **vision** (the 26b tag does not, verified via `/api/tags`), which the LOCAL route needs to answer "what does this figure show?". |
 | `VLM_MODEL` | (empty) | Empty reuses `CHAT_MODEL`, so figure description also runs on gemma4 cloud. See §5 for the cost edge. |
 | `CLASSIFIER_MODEL` | `ornith:9b` | Default (empty) reuses `CHAT_MODEL`, putting two **cloud** round trips on the critical path of every question. |
-| `EMBEDDING_MODEL` | `qwen3-embedding:8b` | ⚠ The default `qwen3-embedding` is a bare name with **no matching tag on this machine** — it would 404 on first embed. |
+| `EMBEDDING_MODEL` | `qwen3-embedding:8b` | ⚠ The default `qwen3-embedding` is a bare name with **no matching tag on this machine**: it would 404 on first embed. |
 | `EMBEDDING_PROVIDER` | `ollama` | Pinned so a transient Ollama hiccup can never mix vectors from two models inside one library. |
 | `VECTOR_DIMENSION` | `1024` | `qwen3-embedding:8b` emits **4096** dims (measured). Stored truncated + renormalized via MRL. Must stay ≤ 2000 or pgvector's HNSW index cannot exist. |
 
 ---
 
-## 3. Role split — cloud where it thinks, local where it counts
+## 3. Role split: cloud where it thinks, local where it counts
 
 ```text
 role         model                  where      per-/ask calls   rationale
@@ -104,7 +104,7 @@ A local model is the only one that cannot be changed by a billing event.
 
 ## 4. Verification
 
-Run against the live daemon on 2026-07-25 — all three passed:
+Run against the live daemon on 2026-07-25, all three passed:
 
 ```bash
 # chat — cloud tag reachable and signed in
@@ -152,7 +152,7 @@ curl -s http://localhost:8000/api/v1/health | jq
   library**. That is correct behavior, but it means editing `EMBEDDING_MODEL` later is a
   destructive act with no confirmation prompt. Changing `VECTOR_DIMENSION` does the same.
 - **`gemma4:26b` is still the code default** in [`config.py`](../../backend/app/core/config.py)
-  and in every `docker-compose.yml` service block. This `.env` overrides it for host runs only —
+  and in every `docker-compose.yml` service block. This `.env` overrides it for host runs only:
   containers read the compose defaults. See §6.
 - **No cloud API keys are set.** With `LLM_PROVIDER=ollama` that is deliberate, but it means an
   `ollama.com` outage takes chat down with no fallback. Adding one key does nothing while the
@@ -162,10 +162,10 @@ curl -s http://localhost:8000/api/v1/health | jq
 
 ## 6. Docker delta [planned]
 
-The compose services do **not** read `backend/.env` for model names — they hardcode defaults in
+The compose services do **not** read `backend/.env` for model names: they hardcode defaults in
 their `environment:` blocks, and deliberately override `OLLAMA_BASE_URL` to
 `host.docker.internal:11434` (a container reaching `localhost` would find itself, not the host
-daemon — the compose file comments this at length).
+daemon, the compose file comments this at length).
 
 To make containers match this host config, both the `api` and `celery_worker` services need:
 
@@ -175,7 +175,7 @@ CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-ornith:9b} # was empty
 EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:8b}  # was qwen3-embedding
 ```
 
-⚠ Not yet applied — host-mode development works today, so this is deferred until someone runs the
+⚠ Not yet applied: host-mode development works today, so this is deferred until someone runs the
 `server` profile. Until then, **a `docker compose up` run will use different models than
 `uvicorn` on the host**, which is exactly the kind of divergence that produces "it works on my
 machine" bug reports against this repo.

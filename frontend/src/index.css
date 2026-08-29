@@ -68,7 +68,7 @@ body {
 /* ── Library ────────────────────────────────────────────────────────────
    A shelf, not a table. Every card leads with the paper's own first page,
    because at ten papers a filename is enough to tell them apart and at fifty
-   it is not — and the filenames in this library are frequently arXiv ids.
+   it is not, and the filenames in this library are frequently arXiv ids.
    The rename control exists for the same reason from the other direction. */
 .lib-grid {
   display: grid;
@@ -118,7 +118,7 @@ body {
 }
 
 /* The cover. A fixed aspect ratio keeps the grid on a baseline whatever the
-   page geometry — a Letter page and an A4 one are different shapes, and rows
+   page geometry: a Letter page and an A4 one are different shapes, and rows
    of mismatched heights read as a broken layout rather than as real paper. */
 .paper-cover {
   position: relative;
@@ -238,7 +238,7 @@ body {
 }
 
 /* Rename and delete. Hidden until the card is hovered or something inside it
-   has focus — the second condition is what makes them reachable by keyboard
+   has focus: the second condition is what makes them reachable by keyboard
    at all, since a control revealed only by a pointer cannot be tabbed to. */
 .paper-actions {
   position: absolute;
@@ -253,8 +253,8 @@ body {
 .paper-card:focus-within .paper-actions,
 .paper-row:hover .paper-actions,
 .paper-row:focus-within .paper-actions { opacity: 1; }
-/* On a touch screen there is no hover to reveal these, so — same as
-   .card-grip — they simply stay. Otherwise rename/delete don't exist there. */
+/* On a touch screen there is no hover to reveal these, so they simply stay,
+   the same as .card-grip. Otherwise rename/delete don't exist there. */
 @media (hover: none) {
   .paper-actions { opacity: 1; }
 }
@@ -338,7 +338,7 @@ body {
 .thin-scroll::-webkit-scrollbar-thumb    { background: var(--border-strong); border-radius: 999px; border: 3px solid var(--bg); }
 .thin-scroll::-webkit-scrollbar-track   { background: transparent; }
 
-/* A toolbar that's wider than its viewport scrolls rather than clips — the
+/* A toolbar that's wider than its viewport scrolls rather than clips: the
    scrollbar itself would just be one more thing crowding a 52px-tall bar. */
 .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
@@ -470,14 +470,14 @@ body {
    orientation ProcessingOverlay's ring applies via the `-rotate-90` utility
    class on the same element. A keyframes rule with only `to` implicitly
    starts each cycle from whatever the OTHER CSS on the element already sets
-   (here, that -90deg utility) — so it swept from -90deg to 360deg (450
+   (here, that -90deg utility), so it swept from -90deg to 360deg (450
    degrees, more than a full turn) and then snapped backward to -90deg on
    every loop restart. Starting and ending 360deg apart at the same
    normalized angle makes the loop seamless. */
 @keyframes spin-slow { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
 .spin-slow { animation: spin-slow 1.6s linear infinite; }
 
-/* Diagonal moving stripes — overlaid on the green progress fill while a paper
+/* Diagonal moving stripes, overlaid on the green progress fill while a paper
    is still being processed in the background. The base color is whatever the
    element's `background` is set to; the stripes layer on top via gradient. */
 @keyframes progress-stripes-slide {
@@ -508,7 +508,7 @@ body {
 
 /* ── Book reader: mobile read/chat toggle ──────────────────────
    Below 820px BookReadingView shows one pane at a time (see .narrow in that
-   component) — this is the only way to reach the other one. */
+   component), this is the only way to reach the other one. */
 .mobile-pane-toggle {
   position: fixed;
   right: 16px;
@@ -529,7 +529,7 @@ body {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   Article reader — the paper reading experience.
+   Article reader: the paper reading experience.
 
    Layout is a two-column grid: a fixed-measure article and a note gutter.
    Cards in the gutter are positioned by transform from JS (ArticleReader
@@ -561,7 +561,7 @@ body {
 }
 @media (max-width: 640px) {
   .reader-bar { padding: 0 12px; gap: 8px; }
-  /* Decorative read-progress percentage — the rail beneath already shows
+  /* Decorative read-progress percentage: the rail beneath already shows
      this visually, so it's the first thing to go when space is tight. */
   .reader-meta { display: none; }
 }
@@ -585,7 +585,7 @@ body {
   text-overflow: ellipsis;
   max-width: 46ch;
 }
-/* The title doubles as the rename trigger — reset the <button> chrome it
+/* The title doubles as the rename trigger, so reset the <button> chrome it
    otherwise carries, leaving only .reader-title's own look. */
 .reader-title-btn {
   background: none;
@@ -617,7 +617,7 @@ body {
 }
 /* Phones: this group (bookmark, resume, contents, progress, user menu) can be
    wider than the screen. Left un-scrollable, the excess just clips against
-   the bar's own overflow and whatever's rightmost — usually the user menu —
+   the bar's own overflow, and whatever's rightmost, usually the user menu,
    stops existing rather than becoming reachable another way. min-width: 0
    is what lets a flex child shrink to less than its content size at all;
    without it the row simply pushes the header wider instead of scrolling. */
@@ -674,7 +674,7 @@ body {
 .reader-chip.is-mark.is-on:hover { border-color: var(--ok); color: var(--ok); }
 
 /* The Resume chip is the one that has to do work. Two states:
-   - default: a navigation target — accent color, click jumps to the bookmark.
+   - default: a navigation target, accent color, click jumps to the bookmark.
    - "here"  : the newest bookmark is the topmost visible block, so the chip
                becomes a quiet indicator instead of offering a no-op jump. */
 .reader-chip.is-resume {
@@ -763,7 +763,7 @@ body {
   background: var(--fg);
 }
 
-/* ── Marginalia panel — contents, bookmarks and notes ────────── */
+/* ── Marginalia panel: contents, bookmarks and notes ────────── */
 .marg-scrim {
   position: absolute;
   inset: 52px 0 0 0;
@@ -940,7 +940,7 @@ body {
 .marg-cta:hover { border-color: var(--accent); color: var(--accent); }
 /* Heading depth, shared with the old outline naming. */
 /* Contents nesting, at any depth.
-   Depth comes from the paper's own numbering — see backend services/outline.py
+   Depth comes from the paper's own numbering: see backend services/outline.py
    for why heading_path cannot supply it.
 
    ⚠ One calc() rather than a rule per level. It was `.outline-l1` … `.outline-l4`,
@@ -982,8 +982,8 @@ body {
 /* ⚠ The article column is ALWAYS dead-centre. Both margins are declared as
    real grid columns of equal width whether or not they hold a card, so a note
    appearing can never shift the text under the reader's eye. The cost is some
-   empty space on a paper with no notes; the alternative — text that jumps
-   sideways mid-sentence — is far worse. */
+   empty space on a paper with no notes; the alternative, text that jumps
+   sideways mid-sentence, is far worse. */
 .reader-layout {
   position: relative;
   padding: 72px 32px 45vh;
@@ -997,7 +997,7 @@ body {
 .reader-layout.layout-inline {
   grid-template-columns: minmax(0, 680px);
 }
-/* Only one margin fits, but the article must still be centred — so the left
+/* Only one margin fits, but the article must still be centred, so the left
    column stays in the grid as an empty spacer and both sides share whatever
    room is left. Cards get narrower rather than the text moving. */
 .reader-layout.layout-right-only {
@@ -1051,7 +1051,7 @@ body {
   background: color-mix(in oklab, var(--accent-soft), transparent 55%);
 }
 .article-block.is-bookmarked {
-  /* A stripe plus a faint green wash — the bookmark is the one mark in the
+  /* A stripe plus a faint green wash: the bookmark is the one mark in the
      reader guaranteed to mean something on a return visit, so it should be
      findable at a glance, not only on careful reading. */
   box-shadow: inset 3px 0 0 0 var(--ok);
@@ -1189,8 +1189,8 @@ body {
 .article-math-ask:hover { border-color: var(--accent); color: var(--accent); }
 /* ── Tables: their own scroll box, not a squeezed-to-fit grid ──────────────
    A paper's tables are the one part of it that is genuinely not the width of
-   the prose column. The old rule — overflow-x on the wrapper, width:100% on
-   the table — could never scroll: the table always fit, because 100% told it
+   the prose column. The old rule, overflow-x on the wrapper, width:100% on
+   the table, could never scroll: the table always fit, because 100% told it
    to, and it bought that fit by crushing "Params (B)" into four stacked
    letters. Here the table takes its natural width and the box scrolls under
    it. Vertical scroll too, with the header row pinned, so a long table stays
@@ -1206,7 +1206,7 @@ body {
   /* The scroll cue: the two radial gradients are painted against the viewport
      (`scroll`) while the two flat ones ride with the content (`local`), so an
      edge shadow appears only on the side that still has content behind it and
-     fades out as you reach the end. Cells must be opaque for this to read —
+     fades out as you reach the end. Cells must be opaque for this to read:
      see the background on th/td below. */
   background:
     linear-gradient(to right, var(--bg) 30%, transparent) left center / 28px 100% no-repeat local,
@@ -1266,7 +1266,7 @@ body {
 }
 /* ⚠ Body cells stay transparent. The edge shadows above are painted on the
    scroller's own background, so an opaque cell sits on top of them and the cue
-   silently disappears — which is how this was written the first time. Only the
+   silently disappears, which is how this was written the first time. Only the
    header needs a fill, and it needs one for a different reason: it is sticky,
    and rows would otherwise scroll visibly through it. */
 .article-table .article-table-scroll th {
@@ -1279,7 +1279,7 @@ body {
      border-collapse the cell borders belong to the table's paint layer, which
      is not sticky, so they scroll away and leave the header floating with rows
      cut off flush against its text. An inset shadow is drawn by the cell
-     itself, so it travels — right edge for the column separators, bottom edge
+     itself, so it travels: right edge for the column separators, bottom edge
      for the line under the header. */
   box-shadow: inset -1px 0 0 var(--border), inset 0 -1px 0 var(--border-strong);
 }
@@ -1466,7 +1466,7 @@ body {
 }
 
 /* The drag handle. Only the grip starts a drag, so selecting text inside a
-   card still works — making the whole card draggable breaks that. */
+   card still works: making the whole card draggable breaks that. */
 .card-grip {
   display: inline-flex;
   align-items: center;
@@ -1664,7 +1664,7 @@ body {
 .model-picker select:hover,
 .model-picker select:focus { border-color: var(--accent); }
 
-/* Which model produced an answer. Quiet by default — it is reference
+/* Which model produced an answer. Quiet by default: it is reference
    information, only wanted when comparing two cards. */
 .note-model {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -1747,7 +1747,7 @@ body {
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
 
-/* Two actions, one cluster — stacking them at different `bottom` offsets made
+/* Two actions, one cluster: stacking them at different `bottom` offsets made
    them read as two unrelated controls that happened to overlap.
    Bottom LEFT, not right: the right gutter always holds cards, so a control
    pinned to that corner sits on top of a note at almost every scroll
@@ -1853,7 +1853,7 @@ body {
   flex-shrink: 0;
 }
 /* A web fetch is the one that left the machine, so it is the one that gets a
-   different colour — the reader should be able to see at a glance whether an
+   different colour: the reader should be able to see at a glance whether an
    answer drew on anything outside the paper. */
 .trail-step.tool-web .trail-glyph { color: var(--deck); }
 .trail-label { min-width: 0; overflow-wrap: anywhere; }
@@ -1972,7 +1972,7 @@ body {
   flex-direction: column;
   gap: 14px;
 }
-/* Cards here are laid out by flow, not by the gutter's absolute slots — the
+/* Cards here are laid out by flow, not by the gutter's absolute slots: the
    card keeps its own `position: relative` (its spine is drawn against it). */
 .asst-list .note-card { width: auto; }
 .asst-empty {
@@ -2068,7 +2068,7 @@ body {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   Decks — several cards sharing one slot in the margin.
+   Decks: several cards sharing one slot in the margin.
 
    The gutter's budget is vertical space, and it is spent the moment a card is
    placed: everything anchored below it is pushed down by its full height. A
@@ -2137,7 +2137,7 @@ body {
 /* ── The turn ────────────────────────────────────────────────────────────
    Changing card is a card being turned over, not a crossfade. Two halves,
    with the content swapped at the midpoint where the card is edge-on and
-   nothing can be read anyway — which is exactly how you can get away with
+   nothing can be read anyway, which is exactly how you can get away with
    one element instead of two stacked faces.
 
    ⚠ The durations here are duplicated in DeckCard.tsx (FLIP_OUT_MS /
@@ -2179,7 +2179,7 @@ body {
   to   { transform: rotateY(0deg) scale(1); opacity: 1; }
 }
 
-/* The rest of the stack settles while the top card is in the air — small,
+/* The rest of the stack settles while the top card is in the air: small,
    but it is what stops the deck reading as a single card with changing text. */
 .deck.is-turning .deck-edge-1 { bottom: -12px; }
 .deck.is-turning .deck-edge-2 { bottom: -22px; }
@@ -2247,7 +2247,7 @@ body {
 .deck.is-dragging { transition: none; }
 
 /* While something is in flight every other card advertises that it will
-   accept it — otherwise the gesture is only discoverable by accident. */
+   accept it: otherwise the gesture is only discoverable by accident. */
 .is-dragging-card .note-card:not(.is-dragging),
 .is-dragging-card .deck:not(.is-dragging) .note-card {
   border-style: dashed;
@@ -2345,7 +2345,7 @@ body {
   padding-left: 12px;
 }
 @media (max-width: 640px) {
-  /* Purely decorative caption — drop it first. Everything else in this bar
+  /* Purely decorative caption: drop it first. Everything else in this bar
      is a control, so instead of letting it clip off-screen (where a button
      simply stops existing) the bar scrolls horizontally to reach it. */
   .desk-bar-sub { display: none; }
@@ -2381,7 +2381,7 @@ body {
 }
 
 /* Header button that reopens the rail once the grid has hidden it. Hidden
-   above 820px — the rail is just always there and this would be redundant. */
+   above 820px, since the rail is just always there and this would be redundant. */
 .desk-rail-toggle {
   display: none;
   font-size: 12px;
@@ -2887,7 +2887,7 @@ body {
   outline: none;
 }
 /* ⚠ min-width:0 and the overflow rules are load-bearing. A paper label is a
-   full paper title, and a flex/grid child defaults to min-width:auto — so
+   full paper title, and a flex/grid child defaults to min-width:auto, so
    without this the chip pushes past the note's own edge instead of ellipsing. */
 .sticky-foot { margin-top: 7px; display: flex; min-width: 0; }
 .sticky-scope {
@@ -2934,7 +2934,7 @@ body {
 /* ── The universal board ─────────────────────────────────────────────────
    A wall, not a list. The chat strip is a list because it sits beside a
    transcript and has to stay narrow; this is the whole page, and the point is
-   seeing everything at once — which is a spatial task, so the notes are laid
+   seeing everything at once, which is a spatial task, so the notes are laid
    out spatially. */
 .wall { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .wall-head {
@@ -3010,17 +3010,17 @@ body {
 .wall-empty { max-width: 56ch; margin: 8vh auto 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
 .wall-empty p + p { margin-top: 10px; }
 
-/* ⚠ **A grid, not CSS multi-column — and that is the whole point.**
+/* ⚠ **A grid, not CSS multi-column, and that is the whole point.**
    This was `columns: 260px` for the masonry. Multi-column FRAGMENTS its
    children: a note taller than the remaining column height is split, and the
-   remainder is re-drawn at the top of the next column — pin, dashed border and
+   remainder is re-drawn at the top of the next column: pin, dashed border and
    all. `display: inline-block` is the usual charm against that and it is not
    enough in WebKit, where the reported symptom was exactly this: two orphaned
    note-bottoms with their own pins stranded under the board.
 
    Grid items never fragment, in any engine. The cost is the masonry: rows are
-   ragged rather than tightly packed. For a corkboard that is not a loss — a
-   real one is not masonry either — and it is a deterministic layout instead of
+   ragged rather than tightly packed. For a corkboard that is not a loss: a
+   real one is not masonry either, and it is a deterministic layout instead of
    one that depends on how a browser handles a break. Do not "restore" the
    columns without a WebKit test. */
 .wall-grid {
@@ -3054,8 +3054,8 @@ body {
 }
 /* Fade only where there is actually more below.
    ⚠ `.is-clipped` is set by StickyNote from a real measurement, not by a CSS
-   heuristic. The heuristic here was ":has(> :nth-child(3))" — fade when the
-   body has three or more blocks — and it is wrong for the common case, because
+   heuristic. The heuristic here was ":has(> :nth-child(3))", fade when the
+   body has three or more blocks, and it is wrong for the common case, because
    a long note is usually ONE long paragraph. It clamped with a hard cut through
    the middle of a line and nothing to say why.
    ⚠ The gradient uses black/transparent, not a colour token. A mask reads the
@@ -3079,7 +3079,7 @@ body {
 }
 .wall-grid .sticky-foot { max-width: 100%; }
 
-/* The tack. Drawn, not an image — it has to sit correctly in both themes. */
+/* The tack. Drawn, not an image: it has to sit correctly in both themes. */
 .sticky-tack {
   position: absolute;
   top: -7px;

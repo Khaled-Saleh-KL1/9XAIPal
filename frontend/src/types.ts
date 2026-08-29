@@ -41,7 +41,7 @@ export type ChunkType =
   | 'list'
   | 'section_summary'; // future: when we surface pre-computed summaries as first-class chunks
 
-// Legacy interface — the app primarily uses ChunkData from the API (structural_type is a plain string).
+// Legacy interface: the app primarily uses ChunkData from the API (structural_type is a plain string).
 export interface Chunk {
   type: ChunkType;
   level?: 1 | 2;

@@ -1,4 +1,4 @@
-# Design: Host the 9XAIPal backend 24/7 (Render) — sub‑project B
+# Design: Host the 9XAIPal backend 24/7 (Render): sub‑project B
 
 Date: 2026-08-10
 Status: Draft for review
@@ -6,7 +6,7 @@ Status: Draft for review
 ## Goal
 
 Run the backend on a managed host with a public HTTPS URL so the **Vercel‑hosted
-frontend can actually upload and read papers** — replacing today's "No backend
+frontend can actually upload and read papers**: replacing today's "No backend
 connected" state. Depends on sub‑project A (`EXTRACTOR_PROVIDER=vlm`, PR #8),
 which removes MinerU/torch from the worker and makes a small box viable.
 
@@ -18,7 +18,7 @@ off Vercel, changing app behaviour.
 Chosen over Fly.io because it is Docker‑native (reuses `backend/Dockerfile`
 unchanged), gives a free HTTPS subdomain (`*.onrender.com`) with no domain
 purchase, and offers managed Postgres **with pgvector** plus managed Redis
-("Key Value") — the two stateful pieces this app needs.
+("Key Value"): the two stateful pieces this app needs.
 
 ## Architecture (and the constraint that shapes it)
 
@@ -26,7 +26,7 @@ purchase, and offers managed Postgres **with pgvector** plus managed Redis
 extracted assets to `STORAGE_ROOT` and the API *serves* them, so a
 "web service + separate background worker" split would break asset serving.
 
-**Therefore: one Render Web Service runs BOTH processes**, sharing one disk —
+**Therefore: one Render Web Service runs BOTH processes**, sharing one disk,
 mirroring the project's existing "my computer is the server" single‑box model.
 
 ```
@@ -45,13 +45,13 @@ script `exec`s uvicorn and traps signals so a crashed worker is visible in logs)
 
 ## Files to create/modify
 
-- **Create `backend/start.sh`** — starts the Celery worker, then `exec`s uvicorn
+- **Create `backend/start.sh`**: starts the Celery worker, then `exec`s uvicorn
   bound to `$PORT` (Render injects `PORT`).
-- **Create `render.yaml`** (repo root) — Blueprint declaring the web service
+- **Create `render.yaml`** (repo root): Blueprint declaring the web service
   (Docker, `dockerfilePath: backend/Dockerfile`, `dockerContext: backend`),
   the disk (`/data/storage`, 10 GB), the Postgres instance and the Key Value
   instance, with env wiring (`fromDatabase` / `fromService`).
-- **Modify `backend/Dockerfile`** — only if needed: ensure `start.sh` is copied
+- **Modify `backend/Dockerfile`**, only if needed: ensure `start.sh` is copied
   and executable; keep the existing light `requirements.txt` install (no torch).
 - **No application code changes.** Everything else is configuration.
 
@@ -86,7 +86,7 @@ Ollama Cloud → assets written to /data/storage → served back by the API`
 2. Render logs show migrations applied and `CREATE EXTENSION vector` succeeding.
 3. From `https://9xaipal.vercel.app`: upload a small PDF → progress advances
    past *extracting → chunking → embedding* → the reader shows structural chunks
-   (headings/figures/equations) — i.e. **no "No backend connected"**.
+   (headings/figures/equations), i.e. **no "No backend connected"**.
 4. Ask a question in the side chat and get a grounded answer (LLM path works).
 5. Re‑deploy the service and confirm previously uploaded papers still open
    (disk persistence).
@@ -103,14 +103,14 @@ separate and consumed per extraction/chat.
   service must be a paid always‑on instance for background processing to work.
 - **Single‑container coupling:** a Celery crash doesn't restart the container.
   Mitigation: worker logs to stdout (visible in Render); revisit if it proves flaky.
-- **Web search (SearXNG) is not deployed** — `EXTERNAL` questions will fail or
+- **Web search (SearXNG) is not deployed**: `EXTERNAL` questions will fail or
   degrade. Acceptable for v1; document it.
 - **`VECTOR_DIMENSION` mismatch** with the chosen cloud embedding model would
   force a re‑embed; confirm the model's true dimension before first ingest.
-- **Ollama Cloud rate limits** — sub‑project A's deferred fast‑follows
+- **Ollama Cloud rate limits**: sub‑project A's deferred fast‑follows
   (per‑page retry/backoff, dead `extractor_vlm_concurrency`) should land before
   large books are processed.
-- **Upload size vs. Render request limits** — verify large PDFs upload cleanly.
+- **Upload size vs. Render request limits**: verify large PDFs upload cleanly.
 
 ## Prerequisites (user actions I cannot perform)
 

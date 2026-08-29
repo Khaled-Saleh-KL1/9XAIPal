@@ -6,7 +6,7 @@
  * had its own evenly-spaced calculation keyed off `kind` (paper vs book)
  * that assumed a paper is done at "chunking", while the backend actually
  * decides completion purely from INGEST_PROFILE (see
- * backend/app/extraction/pipeline_sync.py::_is_fast_ingest) — so on any
+ * backend/app/extraction/pipeline_sync.py::_is_fast_ingest), so on any
  * deployment running the "full" profile, a paper goes through embedding and
  * summarizing just like a book, and the overlay's steps would show "done"
  * while the library card (which used this same map) still showed 78%.
@@ -28,7 +28,7 @@ export const STAGE_PROGRESS: Record<string, number> = {
  * preferred since it is more fine-grained.
  *
  * `subFraction` (0-1), when given, is real progress *within* the extracting
- * stage (pages extracted / total pages — see ingestion_jobs.progress_fraction)
+ * stage (pages extracted / total pages, see ingestion_jobs.progress_fraction)
  * and is blended into the queued→extracting band instead of the flat 0.3, so
  * a long extraction actually moves instead of sitting still for minutes.
  */

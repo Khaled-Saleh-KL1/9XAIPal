@@ -2,7 +2,7 @@
  * API client for 9XAIPal backend.
  *
  * Base URL resolution:
- *  - Local dev: leave VITE_API_BASE_URL unset — requests stay relative
+ *  - Local dev: leave VITE_API_BASE_URL unset: requests stay relative
  *    ('/api/v1') and Vite proxies them to the backend on http://localhost:8000.
  *  - Hosted frontend: set VITE_API_BASE_URL to the backend's public origin.
  *    Otherwise the static host has no /api and every call 404s.
@@ -16,7 +16,7 @@ const BASE = `${API_ORIGIN}/api/v1`;
 /**
  * Whether there is a backend to talk to at all: either an explicit origin was
  * configured, or we're on localhost where Vite proxies /api during dev. When
- * false — a hosted frontend with no backend configured — API calls would hit a
+ * false, meaning a hosted frontend with no backend configured, API calls would hit a
  * static host and 404, so callers should surface NO_BACKEND_MESSAGE instead.
  */
 export const HAS_BACKEND =
@@ -138,7 +138,7 @@ export async function reextractPaper(paperId: string): Promise<{ paper_id: strin
 }
 
 /**
- * Re-run only the chunker on the cached MinerU output (fast — no re-extraction).
+ * Re-run only the chunker on the cached MinerU output (fast, no re-extraction).
  * Use after improving the chunker to apply it to a paper already on disk.
  */
 export async function rechunkPaper(paperId: string): Promise<{ paper_id: string; status: string; chunks_total: number; message: string }> {
@@ -185,7 +185,7 @@ export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<
 }
 
 /**
- * Import a web article by URL — the third ingestion pipeline, alongside
+ * Import a web article by URL: the third ingestion pipeline, alongside
  * uploadPaper. Always doc_kind='article' on the backend, so there is no
  * `kind` to pass here the way uploadPaper has one.
  */
@@ -302,7 +302,7 @@ export async function getFullDocument(paperId: string): Promise<FullDocument> {
 /**
  * What a note hangs off.
  *
- * `document` is the holistic level — the question is about the paper as a
+ * `document` is the holistic level: the question is about the paper as a
  * whole, asked from the assistant panel rather than from a selection. The
  * server derives the note's `scope` from this, so the two can never disagree.
  */
@@ -354,8 +354,8 @@ export interface AgentSource {
 /**
  * One tool call the agent made, as the reader sees it.
  *
- * Arrives twice while streaming — `running` when the agent announces the call
- * and `done` when it returns — keyed by `id` so the row updates in place.
+ * Arrives twice while streaming: `running` when the agent announces the call
+ * and `done` when it returns, keyed by `id` so the row updates in place.
  * The observation itself (the blocks the model actually read) is deliberately
  * not here: it is thousands of characters the card renders one line of.
  */
@@ -363,7 +363,7 @@ export interface AgentStep {
   id: string;
   /** Which tool round this call belonged to, 1-based. */
   n: number;
-  /** `NOTE` and `REMEMBER` are writes, not fetches — they pin to a board / to memory. */
+  /** `NOTE` and `REMEMBER` are writes, not fetches: they pin to a board / to memory. */
   tool: 'SECTION' | 'SEARCH' | 'READ' | 'WEB' | 'NOTE' | 'REMEMBER';
   arg: string;
   state: 'running' | 'done';
@@ -428,7 +428,7 @@ export async function deleteNote(paperId: string, noteId: string): Promise<void>
 }
 
 export interface NoteStreamHandlers {
-  /** The note row exists — render the card now, before any answer arrives. */
+  /** The note row exists, so render the card now, before any answer arrives. */
   onCreated: (noteId: string) => void;
   /** The phase the agent is in ("Reading the passage…", "Writing the answer…"). */
   onStatus: (message: string) => void;
@@ -592,12 +592,12 @@ export async function getPaper(paperId: string): Promise<PaperMeta> {
   return res.json();
 }
 
-/** Delete a paper (DB cascade + on-disk cleanup) — 204 on success. */
+/** Delete a paper (DB cascade + on-disk cleanup): 204 on success. */
 /**
  * Rename a paper.
  *
  * Sets a display title used everywhere a name is shown. Passing an empty
- * string clears it and restores the uploaded filename — the server treats
+ * string clears it and restores the uploaded filename: the server treats
  * blank as "no override" rather than storing an empty name.
  */
 export async function renamePaper(paperId: string, title: string): Promise<PaperMeta> {
@@ -614,7 +614,7 @@ export async function renamePaper(paperId: string, title: string): Promise<Paper
  * URL of a paper's first-page thumbnail.
  *
  * ⚠ Served as 204 No Content when the page cannot be rendered, which an
- * <img> reports as a load error — so every caller needs an onError fallback.
+ * <img> reports as a load error, so every caller needs an onError fallback.
  * A 404 would be worse: the library requests one per card, and a console full
  * of them makes a working library look broken.
  */
@@ -673,11 +673,11 @@ export async function askPaper(
 }
 
 export interface AskStreamHandlers {
-  /** Called per generated token — append to the in-progress answer. */
+  /** Called per generated token: append to the in-progress answer. */
   onToken: (text: string) => void;
   /** Transient status line (e.g. "Researching the web…"). */
   onStatus?: (message: string) => void;
-  /** Discard the buffered answer — a research synthesis pass restreams it. */
+  /** Discard the buffered answer: a research synthesis pass restreams it. */
   onReplace?: () => void;
   /** One tool call from the agent (books). Emitted twice: running → done. */
   onStep?: (step: AgentStep) => void;
@@ -686,7 +686,7 @@ export interface AskStreamHandlers {
 /**
  * Streaming variant of askPaper using Server-Sent Events. Tokens arrive via
  * `handlers` as they are generated; resolves with the final AskResponse
- * (whose `answer` is authoritative — the backend may rewrite image URLs after
+ * (whose `answer` is authoritative, since the backend may rewrite image URLs after
  * streaming completes).
  */
 export async function askPaperStream(
@@ -1057,7 +1057,7 @@ export async function putDecks(paperId: string, decks: WireDeck[]): Promise<Wire
  * The path segment that means "every paper" rather than a saved group.
  *
  * ⚠ A real scope, not a null. The server stores `study_id IS NULL` for its
- * turns, and both are the library-wide chat — treating either as "unset" loses
+ * turns, and both are the library-wide chat: treating either as "unset" loses
  * the reader's main conversation.
  */
 export const LIBRARY_SCOPE = 'library';
@@ -1327,7 +1327,7 @@ export async function createSticky(input: {
  * enough: `scope: 'library'` is a real destination, not "unset".
  *
  * ⚠ `origin` is not patchable. A note the assistant wrote stays badged as the
- * assistant's however often it is edited — the badge records where the claim
+ * assistant's however often it is edited: the badge records where the claim
  * came from, and an edit that launders it makes the badge worthless.
  */
 export async function updateSticky(
@@ -1358,7 +1358,7 @@ export async function deleteSticky(stickyId: string): Promise<void> {
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 //
-// The session is an httponly cookie — nothing here reads or stores a token.
+// The session is an httponly cookie: nothing here reads or stores a token.
 // `credentials: 'include'` is explicit (not just relying on fetch's
 // same-origin default) so these calls stay correct even if this app is ever
 // served from a different origin than the API. The other ~50 functions in
@@ -1371,7 +1371,7 @@ async function _authError(res: Response, fallback: string): Promise<never> {
     const body = await res.json();
     if (body?.detail) detail = body.detail;
   } catch {
-    // non-JSON error body — fall back to the generic message
+    // non-JSON error body, so fall back to the generic message
   }
   throw new Error(detail);
 }

@@ -62,7 +62,7 @@ import {
 /**
  * The paper reading experience: a centred article with a note margin either side.
  *
- * Reading is scrolling. Nothing is revealed, gated, or paced — the whole paper
+ * Reading is scrolling. Nothing is revealed, gated, or paced: the whole paper
  * arrives in one request and renders at once.
  *
  * Asking is anchoring. Highlight a passage (or pick a figure or equation) and a
@@ -72,7 +72,7 @@ import {
  *
  * ⚠ The article column never moves. It is centred by a symmetric grid
  * (gutter | article | gutter) whose side columns are always present, so adding
- * a note cannot shift the text you are reading — the single most disruptive
+ * a note cannot shift the text you are reading, the single most disruptive
  * thing a margin can do to a reader.
  */
 
@@ -106,8 +106,8 @@ function pruneDecks(decks: NoteDeck[]): NoteDeck[] {
 /**
  * The whole drag-to-stack rule, as one pure transformation.
  *
- * Every combination — card onto card, card onto deck, deck onto card, deck
- * onto deck — collapses to the same sentence: the thing that was already
+ * Every combination, card onto card, card onto deck, deck onto card, deck
+ * onto deck, collapses to the same sentence: the thing that was already
  * sitting still keeps its place, and the thing that was dragged joins it.
  * Whatever the moving card belonged to before is left without it.
  *
@@ -115,8 +115,8 @@ function pruneDecks(decks: NoteDeck[]): NoteDeck[] {
  * result is PUT as the paper's complete arrangement, so it has to be correct
  * on its own rather than as a sequence of state updates.
  *
- * Returns null when the drop no longer makes sense — the target vanished
- * mid-drag — so the caller can leave the arrangement untouched.
+ * Returns null when the drop no longer makes sense, the target vanished
+ * mid-drag, so the caller can leave the arrangement untouched.
  */
 function stackDecks(
   decks: NoteDeck[],
@@ -163,7 +163,7 @@ function stackDecks(
  * Flatten a flat note list into threads: each root note plus its follow-ups.
  *
  * ⚠ The rootOf walk is guarded against cycles. parent_note_id is a foreign key
- * the server sets, so a cycle should be impossible — but "should be" is doing
+ * the server sets, so a cycle should be impossible, but "should be" is doing
  * a lot of work for a loop that renders the reader's margin, and an infinite
  * one hangs the tab rather than dropping a card.
  */
@@ -203,7 +203,7 @@ interface Props {
   /** A block the desk asked us to open at. Consumed once, then cleared. */
   jumpToSequence?: number | null;
   onJumped?: () => void;
-  /** Leave for the desk — the cross-paper surface this reader's panel became. */
+  /** Leave for the desk: the cross-paper surface this reader's panel became. */
   onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
 }
@@ -237,7 +237,7 @@ export function ArticleReader({
   /**
    * Which desk scope this paper's corner button opens.
    *
-   * A study containing this paper if there is exactly one — that is almost
+   * A study containing this paper if there is exactly one, that is almost
    * always the context the reader wants back. Two or more is ambiguous, and
    * guessing between them is worse than landing on the library scope with the
    * studies rail right there.
@@ -289,7 +289,7 @@ export function ArticleReader({
   const draggingRef = useRef<{ id: string; kind: DragKind } | null>(null);
 
   // Model choice. Remembered across sessions so the reader does not re-pick it
-  // on every question, but re-validated against the catalog on load — a model
+  // on every question, but re-validated against the catalog on load, since a model
   // can be removed from Ollama between sessions.
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [model, setModel] = useState<string>(
@@ -334,7 +334,7 @@ export function ArticleReader({
 
     listNotes(paperId)
       .then((n) => { if (alive) setNotes(n); })
-      .catch(() => { /* notes are additive — a failure must not block reading */ })
+      .catch(() => { /* notes are additive: a failure must not block reading */ })
       .finally(() => { if (alive) setNotesLoaded(true); });
 
     return () => { alive = false; };
@@ -350,7 +350,7 @@ export function ArticleReader({
     return () => clearInterval(id);
   }, [doc, paperId]);
 
-  // Bookmarks, personal notes and decks arrive together — decks reference the
+  // Bookmarks, personal notes and decks arrive together: decks reference the
   // other two, so a deck list fetched separately can describe a note that is
   // no longer there.
   useEffect(() => {
@@ -385,7 +385,7 @@ export function ArticleReader({
     return () => { alive = false; };
   }, [paperId]);
 
-  // The notice is an acknowledgement, not a status bar — it goes on its own.
+  // The notice is an acknowledgement, not a status bar. It goes on its own.
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), notice.tone === 'error' ? 9000 : 7000);
@@ -467,7 +467,7 @@ export function ArticleReader({
   /**
    * Scroll to the block the desk cited.
    *
-   * ⚠ Waits for `doc` — the block elements do not exist until the article has
+   * ⚠ Waits for `doc`: the block elements do not exist until the article has
    * rendered, and a jump fired on mount silently does nothing. `onJumped`
    * clears it in App so a later re-render cannot yank the reader back.
    */
@@ -485,7 +485,7 @@ export function ArticleReader({
   // ⚠ Split by scope FIRST. Anchored notes belong in the gutter beside their
   // passage; whole-paper notes belong in the assistant panel. They share a
   // table and an endpoint but never a surface, and a document-scope note
-  // carries the first block's sequence id only to satisfy a NOT NULL column —
+  // carries the first block's sequence id only to satisfy a NOT NULL column;
   // laid out in the margin it would pile onto the paper's title.
   const marginNotes = useMemo(
     () => notes.filter((n) => n.scope !== 'document'),
@@ -698,7 +698,7 @@ export function ArticleReader({
 
     const articleTop = article.getBoundingClientRect().top;
 
-    // Each margin is laid out independently — a card on the left must not be
+    // Each margin is laid out independently: a card on the left must not be
     // pushed down by one on the right.
     const bySide: Record<MarginSide, Array<{ key: string; seq: number }>> = {
       left: [],
@@ -768,8 +768,8 @@ export function ArticleReader({
    *
    * ⚠ layoutNotes measures with getBoundingClientRect, which forces a
    * synchronous reflow. A streaming answer triggers it from three directions at
-   * once — the React update, the ResizeObserver watching the growing card, and
-   * the observer watching the article — so calling it directly meant several
+   * once: the React update, the ResizeObserver watching the growing card, and
+   * the observer watching the article, so calling it directly meant several
    * forced reflows per repaint. Funnelling every request through one animation
    * frame collapses those into a single measure-and-place pass.
    */
@@ -822,7 +822,7 @@ export function ArticleReader({
    *
    * ⚠ Binary search, not a scan. This runs on every scroll frame to keep the
    * Resume chip and the panel's "you are here" marker honest, and the previous
-   * linear version read a bounding rect for every block in the paper — several
+   * linear version read a bounding rect for every block in the paper: several
    * hundred forced reflows per frame on a long document. Blocks are laid out
    * top to bottom in sequence order, so their tops are monotonic and a search
    * costs about ten reads instead.
@@ -927,8 +927,8 @@ export function ArticleReader({
    * is read as "actually, not here" rather than silently doing nothing.
    */
   /**
-   * Optimistic on both paths. Bookmarking is a reflex — it happens on a
-   * keypress mid-scroll — so the ribbon has to appear under the cursor rather
+   * Optimistic on both paths. Bookmarking is a reflex: it happens on a
+   * keypress mid-scroll, so the ribbon has to appear under the cursor rather
    * than a round trip later. The temporary id is swapped for the real one
    * when the row comes back, and a failure simply takes the mark away again.
    */
@@ -1022,7 +1022,7 @@ export function ArticleReader({
         const bounds = scroller.getBoundingClientRect();
         // The group is centred on `left` (see .ask-pill-group's translateX).
         // On a narrow phone a selection near either edge of the column would
-        // otherwise centre it partly off-screen — clamp so the full pill
+        // otherwise centre it partly off-screen; clamp so the full pill
         // group (~260px, three pills) always stays reachable.
         const halfGroupWidth = 130;
         const rawLeft = cap.rect.left - bounds.left + cap.rect.width / 2;
@@ -1037,7 +1037,7 @@ export function ArticleReader({
       }, 10);
     };
     article.addEventListener('mouseup', onUp);
-    // A touch selection never fires mouseup — without this, the whole
+    // A touch selection never fires mouseup, so without this, the whole
     // Ask/Note/Bookmark pill (the only way to ask the AI about a passage on
     // a paper) simply never appears on a phone or tablet.
     article.addEventListener('touchend', onUp);
@@ -1068,8 +1068,8 @@ export function ArticleReader({
    * Blocks by sequence id.
    *
    * A selection knows only which element it landed in; deciding what that
-   * element *is* — and therefore whether the ask should be about a passage or
-   * about a whole table — needs the block behind it.
+   * element *is*, and therefore whether the ask should be about a passage or
+   * about a whole table, needs the block behind it.
    */
   const blockBySeq = useMemo(() => {
     const map = new Map<number, DocBlock>();
@@ -1083,8 +1083,8 @@ export function ArticleReader({
         sequenceId: block.sequence_order,
         chunkId: block.id,
         kind,
-        // For an equation and a table the "quote" is the machine transcription
-        // — LaTeX, or the recovered table body — which the agent is told to
+        // For an equation and a table the "quote" is the machine transcription:
+        // LaTeX, or the recovered table body, which the agent is told to
         // treat as fallible next to the attached crop. A figure has only its
         // caption to offer.
         quote: kind === 'figure'
@@ -1106,7 +1106,7 @@ export function ArticleReader({
     /**
      * ⚠ A selection inside a table asks about the whole table.
      *
-     * Dragging across a table yields text like "8.4 12.1 91.2 7B" — the cells
+     * Dragging across a table yields text like "8.4 12.1 91.2 7B": the cells
      * the pointer crossed, stripped of the header that says which metric each
      * one is and the row label that says which model. As a quote it is
      * unanswerable, and worse, it is unanswerable in a way that looks
@@ -1213,7 +1213,7 @@ export function ArticleReader({
       }
       if (e.key === 'b') {
         // Bookmark reuses the same "topmost block" rule as the bar's button.
-        // Selection wins if there is one — a bookmark over a passage is a more
+        // Selection wins if there is one: a bookmark over a passage is a more
         // specific intent than "wherever I'm looking."
         e.preventDefault();
         const cap = articleRef.current ? captureSelection(articleRef.current) : null;
@@ -1274,8 +1274,8 @@ export function ArticleReader({
           {
             onCreated: (noteId) => patch((p) => ({ ...p, noteId })),
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
-            // ⚠ Upsert by id, never append. Every call arrives twice —
-            // `running` when the agent announces it, `done` when it returns —
+            // ⚠ Upsert by id, never append. Every call arrives twice:
+            // `running` when the agent announces it, `done` when it returns,
             // and appending would show each fetch as two rows, the first one
             // spinning forever.
             // ⚠ Clear the status line as well. Once a fetch is on screen the
@@ -1299,7 +1299,7 @@ export function ArticleReader({
           draft.model,
         );
         // Let the pacer finish painting before the card is swapped for the
-        // saved one — otherwise the last few words would be skipped over.
+        // saved one: otherwise the last few words would be skipped over.
         await pacer.finish();
         // Refetch rather than splicing the response in: the server is the
         // authority on the note's final shape (citations, retrieval mode, and
@@ -1320,7 +1320,7 @@ export function ArticleReader({
    *
    * The one non-optimistic mutation here: a new note has no id until the
    * server gives it one, and a card rendered under a temporary id cannot be
-   * dragged into a deck — deck membership is a foreign key. Waiting is
+   * dragged into a deck, since deck membership is a foreign key. Waiting is
    * invisible against a local backend, and the composer stays open until the
    * save lands, so a failure loses nothing the reader typed.
    */
@@ -1445,7 +1445,7 @@ export function ArticleReader({
         steps: [],
         error: null,
         parentNoteId,
-        // A follow-up belongs to the same surface as its parent — a follow-up
+        // A follow-up belongs to the same surface as its parent: a follow-up
         // to a whole-paper question stays in the panel.
         scope: parent.scope,
         // A follow-up joins its parent's card, so it must share its margin.
@@ -1540,7 +1540,7 @@ export function ArticleReader({
   const title = doc?.title || fallbackTitle;
 
   /**
-   * Rename from the reader itself, not just the library — a long arXiv id
+   * Rename from the reader itself, not just the library: a long arXiv id
    * turning into a name is exactly the moment the reader is looking at the
    * paper, not the shelf. Optimistic: the header updates immediately, and
    * next time the library loads it reads the same title straight from the
@@ -1981,7 +1981,7 @@ export function ArticleReader({
         )}
       </div>
 
-      {/* One button, one meaning — and it now leaves.
+      {/* One button, one meaning, and it now leaves.
           ⚠ It replaced an "Ask" and a "Note" button that both anchored to
           whatever block happened to be at the top of the viewport, and then a
           panel that overlaid the article. Neither was right: a question about

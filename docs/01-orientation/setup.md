@@ -11,7 +11,7 @@
 > what listens where ([runtime-topology.md](runtime-topology.md)), fixing a broken install
 > ([operations.md](operations.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-28 (`main`, 5471870) — §5 run end-to-end from
+> **Status:** current · **Last verified:** 2026-07-28 (`main`, 5471870): §5 run end-to-end from
 > `docker compose down` to a healthy stack
 > **Verify with:** `curl -s localhost:8000/api/v1/health | jq`
 
@@ -27,25 +27,25 @@
 | PostgreSQL | 15+ (16 in compose) | Needs `pgvector` + `uuid-ossp` |
 | Redis | 7+ | Celery broker |
 | MinerU | 3.2+ | `mineru` CLI. ⚠ `magic-pdf` 0.x is a different, abandoned package and is **not** supported |
-| Ollama | latest | Optional — a cloud API key works instead |
+| Ollama | latest | Optional, a cloud API key works instead |
 
 ### MinerU: installed by pip, but the weights are not
 
 MinerU is pinned in `requirements.txt` (`mineru[core]>=3.4.4`) as of 2026-07-25, so `pip install`
-brings in the CLI. What pip does **not** bring is the model weights — the first parse downloads
+brings in the CLI. What pip does **not** bring is the model weights: the first parse downloads
 ~5 GB from Hugging Face. Set `HF_TOKEN` if you get rate-limited.
 
 ```bash
 mineru --version       # must succeed in the shell the Celery worker inherits
 ```
 
-Verified working on Apple Silicon (M4 Max, macOS 15.7) directly on the host — no CUDA and no
+Verified working on Apple Silicon (M4 Max, macOS 15.7) directly on the host, no CUDA and no
 container needed. ⚠ Do not change the backend: the app passes `-b pipeline`, and
 `hybrid-engine` measured 8.5× slower with worse heading classification
 ([evaluation](../plans/pdf-parser-evaluation.md)).
 
 ⚠ If you skip MinerU and set `ALLOW_PYMUPDF_FALLBACK=true`, extraction still runs but produces
-**no OCR, no table structure, and no math** — which removes most of the reason this app exists.
+**no OCR, no table structure, and no math**, which removes most of the reason this app exists.
 Fine for a smoke test, wrong for real use. Running the worker via
 `docker compose` sidesteps this entirely: `Dockerfile.mineru` bakes MinerU and its models into the
 image.
@@ -74,7 +74,7 @@ cp .env.example .env
 ```
 
 Then edit `.env`. The minimum that must be right: Postgres credentials, one AI backend, and an
-`EMBEDDING_MODEL` tag that exists. Everything else has a working default —
+`EMBEDDING_MODEL` tag that exists. Everything else has a working default:
 [configuration.md](../03-reference/configuration.md) is the full table.
 
 ---
@@ -98,18 +98,18 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-⚠ Older instructions say `pip install -e .`. That does **not** work from a fresh clone —
+⚠ Older instructions say `pip install -e .`. That does **not** work from a fresh clone:
 `pyproject.toml` is listed in `.gitignore` and is therefore not in the repository. Use
 `requirements.txt`. (⚠ It pins no versions; see [roadmap.md](../roadmap.md).)
 
-### 3.3 Celery worker — separate terminal, same venv
+### 3.3 Celery worker (separate terminal, same venv)
 
 ```bash
 cd backend && source .venv/bin/activate
 celery -A app.core.celery_app worker --loglevel=info
 ```
 
-⚠ Without this, uploads accept and then hang at `queued` forever. Nothing surfaces an error —
+⚠ Without this, uploads accept and then hang at `queued` forever. Nothing surfaces an error:
 the job simply sits in Redis with no consumer. If the processing overlay never advances, check
 here first.
 
@@ -131,10 +131,10 @@ The FastAPI lifespan ([`core/lifecycle.py`](../../backend/app/core/lifecycle.py)
 4. Mount the built SPA at `/` when `SERVE_FRONTEND=true` and a `dist` exists.
 5. Verify the database connection.
 6. Apply migrations (`database/schema.sql`, idempotent).
-7. Resolve and log the active AI backend — never fatal.
+7. Resolve and log the active AI backend, never fatal.
 8. Sync the pgvector column to `VECTOR_DIMENSION` and ensure the HNSW index.
    ⚠ **If the dimension changed, all embeddings are wiped and re-queued.**
-9. If it did not change, check for an embedding-model switch — pinned provider ⇒ wipe + re-embed;
+9. If it did not change, check for an embedding-model switch: pinned provider ⇒ wipe + re-embed;
    `auto` ⇒ warn only.
 
 ---
@@ -175,36 +175,36 @@ A sample paper ships at [`samples/attention-is-all-you-need.pdf`](../../samples/
 
 | Mode | Command | Use when |
 | --- | --- | --- |
-| Host dev | §3 above | Normal development — hot reload on both sides |
+| Host dev | §3 above | Normal development, hot reload on both sides |
 | Full stack in Docker | `cd backend && docker compose up -d --build` | UI + API on `:8000`, no Node needed on the host |
 | LAN server | `cd backend && ./start-lan-server.sh` | Let another device on the same Wi-Fi use the app |
 
-**Full stack** brings up every service — Postgres, Redis, SearXNG, the Celery worker, the API, and
+**Full stack** brings up every service: Postgres, Redis, SearXNG, the Celery worker, the API, and
 a one-shot container that builds the SPA into a volume the API serves at `/`. The whole app is on
 one port; there is no second dev server and no reverse proxy.
 
 `[historical]` This used to require `--profile server`. Without the flag the frontend build never
 ran, so `up` produced an API with an empty SPA volume that served nothing at `/`. The build service
 is no longer behind a profile, and `api` waits for it via
-`depends_on: {frontend-build: {condition: service_completed_successfully}}` — which also makes a
+`depends_on: {frontend-build: {condition: service_completed_successfully}}`, which also makes a
 broken frontend build **fail the `up` loudly** instead of quietly starting an API with no UI.
 
 ⚠ **If another project on your machine already holds `8000`, `5432`, `6379` or `8080`, `up` fails
-with "port is already allocated."** Every mapping is overridable in `backend/.env` —
+with "port is already allocated."** Every mapping is overridable in `backend/.env`:
 `API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`, `SEARXNG_PORT` (see
 [`.env.example`](../../backend/.env.example)). Only the **host** side moves: containers reach each
 other by service name on the compose network, so nothing inside the stack is affected.
 
 `start-lan-server.sh` builds the SPA in a container, removes the upload cap, raises the MinerU
 timeout for large books, prints the exact LAN URL, streams logs, and tears the stack down on
-Ctrl+C — **without** `-v`, so data volumes and uploaded papers survive.
+Ctrl+C: **without** `-v`, so data volumes and uploaded papers survive.
 
 The API requires a logged-in session (see [auth.md](../02-architecture/auth.md)) the same way in
-LAN mode as anywhere else — nothing disables `get_current_user` for it. The real gate is
+LAN mode as anywhere else: nothing disables `get_current_user` for it. The real gate is
 `SIGNUP_INVITE_CODE`: leave it set to something only people you trust have, since anyone on the
 LAN who obtains it can create their own account. Leaving it empty closes signup entirely (existing
-accounts can still log in) — the safer default for a LAN you don't fully control.
-⚠ `/static/{images,extracted,assets}` are the exception — those mounts have no auth check at all.
+accounts can still log in), the safer default for a LAN you don't fully control.
+⚠ `/static/{images,extracted,assets}` are the exception: those mounts have no auth check at all.
 See [roadmap.md](../roadmap.md).
 
 ---
@@ -217,11 +217,11 @@ Collected because each one has cost someone an hour:
 | --- | --- | --- |
 | Upload sticks at `queued` forever | No Celery worker consuming Redis | Start the worker (§3.3) |
 | `pip install -e .` fails, no `pyproject.toml` | It is gitignored, so it is not in the clone | `pip install -r requirements.txt` |
-| `docker compose up` fails with "port is already allocated" | Another project holds `8000` / `5432` / `6379` / `8080` | Set `API_PORT` / `POSTGRES_PORT` / `REDIS_PORT` / `SEARXNG_PORT` in `backend/.env` — host side only |
+| `docker compose up` fails with "port is already allocated" | Another project holds `8000` / `5432` / `6379` / `8080` | Set `API_PORT` / `POSTGRES_PORT` / `REDIS_PORT` / `SEARXNG_PORT` in `backend/.env`, host side only |
 | Worker logs `Cannot connect to redis://redis:6379: Name or service not known` | A container left over from an older `up` is attached to no compose network | `docker compose up -d --force-recreate redis celery_worker` |
 | First embed 404s | `EMBEDDING_MODEL` has no matching pulled tag | Use an explicit tag, e.g. `qwen3-embedding:8b` |
 | Every model call refused, in Docker | `OLLAMA_BASE_URL=localhost` inside a container resolves to the container | Compose already sets `host.docker.internal`; do not override it from the host `.env` |
-| Web search silently returns nothing | No provider configured, or the active one is down | `WEB_SEARCH_PROVIDER=tavily` needs `TAVILY_API_KEY`; check the logs for `Tavily search failed: HTTP 401`. On `searxng`: `docker compose up -d searxng`. ⚠ `/health` cannot verify a Tavily key — see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
+| Web search silently returns nothing | No provider configured, or the active one is down | `WEB_SEARCH_PROVIDER=tavily` needs `TAVILY_API_KEY`; check the logs for `Tavily search failed: HTTP 401`. On `searxng`: `docker compose up -d searxng`. ⚠ `/health` cannot verify a Tavily key: see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
 | Ingestion fails with `MinerUError` | MinerU missing from the worker's `$PATH` | Install it, or run the worker in compose |
 | Chat 503 `NO_LLM_CONFIGURED` | No Ollama and no cloud key | Start Ollama or paste one API key |
-| Setting seems to do nothing | Typo'd env key — `extra="ignore"` swallows unknown keys silently | Check spelling against [configuration.md](../03-reference/configuration.md) |
+| Setting seems to do nothing | Typo'd env key: `extra="ignore"` swallows unknown keys silently | Check spelling against [configuration.md](../03-reference/configuration.md) |

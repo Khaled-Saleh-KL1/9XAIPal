@@ -10,7 +10,7 @@
 > **Verify with:** restart the API and read the migration log lines
 >
 > ⚠ **Migrations are best-effort by design.** Each statement runs in its own transaction and a
-> failure is logged as a warning, not raised — then `_ensure_recent_columns()` patches up columns
+> failure is logged as a warning, not raised, then `_ensure_recent_columns()` patches up columns
 > that didn't apply. This is a recovery mechanism, not a migration system: it cannot detect a
 > partially-applied change it doesn't already know about. Replacing it with Alembic is tracked in
 > [roadmap.md](../roadmap.md).
@@ -66,8 +66,8 @@ docker compose exec -T db psql -U postgres -d scholarflow -f /docker-entrypoint-
 ```
 
 New capabilities added:
-- `chunks.table_json` (JSONB) — structured table data (headers + rows) for `chunk_type = 'table'`.
-- `figure_descriptions` table — rich, technical VLM-generated descriptions of figures/diagrams (especially architectures). These are generated during/after the normal ingestion + summarization pass.
+- `chunks.table_json` (JSONB): structured table data (headers + rows) for `chunk_type = 'table'`.
+- `figure_descriptions` table: rich, technical VLM-generated descriptions of figures/diagrams (especially architectures). These are generated during/after the normal ingestion + summarization pass.
 
 These descriptions are stored with full attribution so they participate in GLOBAL search, OVERVIEW synthesis, and targeted "explain this figure" flows.
 
@@ -125,7 +125,7 @@ psql -h localhost -U postgres -d scholarflow -f backend/app/database/schema.sql
 
 **New repository helpers** (see `backend/app/database/repositories/conversations.py`):
 - `get_main_chat(conversation_id)`
-- `get_thread_subtree(root_turn_id)` — uses recursive CTE + special-case logic to include the original first AI reply
+- `get_thread_subtree(root_turn_id)`: uses recursive CTE + special-case logic to include the original first AI reply
 - `has_children(turn_id)`
 - `get_thread_message_count(root_turn_id)`
 
@@ -148,7 +148,7 @@ ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS requested_model TEXT;
 ```
 
 ⚠ **The migration runner splits `schema.sql` on `;`.** A semicolon inside a SQL comment therefore
-truncates the statement mid-definition, and the table silently fails to create — the failure is a
+truncates the statement mid-definition, and the table silently fails to create: the failure is a
 logged warning, not an error, so the first symptom is a 500 at runtime. This bit during
 development. Keep semicolons out of comments in `schema.sql`.
 
@@ -161,6 +161,6 @@ No schema change. The chunker now records MinerU's cropped equation bitmap in `i
 `equation` entries, so `chunk_assets` gains rows for `math` chunks on the next ingest.
 
 ⚠ Existing papers do **not** gain equation crops until re-chunked
-(`POST /papers/{id}/rechunk`) — cheap, since it reuses the cached MinerU output and never re-runs
+(`POST /papers/{id}/rechunk`), cheap, since it reuses the cached MinerU output and never re-runs
 extraction. The same re-chunk also applies the U+FFFD glyph repair described in
 [ingestion-pipeline.md](../02-architecture/ingestion-pipeline.md).

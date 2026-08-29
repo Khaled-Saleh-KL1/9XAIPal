@@ -12,7 +12,7 @@ import type { DeckMemberKind } from '../lib/personalNotes';
  * The shared furniture every margin card wears.
  *
  * Before this, an AI note and a personal note were told apart by a slightly
- * greener border — which is invisible in peripheral vision, exactly where a
+ * greener border, which is invisible in peripheral vision, exactly where a
  * margin card lives. Every card now opens with the same strip: a grip to drag
  * it by, a colored dot and one word saying who made it, the paragraph it is
  * anchored to, and a slot for its actions. Same geometry, different color, so
@@ -39,7 +39,7 @@ export type DragKind = DeckMemberKind | 'deck';
  *
  * Dragging is wired with pointer events rather than the HTML5 drag-and-drop
  * API. HTML5 DnD would hand us a drag image and autoscroll for free, but it
- * does not exist on touch — and this app is meant to be opened from a tablet
+ * does not exist on touch, and this app is meant to be opened from a tablet
  * on the same network, where "drag one note onto another" is exactly the
  * gesture a finger expects to work. Pointer events cover mouse, pen and touch
  * with one path, and let the card itself be the thing that moves.

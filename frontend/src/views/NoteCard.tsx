@@ -17,7 +17,7 @@ import type { AgentStep, PaperNote } from '../api';
  * card in the gutter beside the passage it is about.
  */
 
-/** A note being generated right now — not yet a complete row. */
+/** A note being generated right now, not yet a complete row. */
 export interface PendingNote {
   clientId: string;
   noteId: string | null;
@@ -55,8 +55,8 @@ export interface NoteGroup {
 /**
  * Study state for a card sitting face-up in a deck.
  *
- * `revealed` false means show the prompt only — the question and what it was
- * asked about — so the deck can be used to test recall rather than reread.
+ * `revealed` false means show the prompt only: the question and what it was
+ * asked about, so the deck can be used to test recall rather than reread.
  */
 export interface StudyState {
   revealed: boolean;
@@ -103,7 +103,7 @@ function withCitationLinks(text: string): string {
       if (!seqs) return whole;
       return seqs.map((seq) => `[¶${seq}](#blk-${seq})`).join(' ');
     })
-    // ⚠ Sweep up markers that carry no block number — models given the WEB
+    // ⚠ Sweep up markers that carry no block number: models given the WEB
     // tool improvise "[[WEB]]" for a claim that came from outside the paper.
     // There is nothing to link to, and left alone it renders as literal
     // brackets mid-sentence. The trail below already names every page opened,
@@ -260,7 +260,7 @@ export function NoteCardView({
   const { dragging, isDropTarget, zoneProps, gripProps } = useCardDrag(drag);
   const rootModel = group.root.model || group.root.requested_model;
 
-  // Focus without scrolling — see the note in AskComposer: an autoFocus here
+  // Focus without scrolling, see the note in AskComposer: an autoFocus here
   // yanks the article away from the passage the note is about.
   useEffect(() => {
     if (composing) followUpRef.current?.focus({ preventScroll: true });

@@ -7,7 +7,7 @@
  * gemma4:31b-cloud: 77 token events, median 5 characters, 19% of them a single
  * character, and inter-event gaps of 79 ms at the median but 474 ms at p90 and
  * 751 ms at worst. Rendering each event the moment it lands reproduces that
- * cadence exactly — a letter, a long stall, then a clump of words. It reads as
+ * cadence exactly: a letter, a long stall, then a clump of words. It reads as
  * broken even though the stream is perfectly healthy.
  *
  * ## The approach
@@ -17,7 +17,7 @@
  *
  * The key idea is the RESERVE: the pacer deliberately holds a small amount of
  * text back rather than showing everything it has. That cushion is what lets
- * it keep painting through a 750 ms stall — without it the buffer empties
+ * it keep painting through a 750 ms stall: without it the buffer empties
  * during the first gap and the stutter returns, just shifted later. When the
  * buffer grows beyond the reserve (the model sent a burst) it drains fast to
  * catch up, so the cushion never becomes latency that accumulates.
@@ -144,7 +144,7 @@ export function createPacer(onUpdate: (revealed: string) => void): Pacer {
 /**
  * Hide a trailing, not-yet-closed math span while the answer is still arriving.
  *
- * Without this the reader watches raw LaTeX type itself out — "$\mathcal{P" —
+ * Without this the reader watches raw LaTeX type itself out: "$\mathcal{P",
  * and then snap into a rendered symbol once the closing delimiter lands. The
  * flicker is worse than a brief gap, so the incomplete fragment is withheld
  * until it can be rendered.

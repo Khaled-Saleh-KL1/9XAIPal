@@ -1,6 +1,6 @@
 # API reference
 
-> **What this is:** every HTTP endpoint, its payload, and its errors. Look-up only — no narrative.
+> **What this is:** every HTTP endpoint, its payload, and its errors. Look-up only, no narrative.
 >
 > **Owns:** endpoint paths, request/response shapes, status codes.
 > **Does not own:** why a route behaves as it does ([chat-and-ask.md](../02-architecture/chat-and-ask.md)).
@@ -9,13 +9,13 @@
 > [`endpoints/auth.py`](../../backend/app/api/v1/endpoints/auth.py) (`main`, 502272b); the rest
 > 2026-07-28 against [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870).
 > The note anchor payload was re-read 2026-08-18 against
-> [`endpoints/notes.py`](../../backend/app/api/v1/endpoints/notes.py) (`8fb153b`) — **not**
+> [`endpoints/notes.py`](../../backend/app/api/v1/endpoints/notes.py) (`8fb153b`): **not**
 > against live OpenAPI, which was not running.
 > **Verify with:** `http://localhost:8000/docs` (live OpenAPI, always authoritative)
 >
 > ⚠ Every route below except `/health` and `/auth/*` requires a logged-in session (an
-> `httponly` cookie — see [auth.md](../02-architecture/auth.md)) and is scoped to the caller's own
-> data. A request for a resource you don't own **404s**, not 403 — existence is never confirmed to
+> `httponly` cookie, see [auth.md](../02-architecture/auth.md)) and is scoped to the caller's own
+> data. A request for a resource you don't own **404s**, not 403, since existence is never confirmed to
 > a non-owner.
 
 All endpoints live under the prefix **`/api/v1`** and are registered in
@@ -87,10 +87,10 @@ GET    /search/web
 Static (not under `/api/v1`):
 
 ```
-GET /static/images/<doc_id>/<file>           — extracted chunk images
-GET /static/extracted/<doc_id>/...           — raw MinerU output
-GET /static/assets/<doc_id>.pdf              — original PDF, direct served
-GET /static/images/research/<conv_id>/<file> — research-agent-saved images
+GET /static/images/<doc_id>/<file>           : extracted chunk images
+GET /static/extracted/<doc_id>/...           : raw MinerU output
+GET /static/assets/<doc_id>.pdf              : original PDF, direct served
+GET /static/images/research/<conv_id>/<file> : research-agent-saved images
 ```
 
 ## Health
@@ -114,7 +114,7 @@ Probes the DB, Ollama (`/api/tags`), and the active web-search provider. Overall
 `degraded` if the database is unavailable.
 
 ⚠ `searxng` is a **deprecated alias for `web_search`**, kept so older clients keep parsing. It
-carries the *active* provider's status — it says nothing about SearXNG specifically unless SearXNG
+carries the *active* provider's status: it says nothing about SearXNG specifically unless SearXNG
 is the one running.
 
 ⚠ **`web_search` does not prove a Tavily key works.** Tavily exposes no health endpoint, so the
@@ -139,7 +139,7 @@ Request:
 ```
 
 Response: `201 Created`, sets the session cookie, body is a `UserResponse` (`id`, `email`,
-`display_name`, `created_at` — never `password_hash`).
+`display_name`, `created_at`, never `password_hash`).
 
 Errors: `403` if `SIGNUP_INVITE_CODE` is unset (signup closed) or the code doesn't match
 (`secrets.compare_digest`, constant-time). `409` if the email is already registered.
@@ -150,18 +150,18 @@ Request: `{ "email": "...", "password": "..." }`
 
 Response: `200 OK`, sets the session cookie, body is a `UserResponse`.
 
-`401 Invalid email or password` for both "no such account" and "wrong password" — the check runs
+`401 Invalid email or password` for both "no such account" and "wrong password": the check runs
 a real Argon2 verify either way (against a precomputed dummy hash when the email doesn't exist),
 so the two cases take similar time and neither discloses whether an email is registered.
 
 ### `POST /auth/logout`
 
-No body. `204 No Content`. Idempotent — logging out with no session, or an already-expired one,
+No body. `204 No Content`. Idempotent: logging out with no session, or an already-expired one,
 still succeeds.
 
 ### `GET /auth/me`
 
-No auth required to call it — that's the point. `200 OK` with `{ "user": <UserResponse> | null }`.
+No auth required to call it, that's the point. `200 OK` with `{ "user": <UserResponse> | null }`.
 The frontend calls this once on load to decide whether to show the app or the login screen.
 
 ---
@@ -280,7 +280,7 @@ Rendered with PyMuPDF on first request and cached at `storage/covers/<id>.jpg`.
 
 ⚠ **204, not 404, for a missing cover.** The library requests one per card; a wall of 404s makes a
 working library look broken. ⚠ A browser reports 204 to `<img>` as a **load error**, so every
-client needs an `onError` placeholder — see
+client needs an `onError` placeholder: see
 [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx).
 
 ⚠ The cache is keyed by document id alone and is never invalidated. A document's first page cannot
@@ -305,7 +305,7 @@ Wipes cached extraction + DB side-effects and re-runs the full pipeline
 
 ### `POST /papers/{paper_id}/regenerate-summaries`
 
-Dispatches `generate_section_summaries` — re-runs hierarchical section
+Dispatches `generate_section_summaries`, which re-runs hierarchical section
 summarization and VLM figure descriptions. Returns `202 Accepted`.
 
 ### `POST /papers/{paper_id}/reconstruct-reading-order`
@@ -322,7 +322,7 @@ Source: [endpoints/chunks.py](../../backend/app/api/v1/endpoints/chunks.py).
 ### `GET /papers/{paper_id}/document`
 
 **The article reader's only load.** Returns every block of the paper plus its heading spine, in
-one response — chunks and their image assets are fetched in two queries and joined in memory.
+one response: chunks and their image assets are fetched in two queries and joined in memory.
 
 ⚠ Deliberately unpaginated. The reader renders the whole paper at once; the previous approach
 walked `/chunks/after/{seq}` once per chunk, costing 105 sequential round-trips on a 14-page
@@ -352,7 +352,7 @@ paper before a single word appeared.
 }
 ```
 
-⚠ `image_url` is populated for `figure` **and** `math` blocks — MinerU crops a bitmap of every
+⚠ `image_url` is populated for `figure` **and** `math` blocks: MinerU crops a bitmap of every
 equation alongside its LaTeX, and the reader hands that crop to the model when a question is
 anchored to a formula.
 
@@ -396,8 +396,8 @@ client:
 `image_url` is populated only when there's a row in `chunk_assets` for
 this chunk with `asset_type='image'`.
 
-`404 ChunkNotFound` when there's no chunk at that sequence — the
-frontend uses this as the "end of paper" signal.
+`404 ChunkNotFound` when there's no chunk at that sequence, which the
+frontend uses as the "end of paper" signal.
 
 ---
 
@@ -426,13 +426,13 @@ Source: [endpoints/notes.py](../../backend/app/api/v1/endpoints/notes.py). Behav
 [chat-and-ask.md](../02-architecture/chat-and-ask.md).
 
 A **note** is one question anchored to a place in a paper, plus its answer, rendered as a card in
-the reader's margin. Notes live in `paper_notes` — not in `conversation_turns` — because they are
+the reader's margin. Notes live in `paper_notes`, not in `conversation_turns`, because they are
 a different artifact: anchored, one Q+A per row, and untouched by routing, compaction, or
 sub-threads.
 
 ### `GET /papers/{paper_id}/notes`
 
-Every note on the paper — **both scopes** — ordered by `anchor_sequence_id` then `created_at`,
+Every note on the paper, **both scopes**, ordered by `anchor_sequence_id` then `created_at`,
 the same order the margin lays them out in. The client splits them: `scope='anchor'` renders in the
 gutter, `scope='document'` in the assistant panel.
 
@@ -488,7 +488,7 @@ Event types, one JSON object per `data:` line:
 
 | Event | Payload | Meaning |
 | --- | --- | --- |
-| `created` | `note_id` | The row exists — render the card now. |
+| `created` | `note_id` | The row exists, render the card now. |
 | `status` | `message` | The phase (`Reading the passage…`, `Writing the answer…`). |
 | `step` | see below | One tool call. Arrives **twice** per call. |
 | `token` | `text` | Answer text as it generates. |
@@ -499,14 +499,14 @@ Event types, one JSON object per `data:` line:
 
 ```ts
 {
-  id: string,          // "s{round}-{index}" — stable across the running/done pair
+  id: string,          // "s{round}-{index}": stable across the running/done pair
   n: number,           // which tool round, 1-based
   tool: "SECTION" | "SEARCH" | "READ" | "WEB",
   arg: string,         // what was asked for
   state: "running" | "done",
   think: string | null,   // the model's stated reason; first call of the round only
   label: string,          // "Read “4.2 Training mixture”"
-  result: string,         // "2 blocks · ¶47–¶48" — empty while running
+  result: string,         // "2 blocks · ¶47–¶48": empty while running
   seqs: number[],         // block numbers pulled in
   sources: { title: string, url: string }[]   // WEB only
 }
@@ -515,13 +515,13 @@ Event types, one JSON object per `data:` line:
 ⚠ **Upsert by `id`, never append.** Every call is announced as `running` before it executes and
 re-sent as `done` after. Appending renders each fetch as two rows, the first spinning forever.
 
-⚠ **The observation is never sent.** The raw blocks the model reads — thousands of characters per
-call — stay server-side and go only into the next prompt. `result` and `seqs` are the summary.
+⚠ **The observation is never sent.** The raw blocks the model reads, thousands of characters per
+call, stay server-side and go only into the next prompt. `result` and `seqs` are the summary.
 
 ⚠ Three fields in the request are **advisory and can be overridden by the server**:
 
 - `anchor.chunk_id` is always re-resolved from `sequence_id`. Re-chunking recreates every row with
-  fresh UUIDs, so a tab opened before a re-chunk holds ids that no longer exist — inserting one
+  fresh UUIDs, so a tab opened before a re-chunk holds ids that no longer exist, and inserting one
   violates the foreign key and 500s the request.
 - `model` is **ignored entirely when `parent_note_id` is set**. A follow-up always uses the
   parent's `requested_model`. A thread that switched models halfway would destroy the comparison
@@ -533,8 +533,8 @@ call — stay server-side and go only into the next prompt. `result` and `seqs` 
 `scope='document'`, everything else → `'anchor'`. A follow-up inherits its parent's. Accepting both
 would allow rows (`kind='document', scope='anchor'`) that no surface can place.
 
-⚠ **A holistic question gets more tool rounds** — `PAPER_AGENT_HOLISTIC_MAX_STEPS` (6) rather than
-`PAPER_AGENT_MAX_STEPS` (4) — and whole-document stuffing is disabled for it regardless of
+⚠ **A holistic question gets more tool rounds**, `PAPER_AGENT_HOLISTIC_MAX_STEPS` (6) rather than
+`PAPER_AGENT_MAX_STEPS` (4), and whole-document stuffing is disabled for it regardless of
 `PAPER_WHOLE_DOCUMENT_CONTEXT`.
 
 ### `PATCH /papers/{paper_id}/notes/{note_id}/margin`
@@ -552,17 +552,17 @@ Body `{"margin_side": "left" | "right"}` → `{"id", "margin_side"}`. 400 on any
 Source: [endpoints/personal.py](../../backend/app/api/v1/endpoints/personal.py). Tables:
 [database-schema.md](database-schema.md#personal-reading-state).
 
-Everything in the reader that belongs to the person rather than the paper — **bookmarks**, the
+Everything in the reader that belongs to the person rather than the paper: **bookmarks**, the
 reader's **own notes**, and **decks**. Distinct from `/notes` above, which is what the *model*
 answered.
 
 `[historical]` This lived in `localStorage` until 2026-07-28, which made it per-browser. The
-client migrates any leftover local copy on first open and then erases it — see
+client migrates any leftover local copy on first open and then erases it: see
 [frontend.md](../02-architecture/frontend.md#personal-state-and-its-migration).
 
 ### `GET /papers/{paper_id}/personal`
 
-All three collections in one request. **Fetch this, not the three below** — decks reference the
+All three collections in one request. **Fetch this, not the three below**: decks reference the
 other two, so served separately a deck list can arrive describing a note a concurrent delete has
 already removed, and the margin renders a stack with a hole in it.
 
@@ -617,16 +617,16 @@ name set in the panel.
 | `DELETE /papers/{paper_id}/personal-notes/{note_id}` | `204`, and prunes any deck this left below two cards. |
 
 ⚠ `anchor_chunk_id` is re-resolved from `anchor_sequence_id` server-side and is never accepted from
-the client — same re-chunk hazard as `POST /papers/{paper_id}/notes/stream` above.
+the client: same re-chunk hazard as `POST /papers/{paper_id}/notes/stream` above.
 
 ### Decks
 
 | Route | Behaviour |
 | --- | --- |
 | `GET /papers/{paper_id}/decks` | `{"decks": [...]}`, oldest first, members in stacking order. |
-| `PUT /papers/{paper_id}/decks` | Body `{"decks": [...]}` — replaces the paper's whole arrangement. Returns what was stored. |
+| `PUT /papers/{paper_id}/decks` | Body `{"decks": [...]}`, replaces the paper's whole arrangement. Returns what was stored. |
 
-⚠ **`PUT` is a whole-collection replace, and that is the contract** — there is no per-deck create,
+⚠ **`PUT` is a whole-collection replace, and that is the contract**: there is no per-deck create,
 update, or delete. One drag can dissolve a deck, create another, and move a card between two more;
 that is a single arrangement, applied in one transaction. Expressed as granular calls it becomes an
 ordered sequence with a half-applied state between every pair, and a request dropped in the middle
@@ -652,12 +652,12 @@ Source: [endpoints/studies.py](../../backend/app/api/v1/endpoints/studies.py). B
 [chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b--the-study-agent-the-desk).
 
 A **study** is a named group of papers that scopes an answer. Its chat lives in
-`conversation_turns` — the same table the book chat uses — because a desk conversation is a rolling
+`conversation_turns`, the same table the book chat uses, because a desk conversation is a rolling
 transcript with follow-ups, not a standalone Q+A.
 
 ⚠ **`library` is a valid `{study_id}`.** It means the library-wide scope: every finished paper, no
 group. Every endpoint below accepts it; `study_id IS NULL` on the turn rows says the same thing in
-the database. `PATCH` and `DELETE` do not — there is no row to change.
+the database. `PATCH` and `DELETE` do not, since there is no row to change.
 
 ### `GET /studies`
 
@@ -706,8 +706,8 @@ partial update could repoint citations already on screen.
 
 ### `POST /studies/{study_id}/chat/stream`
 
-Body `{"question": "…", "model": null}`. SSE, **the same event shapes as the note stream** —
-`created` (carrying `turn_id`), `status`, `step`, `token`, `done`, `error` — so one client
+Body `{"question": "…", "model": null}`. SSE, **the same event shapes as the note stream**:
+`created` (carrying `turn_id`), `status`, `step`, `token`, `done`, `error`, so one client
 component renders both. `done` carries `turn_id`, `answer`, `model`, `cited`, `agent_steps`.
 
 ⚠ The user's turn is stored **before** generation, so a failed model call still leaves the question
@@ -736,7 +736,7 @@ the universal board would be the same row.
 | `GET /stickies?board=chat&scope=<studyId\|library>` | That conversation's strip. |
 | `POST /stickies` | Body `{body?, color?, pinned?, board, scope?, document_ids?}` → the note. `201`. |
 | `PATCH /stickies/{id}` | Body `{body?, color?, pinned?, board?, scope?, document_ids?}`. Omitted fields are left alone. |
-| `DELETE /stickies/{id}` | `204`. **Reader-only** — see below. |
+| `DELETE /stickies/{id}` | `204`. **Reader-only**, see below. |
 
 ```json
 {"id", "body", "color": "yellow|blue|green|pink|orange|plain", "pinned": false,
@@ -750,7 +750,7 @@ enough: `scope=library` is a real destination, not "not supplied".
 
 ⚠ **`origin` cannot be set or patched.** `POST` forces `user`, so no client can
 forge an assistant note; the assistant writes its own by calling the repository
-from `study_agent`. And an edit never launders one — the badge records where the
+from `study_agent`. And an edit never launders one: the badge records where the
 claim came from, not who typed last.
 
 ⚠ **Only the reader deletes.** That is structural, not a check here: there is no
@@ -779,7 +779,7 @@ Models that can answer a note, local first and cloud-hosted last.
 ```
 
 Read from Ollama's `/api/tags`. A model is `is_cloud` when its name ends in `cloud` **or** it
-reports `size_bytes: 0` — a cloud entry carries no local weights. Embedding models are filtered
+reports `size_bytes: 0`, meaning a cloud entry carries no local weights. Embedding models are filtered
 out; they appear in the same tag list but cannot hold a conversation. Falls back to the single
 configured cloud model when Ollama is unreachable.
 
@@ -868,7 +868,7 @@ called by the standard UI but useful for testing retrieval directly.
 ### `GET /search/vector?q=...&document_id=<uuid>&limit=10`
 
 Embeds the query and returns the top-K chunks by cosine similarity.
-`document_id` is optional — when omitted, searches across all papers.
+`document_id` is optional: when omitted, searches across all papers.
 
 ### `GET /search/web?q=...&limit=5`
 

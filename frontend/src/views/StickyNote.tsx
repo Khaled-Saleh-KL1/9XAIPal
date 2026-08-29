@@ -8,11 +8,11 @@ import type { Sticky, StickyColor } from '../api';
  *
  * ⚠ **An assistant note is marked, and the mark cannot be edited away.** The
  * reader has to be able to tell "I decided this" from "a model claimed this"
- * at a glance and after a week — so the badge is drawn from `origin`, which the
+ * at a glance and after a week, so the badge is drawn from `origin`, which the
  * API refuses to patch. Editing the body of an assistant note leaves it the
  * assistant's; the badge records where the claim came from, not who typed last.
  *
- * ⚠ **Delete is the reader's alone.** There is no assistant path to it — no
+ * ⚠ **Delete is the reader's alone.** There is no assistant path to it: no
  * tool, and `study_agent` does not import the repository's delete. The × here
  * is the only way a note goes away, which is why it is on every note including
  * the ones the assistant wrote.
@@ -67,8 +67,8 @@ export function StickyNote({
   /**
    * Whether the clamped body actually has more below it.
    *
-   * ⚠ Measured, not inferred. This was a CSS heuristic — fade when the body has
-   * three or more block children — which is wrong for the common case: a long
+   * ⚠ Measured, not inferred. This was a CSS heuristic: fade when the body has
+   * three or more block children, which is wrong for the common case: a long
    * note is usually ONE long paragraph, so it clamped with a hard cut through
    * the middle of a line and no fade to say why. CSS cannot ask "did this
    * overflow", so the question is asked of the DOM.
@@ -81,7 +81,7 @@ export function StickyNote({
     if (editing) ref.current?.focus({ preventScroll: true });
   }, [editing]);
 
-  // The body can change under us — the assistant edits notes too — so a card
+  // The body can change under us: the assistant edits notes too. So a card
   // that is not being edited follows the server.
   useEffect(() => {
     if (!editing) setDraft(note.body);

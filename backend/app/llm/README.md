@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The `llm` directory owns all model communication — local Ollama **and** cloud
+The `llm` directory owns all model communication: local Ollama **and** cloud
 APIs (OpenAI, Anthropic, xAI, DeepSeek). Other backend layers never
 know which backend is active or what the model is called: they call the
 client with a *role* and the resolver picks the backend and model.
@@ -17,8 +17,8 @@ The single decision point for "which AI backend and which model?". With
 1. Probe Ollama at `OLLAMA_BASE_URL` (`GET /api/tags`, 3 s timeout, result
    cached 30 s). Reachable → use Ollama with `CHAT_MODEL` / `VLM_MODEL` /
    `CLASSIFIER_MODEL`.
-2. Otherwise walk the cloud keys in fixed order — OpenAI → Anthropic →
-   xAI → DeepSeek — and use the first `*_API_KEY` that is set, with
+2. Otherwise walk the cloud keys in fixed order: OpenAI → Anthropic →
+   xAI → DeepSeek, and use the first `*_API_KEY` that is set, with
    that provider's own model setting (`OPENAI_CHAT_MODEL`, …). Ollama tags
    are never sent to a cloud API.
 3. Otherwise raise `NoLLMConfigured` (→ HTTP 503, code `NO_LLM_CONFIGURED`)
@@ -33,7 +33,7 @@ Exposes `resolve_llm()` / `resolve_llm_sync()` returning a frozen
 `model_for_role(role)`), plus `resolve_embedding()` / `resolve_embedding_sync()`
 returning an `EmbeddingTarget`. Embedding resolution follows the same chain
 but only OpenAI offers an embedding API among these providers, and the auto
-choice is **pinned per process** — vectors from different models are not
+choice is **pinned per process**: vectors from different models are not
 comparable, so a mid-run Ollama hiccup must never mix models inside one
 library.
 
@@ -42,7 +42,7 @@ library.
 Backend-agnostic entry points used by the rest of the app: `chat`,
 `stream_chat` (async) and `chat_sync` (Celery workers). Callers pass
 `role="chat" | "classifier" | "vlm"` (or an explicit `model` override); the
-client resolves the target, then dispatches — Ollama targets through
+client resolves the target, then dispatches: Ollama targets through
 `ollama_client.py`, cloud targets via OpenAI-compatible
 `POST {base_url}/chat/completions` with a Bearer key (keyless `custom`
 endpoints allowed). `is_available()` returns False when resolution fails.

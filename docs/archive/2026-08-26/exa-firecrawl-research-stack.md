@@ -1,4 +1,4 @@
-# Plan — Replace SearXNG with Exa (search) + Firecrawl (read)
+# Plan: Replace SearXNG with Exa (search) + Firecrawl (read)
 
 > **What this is:** the design and migration plan for swapping the EXTERNAL research path
 > from a self-hosted SearXNG metasearch proxy to a two-stage **Exa → Firecrawl** pipeline:
@@ -11,11 +11,11 @@
 > §10 segmentation for handoff.
 >
 > **Companions (detail):**
-> [chat-and-ask.md](../../02-architecture/chat-and-ask.md) — how EXTERNAL is routed and cited ·
-> [ai-backend.md](../../02-architecture/ai-backend.md) — provider resolution this plan mirrors ·
-> [configuration.md](../../03-reference/configuration.md) — canonical env-var table.
+> [chat-and-ask.md](../../02-architecture/chat-and-ask.md): how EXTERNAL is routed and cited ·
+> [ai-backend.md](../../02-architecture/ai-backend.md): provider resolution this plan mirrors ·
+> [configuration.md](../../03-reference/configuration.md): canonical env-var table.
 >
-> **Status:** `[historical]` — **superseded, not implemented.** On 2026-08-26 the web-search path
+> **Status:** `[historical]`: **superseded, not implemented.** On 2026-08-26 the web-search path
 > was replaced with **Tavily** instead, behind the provider dispatch in
 > [`app/search/web.py`](../../../backend/app/search/web.py). Tavily returns ranked, already-extracted
 > page text in one call, which is what the two-stage Exa → Firecrawl pipeline below existed to
@@ -24,7 +24,7 @@
 > See [decisions.md](../../decisions.md), entry 2026-08-26.
 >
 > **Reflects code as of:** 2026-07-25 (`main`, ad43845)
-> **Language decision:** the backend is **Python 3.11 / FastAPI** — every integration below is
+> **Language decision:** the backend is **Python 3.11 / FastAPI**, so every integration below is
 > Python (`exa-py`, `firecrawl-py`). The React frontend never calls Exa or Firecrawl directly.
 
 ---
@@ -53,7 +53,7 @@ Trace the EXTERNAL route as it exists today:
 
 | Step | Code | What actually happens |
 | --- | --- | --- |
-| Search | [`searxng_client.py::search`](../../../backend/app/search/searxng_client.py) | Returns `title`, `url`, `snippet`, `source_engine`, `score` — SERP metadata only. |
+| Search | [`searxng_client.py::search`](../../../backend/app/search/searxng_client.py) | Returns `title`, `url`, `snippet`, `source_engine`, `score`: SERP metadata only. |
 | Rank | [`ranking.py::rank_results`](../../../backend/app/search/ranking.py) (L22-25) | Dedupes by URL, sorts by engine `score`, **truncates every snippet to 500 chars**. |
 | "Study" | [`research_agent.py::_study_results`](../../../backend/app/chat/research_agent.py) (L211-217) | Takes `snippet[:280]` and calls it a `key_point`. That is the entire study phase. |
 | Synthesize | [`orchestrator.py`](../../../backend/app/chat/orchestrator.py) | Feeds those 280-char fragments to the LLM as `RESEARCH FINDINGS`. |
@@ -78,7 +78,7 @@ Exa fixes the *finding*. Firecrawl fixes the *reading*. Neither alone closes the
 
 ## 2. The two-stage contract
 
-### Stage 1 — Exa (the map maker)
+### Stage 1: Exa (the map maker)
 
 **Why:** embeddings-native search over a web index built for LLM consumption. Ranks by meaning,
 not keyword overlap, and exposes a `category` filter (`research paper`, `pdf`, `news`, `github`)
@@ -87,7 +87,7 @@ that replaces the hand-rolled `_TECH_HINT_WORDS` bias list.
 **When:** every EXTERNAL route, and every iteration of the research agent.
 
 **How:** `search_and_contents` returns ranked URLs *plus* Exa's own extracted text and highlights
-in one round trip. That text is good enough for ranking and for cheap questions — which matters,
+in one round trip. That text is good enough for ranking and for cheap questions, which matters,
 because it lets Stage 2 be selective rather than automatic.
 
 ```python
@@ -98,7 +98,7 @@ exa = AsyncExa(api_key=settings.exa_api_key)
 res = await exa.search_and_contents(
     query,
     type="auto",                    # neural when semantic, keyword when literal
-    category="research paper",      # or "pdf" / None — replaces the query-bias hack
+    category="research paper",      # or "pdf" / None: replaces the query-bias hack
     num_results=6,
     text={"max_characters": 2000},  # cheap pre-read for ranking
     highlights={"num_sentences": 3, "highlights_per_url": 2},
@@ -106,15 +106,15 @@ res = await exa.search_and_contents(
 )
 ```
 
-### Stage 2 — Firecrawl (the reader)
+### Stage 2: Firecrawl (the reader)
 
-**Why:** Exa's extracted text is a summary layer. For a paper the model must reason over —
-methods, equations, tables, ablations — the system needs the **whole document as clean markdown**.
+**Why:** Exa's extracted text is a summary layer. For a paper where the model must reason over
+methods, equations, tables, and ablations, the system needs the **whole document as clean markdown**.
 Firecrawl strips nav/ads/cookie walls (`onlyMainContent: true`, default), handles anti-bot
-pages via its proxy tiers, and — critically for this app — **converts PDFs to markdown natively**
+pages via its proxy tiers, and, critically for this app, **converts PDFs to markdown natively**
 (`parsers: ["pdf"]`, the default).
 
-**When:** *selectively*, on the top `FIRECRAWL_MAX_PAGES` Exa hits — never on all of them. This is
+**When:** *selectively*, on the top `FIRECRAWL_MAX_PAGES` Exa hits, never on all of them. This is
 the single most important cost control in the plan (see §6).
 
 **How:** `batch_scrape` over the selected URLs in one job rather than N sequential scrapes.
@@ -137,20 +137,20 @@ job = await fc.batch_scrape(
 
 > `max_age` is the quiet win. A research session re-visits the same canonical papers constantly
 > (arXiv, the same 3 blog posts). Firecrawl serves a cached scrape when the page is younger than
-> `max_age` — the upstream docs claim up to a 500 % speedup on repeat hits, and it converts most
+> `max_age`: the upstream docs claim up to a 500 % speedup on repeat hits, and it converts most
 > follow-up questions into a near-free path.
 
 ### The division of labour, stated as an invariant
 
 > **Exa decides *what* to read. Firecrawl decides *what the text is*. Neither ever decides what
-> the answer is** — synthesis stays in [`orchestrator.py`](../../../backend/app/chat/orchestrator.py)
+> the answer is**: synthesis stays in [`orchestrator.py`](../../../backend/app/chat/orchestrator.py)
 > with the resolved chat model, exactly as it is today.
 
 ---
 
 ## 3. Architecture
 
-### 3a. EXTERNAL route — before and after
+### 3a. EXTERNAL route: before and after
 
 ```text
 BEFORE (today)
@@ -239,7 +239,7 @@ iteration N  (MAX_ITERATIONS = 3, unchanged)
   │              dedupe vs sources_seen (existing set, reused)
   │                    │
   ├─ fresh urls ─► Firecrawl.batch_scrape (ONE job for the whole iteration)
-  │                    │                    ⚠ not one job per query — batch across the round
+  │                    │                    ⚠ not one job per query: batch across the round
   │                    ▼
   │              full markdown  ──►  _study_results()   [REWRITTEN: real text, not snippet[:280]]
   │                    │
@@ -263,7 +263,7 @@ sequenceDiagram
         RA->>E: search_and_contents(q) per query
         E-->>RA: ranked urls + text + highlights
         RA->>RA: dedupe vs sources_seen
-        RA->>F: batch_scrape(fresh top-K) — one job per iteration
+        RA->>F: batch_scrape(fresh top-K), one job per iteration
         F-->>RA: markdown per url
         RA->>RA: _study_results(full markdown)
         RA->>RA: _should_continue_research()
@@ -282,19 +282,19 @@ sequenceDiagram
 | --- | --- | --- |
 | New search provider | `app/search/exa_client.py` (new) | `search()` returns the same dict keys SearXNG did: `title`, `url`, `snippet`, `source_engine`, `score` |
 | New reader | `app/search/firecrawl_client.py` (new) | Returns `{url: markdown}`; missing/failed URLs are absent, never `None`-valued |
-| Provider selection | `app/search/resolver.py` (new) | Mirrors [`llm/resolver.py`](../../../backend/app/llm/resolver.py) — `auto` → Exa if key, else SearXNG if reachable, else empty |
+| Provider selection | `app/search/resolver.py` (new) | Mirrors [`llm/resolver.py`](../../../backend/app/llm/resolver.py): `auto` → Exa if key, else SearXNG if reachable, else empty |
 | EXTERNAL assembly | `app/chat/external_context.py` (rewrite) | `build_external_context()` keeps its return shape: `{results, images, query, original_query, image_intent}` |
 | Research loop | `app/chat/research_agent.py` (`_study_results`, L201-229) | Studies full markdown; batch-scrapes once per iteration, not per query |
-| Ranking | `app/search/ranking.py` | Exa `score` is a relevance float, not a SearXNG engine score — confirm sort direction still holds |
+| Ranking | `app/search/ranking.py` | Exa `score` is a relevance float, not a SearXNG engine score, so confirm sort direction still holds |
 | Config | `app/core/config.py`, `backend/.env.example` | New keys in §5 load and default cleanly with no key set |
-| Health | `app/api/v1/endpoints/health.py` | `searxng` field becomes `research` (or reports both) — this is a **response-shape change**, see §9 |
+| Health | `app/api/v1/endpoints/health.py` | `searxng` field becomes `research` (or reports both). This is a **response-shape change**, see §9 |
 | Debug endpoint | `app/api/v1/endpoints/search.py` (`GET /search/web`) | Still returns `{results, query, total}` |
 | Compose | `backend/docker-compose.yml` | `searxng` service + `SEARXNG_URL` env in `api` and `celery_worker` become optional |
-| Deps | `backend/requirements.txt` | `exa-py`, `firecrawl-py` — **pin them**; nothing else in this file is pinned (known debt) |
+| Deps | `backend/requirements.txt` | `exa-py`, `firecrawl-py`: **pin them**; nothing else in this file is pinned (known debt) |
 
 ### 4b. Interface both providers must satisfy
 
-Keeping this contract is what makes the swap non-destructive — `SEARCH_PROVIDER=searxng` must
+Keeping this contract is what makes the swap non-destructive: `SEARCH_PROVIDER=searxng` must
 remain a working fallback through at least one release.
 
 ```python
@@ -309,7 +309,7 @@ async def read(urls: list[str], *, timeout_s: int = 120) -> dict[str, str]:
 async def is_available() -> bool: ...
 ```
 
-> `read()` has no SearXNG implementation — the SearXNG provider returns `{}`. That is the honest
+> `read()` has no SearXNG implementation: the SearXNG provider returns `{}`. That is the honest
 > encoding of "this provider cannot read pages", and it lets `build_external_context` fall back to
 > snippets without a branch on provider name.
 
@@ -337,7 +337,7 @@ provider settings. Canonical table lives in
 | `SEARXNG_URL` | `http://localhost:8080` | **Retained.** Still the fallback provider; unchanged semantics. |
 
 > ⚠ `RESEARCH_CONTEXT_BUDGET_CHARS` is new and load-bearing. Today the EXTERNAL block is
-> self-limiting because snippets are tiny. Full markdown is not — three scraped papers can be
+> self-limiting because snippets are tiny. Full markdown is not: three scraped papers can be
 > 150 KB+, which will blow past a local model's usable window even at gemma4's 262 k context and
 > will be slow and expensive on a cloud key. Truncate per-source, round-robin across sources, so
 > one long paper cannot starve the other two.
@@ -347,26 +347,26 @@ provider settings. Canonical table lives in
 ## 6. Cost & latency envelope
 
 Stated per EXTERNAL turn, at the defaults above, as of 2026-07. **Verify against current Exa and
-Firecrawl pricing pages before committing spend — these are structural estimates, not quotes.**
+Firecrawl pricing pages before committing spend: these are structural estimates, not quotes.**
 
 | Path | Exa calls | Firecrawl pages | Notes |
 | --- | --- | --- | --- |
 | Single EXTERNAL question | 1 | ≤ 3 | Cache hits on repeat URLs cost ~nothing (`max_age`). |
 | Research agent, 1 iteration | 2–3 (one per query) | ≤ 3 (one batch job) | Batch per *iteration*, not per query. |
 | Research agent, full 3 iterations | 6–9 | ≤ 9 | ⚠ The realistic worst case. See the guard below. |
-| PDF scrape | — | 1 credit **per page** | A 12-page paper = 12 credits, not 1. This dominates cost. |
+| PDF scrape | n/a | 1 credit **per page** | A 12-page paper = 12 credits, not 1. This dominates cost. |
 
 > ⚠ **The per-page PDF billing is the sharpest cost edge in this plan.** `parsers: ["pdf"]`
-> converts PDFs to markdown at 1 credit per page — exactly the content this app most wants. A
+> converts PDFs to markdown at 1 credit per page, exactly the content this app most wants. A
 > research agent that scrapes three 15-page papers across three iterations can bill ~135 credits
 > for one question. Mitigations, in order of preference:
-> 1. Keep `FIRECRAWL_MAX_PAGES` low (3) and scrape only *newly seen* URLs — `sources_seen` in
+> 1. Keep `FIRECRAWL_MAX_PAGES` low (3) and scrape only *newly seen* URLs: `sources_seen` in
 >    [`research_agent.py`](../../../backend/app/chat/research_agent.py) already tracks this.
 > 2. Prefer the arXiv **abs** page over the **pdf** URL when both are available; scrape the PDF
 >    only when the model explicitly needs methods/results depth.
 > 3. Add a per-conversation scrape counter and stop reading (not searching) past a ceiling.
 
-**Latency.** Exa returns in roughly the time SearXNG did. Firecrawl adds a real batch-scrape wait —
+**Latency.** Exa returns in roughly the time SearXNG did. Firecrawl adds a real batch-scrape wait:
 budget **5–25 s** for 3 pages, more when `proxy` escalates to `enhanced`. Against the current
 `/ask` EXTERNAL baseline of 30–120 s with the research agent, this is not a regression, but it
 does move latency from "several fast useless calls" to "fewer slow useful ones". Say so in the UI:
@@ -383,33 +383,33 @@ the processing indicator should read *reading sources* during the scrape phase.
 | Exa 429 rate limit | HTTP 429 | Log, return `[]` for that query; other queries in the round still run | Fewer sources | Back off; lower `RESULTS_PER_SEARCH` |
 | `FIRECRAWL_API_KEY` missing | `resolver.py` | Exa text + highlights only, no scrape | Shallower answer, still cited | Add key |
 | Firecrawl job `failed` | `job.status == "failed"` | Use Exa text for all URLs | Shallower answer | Check Firecrawl status page |
-| Firecrawl partial batch | `job.completed < job.total` | Use whatever markdown arrived; missing URLs fall back to Exa text | Mixed depth | None needed — by design |
-| URL blocked by robots.txt | `/batch/scrape/{id}/errors` → `robotsBlocked[]` | URL omitted from `read()` result | Source cited from Exa text only | None — respect it |
+| Firecrawl partial batch | `job.completed < job.total` | Use whatever markdown arrived; missing URLs fall back to Exa text | Mixed depth | None needed, by design |
+| URL blocked by robots.txt | `/batch/scrape/{id}/errors` → `robotsBlocked[]` | URL omitted from `read()` result | Source cited from Exa text only | None, respect it |
 | Scrape returns huge markdown | `len()` vs `RESEARCH_CONTEXT_BUDGET_CHARS` | Per-source round-robin truncation | Slightly shorter context | Raise budget if the model has room |
-| Both providers unavailable | `resolver.py` | `build_external_context` returns empty `results` | Answer is ungrounded but does not crash — matches today's SearXNG-down behavior | Configure one provider |
+| Both providers unavailable | `resolver.py` | `build_external_context` returns empty `results` | Answer is ungrounded but does not crash: matches today's SearXNG-down behavior | Configure one provider |
 
 > The guiding rule, inherited from [`llm/resolver.py`](../../../backend/app/llm/resolver.py): **a
 > missing research provider degrades the answer; it never fails the request.** LOCAL, GLOBAL, and
-> OVERVIEW routes must remain completely unaffected — they never touch this code path.
+> OVERVIEW routes must remain completely unaffected, since they never touch this code path.
 
 ---
 
 ## 8. What never happens
 
-Negative guarantees — each is a bug if observed:
+Negative guarantees. Each is a bug if observed:
 
 1. **Exa and Firecrawl are never called on the LOCAL, GLOBAL, OVERVIEW, or OUT_OF_SCOPE routes.**
    The local-first promise in [overview.md](../../02-architecture/overview.md) survives this change:
    a user reading a paper and asking about it still emits zero external requests.
 2. **Firecrawl is never called on a URL Exa did not return** (or the user did not explicitly
-   paste). No crawling, no link-following, no `crawl()` — `scrape`/`batch_scrape` only.
+   paste). No crawling, no link-following, no `crawl()`: `scrape`/`batch_scrape` only.
 3. **Paper text, chunk text, and conversation history are never sent to Exa or Firecrawl.** Only
    the rewritten *query string* goes to Exa; only *URLs* go to Firecrawl.
 4. **A scrape failure never marks a document or job `failed`.** Ingestion and research are
    unrelated subsystems.
 5. **No scraped content is written to Postgres.** External markdown lives for the duration of the
    turn. (Research *images* keep their existing durable path under
-   `images/research/<conversation_id>/` — unchanged by this plan.)
+   `images/research/<conversation_id>/`, unchanged by this plan.)
 
 ---
 
@@ -418,7 +418,7 @@ Negative guarantees — each is a bug if observed:
 - ⚠ **Image search has no clean equivalent.** [`searxng_client.py::search_images`](../../../backend/app/search/searxng_client.py)
   backs `_wants_images()` in `external_context.py` and the `local_images` persistence in
   `research_agent.py`. Neither Exa nor Firecrawl offers a SearXNG-style image search. Options,
-  none free: (a) harvest `![](...)` image URLs out of the Firecrawl markdown — works well for
+  none free: (a) harvest `![](...)` image URLs out of the Firecrawl markdown, which works well for
   papers and blog posts, which is most of the real use; (b) keep SearXNG running *solely* for
   images; (c) drop the feature. **This plan assumes (a)** and treats (b) as the fallback if image
   quality regresses. This is the one place where the migration is not a strict improvement.
@@ -428,7 +428,7 @@ Negative guarantees — each is a bug if observed:
   release.
 - ⚠ **Local-first is now partly rented.** SearXNG was self-hosted; Exa and Firecrawl are paid
   SaaS on someone else's machine. The README's "everything runs locally by default" claim stays
-  true only because EXTERNAL is opt-in per query — but the claim must be reworded, not left to
+  true only because EXTERNAL is opt-in per query, but the claim must be reworded, not left to
   rot. ⚠ **Queries leave the machine in plaintext to a commercial API.** That is a real privacy
   posture change and belongs in the README, not buried here.
 - **`rank_results` semantics shift.** SearXNG `score` is an engine-fusion score; Exa's is a
@@ -436,7 +436,7 @@ Negative guarantees — each is a bug if observed:
   snippet truncation at [`ranking.py:24-25`](../../../backend/app/search/ranking.py) becomes actively
   harmful once `snippet` can carry Exa's 2000-char text. Raise or remove it.
 - **`rewrite_query_for_papers` should shrink, not die.** With `category="research paper"` doing
-  the domain work, the keyword-stuffing branches are noise — but the *paper-title anchoring*
+  the domain work, the keyword-stuffing branches are noise, but the *paper-title anchoring*
   branch (`f'{q} (in the context of the research paper "{title}")'`) is genuinely useful signal
   for a semantic engine. Keep that one.
 - **Neither SDK is currently a dependency, and `requirements.txt` pins nothing.** Adding two
@@ -454,7 +454,7 @@ both; S4 is cleanup that must not start until S3 has been exercised on a real qu
 | --- | --- | --- |
 | **S1** | `app/search/exa_client.py` + `resolver.py` + config keys. Exa behind the `search()` contract in §4b. | `GET /search/web?q=...` returns Exa results with `SEARCH_PROVIDER=exa`, and identical-shaped SearXNG results with `SEARCH_PROVIDER=searxng`. |
 | **S2** | `app/search/firecrawl_client.py` implementing `read()`. Batch scrape, `max_age`, PDF parsing, partial-failure tolerance. | Given 3 URLs (one HTML, one arXiv abs, one PDF), returns markdown for each; a deliberately bad URL is omitted, not `None`. |
-| **S3** | Wire both into `external_context.py` + `research_agent.py::_study_results`. Budget cap. Health field. | An EXTERNAL question produces an answer citing text that appears in the scraped markdown — verified by grepping the answer against `job.data[].markdown`. |
+| **S3** | Wire both into `external_context.py` + `research_agent.py::_study_results`. Budget cap. Health field. | An EXTERNAL question produces an answer citing text that appears in the scraped markdown, verified by grepping the answer against `job.data[].markdown`. |
 | **S4** | Image strategy (§9), compose/docs cleanup, decide SearXNG's fate, reword the local-first claim in the README. | `docker compose up` no longer requires `searxng`; README privacy wording matches reality. |
 
 **Not in scope:** the research agent's iteration heuristics (`_should_continue_research`), the

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * Edit a title in place. Shared by the library cards and both reader headers
- * — the same rename, wherever the reader happens to be when they want it.
+ * Edit a title in place. Shared by the library cards and both reader headers:
+ * the same rename, wherever the reader happens to be when they want it.
  *
  * Inline rather than in a modal: the reader is comparing this name against
  * its surroundings (the cover, the header it sits in), and a dialog covers
- * exactly that context. Enter commits, Escape reverts, blur commits — a click
+ * exactly that context. Enter commits, Escape reverts, and blur commits: a click
  * elsewhere after typing a name means the name, not "discard it".
  */
 export function TitleEditor({
@@ -25,7 +25,7 @@ export function TitleEditor({
   const [draft, setDraft] = useState(value);
   const ref = useRef<HTMLInputElement>(null);
   // ⚠ Enter commits and (via the caller flipping its "renaming" state)
-  // unmounts this input on the next render — removing a focused element
+  // unmounts this input on the next render: removing a focused element
   // from the DOM can refire its blur synthetically, which would call
   // onCommit a second time. Both calls carry the same draft, so this was
   // never a data-corruption risk, just a wasted extra request; this stops
@@ -33,7 +33,7 @@ export function TitleEditor({
   const committed = useRef(false);
 
   useEffect(() => {
-    // ⚠ preventScroll is load-bearing here too — a header rename can open
+    // ⚠ preventScroll is load-bearing here too: a header rename can open
     // pinned above a tall scroll area (the reader), and an unguarded focus()
     // jumps the browser to wherever it thinks the input "is" before layout
     // settles. Same fix as AskComposer's.

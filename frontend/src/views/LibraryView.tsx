@@ -462,7 +462,7 @@ function PaperCard({
         actions as siblings of the open target leaves three separate,
         correctly-named controls.
 
-        A card being renamed is not an open target at all — a stray click
+        A card being renamed is not an open target at all: a stray click
         inside the editor would otherwise open the reader mid-edit.
       */}
       <div

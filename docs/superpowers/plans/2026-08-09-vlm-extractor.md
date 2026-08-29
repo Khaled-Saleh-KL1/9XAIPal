@@ -20,10 +20,10 @@
 
 ## File Structure
 
-- Create `backend/app/extraction/vlm_client.py` — rendering, VLM call, parse, assembly, cropping.
-- Modify `backend/app/core/config.py` — add extractor settings.
-- Modify `backend/app/extraction/pipeline_sync.py` — dispatch on `EXTRACTOR_PROVIDER`.
-- Create `backend/tests/test_vlm_extractor.py` — unit tests (mocked VLM + fitz on a tiny generated PDF).
+- Create `backend/app/extraction/vlm_client.py`: rendering, VLM call, parse, assembly, cropping.
+- Modify `backend/app/core/config.py`: add extractor settings.
+- Modify `backend/app/extraction/pipeline_sync.py`: dispatch on `EXTRACTOR_PROVIDER`.
+- Create `backend/tests/test_vlm_extractor.py`: unit tests (mocked VLM + fitz on a tiny generated PDF).
 
 ---
 
@@ -360,7 +360,7 @@ git commit -m "feat(extraction): dispatch extractor on EXTRACTOR_PROVIDER"
 
 ---
 
-### Task 6: Local integration verification (manual, real key — not CI)
+### Task 6: Local integration verification (manual, real key, not CI)
 
 **Files:** none (verification only). Document results in the PR description.
 
@@ -373,9 +373,9 @@ extract_via_vlm(Path('../samples/attention-is-all-you-need.pdf'), d); \
 print(json.dumps(json.loads((d/'content_list.json').read_text())[:8], indent=2))"
 ```
 Expected: JSON blocks with headings (`text_level`), body `text`, some `equation`/`table`/`image` blocks; figure PNGs under `images/`.
-- [ ] **Step 3:** Start the backend locally (`EXTRACTOR_PROVIDER=vlm`) + frontend, upload `attention-is-all-you-need.pdf`, confirm the reader shows structured chunks (headings/figures/equations) — i.e. the content_list flows through `create_chunks_from_content_list` unchanged.
+- [ ] **Step 3:** Start the backend locally (`EXTRACTOR_PROVIDER=vlm`) + frontend, upload `attention-is-all-you-need.pdf`, confirm the reader shows structured chunks (headings/figures/equations), i.e. the content_list flows through `create_chunks_from_content_list` unchanged.
 - [ ] **Step 4:** Note quality observations (tables/math) + approximate credit usage in the PR description; decide whether whole‑page figure fallback is needed.
-- [ ] **Step 5: Open the PR** (runs backend CI — mocked tests only, no network):
+- [ ] **Step 5: Open the PR** (runs backend CI, mocked tests only, no network):
 ```bash
 git push -u origin feat/vlm-extractor
 gh pr create --base main --title "feat(extraction): Qwen3-VL cloud extractor (EXTRACTOR_PROVIDER=vlm)" --body "Implements docs/superpowers/specs/2026-08-09-vlm-extraction-design.md. Off by default; see local verification notes."
@@ -386,5 +386,5 @@ gh pr create --base main --title "feat(extraction): Qwen3-VL cloud extractor (EX
 ## Self-Review
 
 - **Spec coverage:** pluggable provider (Task 1,5) ✓; render (Task 2) ✓; per-page Qwen3‑VL call (Task 3) ✓; content_list assembly + assets + fallback (Task 4) ✓; dispatch/default-off (Task 5) ✓; mocked unit tests CI-safe + local integration (Tasks 3–6) ✓; config guardrails (Task 1) ✓.
-- **Placeholders:** none — every code/test step has real content. Model tag `qwen3-vl:235b-cloud` is a documented default to confirm in Task 6 (spec risk).
-- **Type consistency:** `render_pages`→`list[bytes]`; `call_vlm_page(png,model,client)->list[dict]`; `extract_via_vlm(pdf_path,output_dir)->Path`; `resolve_extractor(pdf_path,output_dir)->Path` — used consistently across Tasks 2–5.
+- **Placeholders:** none: every code/test step has real content. Model tag `qwen3-vl:235b-cloud` is a documented default to confirm in Task 6 (spec risk).
+- **Type consistency:** `render_pages`→`list[bytes]`; `call_vlm_page(png,model,client)->list[dict]`; `extract_via_vlm(pdf_path,output_dir)->Path`; `resolve_extractor(pdf_path,output_dir)->Path`: used consistently across Tasks 2–5.

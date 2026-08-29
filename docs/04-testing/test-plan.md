@@ -22,14 +22,14 @@ POSTGRES_DB=9xaipal_test pytest -v
 | File | Covers |
 | --- | --- |
 | [`test_chunk_sequence.py`](../../backend/tests/test_chunk_sequence.py) | Chunker sequence numbering + structural type detection |
-| [`test_ingestion_pipeline.py`](../../backend/tests/test_ingestion_pipeline.py) | End-to-end pipeline (extractor stub → chunks → assets); the fast/full profile split — a paper completes at chunking with nothing dispatched, a book still dispatches `embed_document` |
+| [`test_ingestion_pipeline.py`](../../backend/tests/test_ingestion_pipeline.py) | End-to-end pipeline (extractor stub → chunks → assets); the fast/full profile split: a paper completes at chunking with nothing dispatched, a book still dispatches `embed_document` |
 | [`test_vector_retrieval.py`](../../backend/tests/test_vector_retrieval.py) | `search_chunks` against pgvector with deterministic vectors |
 | [`test_provider_resolver.py`](../../backend/tests/test_provider_resolver.py) | Provider auto-detection, fallback order, namespace isolation, `NoLLMConfigured` |
 | [`test_subthread_conversations.py`](../../backend/tests/test_subthread_conversations.py) | Sub-thread trees via `parent_turn_id`, recursive history |
-| [`test_context_router.py`](../../backend/tests/test_context_router.py) | ⚠ **Placeholder — a single comment line. Covers nothing.** |
+| [`test_context_router.py`](../../backend/tests/test_context_router.py) | ⚠ **Placeholder: a single comment line. Covers nothing.** |
 
 ⚠ **These tests `TRUNCATE documents CASCADE` against whatever `POSTGRES_DB` resolves to**, before
-and after every test. That cascade takes chunks, assets, conversations, and notes with it — run it
+and after every test. That cascade takes chunks, assets, conversations, and notes with it: run it
 against the development database and the library is gone, with only the PDFs left on disk. This
 has happened.
 
@@ -83,7 +83,7 @@ Run in order against a clean library. Sample paper:
 | 9 | Reach the end | `404` on the next sequence sets the end state cleanly |
 | 10 | Open `#/paper/<id>` and refresh | Reading view restores from the URL hash |
 
-### Chat — one per route
+### Chat: one per route
 
 | # | Ask | Expect |
 | --- | --- | --- |
@@ -122,7 +122,7 @@ Run in order against a clean library. Sample paper:
 | # | Step | Pass criteria |
 | --- | --- | --- |
 | 25 | `DELETE /papers/{id}` | `204`; rows gone from all 7 tables; files gone from `documents/`, `assets/`, `extracted/`, `images/` |
-| 26 | After deletion, check `conversation_turns` | **Rows survive** with `document_id = NULL` — this is intended |
+| 26 | After deletion, check `conversation_turns` | **Rows survive** with `document_id = NULL`: this is intended |
 | 27 | Stop Ollama, ask a question | Polite error, no crash. Restart Ollama → next ask succeeds |
 | 28 | Stop Redis, upload a PDF | Document marked `failed` with an actionable `error_message` |
 
