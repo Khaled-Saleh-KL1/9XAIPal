@@ -10,7 +10,7 @@ Ollama (the LLM/VLM/embeddings) can stay on the host, or any cloud API can take 
 cd backend
 
 # 1. Copy and review env (no secrets in the example)
-cp .example.env .env
+cp .env.example .env
 # Edit .env if you want different models, larger pools, etc.
 
 # 2. (First time only — this builds the React UI once into a volume)
