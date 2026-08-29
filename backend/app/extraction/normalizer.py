@@ -15,6 +15,25 @@ def normalize_markdown(text: str) -> str:
     return text.strip()
 
 
+# A run of 3+ bare-numeric <sup> tags separated only by whitespace. MinerU's
+# layout model sometimes attributes a chart's own axis tick labels (rendered
+# as small baseline-shifted text inside the figure) to the surrounding
+# img_caption field instead of discarding them, e.g. one real caption becomes
+# "<sup>0.0</sup> <sup>0.2</sup> ... <sup>1.0 0.0</sup> ... Fig. 2: ...".
+# A genuine superscript in prose (a footnote marker, an exponent like
+# 10<sup>-4</sup>) never appears as part of a run this long, so the run length
+# is what distinguishes leaked tick labels from real superscripted text.
+_AXIS_TICK_RUN = re.compile(r"(?:<sup>\s*[\d.\s]+?\s*</sup>\s*){3,}")
+
+
+def strip_axis_tick_noise(text: str) -> str:
+    """Remove chart axis-tick-label runs leaked into a figure/chart caption."""
+    if "<sup>" not in text:
+        return text
+    text = _AXIS_TICK_RUN.sub(" ", text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
 def extract_plain_text(markdown: str) -> str:
     """Strip markdown formatting to get plain text for embeddings."""
     text = markdown

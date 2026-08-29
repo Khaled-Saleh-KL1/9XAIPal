@@ -425,6 +425,19 @@ body {
 .md-body .katex { font-size: 1.02em; }
 .md-body .katex-display { margin: 1em 0; overflow-x: auto; overflow-y: hidden; }
 
+/* A formula KaTeX couldn't parse (malformed OCR'd LaTeX) reads as inert
+   code, not a red error banner. The real parse error is still available
+   via the title tooltip KaTeX attaches to this span. */
+.md-body .katex-error {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.82em;
+  padding: 1px 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: help;
+}
+
 /* ── Active-chunk trailing bullet (ChapterPal "live cursor") ──── */
 .chunk-cursor::after {
   content: '\2009\2022';
