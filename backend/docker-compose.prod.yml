@@ -49,10 +49,24 @@
 # frontend with VITE_API_BASE_URL=https://<your-domain>.
 # ---------------------------------------------------------------------------
 
+# No service here set a logging driver, so every container used Docker's
+# daemon default — which, with no /etc/docker/daemon.json on this box, is
+# json-file with NO size cap at all. A long-lived, unattended box with no one
+# rotating logs by hand eventually fills the disk from log growth alone,
+# which is exactly the kind of slow, silent failure this file exists to rule
+# out. 50MB per container (10MB x 5 files) is plenty of history for
+# debugging without being unbounded.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: 9xaipal-postgres
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
       POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
@@ -74,6 +88,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: 9xaipal-redis
+    logging: *default-logging
     # Internal only — reached as redis://redis:6379 on the compose network.
     volumes:
        - 9xaipal_redis_data:/data
@@ -96,6 +111,7 @@ services:
       context: .
       dockerfile: Dockerfile.oracle
     container_name: 9xaipal-celery-worker
+    logging: *default-logging
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=1
     environment:
       POSTGRES_HOST: postgres
@@ -149,7 +165,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # `celery inspect ping` round-trips through the broker (Redis), not just
+    # a process-alive check — it answers even under a busy --concurrency=1
+    # extraction as long as the worker's control-plane thread is genuinely
+    # responsive, and only THAT is what autoheal restarts on. `restart:
+    # unless-stopped` alone only catches an exited process; a hung-but-still-
+    # running worker (deadlock, a stuck connection) would otherwise sit
+    # silently dead-in-place forever with nothing watching it.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping --timeout 5 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
+    labels:
+      autoheal: "true"
 
   # ------------------------------------------------------------------
   # API — FastAPI backend. Does NOT serve the SPA (SERVE_FRONTEND=false);
@@ -160,6 +191,7 @@ services:
       context: .
       dockerfile: Dockerfile.oracle
     container_name: 9xaipal-api
+    logging: *default-logging
     command: >
       uvicorn app.main:app
        --host 0.0.0.0 --port 8000
@@ -251,6 +283,7 @@ services:
   autoheal:
     image: willfarrell/autoheal:latest
     container_name: 9xaipal-autoheal
+    logging: *default-logging
     environment:
       AUTOHEAL_CONTAINER_LABEL: autoheal
       AUTOHEAL_INTERVAL: 15
