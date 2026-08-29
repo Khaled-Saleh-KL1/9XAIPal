@@ -22,8 +22,8 @@ The application code is more mature than the tooling around it. These are the ch
 | Gap | Impact | Fix |
 | --- | --- | --- |
 | **No CI at all**: no `.github/` | 7 test files exist and nothing runs them | A workflow running `pytest` + `tsc --noEmit` + `npm run build` |
-| **Nothing is pinned** in `requirements.txt` | `fastapi`, `sqlalchemy`, `httpx` all float. A fresh install in six months may not work | Pin, or generate a lockfile |
-| ⚠ **`pyproject.toml` is gitignored** | It is not in the clone, so `pip install -e .` fails for everyone. Also why there is no lint/format config | Remove it from `.gitignore` and commit it |
+| ~~**Nothing is pinned**~~ | ~~`fastapi`, `sqlalchemy`, `httpx` all floated in `requirements.txt`~~ | **Fixed 2026-08-29**: migrated to `pyproject.toml` + `uv.lock`, which pins every dependency (including transitive ones) exactly |
+| ~~**`pyproject.toml` is gitignored**~~ | ~~It was not in the clone, so `pip install -e .` failed for everyone~~ | **Fixed 2026-08-29**: `pyproject.toml`/`uv.lock` removed from `.gitignore` and committed |
 | **No linter or formatter** | No ruff/black/ESLint anywhere | Add ruff + an ESLint config |
 | ~~No pytest config~~ | ~~async fixtures in `conftest.py` were collected but never run, failing with an opaque `assert not self._finalizers`~~ | **Fixed 2026-07-26**: `backend/pytest.ini` sets `asyncio_mode = auto` |
 | **`.gitignore` ignores `*.env`** | Would also ignore `.env.example` if it were named `example.env`, which is fragile | Narrow the pattern |

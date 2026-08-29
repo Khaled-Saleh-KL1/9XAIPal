@@ -1,11 +1,8 @@
-# Backend API image. Dependencies are installed with **uv** from
-# requirements.txt (fast) instead of pip. The BuildKit cache mount keeps uv's
-# download cache across builds, so heavy wheels (torch, mineru) download once
-# and are reused — including by the worker image (Dockerfile.mineru).
-#
-# ⚠ This used to read a committed pyproject.toml + uv.lock. Neither is in the
-# repo, so every image build failed at the COPY. requirements.txt is what the
-# README and the venv setup actually use, so it is the one source of truth.
+# Backend API image (local dev). Dependencies come from pyproject.toml/
+# uv.lock's `mineru` extra — the same lockfile Dockerfile.mineru and
+# Dockerfile.lite use, just a different extra selected. The BuildKit cache
+# mount keeps uv's download cache across builds, so heavy wheels (torch,
+# mineru) download once and are reused across all three images.
 #
 # The Celery worker uses Dockerfile.mineru, which adds the OpenCV/runtime libs
 # and pre-downloads the MinerU pipeline models.
@@ -20,7 +17,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     # HTTP timeout aborts mid-download on a slow link, so raise it and cap how
     # many huge wheels download in parallel (so each gets enough bandwidth).
     UV_HTTP_TIMEOUT=600 \
-    UV_CONCURRENT_DOWNLOADS=4
+    UV_CONCURRENT_DOWNLOADS=4 \
+    # Install into the system interpreter below, not a project-local .venv —
+    # keeps `CMD`/`uvicorn` working unprefixed, same as `uv pip install
+    # --system` did before.
+    UV_PROJECT_ENVIRONMENT=/usr/local
 
 WORKDIR /app
 
@@ -35,15 +36,12 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the runtime deps into the system environment. `--mount=type=cache`
-# persists uv's wheel cache between builds (this is the pip -> uv speedup), and
-# the CPU torch index keeps the multi-hundred-MB CUDA wheels out of the image.
-COPY requirements.txt ./
+# `--mount=type=cache` persists uv's wheel cache between builds; `--locked`
+# fails the build instead of silently re-resolving if uv.lock and
+# pyproject.toml ever disagree (e.g. someone edited one by hand).
+COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-      --extra-index-url https://download.pytorch.org/whl/cpu \
-      --index-strategy unsafe-best-match \
-      -r requirements.txt
+    uv sync --locked --no-install-project --extra mineru
 
 COPY app ./app
 

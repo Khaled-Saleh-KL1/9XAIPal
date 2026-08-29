@@ -31,8 +31,8 @@
 
 ### MinerU: installed by uv, but the weights are not
 
-MinerU is pinned in `requirements.txt` (`mineru[core]>=3.4.4`) as of 2026-07-25, so
-`uv pip install -r requirements.txt` brings in the CLI. What it does **not** bring is the model
+MinerU is pinned in `pyproject.toml`'s `mineru` extra (`mineru[core]>=3.4.4`) as of 2026-07-25, so
+`uv sync --extra mineru` brings in the CLI. What it does **not** bring is the model
 weights: the first parse downloads ~5 GB from Hugging Face. Set `HF_TOKEN` if you get
 rate-limited.
 
@@ -93,16 +93,14 @@ docker compose up -d postgres redis searxng
 
 ```bash
 cd backend
-uv venv && source .venv/bin/activate
-uv pip install -r requirements.txt
+uv sync --extra mineru  # creates .venv and installs everything, pinned exactly by uv.lock
+source .venv/bin/activate
 
 uvicorn app.main:app --reload --port 8000
 ```
 
-⚠ Older instructions say `pip install -e .`. That does **not** work from a fresh clone:
-`pyproject.toml` is listed in `.gitignore` and is therefore not in the repository. Use
-`uv pip install -r requirements.txt` as shown above. (⚠ It pins no versions; see
-[roadmap.md](../roadmap.md).)
+⚠ Skip the `mineru` extra (plain `uv sync`) if you don't need PDF extraction on the host — it
+skips MinerU and torch, both multi-hundred-MB. `Dockerfile.lite` (the `api` service) does the same.
 
 ### 3.3 Celery worker (separate terminal, same venv)
 
@@ -218,7 +216,6 @@ Collected because each one has cost someone an hour:
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Upload sticks at `queued` forever | No Celery worker consuming Redis | Start the worker (§3.3) |
-| `pip install -e .` fails, no `pyproject.toml` | It is gitignored, so it is not in the clone | `uv pip install -r requirements.txt` |
 | `docker compose up` fails with "port is already allocated" | Another project holds `8000` / `5432` / `6379` / `8080` | Set `API_PORT` / `POSTGRES_PORT` / `REDIS_PORT` / `SEARXNG_PORT` in `backend/.env`, host side only |
 | Worker logs `Cannot connect to redis://redis:6379: Name or service not known` | A container left over from an older `up` is attached to no compose network | `docker compose up -d --force-recreate redis celery_worker` |
 | First embed 404s | `EMBEDDING_MODEL` has no matching pulled tag | Use an explicit tag, e.g. `qwen3-embedding:8b` |

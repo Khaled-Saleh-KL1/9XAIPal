@@ -91,7 +91,7 @@ def extract_pdf_sync(
             return _extract_with_pymupdf(pdf_path, output_dir), EXTRACTOR_PYMUPDF
         raise MinerUError(
             f"'{binary}' not found on PATH. Install MinerU "
-            "(`uv pip install -U 'mineru[pipeline]'` then `mineru-models-download "
+            "(`uv sync --extra mineru` from backend/, then `mineru-models-download "
             "-s huggingface -m pipeline`), or set ALLOW_PYMUPDF_FALLBACK=true "
             "to use the degraded text-only extractor."
         )

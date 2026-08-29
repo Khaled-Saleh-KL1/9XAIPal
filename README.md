@@ -78,8 +78,8 @@ cd 9XAIPal
 ### 2. Start the backend
 ```bash
 cd backend
-uv venv && source .venv/bin/activate
-uv pip install -r requirements.txt
+uv sync --extra mineru  # creates .venv and installs everything, including MinerU + torch
+source .venv/bin/activate
 
 # Copy and edit environment variables
 cp .env.example .env
