@@ -1,11 +1,22 @@
 name: Deploy
 
-# Runs on the self-hosted runner living on the production box itself, after
-# every push to main. There is exactly one deploy target, so pushes queue
-# instead of overlapping (cancel-in-progress: false — never kill a deploy
-# that's already rebuilding containers mid-flight).
+# Runs on the self-hosted runner living on the production box itself — but
+# only once the CI workflow has actually finished successfully on main, not
+# on the raw push itself. Those used to be two independent workflows
+# triggered by the same `push: main` event with no ordering between them: a
+# push that failed CI would still deploy, and (since branch protection here
+# has `enforce_admins: false`) a direct push bypassing a PR entirely would
+# deploy with zero verification. workflow_run closes both: this only fires
+# after CI's own run for that exact commit reports success, regardless of
+# how the commit reached main.
+#
+# There is exactly one deploy target, so runs queue instead of overlapping
+# (cancel-in-progress: false — never kill a deploy that's already rebuilding
+# containers mid-flight).
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
 
 concurrency:
@@ -36,6 +47,15 @@ jobs:
   deploy:
     name: deploy
     runs-on: self-hosted
+    # workflow_run fires on every CI completion regardless of outcome — the
+    # `branches:` filter above already narrows this to CI runs on main, but
+    # says nothing about whether CI actually passed. Both checks matter:
+    # conclusion catches a failed/cancelled CI run, event catches the
+    # (should be impossible, but cheap to rule out explicitly) case of some
+    # other trigger producing a run whose head_branch happens to read "main".
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
     # Turns this job into a tracked GitHub Deployment: shows "in progress"
     # the moment it starts, then success/failure when it finishes, on the
     # repo homepage's Environments widget, on this commit, and on the PR
@@ -45,12 +65,20 @@ jobs:
       name: production
       url: https://9xaipal.kl1.site
     steps:
+      # ref: pins this checkout to the EXACT commit CI just validated — the
+      # default for a workflow_run-triggered job is the default branch's
+      # CURRENT tip, which is only guaranteed to match if no other push
+      # landed in the (usually short, but not zero) gap between CI finishing
+      # and this job starting. Every other `github.sha` in this file below
+      # would have the same problem, so this workflow uses
+      # `github.event.workflow_run.head_sha` throughout instead.
+      #
       # fetch-depth: 0 (full history, not just this commit) is what makes
       # the rollback step below possible — it needs to `git worktree add` an
-      # EARLIER commit than the one just pushed, which a shallow clone
-      # wouldn't have on disk.
+      # EARLIER commit than this one, which a shallow clone wouldn't have.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - name: Sync tracked files into the deployment directory
@@ -77,7 +105,7 @@ jobs:
       # from the rsync above, so it survives every future sync untouched.
       - name: Record this commit as the last known-good deploy
         if: success()
-        run: echo "${{ github.sha }}" > "$DEPLOY_DIR/.last-good-sha"
+        run: echo "${{ github.event.workflow_run.head_sha }}" > "$DEPLOY_DIR/.last-good-sha"
 
       # The deploy above passed CI, built cleanly, and still failed its own
       # health check at runtime — the OLD, working containers are already
@@ -92,11 +120,11 @@ jobs:
         if: failure() && steps.deploy.outcome == 'failure'
         run: |
           if [ ! -f "$DEPLOY_DIR/.last-good-sha" ]; then
-            echo "::error::Deploy of ${{ github.sha }} failed and there is no previous known-good deploy recorded — nothing to roll back to. This is likely the first deploy under this workflow; manual intervention is required."
+            echo "::error::Deploy of ${{ github.event.workflow_run.head_sha }} failed and there is no previous known-good deploy recorded — nothing to roll back to. This is likely the first deploy under this workflow; manual intervention is required."
             exit 0
           fi
           GOOD_SHA=$(cat "$DEPLOY_DIR/.last-good-sha")
-          echo "::warning::Deploy of ${{ github.sha }} failed its health check. Rolling back to last known-good commit $GOOD_SHA."
+          echo "::warning::Deploy of ${{ github.event.workflow_run.head_sha }} failed its health check. Rolling back to last known-good commit $GOOD_SHA."
 
           git worktree add /tmp/rollback-src "$GOOD_SHA"
           rsync -a --delete \
@@ -109,7 +137,7 @@ jobs:
           git worktree remove /tmp/rollback-src --force
 
           if bash "$DEPLOY_DIR/scripts/deploy-once.sh"; then
-            echo "::notice::Rollback to $GOOD_SHA restored service. ${{ github.sha }} is still broken and needs a fix — the site is running the last good version in the meantime."
+            echo "::notice::Rollback to $GOOD_SHA restored service. ${{ github.event.workflow_run.head_sha }} is still broken and needs a fix — the site is running the last good version in the meantime."
           else
             echo "::error::Rollback to $GOOD_SHA ALSO failed its health check. The box needs manual attention now — this is no longer just a bad commit."
             exit 1
