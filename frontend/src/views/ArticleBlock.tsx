@@ -130,7 +130,7 @@ function ArticleBlockImpl({
           </button>
         </div>
         {block.plain_text && (
-          <figcaption className="article-caption">{block.plain_text}</figcaption>
+          <figcaption className="article-caption"><InlineMd>{block.plain_text}</InlineMd></figcaption>
         )}
       </figure>
     );
@@ -258,7 +258,7 @@ function ArticleBlockImpl({
       <aside {...common}>
         {ribbon}
         <div className="article-footnote">
-          {block.plain_text || block.content_markdown}
+          <InlineMd>{block.plain_text || block.content_markdown}</InlineMd>
         </div>
       </aside>
     );
