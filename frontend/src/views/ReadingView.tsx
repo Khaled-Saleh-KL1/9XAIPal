@@ -8,7 +8,7 @@ import { getPaper, type PaperMeta } from '../api';
  * Picks the reader for a document.
  *
  * Papers get the article reader: the whole text at once, with margin notes.
- * Books keep the original chapter-by-chapter reveal reader untouched — a book
+ * Books keep the original chapter-by-chapter reveal reader untouched: a book
  * cannot be rendered in one pass or held in a context window, so neither half
  * of the article experience applies to it.
  *

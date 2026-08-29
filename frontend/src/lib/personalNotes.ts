@@ -1,7 +1,7 @@
 /**
  * Personal reading state: bookmarks, the reader's own notes, and decks.
  *
- * The shapes here are the reader's, not the wire's — camelCase, timestamps as
+ * The shapes here are the reader's, not the wire's: camelCase, timestamps as
  * millisecond numbers, deck members as a flat ordered list. The API speaks
  * snake_case with ISO strings, so everything crosses through the mappers at
  * the bottom of this file rather than leaking a transport shape into the
@@ -38,7 +38,7 @@ export interface PersonalBookmark {
   updatedAt: number;
   /** First ~60 chars of the bookmarked block, cached for display. */
   snippet?: string;
-  /** Block kind at the bookmark — lets us label it "on figure" / "on equation". */
+  /** Block kind at the bookmark: lets us label it "on figure" / "on equation". */
   kind?: 'text' | 'figure' | 'equation' | 'table' | 'block';
   /** Page number where the bookmark lives, when known. */
   page?: number | null;
@@ -52,7 +52,7 @@ export interface PersonalBookmark {
  * Vertical space in the gutter is the scarcest resource in the reader: cards
  * stack downward from their anchors, so one tall note pushes every later note
  * away from the passage it belongs to. A deck collapses N cards into the
- * height of one, which is the whole point — you trade "see everything at once"
+ * height of one, which is the whole point: you trade "see everything at once"
  * for "everything stays where it belongs".
  *
  * A deck owns nothing. Its members are notes that go on existing
@@ -93,7 +93,7 @@ export function makeId(): string {
     return crypto.randomUUID();
   }
   // Deck ids are sent to the server as UUIDs, so the fallback has to be one
-  // too — a timestamp-and-random string is rejected by the route's UUID type.
+  // too, since a timestamp-and-random string is rejected by the route's UUID type.
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
@@ -170,7 +170,7 @@ export function makeDeck(members: DeckMember[], marginSide: MarginSide): NoteDec
  * Drop members whose underlying note is gone, then drop decks that no longer
  * hold two cards.
  *
- * The server enforces the same rule on write — membership rows cascade away
+ * The server enforces the same rule on write: membership rows cascade away
  * with their notes and thin decks are pruned. This is the local mirror of it,
  * applied between an optimistic delete and the response that confirms it, so
  * the margin never renders a stack with a hole in it.
@@ -274,7 +274,7 @@ export function clearLegacyState(paperId: string): void {
     try {
       localStorage.removeItem(key);
     } catch {
-      /* storage blocked — the migration is idempotent, so a retry is harmless */
+      /* storage blocked, but the migration is idempotent, so a retry is harmless */
     }
   }
 }

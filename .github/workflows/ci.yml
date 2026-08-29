@@ -1,14 +1,18 @@
 name: CI
 
-# Runs on every PR into main (the merge gate) and on pushes to main
-# (post-merge sanity check). Each job is path-gated (see the `changes` job), so
-# a PR only runs the checks for the area it touches — a docs- or frontend-only
+# Runs on every PR into dev or main (the merge gate for both) and on pushes
+# to either (a post-merge sanity check). dev is where feature branches land
+# day to day; main only ever moves via a dev -> main PR, once dev has been
+# tested locally — this is what makes deploy.yml (gated on a CI success
+# specifically on main, see its own header) a genuine second check, not a
+# rerun of the same one. Each job is path-gated (see the `changes` job), so a
+# PR only runs the checks for the area it touches — a docs- or frontend-only
 # PR won't wait on the backend suite.
 on:
   pull_request:
-    branches: [main]
+    branches: [dev, main]
   push:
-    branches: [main]
+    branches: [dev, main]
 
 # A newer commit on the same PR/branch cancels the older, still-running check.
 concurrency:

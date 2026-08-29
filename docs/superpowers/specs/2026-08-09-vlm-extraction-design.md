@@ -18,7 +18,7 @@ frontend. Removing MinerU entirely (it stays available behind a config switch).
 
 The entire downstream pipeline consumes exactly one artifact:
 `create_chunks_from_content_list(content_list_path)` reads MinerU's
-**`content_list.json`** — a JSON array of typed blocks. If the VLM extractor
+**`content_list.json`**: a JSON array of typed blocks. If the VLM extractor
 emits a compatible `content_list.json` (plus referenced asset images), nothing
 downstream changes.
 
@@ -32,7 +32,7 @@ Required block schema (as consumed by `chunker.py`):
 | `table` | `table_body` (HTML `<table>…`), `table_caption` (list), optional `img_path` | HTML preferred |
 | `list` | `list_items` (array) or `text` | rendered as text |
 | `page_footnote` / `aside_text` | `text` | → footnote chunk |
-| `header` / `footer` / `page_number` | — | dropped as chrome |
+| `header` / `footer` / `page_number` | n/a | dropped as chrome |
 
 Every block carries `page_idx` (**0‑indexed**; the chunker converts to 1‑indexed).
 Blocks appear in **reading order**. Asset images referenced by `img_path` live in
@@ -53,22 +53,22 @@ Pluggable extractor, mirroring the existing `LLM_PROVIDER` pattern:
 
 ### `vlm_client.py` components
 
-1. **Page render** — `fitz` (PyMuPDF, already a dependency): each PDF page →
+1. **Page render**: `fitz` (PyMuPDF, already a dependency): each PDF page →
    PNG at a configurable DPI (default ~150–200). No new deps.
-2. **Per‑page VLM call** — reuse the Ollama Cloud client pattern
+2. **Per‑page VLM call**: reuse the Ollama Cloud client pattern
    (`_ollama_headers()` Bearer auth + httpx) against `OLLAMA_BASE_URL`
    (`https://ollama.com`) using `EXTRACTOR_VLM_MODEL` (default: largest Qwen3‑VL
    cloud tag, e.g. `qwen3-vl:<largest>-cloud`; exact tag confirmed at build time).
    Sends the page image + a strict prompt requesting a JSON array of blocks in the
    schema above, including **bounding boxes for figures** so we can crop them.
-3. **Parse + validate** — parse the model's JSON (tolerant: strip code fences,
+3. **Parse + validate**: parse the model's JSON (tolerant: strip code fences,
    validate against the schema, drop malformed blocks). Assign `page_idx`.
-4. **Assets** — for each figure/chart block, crop the page PNG at the returned
+4. **Assets**: for each figure/chart block, crop the page PNG at the returned
    bbox and save to `images/`; set `img_path`. Equations render from LaTeX (crop
    optional); tables render from HTML (crop optional).
-5. **Assemble** — concatenate per‑page blocks in page then reading order → write
+5. **Assemble**: concatenate per‑page blocks in page then reading order → write
    `content_list.json`.
-6. **Fallback** — on VLM/parse failure for a page (after retries), fall back to
+6. **Fallback**: on VLM/parse failure for a page (after retries), fall back to
    PyMuPDF text for that page so a single bad page never fails the whole doc.
 
 ## Configuration (all with safe defaults)
@@ -94,7 +94,7 @@ Runs inside the existing Celery worker, so per‑page latency is hidden from the
 - Per‑page retry with backoff on 429/5xx; bounded concurrency.
 - Per‑page fallback to PyMuPDF text on persistent failure.
 - `EXTRACTOR_VLM_MAX_PAGES` guardrail; log estimated page count before starting.
-- Never crash the pipeline on one bad block — validate and drop.
+- Never crash the pipeline on one bad block: validate and drop.
 
 ## Testing
 
@@ -109,13 +109,13 @@ Runs inside the existing Celery worker, so per‑page latency is hidden from the
 
 ## Risks / open questions
 
-- **Table/math precision** vs MinerU — accepted as best‑effort for v1; falls back
+- **Table/math precision** vs MinerU: accepted as best‑effort for v1; falls back
   to plain text when the model's HTML/LaTeX is malformed.
-- **Credit usage** — many‑page books are token‑heavy; `EXTRACTOR_VLM_MAX_PAGES`
+- **Credit usage**: many‑page books are token‑heavy; `EXTRACTOR_VLM_MAX_PAGES`
   and the async worker mitigate; revisit if credits run low.
-- **Bounding‑box quality** for figure crops — if Qwen3‑VL bboxes are unreliable,
+- **Bounding‑box quality** for figure crops: if Qwen3‑VL bboxes are unreliable,
   fall back to whole‑page image for figure‑heavy pages (decide during local test).
-- **Exact Qwen3‑VL cloud tag + image API shape** — confirm against Ollama Cloud
+- **Exact Qwen3‑VL cloud tag + image API shape**: confirm against Ollama Cloud
   docs during build (Ollama `/api/chat` `images` field vs base64 inline).
 
 ## Out of scope (→ sub‑project B, separate spec)

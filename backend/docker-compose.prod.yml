@@ -14,10 +14,11 @@
 #   • celery_worker builds from Dockerfile.mineru (adds MinerU + torch + the
 #     OpenCV/runtime libs it needs) — same as local dev, real local
 #     extraction with full table/equation/figure fidelity, not a cloud VLM.
-#     `HF_TOKEN` is passed as a Docker build **arg**, not just an environment
-#     variable — `docker build` never sees `environment:`, only `docker run`
-#     does, and Dockerfile.mineru's model-download step runs at *build* time
-#     (avoids anonymous Hugging Face rate limits on the ~5GB weight download).
+#     `HF_TOKEN` reaches its model-download step (which runs at *build*
+#     time, avoiding anonymous Hugging Face rate limits on the ~5GB weight
+#     download) via a BuildKit build-time SECRET, not a build arg — an arg
+#     or a plain environment variable both end up permanently readable in
+#     `docker history`; a secret exists only for that one RUN step.
 #   • api builds from the lighter Dockerfile.lite instead — it never runs
 #     MinerU itself (celery_worker does all extraction), so there is no
 #     reason for its image to carry torch/OpenCV too.
@@ -123,8 +124,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mineru
-      args:
-        HF_TOKEN: ${HF_TOKEN:-}
+      # A build-time SECRET, not a build arg — see Dockerfile.mineru's own
+      # comment on why. `secrets:` below sources it from HF_TOKEN in
+      # backend/.env; empty/unset is fine (anonymous HF download, just more
+      # likely to hit rate limits).
+      secrets:
+        - hf_token
     container_name: 9xaipal-celery-worker
     logging: *default-logging
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=1
@@ -197,8 +202,9 @@ services:
       autoheal: "true"
     # Headroom for MinerU extraction on a book-length PDF while leaving
     # enough of the box's 11GB total for postgres/redis/api/autoheal/OS/host
-    # Ollama. There is no swap on this box, so a real overrun hits this limit
-    # hard — by design: it OOM-kills only this one container, which then
+    # Ollama, plus whatever else shares the box (a portfolio site, another
+    # small app). There is no swap on this box, so a real overrun hits this
+    # limit hard, by design: it OOM-kills only this one container, which then
     # auto-restarts (see the healthcheck note above), instead of the box
     # coming under memory pressure everywhere at once. Raise if extraction of
     # large books gets OOM-killed under real multi-user load; lower if other
@@ -206,7 +212,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${WORKER_MEM_LIMIT:-7G}
+          memory: ${WORKER_MEM_LIMIT:-6G}
 
   # ------------------------------------------------------------------
   # API — FastAPI backend. Does NOT serve the SPA (SERVE_FRONTEND=false);
@@ -318,3 +324,10 @@ services:
 volumes:
   9xaipal_postgres_data:
   9xaipal_redis_data:
+
+# Build-time secrets — reach a RUN step's /run/secrets/<id> only for the
+# duration of that step, never an image layer. See celery_worker's build
+# block above and Dockerfile.mineru's own comment.
+secrets:
+  hf_token:
+    environment: HF_TOKEN

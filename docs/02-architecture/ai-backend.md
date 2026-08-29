@@ -1,4 +1,4 @@
-# AI backend — provider resolution and roles
+# AI backend: provider resolution and roles
 
 > **What this is:** how the app decides which model answers which call. Nothing in the codebase
 > hardcodes a model or a provider; this doc explains the machinery that replaces that.
@@ -21,12 +21,12 @@
 
 1. No call site names a model. Call sites pass a **role** (`chat`, `vlm`, `classifier`,
    `embedding`); the resolver maps role → model for the active provider.
-2. An Ollama tag is **never** sent to a cloud API, and vice versa — the two namespaces are
+2. An Ollama tag is **never** sent to a cloud API, and vice versa: the two namespaces are
    disjoint (§1).
 3. A missing AI backend is never fatal at startup. It logs, and chat requests fail with
    503 `NO_LLM_CONFIGURED` carrying configure-me instructions. Stored papers still serve.
 4. Within one process lifetime, the **embedding** provider is pinned after first successful
-   resolution — a mid-run provider switch can never mix incomparable vectors into one library.
+   resolution: a mid-run provider switch can never mix incomparable vectors into one library.
 5. Provider reachability is probed, not assumed, and the probe result is cached for 30 s.
 
 ---
@@ -47,7 +47,7 @@ EMBEDDING_MODEL    qwen3-embedding:0.6b DEEPSEEK_CHAT_MODEL   deepseek-chat  ⚠
 ```
 
 Because the namespaces are separate, switching to a cloud provider requires **pasting one API key
-and nothing else** — your Ollama tags stay where they are and are simply not used.
+and nothing else**, your Ollama tags stay where they are and are simply not used.
 
 ---
 
@@ -131,13 +131,13 @@ the role mapping for that call only.
 The catalog ([`llm/catalog.py`](../../backend/app/llm/catalog.py)) reads Ollama's `/api/tags` and
 splits it:
 
-- **local** — real weights on disk, non-zero `size`.
-- **cloud** — run on Ollama's infrastructure, name ending in `cloud`, `size: 0`.
+- **local**: real weights on disk, non-zero `size`.
+- **cloud**: run on Ollama's infrastructure, name ending in `cloud`, `size: 0`.
 
 Embedding models are filtered out; they share the tag list but cannot chat. When Ollama is
 unreachable the catalog degrades to the single configured cloud model.
 
-⚠ This does not break invariant 1. Nothing *hardcodes* a model — the name comes from the user at
+⚠ This does not break invariant 1. Nothing *hardcodes* a model: the name comes from the user at
 request time, and `requested_model` is persisted on the note so the answer stays attributable. A
 follow-up reuses its parent's model and cannot be overridden.
 
@@ -152,15 +152,15 @@ Two further mitigations already in place: the orchestrator runs guardrail and ro
 common case an in-paper question costs **one** classifier call, not two.
 
 **The `vlm` row is the cost lever.** It runs once per figure at ingestion time, so a figure-heavy
-paper is dozens of vision calls before anyone asks anything. On a metered provider, this — not
-chat — is where the money goes.
+paper is dozens of vision calls before anyone asks anything. On a metered provider, this, not
+chat, is where the money goes.
 
 ---
 
 ## 4. The embedding pin
 
 Vectors produced by different models are not comparable. Mixing them inside one library silently
-destroys retrieval quality — there is no error, just worse answers. Three mechanisms defend this:
+destroys retrieval quality: there is no error, just worse answers. Three mechanisms defend this:
 
 1. **Per-process pinning.** After the first successful embedding resolution, the choice is fixed
    for that process. A transient Ollama hiccup mid-ingestion cannot switch models halfway.
@@ -170,11 +170,11 @@ destroys retrieval quality — there is no error, just worse answers. Three mech
    | `EMBEDDING_PROVIDER` | Stored ≠ active | Action |
    | --- | --- | --- |
    | pinned (`ollama`/`openai`/`custom`) | yes | ⚠ **Wipes all vectors and re-embeds the library.** Summaries and figure descriptions are prompt-hash cached and do not re-run. |
-   | `auto` | yes | Loud warning only — a temporarily-down Ollama must never trigger a destructive re-embed. |
+   | `auto` | yes | Loud warning only: a temporarily-down Ollama must never trigger a destructive re-embed. |
 
 3. **Dimension normalization.** Whatever the model emits is coerced to `VECTOR_DIMENSION`
-   (default 1024): larger outputs are truncated and re-normalized — valid for MRL-trained models
-   like `qwen3-embedding` and `text-embedding-3-*` — smaller ones are
+   (default 1024): larger outputs are truncated and re-normalized (valid for MRL-trained models
+   like `qwen3-embedding` and `text-embedding-3-*`); smaller ones are
    zero-padded. ⚠ Keep it ≤ 2000: pgvector's HNSW index has a hard 2000-dim limit, and without the
    index every search degrades to a brute-force scan.
 
@@ -188,10 +188,10 @@ operation with no confirmation prompt**. It happens on the next start.
 - ⚠ **Ollama cloud tags blur the local/cloud line.** A tag like `gemma4:31b-cloud` is served
   through `localhost:11434` but proxied by the Ollama daemon to `ollama.com`. The resolver
   correctly reports provider `ollama`, so **traces cannot distinguish a cloud-served answer from a
-  local one** — the API response echoes the model name without the `-cloud` suffix. See
+  local one**: the API response echoes the model name without the `-cloud` suffix. See
   [plans/ollama-local-gemma4-cloud.md](../plans/ollama-local-gemma4-cloud.md).
 - **DeepSeek has no vision.** With it active, figure images cannot be described; captions still
-  work. Nothing errors — the feature just quietly does less.
+  work. Nothing errors: the feature just quietly does less.
 - **The 30 s probe cache means failover is not instant.** When Ollama dies with a cloud key
   present, up to 30 seconds of requests can fail before `auto` reroutes.
 - **`custom` reuses the Ollama namespace.** `LLM_PROVIDER=custom` + `LLM_BASE_URL` speaks

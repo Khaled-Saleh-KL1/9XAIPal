@@ -8,7 +8,7 @@ POSTGRES_DB=9xaipal_test pytest
 
 **Every test truncates `documents CASCADE`.** That cascade takes chunks,
 assets, conversations, and notes with it, so running the suite against the
-development database deletes your entire library — the rows go, and only the
+development database deletes your entire library: the rows go, and only the
 PDFs on disk survive. `conftest.py` refuses to start unless `POSTGRES_DB`
 contains "test" (override with `ALLOW_DESTRUCTIVE_TESTS=1` if you genuinely
 mean it).

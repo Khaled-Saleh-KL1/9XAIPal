@@ -2,7 +2,7 @@
  * Short, human-friendly "X ago" for chips and card eyebrows.
  *
  * The threshold ladder is deliberately loose because nobody needs "47 seconds
- * ago" — the label is small and the reader only wants to know whether the
+ * ago": the label is small and the reader only wants to know whether the
  * thing it is attached to is fresh or stale.
  */
 export function formatRelativeTime(at: number, now: number = Date.now()): string {

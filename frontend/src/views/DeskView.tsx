@@ -34,16 +34,16 @@ import {
 } from '../api';
 
 /**
- * The desk — a place to work on papers without opening them.
+ * The desk: a place to work on papers without opening them.
  *
  * Two pages, because there are two kinds of thought here:
  *
- *   'study' — a scope, its chat, and the notes belonging to that conversation
- *   'notes' — the universal board: what outlived the question that produced it
+ *   'study': a scope, its chat, and the notes belonging to that conversation
+ *   'notes': the universal board, what outlived the question that produced it
  *
  * ⚠ **Chat notes are scoped to the conversation, not to papers.** Switching
  * study switches the board. A note that should follow the reader everywhere
- * goes on the universal board instead — either of them can put it there, and
+ * goes on the universal board instead: either of them can put it there, and
  * the assistant can pin to both from any chat.
  *
  * ⚠ **The assistant writes and edits notes; only the reader deletes one.** That
@@ -103,7 +103,7 @@ export function DeskView({
   });
   /**
    * Below 820px the rail (scope/paper picker) is hidden by CSS to give the
-   * chat room to breathe — see `.desk-grid` in index.css. With nothing to
+   * chat room to breathe: see `.desk-grid` in index.css. With nothing to
    * bring it back, "Whole library" / "In this study" simply stop existing on
    * a phone. This opens it as a slide-over instead.
    */
@@ -238,7 +238,7 @@ export function DeskView({
         patch((p) => ({ ...p, error: (e as Error).message || 'Could not answer that.' }));
       } finally {
         // The agent may have pinned something. One answer can reach both
-        // boards, so both are refreshed — and only when it actually wrote,
+        // boards, so both are refreshed, and only when it actually wrote,
         // because a refresh per question would fight an open editor.
         if (wrote) {
           void refreshChatNotes();
@@ -439,7 +439,7 @@ export function DeskView({
         />
       ) : (
         <div className={`desk-grid${boardHidden ? ' is-board-hidden' : ''}`}>
-          {/* Only does anything below 820px (see .rail-backdrop) — closes the
+          {/* Only does anything below 820px (see .rail-backdrop): closes the
               slide-over on an outside tap, same as tapping a scope does. */}
           <div
             className={`rail-backdrop${railOpenMobile ? ' is-on' : ''}`}
@@ -520,7 +520,7 @@ export function DeskView({
                 {renaming ? (
                   /* ⚠ Keyed on the study id. StudyNameInput seeds its draft from
                      `initial` on mount only, and "create then rename" sets
-                     renaming before the new study has loaded — so without the
+                     renaming before the new study has loaded, so without the
                      key the input opens holding the PREVIOUS study's name and
                      commits it on blur. That is how three studies all ended up
                      called "Whole library". */

@@ -3,18 +3,18 @@ import { useAuth } from '../contexts/AuthContext';
 
 /**
  * User badge + logout dropdown. Meant to sit inline as the trailing item in
- * a view's own header row — every screen has its own header, and each one
+ * a view's own header row: every screen has its own header, and each one
  * embeds this directly rather than a global corner overlay.
  *
  * ⚠ There used to also be a `UserMenu` wrapper that pinned this to a fixed
  * viewport corner (`position: fixed; top; right`), for routes with no header
  * of their own. It was removed once every route turned out to have one: a
  * viewport-edge-fixed control silently lands on top of whatever a header's
- * own rightmost button is — a header's content is usually capped at a
+ * own rightmost button is, since a header's content is usually capped at a
  * max-width and centered, so on a normal (non-ultrawide) window its right
- * edge sits close to the actual screen edge. This bit twice — once over
+ * edge sits close to the actual screen edge. This bit twice: once over
  * LibraryView's "Raw files" button, then again over PdfViewer's "Read
- * structured" button — before every view got its own inline copy instead.
+ * structured" button, before every view got its own inline copy instead.
  */
 export function UserMenuInline() {
   const { user, logout } = useAuth();

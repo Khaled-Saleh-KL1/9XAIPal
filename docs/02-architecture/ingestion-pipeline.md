@@ -3,13 +3,13 @@
 > **What this is:** the path a PDF takes from upload to readable, chunk by chunk.
 >
 > **Owns:** extraction, chunking, glyph repair, asset handling, embedding, and summarization
-> order — and which of those actually run.
+> order, and which of those actually run.
 > **Does not own:** how chunks are retrieved at question time ([chat-and-ask.md](chat-and-ask.md)),
 > where files land on disk ([storage.md](../03-reference/storage.md)).
 >
-> **Companions:** [overview.md](overview.md) — system context ·
-> [ai-backend.md](ai-backend.md) — which model embeds and summarizes ·
-> [operations.md](../01-orientation/operations.md) — repairing a stuck ingestion.
+> **Companions:** [overview.md](overview.md): system context ·
+> [ai-backend.md](ai-backend.md): which model embeds and summarizes ·
+> [operations.md](../01-orientation/operations.md): repairing a stuck ingestion.
 >
 > **Status:** current · **Last verified:** 2026-07-25 against
 > [`extraction/pipeline_sync.py`](../../backend/app/extraction/pipeline_sync.py) and
@@ -33,7 +33,7 @@ ask grounded questions about it."
 | VLM figure descriptions | ✗ | ✅ |
 | Complete after | **chunking** | `generate_section_summaries` |
 
-Under `fast` a paper is readable the moment MinerU and the chunker finish — nothing stands between
+Under `fast` a paper is readable the moment MinerU and the chunker finish, nothing stands between
 dropping a PDF and reading it. Everything the model needs is derived at question time by
 [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py); see
 [chat-and-ask.md](chat-and-ask.md).
@@ -146,16 +146,16 @@ flowchart TD
 
 ⚠ **Completion is set in exactly two places**, and they are mutually exclusive:
 `generate_section_summaries` at the end of the full chain, and `run_pipeline_sync` on the fast
-path. The fast path may set it only because it dispatches nothing afterwards — there is no
+path. The fast path may set it only because it dispatches nothing afterwards: there is no
 downstream task left to contradict it. Adding a dispatch to that branch without moving the
 completion would reintroduce the bug where the UI reported "done" while a worker was still
 running.
 
-## Step 1.5 — Glyph repair
+## Step 1.5: Glyph repair
 
 MinerU writes **U+FFFD REPLACEMENT CHARACTER** wherever a paper typesets an inline variable using
-the Unicode Mathematical Alphanumeric Symbols block (U+1D400–U+1D7FF). Those codepoints are astral
-— above U+FFFF — and its text pipeline mangles the surrogate pairs. The reader then shows `�`
+the Unicode Mathematical Alphanumeric Symbols block (U+1D400–U+1D7FF). Those codepoints are astral,
+above U+FFFF, and its text pipeline mangles the surrogate pairs. The reader then shows `�`
 where a variable should be:
 
 ```text
@@ -164,19 +164,19 @@ Truth:   "limiting output attention to the preceding 𝑛 tokens (𝑛 defaults 
                                                      ^ U+1D45B
 ```
 
-U+FFFD carries no information — you cannot tell *n* from *t* by looking at it. But the PDF still
+U+FFFD carries no information: you cannot tell *n* from *t* by looking at it. But the PDF still
 does, and PyMuPDF decodes the same glyphs correctly, so
 [`glyph_repair.py`](../../backend/app/extraction/glyph_repair.py) re-reads the source page and uses
 the surrounding text as a lookup key. The recovered character is emitted as LaTeX (`𝑛` → `$n$`)
 so it renders as italic math and the model sees a variable rather than an exotic codepoint.
 
-⚠ Best-effort by design. An ambiguous match is left as `�` — a visible mystery glyph beats a
+⚠ Best-effort by design. An ambiguous match is left as `�`, a visible mystery glyph beats a
 confidently wrong letter in a formula. Measured on the reference paper: 14 of 14 recovered.
 
 Runs in the pipeline and again on `/rechunk`, so a paper already on disk can be repaired without
 re-running MinerU.
 
-## Step 1 — Upload
+## Step 1: Upload
 
 ```http
 POST /api/v1/papers/upload
@@ -188,7 +188,7 @@ Server:
 
 1. Generates a fresh storage filename: `<uuid4().hex>.pdf`.
 2. Reads the file body into memory.
-3. Writes it to `<storage_root>/documents/<uuid>.pdf` — this is what MinerU consumes.
+3. Writes it to `<storage_root>/documents/<uuid>.pdf`: this is what MinerU consumes.
 4. Inserts a row into `documents` with `status='queued'`.
 5. Writes a second copy to `<storage_root>/assets/<doc_id>.pdf`.
 6. Inserts a row into `ingestion_jobs` with `status='queued'`.
@@ -197,7 +197,7 @@ Server:
 
 The frontend starts a 1-second poll against `/progress`, showing the `ProcessingOverlay`.
 
-## Step 2 — MinerU extraction
+## Step 2: MinerU extraction
 
 `process_ingestion` calls `run_pipeline_sync`:
 
@@ -211,7 +211,7 @@ If `mineru` exits non-zero, the pipeline raises `MinerUError`, the job
 + document are marked `failed`, and the polling frontend exits to the
 library.
 
-## Step 3 — Chunking
+## Step 3: Chunking
 
 The chunker is **structural**: a chunk is one heading, one paragraph, one
 math block, one table, or one figure.
@@ -223,13 +223,13 @@ Implementation:
 2. For each section:
    - Assign a monotonically increasing `sequence_id` (1-based).
    - Detect the chunk type: `heading > math ($$…$$) > table (|…|…|) > figure (![…](…)) > text`.
-   - Maintain `current_heading_path` — a breadcrumb of H1→H6 titles.
+   - Maintain `current_heading_path`, a breadcrumb of H1→H6 titles.
    - Extract any `![alt](src)` image filenames into `image_refs`.
    - Extract `table_json` for table chunks.
    - Normalize markdown and extract plain text for embedding.
 3. Returns a list of dicts ready for persistence.
 
-## Step 4 — Persisting chunks + images
+## Step 4: Persisting chunks + images
 
 1. `UPDATE ingestion_jobs SET status='chunking'`.
 2. `store_chunks` inserts one row per chunk into `chunks`.
@@ -239,23 +239,23 @@ Implementation:
 5. For each persisted chunk, look up its `image_refs` against the map.
    Each hit becomes an `INSERT INTO chunk_assets`.
 
-## Step 5 — Embedding (conditional)
+## Step 5: Embedding (conditional)
 
 The pipeline decides here whether this document needs embeddings at all, then dispatches the
 matching downstream task.
 
-1. `_should_skip_embeddings()` — see [paper-only mode](#paper-only-mode-conditional-dispatch).
-2. `UPDATE documents SET embedding_mode, embedding_skip_reason` — recorded once, never re-derived.
+1. `_should_skip_embeddings()`: see [paper-only mode](#paper-only-mode-conditional-dispatch).
+2. `UPDATE documents SET embedding_mode, embedding_skip_reason`, recorded once, never re-derived.
 3. Branch:
    - **embedded** (default): `UPDATE ingestion_jobs SET status='embedding'`, then
      `embed_document.delay(document_id)`.
    - **skipped**: `UPDATE ingestion_jobs SET status='summarizing'`, then
-     `generate_section_summaries.delay(document_id)` — the chain is re-attached here.
+     `generate_section_summaries.delay(document_id)`, the chain is re-attached here.
 4. `UPDATE documents SET status='processing', page_count=<pypdf count>`.
 
 ⚠ **On the full chain the pipeline does NOT mark the document complete.** Completion is set by
 `_mark_document_and_job_complete` at the end of `generate_section_summaries`
-([`workers/tasks.py`](../../backend/app/workers/tasks.py)) — the normal exit whenever anything is
+([`workers/tasks.py`](../../backend/app/workers/tasks.py)), the normal exit whenever anything is
 dispatched. Marking it complete before that was the bug that made the UI report "done" while the
 worker was still embedding and describing figures.
 
@@ -268,7 +268,7 @@ complete) and `::test_run_pipeline_book_still_runs_full_chain` (book still dispa
 
 ### Paper-only mode: conditional dispatch
 
-⚠ `[historical]` for papers under the default profile — the fast path returns before
+⚠ `[historical]` for papers under the default profile: the fast path returns before
 `_should_skip_embeddings` is ever reached. This section still describes `INGEST_PROFILE=full` and
 every book.
 
@@ -318,7 +318,7 @@ flowchart TD
 
 > ⚠ The **dispatcher** is conditional; the **chain** is not. Both branches must terminate at
 > `_mark_document_and_job_complete`. A skip path that simply dropped `embed_document` would leave
-> the document at `processing` forever — the frontend polls `/progress` every second and would
+> the document at `processing` forever, since the frontend polls `/progress` every second and would
 > spin indefinitely with no error raised anywhere. Verified by
 > `tests/test_paper_only_mode.py::test_skipped_document_still_reaches_complete`.
 
@@ -336,22 +336,22 @@ When embeddings run, the Celery worker:
 5. Inserts each result into `chunk_embeddings` (`vector(VECTOR_DIMENSION)`, default 1024) along with the resolved `embedding_model` name.
 6. Commits after each batch.
 
-## Step 6 — Summarization (background)
+## Step 6: Summarization (background)
 
-Reached from either branch of Step 5 — after embeddings when they run, directly from the pipeline
+Reached from either branch of Step 5: after embeddings when they run, directly from the pipeline
 when they are skipped. `generate_section_summaries`:
 
 1. Hierarchical section summarization (level 0 = paper, level 1 = H1, level 2 = H2).
 2. VLM figure descriptions for every `chunk_type='figure'` chunk.
 3. Results stored in `section_summaries` and `figure_descriptions` tables.
 
-This step is slow (minutes per paper) but doesn't block the user — they
-can start reading and asking questions as soon as `status='complete'` — which, under the default
+This step is slow (minutes per paper) but doesn't block the user: they
+can start reading and asking questions as soon as `status='complete'`, which, under the default
 fast profile, is as soon as chunking finishes.
 
 ⚠ The upload overlay shows a **different step list per `doc_kind`**: two steps for a paper
 (extract, chunk), four for a book (plus embed, summarize). Showing a paper an "Embedding" step it
-never runs would tick green having done nothing — see
+never runs would tick green having done nothing: see
 [`ProcessingOverlay.tsx`](../../frontend/src/views/ProcessingOverlay.tsx).
 
 ## Status taxonomy

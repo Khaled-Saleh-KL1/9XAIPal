@@ -1,4 +1,4 @@
-# Roadmap — known gaps & future work
+# Roadmap: known gaps & future work
 
 > **What this is:** everything the system does **not** do, or does badly, in one place. Kept out
 > of the how-it-works docs on purpose: a reference doc that mixes current behavior with
@@ -21,23 +21,23 @@ The application code is more mature than the tooling around it. These are the ch
 
 | Gap | Impact | Fix |
 | --- | --- | --- |
-| **No CI at all** — no `.github/` | 7 test files exist and nothing runs them | A workflow running `pytest` + `tsc --noEmit` + `npm run build` |
+| **No CI at all**: no `.github/` | 7 test files exist and nothing runs them | A workflow running `pytest` + `tsc --noEmit` + `npm run build` |
 | **Nothing is pinned** in `requirements.txt` | `fastapi`, `sqlalchemy`, `httpx` all float. A fresh install in six months may not work | Pin, or generate a lockfile |
 | ⚠ **`pyproject.toml` is gitignored** | It is not in the clone, so `pip install -e .` fails for everyone. Also why there is no lint/format config | Remove it from `.gitignore` and commit it |
 | **No linter or formatter** | No ruff/black/ESLint anywhere | Add ruff + an ESLint config |
-| ~~No pytest config~~ | ~~async fixtures in `conftest.py` were collected but never run, failing with an opaque `assert not self._finalizers`~~ | **Fixed 2026-07-26** — `backend/pytest.ini` sets `asyncio_mode = auto` |
-| **`.gitignore` ignores `*.env`** | Would also ignore `.env.example` if it were named `example.env` — fragile | Narrow the pattern |
+| ~~No pytest config~~ | ~~async fixtures in `conftest.py` were collected but never run, failing with an opaque `assert not self._finalizers`~~ | **Fixed 2026-07-26**: `backend/pytest.ini` sets `asyncio_mode = auto` |
+| **`.gitignore` ignores `*.env`** | Would also ignore `.env.example` if it were named `example.env`, which is fragile | Narrow the pattern |
 
 ## Testing
 
 - **[`test_context_router.py`](../backend/tests/test_context_router.py) is a one-line placeholder
   comment.** The route table is the single most behavior-defining piece of logic in the app and it
   is untested.
-- **The two largest and most complex modules have no direct tests** —
+- **The two largest and most complex modules have no direct tests**:
   `chat/orchestrator.py` (1061 lines) and `extraction/chunker.py` (1141 lines).
 - ⚠ **`conftest.py` `TRUNCATE`s a real database.** Tests cannot run without live Postgres, and
   pointing them at a dev DB destroys it. There is no isolation and no throwaway-DB guard.
-- ⚠ **`test_chunk_sequence.py::test_embedding_batching_resumption_and_casting` fails** —
+- ⚠ **`test_chunk_sequence.py::test_embedding_batching_resumption_and_casting` fails**:
   `psycopg2.errors.DataException: expected 1024 dimensions, not 4096`. The test mocks
   `get_embeddings_batch_sync` with hardcoded 4096-dim vectors, bypassing the MRL truncation that
   normally coerces them to `VECTOR_DIMENSION`. Pre-existing (verified by stashing unrelated
@@ -47,10 +47,10 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Data & schema
 
-- **`chunks.page_start` / `page_end` are nullable and never populated** — MinerU page metadata is
+- **`chunks.page_start` / `page_end` are nullable and never populated**: MinerU page metadata is
   not wired through. Page-based citation is therefore impossible today.
 - **`chunk_assets.caption`, `.width`, `.height` are reserved fields**, always null.
-- **`ask_traces.retrieved_chunk_ids` is always null** — reserved.
+- **`ask_traces.retrieved_chunk_ids` is always null**, reserved.
 - ⚠ **Migrations are best-effort by design.** [`migrations.py`](../backend/app/database/migrations.py)
   catches every per-statement exception, logs a warning, and continues; a second pass
   (`_ensure_recent_columns`) patches up what failed. It is self-described as a recovery mechanism.
@@ -58,22 +58,22 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Security
 
-- **Rate limiting is per-process and in-memory** — with `--workers 2` the real ceiling is double
+- **Rate limiting is per-process and in-memory**, so with `--workers 2` the real ceiling is double
   the configured value. Documented honestly in the middleware docstring; a known tradeoff, not a
   bug.
 - ⚠ **Static mounts bypass auth entirely.** `/static/{images,extracted,assets}` are plain
-  `StaticFiles` mounts (`app/main.py`) with no `get_current_user` dependency — the JSON API is
+  `StaticFiles` mounts (`app/main.py`) with no `get_current_user` dependency: the JSON API is
   per-user isolated (see [auth.md](../02-architecture/auth.md)), but a caller who already knows or
   guesses a file path reads it with no login and no ownership check. Paths are UUID-derived, not
-  sequential, so this is not trivially enumerable — but it is not access-controlled either.
+  sequential, so this is not trivially enumerable, but it is not access-controlled either.
 - **Default Postgres password** ships in `.env.example`. Startup warns, but nothing enforces.
 - **90 `except Exception` blocks** across the backend. Zero bare `except:`, which is good
-  discipline — but that density means genuine failures can be logged and swallowed.
+  discipline, but that density means genuine failures can be logged and swallowed.
 
 ## Product gaps
 
 - **Cross-paper search is not surfaced.** `search_chunks` already accepts `document_id=None`, so
-  the retrieval layer supports a library-wide GLOBAL route — the orchestrator simply never calls
+  the retrieval layer supports a library-wide GLOBAL route, but the orchestrator simply never calls
   it. This is the closest thing to free functionality in the repo.
 - **No cleanup for research images.** They accumulate under
   `images/research/<conversation_id>/` forever.
@@ -81,26 +81,26 @@ The application code is more mature than the tooling around it. These are the ch
   garbage-collected on a schedule.
 - **Section summarization is single-pass** per `(document, prompt template)`. Long books may
   exceed the model's effective context.
-- **No multi-tenant isolation** — one database, all data shared.
+- **No multi-tenant isolation**: one database, all data shared.
 - **No retry queue** for failed ingestions beyond `embed_document`'s in-Celery retries.
-- **Web-search images outside the research agent are not persisted** — remote URLs in older chat
+- **Web-search images outside the research agent are not persisted**: remote URLs in older chat
   answers rot.
 
 ## Structural debt
 
 - **Two files over 1000 lines**: `chat/orchestrator.py` and `extraction/chunker.py`. Splitting the
   orchestrator's four context strategies into a dispatch table would help most.
-- **`BookReadingView.tsx` is ~1320 lines** — the old reveal reader, now reached only for
+- **`BookReadingView.tsx` is ~1320 lines**: the old reveal reader, now reached only for
   `doc_kind='book'`. Untouched by the article-reader work and still the largest frontend file.
 - **`ChatPane.tsx` is reachable only from the book reader.** Papers never mount it. If books are
   ever retired, it and the four `/ask` context strategies go with them.
 - **Two pipelines exist**: `extraction/pipeline.py` (async, legacy) and `pipeline_sync.py` (used by
   Celery). `[historical]` The async in-process `BackgroundTasks` + `asyncio.Queue` design was
   replaced by Celery; the async pipeline survives as a fast path. One of them should go.
-- **Naming is inconsistent across the repo** — the directory is `ScholarFlow`, everything inside
+- **Naming is inconsistent across the repo**: the directory is `ScholarFlow`, everything inside
   (README, database, containers, volumes) says `9XAIPal`. ⚠ Before "fixing" it: the Celery app name
   is part of the task name on the wire, so renaming it desynchronises the API from the worker.
-  Tried on a fork — the API dispatched `<newname>.process_ingestion`, the worker still registered
+  Tried on a fork: the API dispatched `<newname>.process_ingestion`, the worker still registered
   `9xaipal.process_ingestion`, and Celery **discarded the message**. A live ingestion sat at
   "queued · 0%" indefinitely with nothing in the UI to suggest the task was gone. If it is renamed,
   `POSTGRES_DB`, the role, container names, volume names and the Celery app all have to move
@@ -108,33 +108,33 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Planned direction
 
-- ~~**Replace SearXNG with Exa + Firecrawl**~~ — **superseded 2026-08-26** by **Tavily**, which
+- ~~**Replace SearXNG with Exa + Firecrawl**~~: **superseded 2026-08-26** by **Tavily**, which
   returns ranked, already-extracted page text in one call rather than assembling it from two
   vendors. Providers now dispatch through
   [`app/search/web.py`](../backend/app/search/web.py); SearXNG remains as the local-only option.
   Original design, never implemented:
   [archive/2026-08-26/exa-firecrawl-research-stack.md](archive/2026-08-26/exa-firecrawl-research-stack.md).
-- ~~**Paper-only mode**~~ — **superseded 2026-07-25** by `INGEST_PROFILE=fast`, which skips the
+- ~~**Paper-only mode**~~: **superseded 2026-07-25** by `INGEST_PROFILE=fast`, which skips the
   whole post-chunking chain for papers rather than embeddings alone, and answers at question time
   via [`chat/paper_agent.py`](../backend/app/chat/paper_agent.py). The `PAPER_ONLY_*` settings
   still govern `INGEST_PROFILE=full` and books. Original design:
   [plans/paper-only-embedding-skip.md](plans/paper-only-embedding-skip.md).
 - `[planned]` **Alembic** for schema evolution, replacing best-effort `schema.sql` application.
-- ~~**Cross-paper questions**~~ — **shipped 2026-08-26** as the desk. A *study* (a named group of
+- ~~**Cross-paper questions**~~: **shipped 2026-08-26** as the desk. A *study* (a named group of
   papers, or the whole library) scopes a chat answered by
   [`chat/study_agent.py`](../backend/app/chat/study_agent.py); citations are `[[P2:41]]` and expand
   inline. Still open underneath it: the study index is heading spines only, so a paper MinerU found
   no headings in can be searched but not browsed.
-- ~~Second PDF extractor (PaddleOCR-VL)~~ — **evaluated and rejected 2026-07-25.** MinerU 3.4.4
+- ~~Second PDF extractor (PaddleOCR-VL)~~: **evaluated and rejected 2026-07-25.** MinerU 3.4.4
   produced correct two-column reading order with zero inversions and zero fragmented equations on
   the backend this app already uses; the premise did not reproduce. Measured results:
   [plans/pdf-parser-evaluation.md §0](plans/pdf-parser-evaluation.md).
-- ~~Pin `mineru` in `requirements.txt`~~ — **done 2026-07-26.** `mineru[core]>=3.4.4`.
-- `[planned]` **`reconstruct_reading_order` removal** — measured at n=28 (16 two-column):
+- ~~Pin `mineru` in `requirements.txt`~~: **done 2026-07-26.** `mineru[core]>=3.4.4`.
+- `[planned]` **`reconstruct_reading_order` removal**, measured at n=28 (16 two-column):
   **0 reading-order inversions**, so it looks vestigial. ⚠ Blocked on testing 3–5 *scanned*
   PDFs, the one document class the corpus could not cover.
   Results: [plans/mineru-heuristic-removal.md §0](plans/mineru-heuristic-removal.md).
-- ~~Delete the chunker equation heuristics~~ — **measured and rejected 2026-07-26.**
+- ~~Delete the chunker equation heuristics~~: **measured and rejected 2026-07-26.**
   `_stitch_split_equations` still catches 8 real orphan equation labels (Planck, WMAP5), and
   `_normalize_math_glyphs` repairs **1,930** Unicode glyphs inside math on the PyMuPDF fallback
   path. Both stay.

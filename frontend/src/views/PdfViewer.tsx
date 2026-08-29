@@ -66,7 +66,7 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
         <span
           className="hidden sm:inline font-serif text-[14px] tracking-tight truncate"
           style={{ color: 'var(--fg)' }}
-          // The name the reader gave it, with the real filename on hover —
+          // The name the reader gave it, with the real filename on hover:
           // this view is about the file, so the filename stays reachable.
           title={paper.original_filename}
         >
@@ -79,7 +79,7 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
         )}
 
         {/*
-          Prev/next, page input, zoom, "Read structured", and the user menu —
+          Prev/next, page input, zoom, "Read structured", and the user menu:
           more controls than a phone is wide. min-w-0 + overflow-x-auto turns
           the overflow into a swipe instead of a silent clip that leaves the
           rightmost buttons (usually "Read structured" and log-out) unreachable.

@@ -7,7 +7,7 @@ import { getChunk, type StudyCitation } from '../api';
  * A `[[P2:41]]` marker, expandable in place.
  *
  * ⚠ **This is the whole point of the desk.** The reader asked to work across
- * papers "without seeing them" — which only holds if a claim can be checked
+ * papers "without seeing them", which only holds if a claim can be checked
  * where it is made. Clicking the chip fetches that block and shows the paper's
  * own words inline; leaving the desk to verify one sentence would defeat the
  * surface.

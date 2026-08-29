@@ -4,12 +4,12 @@ import { displayTitle } from '../lib/titles';
 import type { PaperMeta, StudyPaper } from '../api';
 
 /**
- * Choosing which papers a study holds — and in which order.
+ * Choosing which papers a study holds, and in which order.
  *
  * ⚠ **Order is not decoration here.** Answers cite papers as P1/P2/P3, and the
  * number comes from this list's order. So the dialog has two halves: what is in
  * the study, in order and re-orderable, and what else the library holds. A flat
- * checkbox list hid both facts — you could not see the numbering at all, and
+ * checkbox list hid both facts: you could not see the numbering at all, and
  * you could not tell the chosen from the unchosen without reading every box.
  *
  * ⚠ **Covers, not titles alone.** The reason the library grew thumbnails

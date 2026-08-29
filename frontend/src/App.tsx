@@ -79,20 +79,20 @@ export function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadExtractor, setUploadExtractor] = useState<string | null>(null);
   // Real progress within uploadStatus (e.g. pages extracted / total while
-  // extracting) — null when nothing finer than the status is available.
+  // extracting), null when nothing finer than the status is available.
   const [uploadProgressFraction, setUploadProgressFraction] = useState<number | null>(null);
   // `kind` only changes reading navigation (chapters vs linear) and the
-  // overlay's completion copy — every document runs the same backend
+  // overlay's completion copy: every document runs the same backend
   // pipeline (see ProcessingOverlay's header comment).
   const [uploadKind, setUploadKind] = useState<DocKind | 'article'>('paper');
   const [layout, setLayout] = useState<LibraryLayout>('grid');
-  // When set, the "Book, research paper, or article?" chooser is open —
+  // When set, the "Book, research paper, or article?" chooser is open:
   // article is a third option inside it, not a separate entry point (see
   // UploadKindModal below).
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
   // A file handed to us by a drag-and-drop. The kind chooser still has to run
   // (a drop can't say whether it's a book or a paper), so the file waits here
-  // until a kind is picked — and then skips the native file picker entirely.
+  // until a kind is picked, and then skips the native file picker entirely.
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Tracks the document id of the in-flight upload so Cancel can actually
@@ -139,7 +139,7 @@ export function App() {
   }, [rawFilesOpen, refreshPapers]);
 
   // Shared by every ingestion pipeline (file upload, URL import, …): poll
-  // /progress until a terminal state, without auto-closing the overlay — the
+  // /progress until a terminal state, without auto-closing the overlay: the
   // user clicks "Back to library" themselves. The library list underneath
   // refreshes on its own poll.
   const pollUploadProgress = useCallback((paperId: string) => {
@@ -159,13 +159,13 @@ export function App() {
         if (progress.status === 'complete' || progress.status === 'failed') {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
-          // Once complete, the document is a keeper — drop the cancel handle
+          // Once complete, the document is a keeper: drop the cancel handle
           // so it can never be deleted by a later Cancel click.
           if (progress.status === 'complete') uploadIdRef.current = null;
           refreshPapers();
         }
       } catch {
-        // transient error — keep polling
+        // transient error, keep polling
       }
     }, 1000);
   }, [refreshPapers]);
@@ -196,7 +196,7 @@ export function App() {
     }
   }, [pollUploadProgress]);
 
-  // Web article import handler — the third pipeline, mirroring
+  // Web article import handler: the third pipeline, mirroring
   // handleFileUpload exactly (same processing route + progress poll) but
   // calling importArticleUrl instead of uploadPaper. The real page title
   // isn't known until the fetch runs, so the overlay shows the URL's host
@@ -227,7 +227,7 @@ export function App() {
   }, [pollUploadProgress]);
 
   // "Article by URL" is the third option inside the same kind-picker modal
-  // (UploadKindModal below) — closes it and kicks off the import. A pending
+  // (UploadKindModal below), closes it and kicks off the import. A pending
   // drag-dropped file is discarded: it doesn't apply to a URL import.
   const submitImportUrl = useCallback((url: string) => {
     setKindPickerOpen(false);
@@ -303,7 +303,7 @@ export function App() {
 
   // Cancel actually aborts the upload: stop polling AND delete the document on
   // the backend (rows + on-disk artefacts) so it doesn't keep processing and
-  // reappear in the library. Deletion is best-effort — navigation happens
+  // reappear in the library. Deletion is best-effort: navigation happens
   // regardless so the button always feels responsive.
   const onCancel = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -351,7 +351,7 @@ export function App() {
           setRoute('pdf-viewer');
         }
       } catch {
-        // Paper no longer exists — fall back to the library and clear the hash.
+        // Paper no longer exists, so fall back to the library and clear the hash.
         writeHash({ route: 'library' });
       }
     })();
@@ -359,7 +359,7 @@ export function App() {
   }, []);
 
   /**
-   * Follow the hash when something outside React changes it — a typed URL, a
+   * Follow the hash when something outside React changes it: a typed URL, a
    * bookmark, the back button after a real navigation.
    *
    * ⚠ Without this the address bar and the view can disagree: changing only the
@@ -399,7 +399,7 @@ export function App() {
     // mid-upload returns to the library, not a half-baked processing state.
   }, [route, activePaperId, viewingPdf, deskScope, deskPage]);
 
-  // Gated below all hooks (not an early return above them) — every hook in
+  // Gated below all hooks (not an early return above them), since every hook in
   // this component must run unconditionally on every render regardless of
   // auth state, or their call order would change between renders.
   if (authLoading) {
@@ -514,7 +514,7 @@ function UploadKindModal({
   onCancel: () => void;
 }) {
   // Article-by-URL lives as a third choice in the same modal rather than a
-  // separate button + separate popup — picking it swaps this modal's body
+  // separate button + separate popup: picking it swaps this modal's body
   // for a URL field in place, instead of opening anything new.
   const [mode, setMode] = useState<'choose' | 'url'>('choose');
   const [url, setUrl] = useState('');
@@ -600,7 +600,7 @@ function UploadKindModal({
                 <div className="min-w-0">
                   <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Article by URL</div>
                   <div className="text-[12px] mt-0.5 leading-[1.5]" style={{ color: 'var(--muted)' }}>
-                    Paste a link — reads exactly like a paper, with margin notes, search, and the AI panel.
+                    Paste a link: reads exactly like a paper, with margin notes, search, and the AI panel.
                   </div>
                 </div>
               </button>
@@ -625,7 +625,7 @@ function UploadKindModal({
                 Article by URL
               </div>
               <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
-                Paste a link — it reads exactly like a paper, with margin notes, search, and the AI panel.
+                Paste a link: it reads exactly like a paper, with margin notes, search, and the AI panel.
               </div>
             </div>
             <div className="px-7 py-5">

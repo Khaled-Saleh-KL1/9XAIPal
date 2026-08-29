@@ -13,7 +13,7 @@ import type { DeckMemberKind, NoteDeck } from '../lib/personalNotes';
  * The gutter's scarce resource is vertical space: cards are placed at their
  * anchor and then pushed down past each other, so three tall notes on one
  * section drag the third one far below the paragraph it belongs to. A deck
- * trades simultaneous visibility for locality — you see one card at a time,
+ * trades simultaneous visibility for locality: you see one card at a time,
  * but every card in the stack stays beside the passage that produced it.
  *
  * Decks are built by dragging one card onto another and are stored locally,
@@ -31,7 +31,7 @@ export interface DeckFace {
 }
 
 /**
- * Halves of the turn. `out` ends with the card edge-on, so it is short — it
+ * Halves of the turn. `out` ends with the card edge-on, so it is short, and it
  * is dead time before anything changes. `in` carries the new face back to
  * flat and gets the longer, eased half, which is the part that reads as
  * weight. Both must match the durations in `deck-flip-*` in index.css.
@@ -119,7 +119,7 @@ export function DeckCard({
   /**
    * Turn the card over, and change what it says while it is edge-on.
    *
-   * A physical card does not dissolve into the next one — it rotates until
+   * A physical card does not dissolve into the next one: it rotates until
    * you are looking at its edge, and comes back showing something else. So
    * the swap happens at the midpoint of a two-phase Y rotation, where the
    * card is ~90° to the viewer and effectively invisible. One element does
@@ -148,7 +148,7 @@ export function DeckCard({
       window.setTimeout(() => {
         apply();
         setFlip({ dir, phase: 'in' });
-        // The new content is mounted but not yet measured — wait a frame,
+        // The new content is mounted but not yet measured, so wait a frame,
         // then let the pinned height ease to whatever it actually needs.
         requestAnimationFrame(() => {
           setLockHeight(innerRef.current?.offsetHeight ?? null);

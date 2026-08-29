@@ -6,7 +6,7 @@ import { getCoverUrl } from '../api';
  * A paper's first page, or a placeholder shaped like one.
  *
  * ⚠ The fallback is not optional. The cover endpoint answers 204 when a page
- * cannot be rasterised — no source PDF, a corrupt first page — and a browser
+ * cannot be rasterised, say no source PDF or a corrupt first page, and a browser
  * reports that to <img> as a load error. Without `failed` state the grid would
  * hold broken-image glyphs in exactly the cases where the paper is otherwise
  * fine.
@@ -17,7 +17,7 @@ import { getCoverUrl } from '../api';
  *
  * `showTitle` burns the paper's title into the bottom of the cover, like a
  * book jacket, so a grid of covers is identifiable by sight rather than by
- * reading the caption under each one. Off by default — the small row/picker
+ * reading the caption under each one. Off by default: the small row/picker
  * thumbnails have no room for legible overlaid text, so only the library
  * grid card turns it on.
  */

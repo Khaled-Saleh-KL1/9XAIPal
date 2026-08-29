@@ -9,12 +9,12 @@ import { stageProgress } from '../lib/progress';
  * The step list is the same for every document kind. Whether embedding and
  * summarizing actually run is a backend decision (INGEST_PROFILE, see
  * backend/app/extraction/pipeline_sync.py::_is_fast_ingest) that has nothing
- * to do with `kind` — a deployment running the "full" profile embeds and
+ * to do with `kind`: a deployment running the "full" profile embeds and
  * summarizes papers too. Branching the step list on `kind` used to cause a
  * paper to show both of its steps as "done" the moment it left chunking
  * (because the old 4-item order didn't include 'embedding'/'summarizing'
- * at all, so looking them up returned -1), while the library card — which
- * reads the real stage — still correctly showed ~78%. If a document's
+ * at all, so looking them up returned -1), while the library card, which
+ * reads the real stage, still correctly showed ~78%. If a document's
  * embedding truly is skipped, its status jumps straight to 'complete' and
  * `stateFor` marks every step done at that point regardless, so showing all
  * four steps is never dishonest, just occasionally instant.
@@ -52,7 +52,7 @@ const EXTRACT_STEPS: StepDef[] = [
 ];
 
 // An article's step 1 is a page fetch + readability pass, not a layout/math
-// parse — MinerU never runs for doc_kind='article' (see
+// parse, since MinerU never runs for doc_kind='article' (see
 // article_extraction.py), so the PDF-specific sub-copy above would be wrong.
 const ARTICLE_EXTRACT_STEPS: StepDef[] = [
   {
@@ -109,7 +109,7 @@ interface Props {
   progressFraction?: number | null;
   errorMessage?: string | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | "trafilatura" | null while pending
-  /** Only affects completion copy below — reading navigation, not the pipeline. */
+  /** Only affects completion copy below: reading navigation, not the pipeline. */
   kind?: 'book' | 'paper' | 'article';
   onClose: () => void;
   onCancel: () => void;
@@ -195,7 +195,7 @@ export function ProcessingOverlay({ file, status, progressFraction, errorMessage
           </div>
         </div>
 
-        {/* extractor badge — tells the user whether MinerU or the fallback ran */}
+        {/* extractor badge: tells the user whether MinerU or the fallback ran */}
         {(() => {
           const ex = extractorLabel(extractor);
           const dotColor =

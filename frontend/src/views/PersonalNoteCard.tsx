@@ -72,7 +72,7 @@ export function PersonalNoteCard({
   const save = () => {
     const body = draft.trim();
     if (!body) {
-      // Empty body means delete — otherwise we keep a blank card around.
+      // Empty body means delete, otherwise we keep a blank card around.
       onDelete(note.id);
       return;
     }
@@ -206,7 +206,7 @@ export function PersonalNoteComposer({
   }, [target.sequenceId, target.quote]);
 
   // ⚠ The draft is deliberately NOT cleared here. Saving is a round trip now,
-  // and the parent closes this composer only once the note is safely stored —
+  // and the parent closes this composer only once the note is safely stored,
   // so on a failed save the text the reader typed is still sitting in the box
   // rather than gone with nothing to show for it.
   const send = () => {

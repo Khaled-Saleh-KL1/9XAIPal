@@ -1,5 +1,5 @@
 /**
- * Book reader — the original reveal-one-chunk-at-a-time experience.
+ * Book reader: the original reveal-one-chunk-at-a-time experience.
  *
  * Preserved verbatim for doc_kind='book'. Papers now render as a continuous
  * article with margin notes (see ArticleReader.tsx); ReadingView.tsx picks
@@ -150,7 +150,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
     try {
       const stored = parseFloat(localStorage.getItem('pal:chat:width') || '');
       if (Number.isFinite(stored) && stored >= 20 && stored <= 75) return stored;
-    } catch { /* localStorage blocked — fall through */ }
+    } catch { /* localStorage blocked, fall through */ }
     return 40;
   });
   const draggingRef = useRef(false);
@@ -198,7 +198,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   /**
    * Below 820px the fixed side-by-side split (reading pane + chat pane, each
    * a percentage of a viewport that's now only a few hundred px wide) leaves
-   * both unreadable rather than one usable — this is the "AI is not shown, I
+   * both unreadable rather than one usable: this is the "AI is not shown, I
    * can't ask a question" report for books specifically. Below that width,
    * show one pane at a time, full-width, with a toggle to switch.
    */
@@ -372,7 +372,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
     try {
       if (restoring) {
         // Fast-forward to the saved position in one bulk request instead of
-        // one getNextChunk round trip per chunk — a deep chapter used to cost
+        // one getNextChunk round trip per chunk: a deep chapter used to cost
         // hundreds of sequential HTTP calls just to restore where you left off.
         const cap = chapter ? chapter.end_sequence : savedSeq;
         const range = await getChunksRange(paperId, startCursor, Math.max(1, cap - startCursor + 1));
@@ -384,7 +384,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
           if (cursor >= savedSeq) break;
         }
         // Fewer chunks exist than expected (e.g. re-chunked shorter since the
-        // position was saved) — we ran out before reaching it.
+        // position was saved), so we ran out before reaching it.
         if (!reachedEnd && cursor < savedSeq) reachedEnd = true;
       } else {
         let guard = 0;
@@ -490,7 +490,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
       .catch(() => {});
   }, [paperId, meta?.status]);
 
-  // Linear papers: start (or restore) reading as soon as chunks exist — no need
+  // Linear papers: start (or restore) reading as soon as chunks exist, no need
   // to wait for "complete" (embeddings/summaries/figures keep running).
   useEffect(() => {
     if (!meta) return;
@@ -564,7 +564,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   const displayTitle = meta ? paperDisplayTitle(meta) : paper.title;
 
   /**
-   * Rename from the reader itself, not just the library — a long uploaded
+   * Rename from the reader itself, not just the library: a long uploaded
    * filename turning into a real name is exactly the moment the reader is
    * looking at the book, not the shelf. Optimistic: the header updates from
    * the rename response immediately, no separate refetch needed.
@@ -662,7 +662,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
           )}
         </div>
         <div className="ml-auto min-w-0 flex items-center gap-4 overflow-x-auto no-scrollbar hdr-scroll">
-          {/* extractor pill — confirms which parser produced these chunks */}
+          {/* extractor pill: confirms which parser produced these chunks */}
           {meta?.extractor && (
             <ExtractorPill
               extractor={meta.extractor}
@@ -744,7 +744,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
           <div ref={readerRef} className="flex-1 overflow-y-auto thin-scroll">
             <div className="max-w-[680px] mx-auto px-10 pt-16 pb-40">
 
-              {/* paper meta — driven by real backend data */}
+              {/* paper meta: driven by real backend data */}
               <div className="mb-12">
                 <div
                   className="text-[10.5px] font-mono uppercase tracking-[0.12em]"
@@ -892,7 +892,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
             </div>
           )}
 
-          {/* keyboard reveal cue — only when there's something to reveal */}
+          {/* keyboard reveal cue: only when there's something to reveal */}
           {canRead && !atEnd && (
             <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10">
               <div className="reveal-bar rounded-full px-3.5 py-2 flex items-center gap-2.5">
@@ -915,7 +915,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
           )}
         </section>
 
-        {/* Drag handle — 6px wide, full-height, becomes accent-colored on hover/drag.
+        {/* Drag handle: 6px wide, full-height, becomes accent-colored on hover/drag.
             Only meaningful when both panes share the width, so it's dropped
             entirely once one pane already takes the full screen. */}
         {!narrow && (
@@ -1124,7 +1124,7 @@ function ApiChunkBlock({
     );
   }
 
-  // Default: text chunk — render the markdown body so inline math, italics,
+  // Default: text chunk, render the markdown body so inline math, italics,
   // bold, lists, and bracketed citations look right.
   return (
     <div className={`transition-opacity duration-300 ${cursorClass}`} style={dim}>

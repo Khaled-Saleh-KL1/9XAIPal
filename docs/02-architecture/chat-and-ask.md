@@ -7,12 +7,12 @@
 > **Does not own:** which model serves each call ([ai-backend.md](ai-backend.md)), where the
 > external results come from ([configuration.md § Web search](../03-reference/configuration.md#web-search)).
 >
-> **Companions:** [overview.md](overview.md) — system context ·
-> [api.md](../03-reference/api.md) — request and response shapes ·
-> [database-schema.md](../03-reference/database-schema.md) — `paper_notes`, `conversation_turns`.
+> **Companions:** [overview.md](overview.md): system context ·
+> [api.md](../03-reference/api.md): request and response shapes ·
+> [database-schema.md](../03-reference/database-schema.md): `paper_notes`, `conversation_turns`.
 >
 > **Status:** current · **Last verified:** Part 1 on 2026-08-26 against
-> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) — the tool loop, the `WEB`
+> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py): the tool loop, the `WEB`
 > tool, and the step trail were exercised end to end against a live paper; Part 2 on
 > 2026-07-25 against [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py)
 > (`main`, 9b75500)
@@ -25,17 +25,17 @@ Two of them are agents over the same tool layer; the third is the older router.
 
 | | **Paper agent** (`/notes`) | **Study agent** (`/studies/…/chat`) | **Orchestrator** (`/ask`) |
 | --- | --- | --- | --- |
-| Serves | the article reader's margin notes | the desk — one scope, many papers | books, and any remaining `/ask` caller |
+| Serves | the article reader's margin notes | the desk: one scope, many papers | books, and any remaining `/ask` caller |
 | Source | [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) | [`chat/study_agent.py`](../../backend/app/chat/study_agent.py) | [`chat/orchestrator.py`](../../backend/app/chat/orchestrator.py) |
 | Scope | one paper | a study, or the whole library | one document |
-| Retrieval | the anchor + that paper's contents index | the **study index** — every paper's heading spine | LOCAL / GLOBAL / OVERVIEW / EXTERNAL |
+| Retrieval | the anchor + that paper's contents index | the **study index**: every paper's heading spine | LOCAL / GLOBAL / OVERVIEW / EXTERNAL |
 | Cites | `[[42]]` | `[[P2:42]]` | citation objects |
 | History | ✗ (one Q+A) | ✅ (a transcript) | ✅ |
 | Needs embeddings | ✗ | ✗ | ✅ for GLOBAL |
 | Router / guardrail / compaction | ✗ | ✗ | ✅ |
 | Persists to | `paper_notes` | `conversation_turns` (`study_id`) | `conversation_turns` + `ask_traces` |
 
-The first two share [`chat/agent_tools.py`](../../backend/app/chat/agent_tools.py) — everything
+The first two share [`chat/agent_tools.py`](../../backend/app/chat/agent_tools.py): everything
 between "the model asked for a section" and "here are the blocks". They differ only in what they
 are pointed at, how they name a block, and their prompts.
 
@@ -51,7 +51,7 @@ so there is nothing to compact. Each omission removes a model call from the crit
 
 ---
 
-# Part 1 — The paper agent (`/notes`)
+# Part 1: The paper agent (`/notes`)
 
 ## Two levels of question, one agent
 
@@ -72,24 +72,24 @@ the model is handed and how many rounds it gets.
 `kind='document', scope='anchor'` has no coherent meaning, and accepting both would create rows no
 surface can place. A follow-up inherits its parent's scope.
 
-⚠ **A document-scope note still carries an `anchor_sequence_id`** — the paper's first block —
+⚠ **A document-scope note still carries an `anchor_sequence_id`** (the paper's first block)
 because the column is `NOT NULL`. Nothing positions by it, and `_choose_margin` explicitly excludes
 these rows: they all share one sequence id, so counting them would make every note near the top of
 the paper look crowded.
 
 ⚠ **Whole-document stuffing is disabled for holistic questions even when the flag is on.** "What
-does this paper claim?" is exactly the case the opt-in was written against — handed forty pages,
+does this paper claim?" is exactly the case the opt-in was written against: handed forty pages,
 the model summarises what it was given instead of deciding which sections the question turns on.
 
 ## The paper is not in the prompt
 
 A note is a question about one passage. The model gets that passage, its neighbours, and the
-paper's **contents** — the heading spine, every entry carrying the block number it starts at.
+paper's **contents**: the heading spine, every entry carrying the block number it starts at.
 Everything else it has to go and get.
 
 ⚠ **This reverses the old default.** Until 2026-08-18 a paper under `WHOLE_PAPER_MAX_TOKENS` was
 stuffed into the prompt whole, and only a paper too large for that got tools. Whole-document
-stuffing is now opt-in via `PAPER_WHOLE_DOCUMENT_CONTEXT` (default `False`) — a paper that merely
+stuffing is now opt-in via `PAPER_WHOLE_DOCUMENT_CONTEXT` (default `False`): a paper that merely
 *fits* is not a reason to spend the context window on it.
 
 **What makes the omission safe is the contents index, not the tools.** A model that cannot see the
@@ -158,7 +158,7 @@ still does is cap the opt-in branch.
 ⚠ **The answer does not stream on the default path when the model answers without a tool.** The
 first call is a non-streamed probe, because the reply may turn out to be a tool block and streaming
 `<tool>SEARCH: …` into the margin would be nonsense on screen. Generation time is unchanged; only
-the reveal is — [`lib/pacer.ts`](../../frontend/src/lib/pacer.ts) still paints it at a readable
+the reveal is, and [`lib/pacer.ts`](../../frontend/src/lib/pacer.ts) still paints it at a readable
 rate. Streaming returns for the forced final answer after a tool round.
 
 ## The tools
@@ -168,17 +168,17 @@ rate. Streaming returns for the forced final answer after a tool round.
 | `SECTION` | `SECTION: 31` | the contents entry at that `sequence_id`, expanded to its whole section |
 | `SEARCH` | `SEARCH: reference sliding window attention` | Postgres full-text **plus** a literal `ILIKE` substring pass |
 | `READ` | `READ: 40-52` | `chunks` in that `sequence_id` range, capped in SQL |
-| `WEB` | `WEB: Longformer dilated attention` | the configured provider via [`search/web.py`](../../backend/app/search/web.py) — Tavily by default |
-| `THINK` | `THINK: checking what τ was set to` | nothing. It executes no call and costs no round — it is the model's own reason for the round, shown to the reader above the fetches it triggered |
+| `WEB` | `WEB: Longformer dilated attention` | the configured provider via [`search/web.py`](../../backend/app/search/web.py): Tavily by default |
+| `THINK` | `THINK: checking what τ was set to` | nothing. It executes no call and costs no round: it is the model's own reason for the round, shown to the reader above the fetches it triggered |
 
 ⚠ **`WEB` is offered only when a provider is configured** (`web.is_configured()`), and the help
 text for it is appended to the system prompt rather than baked in. A model told it can check the
 internet, whose every check comes back empty, stops trusting its own observations and starts
-guessing — worse than never having the tool.
+guessing, worse than never having the tool.
 
 ⚠ **`WEB` is the one tool that leaves the machine.** Only the query string goes out. It is scoped
-in the prompt to what the paper cannot answer by construction — what a cited work did, what a term
-means in the wider field — and explicitly forbidden for anything the paper states.
+in the prompt to what the paper cannot answer by construction (what a cited work did, what a term
+means in the wider field) and explicitly forbidden for anything the paper states.
 
 ⚠ **Web claims are attributed in prose, not with a marker.** `[[n]]` means a block number in *this*
 paper; models given `WEB` will otherwise invent `[[WEB]]`, which links to nothing and renders as
@@ -196,11 +196,11 @@ reads the already-loaded chunk list rather than going back to the database.
 failing. Models routinely pass a `SEARCH` hit to `SECTION` to mean "give me the rest of whatever
 this was in", and that is both what they want and the only useful thing to do with the number.
 
-⚠ **The `SECTION` parser is deliberately loose** — `SECTION: [[31]] Method` works. Models echo the
+⚠ **The `SECTION` parser is deliberately loose**: `SECTION: [[31]] Method` works. Models echo the
 contents line they are following, brackets and title included, and a strict `SECTION:\s*(\d+)$`
 throws the call away, which reads to the reader as the index quietly not working.
 
-⚠ **A paper with no detected headings has no index, so one is synthesised** — every Nth block,
+⚠ **A paper with no detected headings has no index, so one is synthesised**: every Nth block,
 sampled by `PAPER_AGENT_MAP_STRIDE`, labelled as a sample rather than a table of contents
 ([`_format_block_map`](../../backend/app/chat/paper_agent.py)). Without it such a paper loses the
 index *and* the document in one move: nothing to browse and nothing in the prompt, leaving a wrong
@@ -213,14 +213,14 @@ is a parser, and it is a deliberate trade. Tool calls are only recognised inside
 so a model that writes "SEARCH:" in prose cannot trigger a round trip.
 
 ⚠ **The substring leg is not redundant.** `to_tsvector` discards single Greek letters, equation
-numbers, and symbol subscripts entirely — a reader asking "why is τ so small here" gets zero
+numbers, and symbol subscripts entirely: a reader asking "why is τ so small here" gets zero
 full-text hits on the one term that matters.
 
 ⚠ The two search legs run **sequentially, not gathered**. An `AsyncSession` is a single connection
 in a single greenlet context; concurrent statements on it are unsupported and fail under the wrong
 interleaving. Both legs are indexed lookups measured in single-digit milliseconds.
 
-## The trail — every fetch is reported, not just logged
+## The trail: every fetch is reported, not just logged
 
 The agent can spend six rounds fetching before it writes a word. Without a trail that time is a
 spinner, and the answer arrives as an assertion the reader has no way to check. The loop therefore
@@ -245,8 +245,8 @@ emits a `step` SSE event per call, the client renders them live, and the whole l
                            observation (the raw blocks)
                                     ▼
                            appended to `gathered`, fed
-                           back into the next round
-                           — NEVER sent to the browser
+                           back into the next round,
+                           NEVER sent to the browser
 ```
 
 ### (rendered)
@@ -269,9 +269,9 @@ flowchart LR
     class O,G never
 ```
 
-What to notice: the two arrows out of `_run_call` never meet again. The **observation** — thousands
-of characters of raw blocks — goes only into the next prompt; the **step** — a label, a one-line
-result, the block numbers — goes only to the browser and the database. Streaming the observation
+What to notice: the two arrows out of `_run_call` never meet again. The **observation** (thousands
+of characters of raw blocks) goes only into the next prompt; the **step** (a label, a one-line
+result, the block numbers) goes only to the browser and the database. Streaming the observation
 would ship the whole paper to a card that renders one line of it.
 
 | Field | Purpose |
@@ -280,8 +280,8 @@ would ship the whole paper to a card that renders one line of it.
 | `n` | which tool round, 1-based |
 | `tool` | `SECTION` \| `SEARCH` \| `READ` \| `WEB` |
 | `think` | the model's stated reason, **first call of the round only** |
-| `label` | reader-facing phrasing — `Read “4.2 Training mixture”` |
-| `result` | one-line summary — `2 blocks · ¶47–¶48`, `no matches`, `4 sources` |
+| `label` | reader-facing phrasing: `Read “4.2 Training mixture”` |
+| `result` | one-line summary: `2 blocks · ¶47–¶48`, `no matches`, `4 sources` |
 | `seqs` | block numbers pulled in, rendered as jump chips (first 6) |
 | `sources` | `{title, url}` for `WEB`, rendered as links |
 
@@ -291,7 +291,7 @@ fetch as two rows, the first spinning forever.
 ⚠ **`think` rides on the first call of a round only.** It explains the *round*; repeated across
 three fetches it reads as three separate reasons.
 
-⚠ **`_plan()` deliberately reorders the model's calls** — `SECTION` and `READ` (millisecond index
+⚠ **`_plan()` deliberately reorders the model's calls**: `SECTION` and `READ` (millisecond index
 lookups) before `SEARCH` (two indexed queries) before `WEB` (a network round trip). The reader
 watches the trail fill in immediately instead of staring at one pending web row while three instant
 fetches queue behind it.
@@ -312,14 +312,14 @@ not a bug: the trail was never captured for them, and an empty one is honest.
 | Kind | The model is told | Quote carries |
 | --- | --- | --- |
 | `text` | the reader highlighted this passage; answer about it specifically | the highlighted text |
-| `figure` | the image is attached — look at it | the caption |
+| `figure` | the image is attached, look at it | the caption |
 | `equation` | explain what it says and what each symbol means; **trust the attached crop over the transcription** | its LaTeX |
 | `table` | this is the whole table, not one cell; **trust the crop over the transcription**, and read the caption for what the columns mean | its recovered table body |
 | `block` | the reader is reading around this point | nothing |
 
 ⚠ Both `equation` and `table` say to trust the image over the text, for the same reason: MinerU's
 transcription is machine-generated. For a table it specifically loses merged cells, spanning
-headers, and footnote markers — the parts that decide what a number means.
+headers, and footnote markers: the parts that decide what a number means.
 
 ## Citations
 
@@ -328,7 +328,7 @@ parsed into `cited_sequence_ids` and rendered as chips that scroll the article.
 
 ⚠ The parser matches a whole bracket blob, not a single number. Models routinely group references
 as `[[16], [42]]` or `[[16, 42]]`; a strict `\[\[(\d+)\]\]` silently returns nothing for those,
-and the note renders with no chips — making a well-grounded answer look ungrounded.
+and the note renders with no chips, making a well-grounded answer look ungrounded.
 
 ## Model selection
 
@@ -336,19 +336,19 @@ A note records both `requested_model` (what the reader picked) and `model` (what
 reported). The catalog comes from [`llm/catalog.py`](../../backend/app/llm/catalog.py).
 
 ⚠ **A follow-up always uses its parent's `requested_model`, and the client cannot override it.**
-A thread that switched models halfway would destroy the comparison the picker exists for — you
+A thread that switched models halfway would destroy the comparison the picker exists for: you
 would no longer know which model said what.
 
 ---
 
-# Part 1b — The study agent (the desk)
+# Part 1b: The study agent (the desk)
 
 ## What a study is
 
 A named group of papers that scopes an answer. Not a folder: a paper can sit in several studies at
 once, and removing it from one takes nothing away from the library or the others.
 
-`study_id IS NULL` on a turn is the **library-wide** scope — every finished paper. That is a real
+`study_id IS NULL` on a turn is the **library-wide** scope: every finished paper. That is a real
 scope, not a missing value; code that "repairs" it deletes the reader's main conversation. The
 route segment for it is the literal string `library`.
 
@@ -358,21 +358,21 @@ The whole thing rests on one trade: the model gets **every paper's heading spine
 
 ```text
 STUDY INDEX:
-P1 — BDH-CQ: In-Context Learning with Recurrent Latent Reasoning (17 pages)
+P1 (BDH-CQ): In-Context Learning with Recurrent Latent Reasoning (17 pages)
    [[P1:6]] Abstract
    [[P1:28]] 3 Introducing BDH-CQ
      [[P1:32]] 3.2 In-context learning through recurrent memory
-P2 — Kimi K3: Open Frontier Intelligence (47 pages)
+P2 (Kimi K3): Open Frontier Intelligence (47 pages)
    [[P2:29]] 2 Model Architecture
      [[P2:33]] 2.1 Hybrid Attention
    [[P2:261]] 5.4 Inference and Online Serving
-P3 — Unlimited OCR Works (14 pages)
+P3: Unlimited OCR Works (14 pages)
    [[P3:31]] 3. Methodology
      [[P3:39]] 3.4. Reference Sliding Window Attention
 ```
 
 Ten papers is easily a million tokens of body text; the spine of all ten is a few thousand. That is
-the entire reason a cross-paper agent is affordable — and it is the same bet the paper agent makes,
+the entire reason a cross-paper agent is affordable, and it is the same bet the paper agent makes,
 taken at the point where there is no alternative.
 
 ⚠ **A paper MinerU found no headings in still gets an entry**, with a note saying `SECTION` will not
@@ -386,16 +386,16 @@ work on it. Omitting it would leave the model believing the study is smaller tha
 | `READ` | `READ: P1:40-52` | one paper's block range |
 | `SEARCH` | `SEARCH: inference cost` | **every paper in the study at once**, hits labelled by paper |
 | `WEB` | `WEB: ARC-AGI state of the art` | the public internet |
-| `NOTE` | `NOTE: P2 and P3 disagree here` | a write — pins to this chat's board |
-| `NOTE ALL` | `NOTE ALL: worth chasing later` | a write — pins to the universal board |
-| `THINK` | `THINK: P2 is the one that reports cost directly` | nothing — the reason, shown to the reader |
+| `NOTE` | `NOTE: P2 and P3 disagree here` | a write: pins to this chat's board |
+| `NOTE ALL` | `NOTE ALL: worth chasing later` | a write: pins to the universal board |
+| `THINK` | `THINK: P2 is the one that reports cost directly` | nothing: the reason, shown to the reader |
 
 ⚠ `NOTE` is the only tool that changes something, so `_plan` runs it **last**:
 the trail then reads as "looked, then wrote" rather than the reverse.
 
 ⚠ **The P-numbers come from `study_papers.position`, and they are load-bearing.** They are how an
 answer names a paper, so re-ordering a study silently repoints every citation the reader has already
-read. That is why membership is written whole-collection (`PUT /studies/{id}/papers`) — the list
+read. That is why membership is written whole-collection (`PUT /studies/{id}/papers`): the list
 order *is* the numbering.
 
 ⚠ **Out-of-range paper numbers are dropped at plan time**, not at execution. A model that writes
@@ -407,7 +407,7 @@ first.
 
 ## Notes: the agent reads both boards and writes to either
 
-The desk has two boards — the chat's own, and the universal one — and the agent
+The desk has two boards (the chat's own, and the universal one), and the agent
 sees both and can pin to both.
 
 **Reading.** Every note already pinned rides in the prompt, each labelled with
@@ -422,7 +422,7 @@ NOTES ALREADY ON THE BOARDS (you can add and edit, never remove):
 ```
 
 ⚠ **The authorship label is load-bearing.** Without it the model re-pins its own
-notes every few turns — it has no memory of having written them — and the reader
+notes every few turns, since it has no memory of having written them, and the reader
 ends up with the same observation five times in five colours.
 
 **Writing**, two ways, because the model reaches for both:
@@ -435,7 +435,7 @@ ends up with the same observation five times in five colours.
 | | `<note board="all">…</note>` | universal |
 
 ⚠ **The `<note>` tag exists because the model invented it.** Asked to "pin a
-note", it wrote `<note>…</note>` into its answer on the first try — the forced
+note", it wrote `<note>…</note>` into its answer on the first try, since the forced
 final turn is told it has no tools, so a `NOTE:` line is genuinely unavailable
 there and it improvised a tag. Parsing it is meeting the model where it is;
 refusing to would leave raw XML in the reader's answer and nothing on the board.
@@ -448,7 +448,7 @@ begins "ALL:" and lands on the wrong board.
 
 ⚠ **Both exits from the loop extract notes.** The model can answer on the very
 first probe without calling a tool, and that path never touches
-`stream_answer` — so extracting only in the streamed branch left the raw tag in
+`stream_answer`, so extracting only in the streamed branch left the raw tag in
 the answer exactly when the reader had asked for a note. That is how it failed
 the first time; `_pin_written_notes` is now called from both.
 
@@ -458,7 +458,7 @@ re-wrapped. Two per answer, hard.
 
 ### The agent cannot delete a note
 
-Not a rule the model is asked to follow — a structural fact:
+Not a rule the model is asked to follow, but a structural fact:
 
 - there is no delete tool in the parser or the plan;
 - `study_agent` does not import `sticky_repo.delete_sticky`;
@@ -474,20 +474,20 @@ came from, not who typed last.
 ## Repeated calls are short-circuited
 
 ⚠ **Observed**: asked a broad question, the model re-requested the same three
-`SECTION`s on four consecutive rounds — twelve identical fetches, four of eight
+`SECTION`s on four consecutive rounds: twelve identical fetches, four of eight
 rounds burned making no progress. It can see the results in `WHAT YOU HAVE
 GATHERED`, but a fresh copy of the same text reads to it as confirmation rather
 than repetition.
 
 A signature set per question (`tool`, `arg`, `board`) now answers a repeat with
-"you already fetched this — ask for something else, or answer with what you
+"you already fetched this: ask for something else, or answer with what you
 have". `NOTE` is exempt: writing the same note twice is caught by the note
 de-dup instead, which compares against the board rather than the round.
 
 ## The forced final turn can still call a tool
 
 The last round is told it has no tools left. It mostly obeys. When it does not, the tokens are
-already streaming to the reader, so stripping afterwards is too late — `tool> THINK: verify P3's
+already streaming to the reader, so stripping afterwards is too late: `tool> THINK: verify P3's
 cost claim… SECTION: P3:29` lands in the middle of the answer and stays there until a refetch
 quietly replaces it. **Observed, not hypothetical**: it happened on the first live desk question.
 
@@ -512,7 +512,7 @@ question, and a desk conversation needing more than eight turns of memory is usu
 
 ---
 
-# Part 2 — The orchestrator (`/ask`)
+# Part 2: The orchestrator (`/ask`)
 
 ⚠ `[historical]` for papers. The article reader never calls `/ask`; this path now serves books and
 any external caller. The routes below are unchanged.
@@ -584,12 +584,12 @@ async def handle_ask(session, *, prompt, document_id, current_chunk_id, conversa
 Two-tier:
 
 1. **Cheap heuristic first.** Three keyword lists:
-   - `_LOCAL_KEYWORDS` — `"this formula"`, `"this figure"`, `"above"`,
+   - `_LOCAL_KEYWORDS`: `"this formula"`, `"this figure"`, `"above"`,
      `"shown here"`, `"bring a picture"`, etc. Only fires if the request
      carries a `current_chunk_id`.
-   - `_OVERVIEW_KEYWORDS` — `"summarize the paper"`, `"main contribution"`,
+   - `_OVERVIEW_KEYWORDS`: `"summarize the paper"`, `"main contribution"`,
      `"tl;dr"`, `"executive summary"`, etc.
-   - `_EXTERNAL_KEYWORDS` — `"latest"`, `"recent"`, `"who is"`,
+   - `_EXTERNAL_KEYWORDS`: `"latest"`, `"recent"`, `"who is"`,
      `"wikipedia"`, etc.
 2. **Fallback to LLM** for ambiguous queries: outputs `LOCAL`, `GLOBAL`,
    `OVERVIEW`, or `EXTERNAL` as JSON.
@@ -611,8 +611,8 @@ If the current chunk is a figure, the model literally sees the picture.
 
 ## GLOBAL context ([chat/global_context.py](../../backend/app/chat/global_context.py))
 
-1. Calls `get_query_embedding(prompt)` — embeds the query with the active embedding backend (same resolver as ingestion, so query and stored vectors always match).
-2. Calls `embeddings.search_embeddings` — pgvector cosine-similarity.
+1. Calls `get_query_embedding(prompt)`: embeds the query with the active embedding backend (same resolver as ingestion, so query and stored vectors always match).
+2. Calls `embeddings.search_embeddings`: pgvector cosine-similarity.
 3. Returns top-K (default 3) chunks.
 4. Surfaces images attached to retrieved chunks for inline rendering.
 
@@ -626,7 +626,7 @@ If the current chunk is a figure, the model literally sees the picture.
 
 1. Rewrites the query toward CS/ML (`rewrite_query_for_papers`) so an ambiguous term like
    "transduction" does not return genetics hits.
-2. Calls [`search/web.py`](../../backend/app/search/web.py) — Tavily by default, SearXNG when
+2. Calls [`search/web.py`](../../backend/app/search/web.py): Tavily by default, SearXNG when
    pinned. Never a provider module directly.
 3. Ranks results via `search/ranking.py` (dedup + scoring).
 4. Returns at most 5 results.

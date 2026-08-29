@@ -22,13 +22,13 @@
 | Vite dev server | `http://localhost:5173` | Dev only | Proxies `/api` and `/static` to `:8000` |
 | PostgreSQL | `localhost:5432` | Yes | `pgvector/pgvector:pg16`; needs `vector` + `uuid-ossp` |
 | Redis | `localhost:6379` | Yes | Celery broker **and** result backend |
-| Celery worker | — | Yes | No port; consumes from Redis |
+| Celery worker | n/a | Yes | No port; consumes from Redis |
 | Ollama | `http://localhost:11434` | Optional* | Chat / VLM / classifier / embedding host |
 | MinerU CLI | binary on `$PATH` | Yes | Subprocess, not a service. `ALLOW_PYMUPDF_FALLBACK=true` degrades gracefully |
 | SearXNG | `http://localhost:8080` | Optional | Only when `WEB_SEARCH_PROVIDER=searxng`. The default provider is **Tavily**, which is reached over the public internet and runs no local service. |
-| autoheal | — | Compose only | Restarts containers whose healthcheck goes unhealthy |
+| autoheal | n/a | Compose only | Restarts containers whose healthcheck goes unhealthy |
 
-\* **One AI backend is required** — either Ollama or a cloud API key. Neither ⇒ chat returns
+\* **One AI backend is required**: either Ollama or a cloud API key. Neither ⇒ chat returns
 503 `NO_LLM_CONFIGURED` with configure-me instructions, but stored papers still serve.
 
 ---
@@ -115,7 +115,7 @@ flowchart TD
 
 > 🟦 owned process · 🟩 data store · 🟨 external / optional.
 > Two edges are worth memorising: **the worker talks to Postgres over psycopg2 (sync), the API
-> over asyncpg (async)** — two separate pools against one database; and **web search is the only
+> over asyncpg (async)**, two separate pools against one database; and **web search is the only
 > arrow leaving the machine**, which is what makes the local-first claim true.
 
 ---
@@ -142,8 +142,8 @@ Two mechanisms, covering two different failure modes:
 
 | Mechanism | Covers | Applies to |
 | --- | --- | --- |
-| `restart: unless-stopped` | Process **exits** — crash, OOM-kill (exit 137) | `postgres`, `redis`, `searxng`, `celery_worker`, `api` |
-| `autoheal` watchdog | Process **hangs** — running but healthcheck unhealthy | containers labeled `autoheal=true`: `api`, `postgres`, `redis` |
+| `restart: unless-stopped` | Process **exits**, crash, OOM-kill (exit 137) | `postgres`, `redis`, `searxng`, `celery_worker`, `api` |
+| `autoheal` watchdog | Process **hangs**, running but healthcheck unhealthy | containers labeled `autoheal=true`: `api`, `postgres`, `redis` |
 
 `restart:` cannot see a hung-but-alive container, which is why autoheal exists; it needs
 `/var/run/docker.sock` mounted to issue restarts. Neither mechanism touches data volumes.
