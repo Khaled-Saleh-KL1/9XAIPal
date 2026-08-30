@@ -1184,6 +1184,14 @@ body {
   overflow-y: hidden;
   max-width: 100%;
 }
+.article-math-fallback-img {
+  max-height: 400px;
+  max-width: 100%;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 4px;
+  padding: 12px;
+}
 .article-math-ask {
   position: absolute;
   right: 0;
