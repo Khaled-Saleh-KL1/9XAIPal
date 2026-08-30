@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import type { DocBlock } from '../api';
@@ -30,6 +30,44 @@ function InlineMd({ children }: { children: string }) {
     >
       {children}
     </ReactMarkdown>
+  );
+}
+
+/**
+ * A formula whose LaTeX transcription KaTeX can't parse (garbled OCR, not
+ * something we can safely auto-repair without risking silently wrong math —
+ * see strip_leaked_sup_run's sibling reasoning in the backend) falls back to
+ * the page crop MinerU already captured for every equation, so the reader
+ * sees the real notation instead of raw TeX source.
+ *
+ * Checks the actual rendered output (a .katex-error span) rather than a
+ * separate katex.renderToString probe — the app's own `katex` package and
+ * rehype-katex's private dependency copy are on different versions, so a
+ * direct `import katex from 'katex'` here would bundle a second full copy
+ * of the library. useLayoutEffect runs before paint, so a formula that does
+ * need the image fallback is never visible as broken raw text first.
+ */
+function MathBlock({ wrapped, imageUrl }: { wrapped: string; imageUrl: string | null }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [broken, setBroken] = useState(false);
+
+  useLayoutEffect(() => {
+    setBroken(!!ref.current?.querySelector('.katex-error'));
+  }, [wrapped]);
+
+  if (broken && imageUrl) {
+    return (
+      <img
+        className="article-math-fallback-img"
+        src={imageUrl}
+        alt="Equation as it appears on the page (its transcription could not be rendered)"
+      />
+    );
+  }
+  return (
+    <div ref={ref}>
+      <Md>{wrapped}</Md>
+    </div>
   );
 }
 
@@ -143,7 +181,7 @@ function ArticleBlockImpl({
       <section {...common}>
         {ribbon}
         <div className="article-math">
-          <Md>{wrapped}</Md>
+          <MathBlock wrapped={wrapped} imageUrl={block.image_url} />
           <button
             type="button"
             className="article-math-ask"

@@ -5,7 +5,7 @@
  * article with margin notes (see ArticleReader.tsx); ReadingView.tsx picks
  * between the two. Nothing here is on the paper path.
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import { displayTitle as paperDisplayTitle } from '../lib/titles';
@@ -94,7 +94,7 @@ type RevealedUnit =
   | { kind: 'heading'; text: string; level: number; sourceChunkId: string; sourceSeq: number }
   | { kind: 'table'; markdown: string; sourceChunkId: string; sourceSeq: number; tableJson?: any }
   | { kind: 'figure'; imageUrl?: string; caption?: string; filename?: string; sourceChunkId: string; sourceSeq: number }
-  | { kind: 'math'; latex: string; sourceChunkId: string; sourceSeq: number }
+  | { kind: 'math'; latex: string; imageUrl?: string; sourceChunkId: string; sourceSeq: number }
   | { kind: 'code'; markdown: string; sourceChunkId: string; sourceSeq: number }
   | { kind: 'footnote'; text: string; sourceChunkId: string; sourceSeq: number };
 
@@ -283,7 +283,7 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
     if (chunk.structural_type === 'math') {
       const body = chunk.content_markdown.trim();
       const latex = body.startsWith('$$') ? body : `$$\n${body}\n$$`;
-      return [{ kind: 'math', latex, sourceChunkId: id, sourceSeq: seq }];
+      return [{ kind: 'math', latex, imageUrl: chunk.image_url || undefined, sourceChunkId: id, sourceSeq: seq }];
     }
 
     if (chunk.structural_type === 'code') {
@@ -1019,6 +1019,41 @@ function InlineMd({ children }: { children: string }) {
   );
 }
 
+// A formula whose LaTeX transcription KaTeX can't parse (garbled OCR, not
+// something safe to auto-repair without risking silently wrong math) falls
+// back to the page crop MinerU already captured for every equation, so the
+// reader sees the real notation instead of raw TeX source. Checks the
+// actual rendered output (a .katex-error span) rather than a separate
+// katex.renderToString probe — the app's own `katex` package and
+// rehype-katex's private dependency copy are on different versions, so a
+// direct import here would bundle a second full copy of the library.
+// useLayoutEffect runs before paint, so a formula that does need the image
+// fallback is never visible as broken raw text first.
+function MathBlock({ wrapped, imageUrl }: { wrapped: string; imageUrl?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [broken, setBroken] = useState(false);
+
+  useLayoutEffect(() => {
+    setBroken(!!ref.current?.querySelector('.katex-error'));
+  }, [wrapped]);
+
+  if (broken && imageUrl) {
+    return (
+      <img
+        src={imageUrl}
+        alt="Equation as it appears on the page (its transcription could not be rendered)"
+        className="max-h-[300px] max-w-full object-contain rounded"
+        style={{ background: '#fff', padding: 12 }}
+      />
+    );
+  }
+  return (
+    <div ref={ref}>
+      <Md>{wrapped}</Md>
+    </div>
+  );
+}
+
 function ApiChunkBlock({
   chunk,
   active,
@@ -1087,7 +1122,7 @@ function ApiChunkBlock({
     const wrapped = body.startsWith('$$') ? body : `$$\n${body}\n$$`;
     return (
       <div className="transition-opacity duration-300 my-4 flex justify-center overflow-x-auto" style={dim}>
-        <Md>{wrapped}</Md>
+        <MathBlock wrapped={wrapped} imageUrl={chunk.image_url || undefined} />
       </div>
     );
   }
@@ -1277,7 +1312,7 @@ function GranularUnit({
   if (unit.kind === 'math') {
     return (
       <div className={`${baseClass} ${lastClass} my-4 flex justify-center overflow-x-auto`}>
-        <Md>{unit.latex}</Md>
+        <MathBlock wrapped={unit.latex} imageUrl={unit.imageUrl} />
       </div>
     );
   }
