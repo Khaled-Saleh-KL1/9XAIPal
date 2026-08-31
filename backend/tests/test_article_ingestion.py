@@ -1,10 +1,14 @@
 """run_article_pipeline_sync: the third pipeline (URL -> markdown -> chunks),
 sharing _finish_ingestion with the PDF pipeline but never its extraction step.
 
-article_extraction.extract_article itself is mocked here — no live network
-call belongs in the regular suite. Its own fetch/filter logic is covered
-separately (test_article_extraction.py) and was additionally verified
-against real, live pages during development (see the plan notes).
+article_extraction's fetch is mocked here — no live network call belongs in
+the regular suite. Its own fetch/filter logic is covered separately
+(test_article_extraction.py) and was additionally verified against real,
+live pages during development (see the plan notes).
+
+The mocked seam is fetch_resource + extract_article_from_html rather than
+extract_article: the pipeline has to see what a URL turned out to be before
+it can choose a pipeline, since a PDF link goes to MinerU instead.
 """
 
 from unittest.mock import patch
@@ -14,7 +18,19 @@ import pytest
 from sqlalchemy import text
 
 from app.extraction.pipeline_sync import run_article_pipeline_sync
-from app.services.article_extraction import ArticleExtraction, ArticleExtractionError
+from app.services.article_extraction import (
+    ArticleExtraction,
+    ArticleExtractionError,
+    FetchedResource,
+)
+
+
+def _html_resource(url="https://example.com/some-article"):
+    return FetchedResource(
+        content=b"<html><body>irrelevant, extraction is mocked</body></html>",
+        content_type="text/html",
+        final_url=url,
+    )
 
 
 def _insert_document_and_job(session, doc_id, job_id):
@@ -49,7 +65,11 @@ def test_run_article_pipeline_success(db_session_sync):
         asset_map={"photo.jpg": "https://cdn.example.com/img/photo.jpg"},
     )
 
-    with patch("app.services.article_extraction.extract_article", return_value=fake):
+    with patch(
+        "app.services.article_extraction.fetch_resource", return_value=_html_resource()
+    ), patch(
+        "app.services.article_extraction.extract_article_from_html", return_value=fake
+    ):
         run_article_pipeline_sync(
             db_session_sync,
             document_id=doc_id,
@@ -97,7 +117,7 @@ def test_run_article_pipeline_failure_marks_document_and_job_failed(db_session_s
     _insert_document_and_job(db_session_sync, doc_id, job_id)
 
     with patch(
-        "app.services.article_extraction.extract_article",
+        "app.services.article_extraction.fetch_resource",
         side_effect=ArticleExtractionError("Couldn't fetch that page: timed out"),
     ):
         with pytest.raises(ArticleExtractionError):
@@ -126,3 +146,91 @@ def test_run_article_pipeline_failure_marks_document_and_job_failed(db_session_s
         text("SELECT COUNT(*) FROM chunks WHERE document_id = :id"), {"id": doc_id}
     ).scalar_one()
     assert remaining == 0
+
+
+# ── a URL that turns out to be a PDF ────────────────────────────────────────
+
+def _pdf_resource(url="https://arxiv.org/pdf/1706.03762"):
+    # Enough of a PDF for is_pdf; the pipeline itself is mocked below.
+    return FetchedResource(
+        content=b"%PDF-1.5\nnot a real body, run_pipeline_sync is mocked\n",
+        content_type="application/pdf",
+        final_url=url,
+    )
+
+
+def test_pdf_url_is_routed_to_the_pdf_pipeline(db_session_sync, tmp_path, monkeypatch):
+    """A pasted arXiv PDF link must become a real doc_kind='paper' document
+    running through MinerU — not an 'article' fed to a static-HTML extractor,
+    which is what produced the 'may require a login or JavaScript' failure.
+    """
+    import app.extraction.pipeline_sync as ps
+
+    doc_id = uuid4()
+    job_id = uuid4()
+    _insert_document_and_job(db_session_sync, doc_id, job_id)
+
+    monkeypatch.setattr(ps, "documents_dir", lambda: tmp_path)
+    monkeypatch.setattr(ps, "assets_dir", lambda: tmp_path)
+    monkeypatch.setattr(ps, "ensure_storage_dirs", lambda: None)
+
+    with patch(
+        "app.services.article_extraction.fetch_resource", return_value=_pdf_resource()
+    ), patch.object(ps, "run_pipeline_sync") as run_pdf:
+        run_article_pipeline_sync(
+            db_session_sync,
+            document_id=doc_id,
+            job_id=job_id,
+            url="https://arxiv.org/pdf/1706.03762",
+        )
+
+    # The PDF pipeline ran, pointed at the file just written.
+    run_pdf.assert_called_once()
+    assert run_pdf.call_args.kwargs["pdf_path"] == tmp_path / f"{doc_id}.pdf"
+
+    # Bytes landed where the pipeline reads them AND where /raw serves them.
+    assert (tmp_path / f"{doc_id}.pdf").read_bytes().startswith(b"%PDF-")
+
+    doc = db_session_sync.execute(
+        text("SELECT * FROM documents WHERE id = :id"), {"id": doc_id}
+    ).mappings().one()
+    assert doc["doc_kind"] == "paper"
+    assert doc["filename"] == f"{doc_id}.pdf"
+    # A human-readable name from the URL, not the placeholder .html one.
+    assert doc["original_filename"] == "1706.03762.pdf"
+    # Provenance survives: this row knows it came from a link.
+    assert doc["source_url"] == "https://example.com/some-article"
+
+
+def test_html_url_still_takes_the_article_path(db_session_sync):
+    """Guard the branch: a normal page must not be dragged into the PDF
+    pipeline by the new routing."""
+    import app.extraction.pipeline_sync as ps
+
+    doc_id = uuid4()
+    job_id = uuid4()
+    _insert_document_and_job(db_session_sync, doc_id, job_id)
+
+    fake = ArticleExtraction(
+        title="An Ordinary Page",
+        markdown="# An Ordinary Page\n\nA paragraph of real prose here.\n",
+        asset_map={},
+    )
+    with patch(
+        "app.services.article_extraction.fetch_resource", return_value=_html_resource()
+    ), patch(
+        "app.services.article_extraction.extract_article_from_html", return_value=fake
+    ), patch.object(ps, "run_pipeline_sync") as run_pdf:
+        run_article_pipeline_sync(
+            db_session_sync,
+            document_id=doc_id,
+            job_id=job_id,
+            url="https://example.com/some-article",
+        )
+
+    run_pdf.assert_not_called()
+    doc = db_session_sync.execute(
+        text("SELECT doc_kind, extractor FROM documents WHERE id = :id"), {"id": doc_id}
+    ).mappings().one()
+    assert doc["doc_kind"] == "article"
+    assert doc["extractor"] == "trafilatura"

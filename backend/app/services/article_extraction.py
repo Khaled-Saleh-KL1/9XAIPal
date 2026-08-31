@@ -16,6 +16,14 @@ time, across every task type, with no global task_time_limit), so a slow or
 hanging site must fail cleanly within a bounded time rather than stalling
 paper/book processing queued behind it.
 
+A pasted link is not always a web page: an arXiv/journal PDF URL is one of
+the most natural ways to add a paper. fetch_resource() reports what a URL
+actually turned out to be so the caller can route a PDF into the real
+MinerU pipeline (see extraction/pipeline_sync.py) instead of feeding binary
+bytes to a static-HTML extractor, which produced a near-empty result and an
+error message blaming a login/paywall/JavaScript for what was really just a
+PDF.
+
 ⚠ Images are hotlinked, never downloaded — by request. The tradeoff this
 buys: no storage, no risk of pulling arbitrary bytes onto this server for an
 image, but also no way to attach one to a VLM call (see chat/paper_agent.py
@@ -38,6 +46,14 @@ logger = get_logger(__name__)
 PAGE_FETCH_TIMEOUT = 15.0
 IMAGE_CHECK_TIMEOUT = 5.0
 MAX_PAGE_BYTES = 8 * 1024 * 1024   # a page of prose, not a video
+# A PDF behind a link is a document, not a page, so it gets the same ceiling
+# an uploaded file does rather than the prose-page one.
+MAX_PDF_BYTES = 100 * 1024 * 1024
+PDF_CONTENT_TYPE = "application/pdf"
+# The PDF spec requires this header near the start of the file. Checked in
+# addition to Content-Type because a server can mislabel or omit the type —
+# /upload's own guard reads the magic bytes for the same reason.
+PDF_MAGIC = b"%PDF-"
 MAX_IMAGES = 20
 # Below this, almost certainly a spacer GIF, a UI icon, or a tracking pixel —
 # not a figure worth showing in the reading flow. Found empirically: Wikipedia's
@@ -69,6 +85,22 @@ class ArticleExtraction:
     # live; resolve_asset_url is what makes a URL here serve correctly
     # instead of being treated as a local images_dir()-relative path.
     asset_map: dict = field(default_factory=dict)
+
+
+@dataclass
+class FetchedResource:
+    """What a URL actually turned out to be, so a caller can route on it."""
+    content: bytes
+    content_type: str
+    final_url: str
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.content_type == PDF_CONTENT_TYPE or self.content.startswith(PDF_MAGIC)
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", errors="replace")
 
 
 def _check_url_is_fetchable(url: str) -> None:
@@ -150,6 +182,45 @@ def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
         return False
 
 
+def fetch_resource(url: str) -> FetchedResource:
+    """Fetch `url` and report what it turned out to be.
+
+    Streamed rather than read whole so an oversized response is abandoned
+    partway instead of being pulled entirely into memory first, and so the
+    size ceiling can be raised the moment the body reveals itself to be a
+    PDF (which is a document, not a page of prose).
+    """
+    _check_url_is_fetchable(url)
+
+    try:
+        with httpx.Client(follow_redirects=True, timeout=PAGE_FETCH_TIMEOUT) as client:
+            with client.stream("GET", url, headers={"User-Agent": USER_AGENT}) as resp:
+                resp.raise_for_status()
+                content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+                final_url = str(resp.url)
+
+                limit = MAX_PDF_BYTES if content_type == PDF_CONTENT_TYPE else MAX_PAGE_BYTES
+                buf = bytearray()
+                for block in resp.iter_bytes():
+                    buf += block
+                    # The magic bytes are ground truth and arrive in the first
+                    # block, so a mislabeled PDF gets the document ceiling too
+                    # rather than being rejected as an oversized "page".
+                    if limit == MAX_PAGE_BYTES and bytes(buf[:len(PDF_MAGIC)]) == PDF_MAGIC:
+                        limit = MAX_PDF_BYTES
+                    if len(buf) > limit:
+                        raise ArticleExtractionError(
+                            "That PDF is too large to import."
+                            if limit == MAX_PDF_BYTES
+                            else "That page is too large to import."
+                        )
+                content = bytes(buf)
+    except httpx.HTTPError as e:
+        raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
+
+    return FetchedResource(content=content, content_type=content_type, final_url=final_url)
+
+
 def extract_article(url: str) -> ArticleExtraction:
     """Fetch `url` and extract its readable content.
 
@@ -157,18 +228,19 @@ def extract_article(url: str) -> ArticleExtraction:
     or JS-only page fails the ingestion job with a clear message rather than
     silently producing a near-empty document.
     """
-    _check_url_is_fetchable(url)
+    resource = fetch_resource(url)
+    if resource.is_pdf:
+        # The pipeline routes a PDF away before reaching here; this only
+        # fires for a direct caller, and says the real reason rather than
+        # letting trafilatura return nothing and blaming a paywall.
+        raise ArticleExtractionError(
+            "That link is a PDF, not a web page — import it as a document instead."
+        )
+    return extract_article_from_html(resource.text, url)
 
-    try:
-        with httpx.Client(follow_redirects=True, timeout=PAGE_FETCH_TIMEOUT) as client:
-            resp = client.get(url, headers={"User-Agent": USER_AGENT})
-            resp.raise_for_status()
-            if len(resp.content) > MAX_PAGE_BYTES:
-                raise ArticleExtractionError("That page is too large to import.")
-            html = resp.text
-    except httpx.HTTPError as e:
-        raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
 
+def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
+    """Extract readable content from already-fetched HTML."""
     markdown = trafilatura.extract(
         html,
         url=url,
