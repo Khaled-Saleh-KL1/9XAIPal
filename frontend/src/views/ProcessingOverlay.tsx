@@ -109,7 +109,11 @@ interface Props {
   progressFraction?: number | null;
   errorMessage?: string | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | "trafilatura" | null while pending
-  /** Only affects completion copy below: reading navigation, not the pipeline. */
+  /**
+   * What the caller believes this is. For a URL import it is a guess, not a
+   * fact, until the fetch lands: see `effectiveKind` below. Affects the step
+   * list, the header line, and the completion copy, never the pipeline.
+   */
   kind?: 'book' | 'paper' | 'article';
   onClose: () => void;
   onCancel: () => void;
@@ -125,7 +129,15 @@ function extractorLabel(ex: string | null | undefined): { label: string; tone: '
 export function ProcessingOverlay({ file, status, progressFraction, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
-  const steps = kind === 'article' ? [...ARTICLE_EXTRACT_STEPS, ...INDEX_STEPS] : [...EXTRACT_STEPS, ...INDEX_STEPS];
+  // `kind` is optimistic for a URL import: a link pasted through "Book" or
+  // "Research paper" is assumed to be the PDF it looks like, because most are.
+  // `extractor` is the first hard evidence of what the backend actually ran,
+  // and trafilatura only ever runs for doc_kind='article', so once it arrives
+  // it wins. Without this, pasting a journal abstract page through "Research
+  // paper" narrates "MinerU is parsing layout, math, and figures" for a run
+  // where MinerU never executes, and labels the host "· runs locally".
+  const effectiveKind = extractor === 'trafilatura' ? 'article' : kind;
+  const steps = effectiveKind === 'article' ? [...ARTICLE_EXTRACT_STEPS, ...INDEX_STEPS] : [...EXTRACT_STEPS, ...INDEX_STEPS];
   const overall = failed ? 0 : stageProgress(status, null, progressFraction);
 
   return (
@@ -157,7 +169,7 @@ export function ProcessingOverlay({ file, status, progressFraction, errorMessage
               {file.name}
             </div>
             <div className="text-[12px] mt-1" style={{ color: 'var(--muted)' }}>
-              {kind === 'article' ? file.size : `${file.size} · runs locally`}
+              {effectiveKind === 'article' ? file.size : `${file.size} · runs locally`}
             </div>
           </div>
           {!complete && !failed && (
@@ -236,7 +248,7 @@ export function ProcessingOverlay({ file, status, progressFraction, errorMessage
           />
           <span className="text-[12px] font-mono" style={{ color: 'var(--muted)' }}>
             {complete
-              ? kind === 'book'
+              ? effectiveKind === 'book'
                 ? 'indexing complete, back to library'
                 : 'extracted, ready to read'
               : failed
