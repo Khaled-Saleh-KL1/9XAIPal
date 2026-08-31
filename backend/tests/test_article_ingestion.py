@@ -234,3 +234,72 @@ def test_html_url_still_takes_the_article_path(db_session_sync):
     ).mappings().one()
     assert doc["doc_kind"] == "article"
     assert doc["extractor"] == "trafilatura"
+
+
+def test_pdf_url_with_book_kind_becomes_doc_kind_book(db_session_sync, tmp_path, monkeypatch):
+    """A link pasted through the 'Book' picker, not just 'Article by URL',
+    must land as doc_kind='book' when it turns out to be a PDF."""
+    import app.extraction.pipeline_sync as ps
+
+    doc_id = uuid4()
+    job_id = uuid4()
+    _insert_document_and_job(db_session_sync, doc_id, job_id)
+
+    monkeypatch.setattr(ps, "documents_dir", lambda: tmp_path)
+    monkeypatch.setattr(ps, "assets_dir", lambda: tmp_path)
+    monkeypatch.setattr(ps, "ensure_storage_dirs", lambda: None)
+
+    with patch(
+        "app.services.article_extraction.fetch_resource", return_value=_pdf_resource()
+    ), patch.object(ps, "run_pipeline_sync") as run_pdf:
+        run_article_pipeline_sync(
+            db_session_sync,
+            document_id=doc_id,
+            job_id=job_id,
+            url="https://arxiv.org/pdf/1706.03762",
+            kind="book",
+        )
+
+    run_pdf.assert_called_once()
+    doc = db_session_sync.execute(
+        text("SELECT doc_kind FROM documents WHERE id = :id"), {"id": doc_id}
+    ).mappings().one()
+    assert doc["doc_kind"] == "book"
+
+
+def test_non_pdf_url_with_paper_kind_still_becomes_an_article(db_session_sync):
+    """The PubMed case: a link pasted through 'Research paper' that turns out
+    to be an abstract page, not a PDF, must NOT error and must NOT force a
+    PDF-shaped doc_kind onto content that was never a PDF — there is no
+    PDF-based pipeline to honor the hint with, so it becomes a normal
+    article, same as if 'Article by URL' had been used directly."""
+    import app.extraction.pipeline_sync as ps
+
+    doc_id = uuid4()
+    job_id = uuid4()
+    _insert_document_and_job(db_session_sync, doc_id, job_id)
+
+    fake = ArticleExtraction(
+        title="A PubMed Abstract",
+        markdown="# A PubMed Abstract\n\nSome real prose content for the test.\n",
+        asset_map={},
+    )
+    with patch(
+        "app.services.article_extraction.fetch_resource", return_value=_html_resource()
+    ), patch(
+        "app.services.article_extraction.extract_article_from_html", return_value=fake
+    ), patch.object(ps, "run_pipeline_sync") as run_pdf:
+        run_article_pipeline_sync(
+            db_session_sync,
+            document_id=doc_id,
+            job_id=job_id,
+            url="https://pubmed.ncbi.nlm.nih.gov/12345/",
+            kind="paper",
+        )
+
+    run_pdf.assert_not_called()
+    doc = db_session_sync.execute(
+        text("SELECT doc_kind, extractor FROM documents WHERE id = :id"), {"id": doc_id}
+    ).mappings().one()
+    assert doc["doc_kind"] == "article"
+    assert doc["extractor"] == "trafilatura"

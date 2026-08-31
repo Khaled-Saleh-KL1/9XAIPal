@@ -578,7 +578,9 @@ def _pdf_name_from_url(url: str) -> str:
     return name[:500]
 
 
-def _adopt_pdf_from_url(session: Session, *, document_id: UUID, url: str, pdf: bytes) -> None:
+def _adopt_pdf_from_url(
+    session: Session, *, document_id: UUID, url: str, pdf: bytes, kind: Optional[str] = None,
+) -> None:
     """Turn the placeholder article row into a real PDF document on disk.
 
     /import-url creates every row as doc_kind='article' with a .html
@@ -586,12 +588,13 @@ def _adopt_pdf_from_url(session: Session, *, document_id: UUID, url: str, pdf: b
     is fetched. Once it turns out to be a PDF, the row has to become what
     /upload would have created: the bytes in documents_dir() under the
     canonical name, a raw copy in assets_dir() so /raw and the PDF viewer
-    work, and doc_kind='paper' so the reader treats it as one.
+    work, and a doc_kind the reader treats as a real document rather than an
+    article.
 
-    doc_kind is always 'paper', never 'book' — /upload gets that from the
-    picker and a URL carries no such signal. A long PDF imported this way
-    reads linearly rather than chapter-by-chapter; changing it after the
-    fact isn't supported anywhere yet.
+    ``kind`` is "book" or "paper" when the link was pasted through that
+    picker, and None for the generic "Article by URL" one — which keeps its
+    pre-existing behavior by defaulting to "paper" here, exactly as before
+    this parameter existed.
     """
     ensure_storage_dirs()
 
@@ -601,12 +604,14 @@ def _adopt_pdf_from_url(session: Session, *, document_id: UUID, url: str, pdf: b
     (documents_dir() / f"{document_id}.pdf").write_bytes(pdf)
     (assets_dir() / f"{document_id}.pdf").write_bytes(pdf)
 
+    resolved_kind = kind or "paper"
     session.execute(
         text(
-            "UPDATE documents SET doc_kind = 'paper', filename = :fn, "
+            "UPDATE documents SET doc_kind = :kind, filename = :fn, "
             "original_filename = :orig, file_size_bytes = :size WHERE id = :id"
         ),
         {
+            "kind": resolved_kind,
             "fn": f"{document_id}.pdf",
             "orig": _pdf_name_from_url(url),
             "size": len(pdf),
@@ -615,8 +620,8 @@ def _adopt_pdf_from_url(session: Session, *, document_id: UUID, url: str, pdf: b
     )
     session.commit()
     logger.info(
-        "[sync] %s is a PDF (%d bytes) — routed to the PDF pipeline as doc_kind='paper'",
-        url, len(pdf),
+        "[sync] %s is a PDF (%d bytes) — routed to the PDF pipeline as doc_kind=%r",
+        url, len(pdf), resolved_kind,
     )
 
 
@@ -626,6 +631,7 @@ def run_article_pipeline_sync(
     document_id: UUID,
     job_id: UUID,
     url: str,
+    kind: Optional[str] = None,
 ) -> None:
     """Fetch and extract a web article, then hand off to the same
     chunk/asset/dispatch tail the PDF pipeline uses (_finish_ingestion).
@@ -639,6 +645,12 @@ def run_article_pipeline_sync(
     ⚠ Despite the name, this is the entry point for every URL import, and a
     URL that turns out to be a PDF is handed to run_pipeline_sync instead —
     see _adopt_pdf_from_url.
+
+    ``kind`` ("book"/"paper") is the intent behind a link pasted through
+    that picker rather than the generic "Article by URL" one. It is used
+    only in the PDF branch (_adopt_pdf_from_url) — a link that turns out not
+    to be a PDF becomes a normal article regardless of ``kind``, since there
+    is no PDF-based pipeline to honor the hint with.
     """
     from app.services.article_extraction import (
         extract_article_from_html,
@@ -662,7 +674,9 @@ def run_article_pipeline_sync(
         session.commit()
         resource = fetch_resource(url)
         if resource.is_pdf:
-            _adopt_pdf_from_url(session, document_id=document_id, url=url, pdf=resource.content)
+            _adopt_pdf_from_url(
+                session, document_id=document_id, url=url, pdf=resource.content, kind=kind,
+            )
     except Exception as e:
         _handle_ingestion_failure(session, document_id, job_id, e)
         raise e
