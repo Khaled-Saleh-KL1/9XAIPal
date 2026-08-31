@@ -186,15 +186,20 @@ export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<
 
 /**
  * Import a web article by URL: the third ingestion pipeline, alongside
- * uploadPaper. Always doc_kind='article' on the backend, so there is no
- * `kind` to pass here the way uploadPaper has one.
+ * uploadPaper. `kind` is set when the link was pasted through the "Book" or
+ * "Research paper" picker rather than the generic "Article by URL" one —
+ * it only takes effect on the backend if the link turns out to be a PDF;
+ * otherwise the document still becomes doc_kind='article' regardless.
  */
-export async function importArticleUrl(url: string): Promise<{ id: string; status: string }> {
+export async function importArticleUrl(
+  url: string,
+  kind?: 'book' | 'paper' | null,
+): Promise<{ id: string; status: string }> {
   if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
   const res = await fetch(`${BASE}/papers/import-url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(kind ? { url, kind } : { url }),
   });
   if (!res.ok) {
     let detail = `Import failed: ${res.status}`;
