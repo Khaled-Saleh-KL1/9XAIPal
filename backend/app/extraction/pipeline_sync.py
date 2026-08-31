@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.paths import extracted_dir
+from app.core.paths import assets_dir, documents_dir, ensure_storage_dirs, extracted_dir
 from app.extraction.mineru_client import (
     extract_pdf_sync,
     find_markdown_output,
@@ -560,6 +560,66 @@ def _handle_ingestion_failure(session: Session, document_id: UUID, job_id: UUID,
     logger.exception(f"Pipeline sync error for {document_id}: {exc}")
 
 
+def _pdf_name_from_url(url: str) -> str:
+    """A human-readable original_filename for a PDF that arrived as a link.
+
+    The last path segment is what a person would call the file
+    ("1706.03762.pdf"); a URL with nothing useful there falls back to the
+    host so the library never shows a blank row.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    name = (parsed.path.rsplit("/", 1)[-1] or "").strip()
+    if not name:
+        name = parsed.netloc or "document"
+    if not name.lower().endswith(".pdf"):
+        name = f"{name}.pdf"
+    return name[:500]
+
+
+def _adopt_pdf_from_url(session: Session, *, document_id: UUID, url: str, pdf: bytes) -> None:
+    """Turn the placeholder article row into a real PDF document on disk.
+
+    /import-url creates every row as doc_kind='article' with a .html
+    placeholder filename, because what a link points at isn't known until it
+    is fetched. Once it turns out to be a PDF, the row has to become what
+    /upload would have created: the bytes in documents_dir() under the
+    canonical name, a raw copy in assets_dir() so /raw and the PDF viewer
+    work, and doc_kind='paper' so the reader treats it as one.
+
+    doc_kind is always 'paper', never 'book' — /upload gets that from the
+    picker and a URL carries no such signal. A long PDF imported this way
+    reads linearly rather than chapter-by-chapter; changing it after the
+    fact isn't supported anywhere yet.
+    """
+    ensure_storage_dirs()
+
+    # documents_dir() name is derived from the id (not a fresh uuid) so the
+    # path stays reconstructible from the row alone, the way assets_dir()
+    # already keys the raw copy by document id.
+    (documents_dir() / f"{document_id}.pdf").write_bytes(pdf)
+    (assets_dir() / f"{document_id}.pdf").write_bytes(pdf)
+
+    session.execute(
+        text(
+            "UPDATE documents SET doc_kind = 'paper', filename = :fn, "
+            "original_filename = :orig, file_size_bytes = :size WHERE id = :id"
+        ),
+        {
+            "fn": f"{document_id}.pdf",
+            "orig": _pdf_name_from_url(url),
+            "size": len(pdf),
+            "id": document_id,
+        },
+    )
+    session.commit()
+    logger.info(
+        "[sync] %s is a PDF (%d bytes) — routed to the PDF pipeline as doc_kind='paper'",
+        url, len(pdf),
+    )
+
+
 def run_article_pipeline_sync(
     session: Session,
     *,
@@ -575,13 +635,49 @@ def run_article_pipeline_sync(
     from there on (chunking, embedding/summary dispatch, failure handling)
     is the exact same code path a PDF goes through, just without a pdf_path,
     a page count, or glyph repair (none of those apply to an article).
+
+    ⚠ Despite the name, this is the entry point for every URL import, and a
+    URL that turns out to be a PDF is handed to run_pipeline_sync instead —
+    see _adopt_pdf_from_url.
     """
+    from app.services.article_extraction import (
+        extract_article_from_html,
+        fetch_resource,
+    )
+
+    # What the link turned out to be decides which pipeline runs. A PDF URL
+    # (an arXiv link, a journal's "Download PDF") is one of the most natural
+    # ways to add a paper, and this app already extracts PDFs far better than
+    # any HTML reader could — before this branch existed those bytes went to
+    # a static-HTML extractor, produced nothing, and failed with a message
+    # blaming a login or JavaScript.
+    #
+    # Deciding is its own guarded step because failure ownership changes at
+    # the handoff: a fetch failure is this function's to report, but once
+    # run_pipeline_sync takes over it runs _handle_ingestion_failure itself,
+    # and calling that from both would double-log the traceback and re-clean
+    # the row.
     try:
         update_job_status_sync(session, job_id, JobStatus.EXTRACTING)
         session.commit()
+        resource = fetch_resource(url)
+        if resource.is_pdf:
+            _adopt_pdf_from_url(session, document_id=document_id, url=url, pdf=resource.content)
+    except Exception as e:
+        _handle_ingestion_failure(session, document_id, job_id, e)
+        raise e
 
-        from app.services.article_extraction import extract_article
-        article = extract_article(url)
+    if resource.is_pdf:
+        run_pipeline_sync(
+            session,
+            document_id=document_id,
+            job_id=job_id,
+            pdf_path=documents_dir() / f"{document_id}.pdf",
+        )
+        return
+
+    try:
+        article = extract_article_from_html(resource.text, url)
 
         # Persist the real page title and which extractor produced this —
         # both are only knowable once extraction has actually run, same

@@ -151,9 +151,11 @@ async def get_full_document(
         "status": doc.get("status"),
         "page_count": doc.get("page_count"),
         "extractor": doc.get("extractor"),
-        # The page a doc_kind='article' row was imported from. NULL for
-        # anything uploaded as a file — there is no raw PDF behind an article
-        # for the reader to fall back to the way /raw does for everything else.
+        # Where a row that arrived as a URL came from. NULL for anything
+        # uploaded as a file. Set on doc_kind='article' (no raw PDF behind
+        # it, so /raw has nothing to fall back to) and also on a
+        # doc_kind='paper' row imported from a PDF link, which does have
+        # one — see pipeline_sync._adopt_pdf_from_url.
         "source_url": doc.get("source_url"),
         "blocks": blocks,
         "outline": outline,
