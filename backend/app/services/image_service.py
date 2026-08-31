@@ -35,7 +35,7 @@ import httpx
 from sqlalchemy import text
 
 from app.core.logging import get_logger
-from app.core.net_safety import resolves_to_private_address
+from app.core.net_safety import resolves_to_private_address, safe_send_async
 from app.core.paths import research_images_dir
 
 logger = get_logger(__name__)
@@ -83,7 +83,8 @@ async def fetch_image_via_proxy(url: str) -> tuple[bytes, str, str]:
         (content_bytes, content_type, suggested_filename)
 
     Raises:
-        httpx.HTTPError or ValueError on unrecoverable problems.
+        httpx.HTTPError, ValueError, or UnsafeRedirectError (a redirect led
+        somewhere the SSRF guard refuses) on unrecoverable problems.
     """
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"Refusing to fetch non-HTTP URL: {url}")
@@ -111,8 +112,15 @@ async def fetch_image_via_proxy(url: str) -> tuple[bytes, str, str]:
             ctype = mimetypes.guess_type(str(existing))[0] or "application/octet-stream"
             return content, ctype, existing.name
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
-        resp = await client.get(url, headers={"User-Agent": "9XAIPal-ImageProxy/1.0"})
+    # safe_send_async walks any redirect chain itself, re-checking the
+    # SSRF guard before following each hop, instead of trusting the single
+    # check above and then a plain follow_redirects=True — see
+    # core/net_safety.py's module docstring for why that combination isn't
+    # actually safe against a crafted redirect.
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        resp = await safe_send_async(
+            client, "GET", url, headers={"User-Agent": "9XAIPal-ImageProxy/1.0"},
+        )
         resp.raise_for_status()
 
         content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()

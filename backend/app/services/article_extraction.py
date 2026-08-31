@@ -39,7 +39,11 @@ import httpx
 import trafilatura
 
 from app.core.logging import get_logger
-from app.core.net_safety import resolves_to_private_address_sync
+from app.core.net_safety import (
+    UnsafeRedirectError,
+    resolves_to_private_address_sync,
+    safe_send_sync,
+)
 
 logger = get_logger(__name__)
 
@@ -164,13 +168,13 @@ def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
         # was being silently discarded for the wrong reason until this was
         # caught by running this code against a live page, not just a mock.
         headers = {"User-Agent": USER_AGENT}
-        resp = client.head(url, timeout=IMAGE_CHECK_TIMEOUT, follow_redirects=True, headers=headers)
+        resp = safe_send_sync(client, "HEAD", url, timeout=IMAGE_CHECK_TIMEOUT, headers=headers)
         length = resp.headers.get("content-length") if resp.is_success else None
         if length is None:
             # Some hosts don't answer HEAD usefully — a 1-byte ranged GET
             # still never pulls the real image body.
-            resp = client.get(
-                url, timeout=IMAGE_CHECK_TIMEOUT,
+            resp = safe_send_sync(
+                client, "GET", url, timeout=IMAGE_CHECK_TIMEOUT,
                 headers={**headers, "Range": "bytes=0-0"},
             )
             if not resp.is_success:
@@ -179,6 +183,8 @@ def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
             length = content_range.split("/")[-1] if "/" in content_range else None
         return length is not None and int(length) >= MIN_IMAGE_BYTES
     except Exception:
+        # Includes UnsafeRedirectError: a figure whose link redirects
+        # somewhere unsafe is dropped exactly like an unreachable one.
         return False
 
 
@@ -192,31 +198,44 @@ def fetch_resource(url: str) -> FetchedResource:
     """
     _check_url_is_fetchable(url)
 
+    resp = None
     try:
-        with httpx.Client(follow_redirects=True, timeout=PAGE_FETCH_TIMEOUT) as client:
-            with client.stream("GET", url, headers={"User-Agent": USER_AGENT}) as resp:
-                resp.raise_for_status()
-                content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-                final_url = str(resp.url)
+        with httpx.Client(timeout=PAGE_FETCH_TIMEOUT) as client:
+            # safe_send_sync walks any redirect chain itself, re-checking the
+            # private-address guard before following each hop — see its
+            # docstring for why client.stream(..., follow_redirects=True)
+            # (the old code here) is not safe to use for an attacker-chosen
+            # URL.
+            resp = safe_send_sync(
+                client, "GET", url, stream=True, headers={"User-Agent": USER_AGENT},
+            )
+            resp.raise_for_status()
+            content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+            final_url = str(resp.url)
 
-                limit = MAX_PDF_BYTES if content_type == PDF_CONTENT_TYPE else MAX_PAGE_BYTES
-                buf = bytearray()
-                for block in resp.iter_bytes():
-                    buf += block
-                    # The magic bytes are ground truth and arrive in the first
-                    # block, so a mislabeled PDF gets the document ceiling too
-                    # rather than being rejected as an oversized "page".
-                    if limit == MAX_PAGE_BYTES and bytes(buf[:len(PDF_MAGIC)]) == PDF_MAGIC:
-                        limit = MAX_PDF_BYTES
-                    if len(buf) > limit:
-                        raise ArticleExtractionError(
-                            "That PDF is too large to import."
-                            if limit == MAX_PDF_BYTES
-                            else "That page is too large to import."
-                        )
-                content = bytes(buf)
+            limit = MAX_PDF_BYTES if content_type == PDF_CONTENT_TYPE else MAX_PAGE_BYTES
+            buf = bytearray()
+            for block in resp.iter_bytes():
+                buf += block
+                # The magic bytes are ground truth and arrive in the first
+                # block, so a mislabeled PDF gets the document ceiling too
+                # rather than being rejected as an oversized "page".
+                if limit == MAX_PAGE_BYTES and bytes(buf[:len(PDF_MAGIC)]) == PDF_MAGIC:
+                    limit = MAX_PDF_BYTES
+                if len(buf) > limit:
+                    raise ArticleExtractionError(
+                        "That PDF is too large to import."
+                        if limit == MAX_PDF_BYTES
+                        else "That page is too large to import."
+                    )
+            content = bytes(buf)
+    except UnsafeRedirectError as e:
+        raise ArticleExtractionError("That link redirects somewhere that can't be imported.") from e
     except httpx.HTTPError as e:
         raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
+    finally:
+        if resp is not None:
+            resp.close()
 
     return FetchedResource(content=content, content_type=content_type, final_url=final_url)
 
@@ -261,7 +280,11 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     markdown = _clean_markdown(markdown)
 
     candidates = _image_urls_in(markdown)[:MAX_IMAGES]
-    with httpx.Client(follow_redirects=True) as client:
+    # follow_redirects is deliberately NOT set here — safe_send_sync (used
+    # inside _is_worth_keeping) forces it off on every call and walks
+    # redirects itself, hop by hop, re-checked; a client-level True here
+    # would be dead configuration that reads as if it still did something.
+    with httpx.Client() as client:
         kept = {u for u in candidates if _is_worth_keeping(client, u)}
 
     all_refs = _image_urls_in(markdown)
