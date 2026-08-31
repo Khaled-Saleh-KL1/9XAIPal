@@ -120,12 +120,20 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dic
     max_retries=0,
     acks_late=True,
 )
-def process_article_ingestion(self, document_id: str, job_id: str, url: str) -> dict:
+def process_article_ingestion(
+    self, document_id: str, job_id: str, url: str, kind: str | None = None,
+) -> dict:
     """Fetch a web article and run the same chunking/embedding pipeline a PDF
     gets, via run_article_pipeline_sync. A separate task (not a branch inside
     process_ingestion) on purpose: this one depends on an arbitrary external
     server responding, which a PDF already sitting on disk never does — a
     hanging fetch here fails only this task, not the PDF pipeline's own.
+
+    ``kind`` ("book" or "paper") is the intent behind a link pasted through
+    that picker rather than the generic "Article by URL" one; None means the
+    generic path. It is processing input, not a document property, so it
+    travels as a task argument rather than a DB column — see
+    run_article_pipeline_sync for what it actually does with it.
     """
     logger.info(f"[celery] process_article_ingestion start document={document_id} job={job_id}")
 
@@ -141,6 +149,7 @@ def process_article_ingestion(self, document_id: str, job_id: str, url: str) -> 
                 document_id=doc_uuid,
                 job_id=job_uuid,
                 url=url,
+                kind=kind,
             )
     except Exception as exc:
         logger.exception(f"[celery] process_article_ingestion failed document={document_id}: {exc}")

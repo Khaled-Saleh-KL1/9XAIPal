@@ -202,7 +202,7 @@ export function App() {
   // isn't known until the fetch runs, so the overlay shows the URL's host
   // as a placeholder the same way the backend placeholders
   // original_filename with the URL itself until extraction finishes.
-  const handleArticleImport = useCallback(async (url: string) => {
+  const handleArticleImport = useCallback(async (url: string, kind: 'book' | 'paper' | null = null) => {
     let host = url;
     try { host = new URL(url).hostname; } catch { /* keep the raw url */ }
 
@@ -210,11 +210,16 @@ export function App() {
     setUploadStatus('queued');
     setUploadError(null);
     setUploadExtractor(null);
-    setUploadKind('article');
+    // Optimistic: most links pasted through "Book"/"Research paper" do turn
+    // out to be the PDF they look like, so the overlay shows that step list
+    // rather than the article one. If the link isn't actually a PDF the job
+    // still finishes (as an article) — this only affects which steps the
+    // overlay narrates while it's in flight.
+    setUploadKind(kind ?? 'article');
     setRoute('processing');
 
     try {
-      const result = await importArticleUrl(url);
+      const result = await importArticleUrl(url, kind);
       const paperId = result.id;
       uploadIdRef.current = paperId;
       setActivePaperId(paperId);
@@ -226,13 +231,15 @@ export function App() {
     }
   }, [pollUploadProgress]);
 
-  // "Article by URL" is the third option inside the same kind-picker modal
-  // (UploadKindModal below), closes it and kicks off the import. A pending
-  // drag-dropped file is discarded: it doesn't apply to a URL import.
-  const submitImportUrl = useCallback((url: string) => {
+  // A URL can now be pasted through any of the three picker choices (Book,
+  // Research paper, or the generic Article by URL), closes the modal and
+  // kicks off the import with whichever kind was picked (null for the
+  // generic one). A pending drag-dropped file is discarded: it doesn't
+  // apply to a URL import.
+  const submitImportUrl = useCallback((url: string, kind: 'book' | 'paper' | null) => {
     setKindPickerOpen(false);
     setPendingFile(null);
-    handleArticleImport(url);
+    handleArticleImport(url, kind);
   }, [handleArticleImport]);
 
   // Step 1 of upload: ask whether this is a book or a research paper. A drop
@@ -510,16 +517,25 @@ function UploadKindModal({
   onCancel,
 }: {
   onChoose: (kind: DocKind) => void;
-  onImportUrl: (url: string) => void;
+  onImportUrl: (url: string, kind: 'book' | 'paper' | null) => void;
   onCancel: () => void;
 }) {
-  // Article-by-URL lives as a third choice in the same modal rather than a
-  // separate button + separate popup: picking it swaps this modal's body
-  // for a URL field in place, instead of opening anything new.
+  // A URL can be pasted for any of the three choices, not just the generic
+  // one — picking one swaps this modal's body for a URL field in place,
+  // instead of opening anything new. urlKind records which button opened
+  // it: 'book'/'paper' only take effect on the backend if the link turns
+  // out to be a PDF (a non-PDF link always becomes a plain article, same as
+  // pasting it into "Article by URL" directly); null is that generic path.
   const [mode, setMode] = useState<'choose' | 'url'>('choose');
+  const [urlKind, setUrlKind] = useState<'book' | 'paper' | null>(null);
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
+
+  const openUrlMode = (kind: 'book' | 'paper' | null) => {
+    setUrlKind(kind);
+    setMode('url');
+  };
 
   useEffect(() => {
     if (mode === 'url') urlInputRef.current?.focus();
@@ -535,8 +551,26 @@ function UploadKindModal({
       setError('Only http:// and https:// links can be imported.');
       return;
     }
-    onImportUrl(trimmed);
+    onImportUrl(trimmed, urlKind);
   };
+
+  const urlCopy = urlKind === 'book'
+    ? {
+        title: 'Book by URL',
+        subtitle: "Paste a link to a PDF: it reads chapter by chapter, just like an uploaded book. A link that isn't a PDF is added as an article instead.",
+        placeholder: 'https://example.com/a-book.pdf',
+      }
+    : urlKind === 'paper'
+    ? {
+        title: 'Research paper by URL',
+        subtitle: "Paste a link to a PDF: it reads front to back, just like an uploaded paper. A link that isn't a PDF is added as an article instead.",
+        placeholder: 'https://arxiv.org/pdf/1706.03762',
+      }
+    : {
+        title: 'Article by URL',
+        subtitle: 'Paste a link: it reads exactly like a paper, with margin notes, search, and the AI panel.',
+        placeholder: 'https://example.com/an-article',
+      };
 
   return (
     <div
@@ -560,32 +594,48 @@ function UploadKindModal({
               </div>
             </div>
             <div className="px-7 py-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                onClick={() => onChoose('book')}
-                className="text-left rounded-xl p-4 transition-colors"
+              <div
+                className="rounded-xl p-4 transition-colors"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
-                <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
-                  Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
-                </div>
-              </button>
-              <button
-                onClick={() => onChoose('paper')}
-                className="text-left rounded-xl p-4 transition-colors"
+                <button onClick={() => onChoose('book')} className="text-left w-full">
+                  <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
+                  <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
+                    Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
+                  </div>
+                </button>
+                <button
+                  onClick={() => openUrlMode('book')}
+                  className="text-[11.5px] mt-2.5 inline-flex items-center gap-1"
+                  style={{ color: 'var(--muted)' }}
+                >
+                  <IconLink className="w-3 h-3" /> or paste a link
+                </button>
+              </div>
+              <div
+                className="rounded-xl p-4 transition-colors"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
-                <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
-                  Linear reading, front to back, no chapter navigation. Best for articles and papers.
-                </div>
-              </button>
+                <button onClick={() => onChoose('paper')} className="text-left w-full">
+                  <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
+                  <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
+                    Linear reading, front to back, no chapter navigation. Best for articles and papers.
+                  </div>
+                </button>
+                <button
+                  onClick={() => openUrlMode('paper')}
+                  className="text-[11.5px] mt-2.5 inline-flex items-center gap-1"
+                  style={{ color: 'var(--muted)' }}
+                >
+                  <IconLink className="w-3 h-3" /> or paste a link
+                </button>
+              </div>
               <button
-                onClick={() => setMode('url')}
+                onClick={() => openUrlMode(null)}
                 className="sm:col-span-2 text-left rounded-xl p-4 flex items-center gap-3 transition-colors"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
@@ -615,17 +665,17 @@ function UploadKindModal({
           <>
             <div className="px-7 pt-7 pb-2">
               <button
-                onClick={() => setMode('choose')}
+                onClick={() => { setMode('choose'); setUrlKind(null); }}
                 className="text-[12px] mb-2"
                 style={{ color: 'var(--muted)' }}
               >
                 ← Back
               </button>
               <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
-                Article by URL
+                {urlCopy.title}
               </div>
               <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
-                Paste a link: it reads exactly like a paper, with margin notes, search, and the AI panel.
+                {urlCopy.subtitle}
               </div>
             </div>
             <div className="px-7 py-5">
@@ -634,7 +684,7 @@ function UploadKindModal({
                 value={url}
                 onChange={(e) => { setUrl(e.target.value); setError(null); }}
                 onKeyDown={(e) => { if (e.key === 'Enter') submitUrl(); }}
-                placeholder="https://example.com/an-article"
+                placeholder={urlCopy.placeholder}
                 className="w-full px-3 py-2.5 rounded-md text-[13px]"
                 style={{
                   background: 'var(--bg-2)',

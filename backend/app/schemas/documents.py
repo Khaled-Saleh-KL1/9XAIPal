@@ -1,6 +1,6 @@
 """Document schemas."""
 
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -45,6 +45,13 @@ class RenameDocumentRequest(BaseModel):
 
 class ImportArticleRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
+    # Set when the link was pasted through the "Book" or "Research paper"
+    # picker rather than the generic "Article by URL" one. Only takes effect
+    # if the link turns out to be a PDF — a URL that isn't one becomes a
+    # normal article regardless of which button it came from, since there is
+    # no PDF-based pipeline to honor the hint with. See
+    # pipeline_sync.run_article_pipeline_sync.
+    kind: Optional[Literal["book", "paper"]] = None
 
 
 class DocumentUploadResponse(BaseModel):

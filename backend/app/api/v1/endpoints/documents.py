@@ -169,12 +169,18 @@ async def import_article(
 ):
     """Import a web article by URL and read it exactly like a paper.
 
-    Always doc_kind='article' — this is a URL, never a file, so there is no
-    book/paper choice to make. The real page title and extractor label are
-    unknown until the fetch actually runs, so this creates the row with the
-    URL itself as a placeholder original_filename; the ingestion task
-    overwrites it with the page's real title once it has one (the same
-    "known only mid-pipeline" pattern /upload uses for `extractor`).
+    Created here as doc_kind='article' regardless of ``payload.kind`` — what
+    the link actually is isn't known until the ingestion task fetches it.
+    ``kind`` ("book"/"paper", set when the link was pasted through that
+    picker rather than the generic "Article by URL" one) travels along as a
+    hint: if the fetch finds a PDF, run_article_pipeline_sync adopts it with
+    that doc_kind instead of 'article'; if it isn't a PDF, the hint is
+    dropped and the row stays a normal article — there's no PDF-based
+    pipeline to honor it with. The real page title and extractor label are
+    likewise unknown until the fetch actually runs, so this creates the row
+    with the URL itself as a placeholder original_filename; the ingestion
+    task overwrites it once it has the real one (the same "known only
+    mid-pipeline" pattern /upload uses for `extractor`).
 
     No file is written to disk here at all — unlike /upload, everything
     happens inside the dispatched Celery task (see
@@ -202,7 +208,7 @@ async def import_article(
 
         dispatch_ok = True
         try:
-            process_article_ingestion.delay(str(doc["id"]), str(job["id"]), url)  # type: ignore[attr-defined]
+            process_article_ingestion.delay(str(doc["id"]), str(job["id"]), url, payload.kind)  # type: ignore[attr-defined]
         except Exception as dispatch_exc:
             logger.exception(f"Failed to dispatch process_article_ingestion for {doc['id']}")
             dispatch_ok = False
