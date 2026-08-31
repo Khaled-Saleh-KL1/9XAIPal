@@ -10,6 +10,15 @@ resolve is a host we shouldn't fetch from.
 Two variants, one classifier: async for FastAPI request handlers, sync
 (blocking) for Celery's worker, which runs everything synchronously — see
 core/celery_app.py's module docstring.
+
+safe_send_sync/safe_send_async close a second hole in the same guard: every
+caller used to check only the URL it was GIVEN, then fetch it with httpx's
+own follow_redirects=True. httpx never re-runs a caller's check against
+where a redirect actually leads, so a host that legitimately resolves to a
+public address can 302 the request anywhere it likes afterward — the cloud
+metadata address, localhost, an internal service — and the check that just
+ran is worthless. These walk the redirect chain themselves, hop by hop,
+re-validating before following each one.
 """
 
 import asyncio
@@ -17,6 +26,8 @@ import ipaddress
 import socket
 from typing import Union
 from urllib.parse import urlparse
+
+import httpx
 
 IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
 
@@ -73,3 +84,72 @@ def resolves_to_private_address_sync(url: str) -> bool:
     except OSError:
         return True
     return _any_unsafe(infos)
+
+
+MAX_SAFE_REDIRECTS = 5
+
+
+class UnsafeRedirectError(Exception):
+    """A redirect chain led to (or couldn't be confirmed clear of) a
+    private/internal address, or went on for too many hops to trust."""
+
+
+def safe_send_sync(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    stream: bool = False,
+    max_redirects: int = MAX_SAFE_REDIRECTS,
+    **kwargs,
+) -> httpx.Response:
+    """Sync variant of the redirect-safe fetch — see the module docstring.
+
+    Forces follow_redirects=False on every hop regardless of how `client`
+    itself was constructed, so a caller's existing `httpx.Client(...)` needs
+    no changes. On a stream=True call, the caller owns closing the returned
+    response (this function only closes the intermediate redirect responses
+    it consumes itself) — same contract as calling client.send() directly.
+    """
+    current = url
+    for _ in range(max_redirects + 1):
+        if resolves_to_private_address_sync(current):
+            raise UnsafeRedirectError(f"refusing to fetch from private/internal address: {current}")
+        request = client.build_request(method, current, **kwargs)
+        response = client.send(request, follow_redirects=False, stream=stream)
+        if not response.is_redirect:
+            return response
+        location = response.headers.get("location")
+        response.close()
+        if not location:
+            # Malformed redirect (3xx with no Location) — nothing more this
+            # function can validate; hand it back as-is rather than guess.
+            return response
+        current = str(response.url.join(location))
+    raise UnsafeRedirectError(f"too many redirects: {url}")
+
+
+async def safe_send_async(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    stream: bool = False,
+    max_redirects: int = MAX_SAFE_REDIRECTS,
+    **kwargs,
+) -> httpx.Response:
+    """Async variant of safe_send_sync, for FastAPI request handlers."""
+    current = url
+    for _ in range(max_redirects + 1):
+        if await resolves_to_private_address(current):
+            raise UnsafeRedirectError(f"refusing to fetch from private/internal address: {current}")
+        request = client.build_request(method, current, **kwargs)
+        response = await client.send(request, follow_redirects=False, stream=stream)
+        if not response.is_redirect:
+            return response
+        location = response.headers.get("location")
+        await response.aclose()
+        if not location:
+            return response
+        current = str(response.url.join(location))
+    raise UnsafeRedirectError(f"too many redirects: {url}")
