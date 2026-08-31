@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { CardEyebrow } from './NoteChrome';
+import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import type { ModelCatalog } from '../api';
+
+const MAX_TEXTAREA_HEIGHT = 240;
 
 /**
  * The composer that opens in the margin when the reader highlights something.
@@ -41,6 +44,7 @@ export function AskComposer({
 }) {
   const [question, setQuestion] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
+  useAutoGrowTextarea(ref, question, MAX_TEXTAREA_HEIGHT);
 
   useEffect(() => {
     // ⚠ preventScroll is load-bearing. The card is positioned by a transform

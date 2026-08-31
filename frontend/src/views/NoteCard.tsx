@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
+import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import {
   CardEyebrow,
   CardGrip,
@@ -256,6 +257,7 @@ export function NoteCardView({
   const [followUp, setFollowUp] = useState('');
   const [composing, setComposing] = useState(false);
   const followUpRef = useRef<HTMLTextAreaElement>(null);
+  useAutoGrowTextarea(followUpRef, followUp, 240);
   const last = group.replies.length ? group.replies[group.replies.length - 1] : group.root;
   const { dragging, isDropTarget, zoneProps, gripProps } = useCardDrag(drag);
   const rootModel = group.root.model || group.root.requested_model;

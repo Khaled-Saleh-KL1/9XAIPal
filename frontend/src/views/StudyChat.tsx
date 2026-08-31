@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
+import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import { AgentTrail } from './AgentTrail';
 import { CitationRef } from './CitationRef';
 import type { AgentStep, ModelCatalog, StudyPaper, StudyTurn } from '../api';
@@ -156,6 +157,7 @@ export function StudyChat({
 }) {
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  useAutoGrowTextarea(inputRef, draft, 200);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
