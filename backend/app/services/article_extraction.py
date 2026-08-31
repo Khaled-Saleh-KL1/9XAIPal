@@ -40,6 +40,7 @@ import trafilatura
 
 from app.core.logging import get_logger
 from app.core.net_safety import (
+    TooManyRedirectsError,
     UnsafeRedirectError,
     resolves_to_private_address_sync,
     safe_send_sync,
@@ -158,8 +159,12 @@ def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
     dropped rather than shown."""
     if not url.startswith(("http://", "https://")):
         return False
-    if resolves_to_private_address_sync(url):
-        return False
+    # No private-address pre-check here: safe_send_sync re-runs exactly that
+    # check on its first hop, and both outcomes end at `return False` below,
+    # so a pre-check only buys a second blocking getaddrinfo per image. With
+    # MAX_IMAGES at 20 and a HEAD plus a ranged-GET fallback each, that was up
+    # to 40 redundant lookups per article, none of them timeout-bounded
+    # (socket.getaddrinfo takes no timeout), on a --concurrency=1 worker.
     try:
         # ⚠ Same User-Agent as the page fetch — found empirically: Wikimedia's
         # image CDN (and likely others) answers a User-Agent-less HEAD with a
@@ -229,6 +234,11 @@ def fetch_resource(url: str) -> FetchedResource:
                         else "That page is too large to import."
                     )
             content = bytes(buf)
+    except TooManyRedirectsError as e:
+        # Caught before UnsafeRedirectError (its parent): a chain that simply
+        # ran long is not the reader pasting a link to the LAN, and saying so
+        # blames them for someone else's redirect config.
+        raise ArticleExtractionError("That link redirects too many times to follow.") from e
     except UnsafeRedirectError as e:
         raise ArticleExtractionError("That link redirects somewhere that can't be imported.") from e
     except httpx.HTTPError as e:
@@ -255,7 +265,10 @@ def extract_article(url: str) -> ArticleExtraction:
         raise ArticleExtractionError(
             "That link is a PDF, not a web page — import it as a document instead."
         )
-    return extract_article_from_html(resource.text, url)
+    # final_url, not url: relative links in the HTML resolve against where
+    # the page actually came from, not the link that redirected here. Same
+    # reason run_article_pipeline_sync passes it.
+    return extract_article_from_html(resource.text, resource.final_url)
 
 
 def extract_article_from_html(html: str, url: str) -> ArticleExtraction:

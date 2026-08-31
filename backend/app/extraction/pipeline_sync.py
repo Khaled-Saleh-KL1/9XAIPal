@@ -604,7 +604,17 @@ def _adopt_pdf_from_url(
     (documents_dir() / f"{document_id}.pdf").write_bytes(pdf)
     (assets_dir() / f"{document_id}.pdf").write_bytes(pdf)
 
-    resolved_kind = kind or "paper"
+    # Clamped, not just defaulted. Every other doc_kind write is filtered
+    # through a whitelist (repositories/documents.py's create_document, and
+    # /upload's own `kind if kind in (...)`), but this one is raw SQL with
+    # nothing downstream to catch a bad value — and a row labelled 'article'
+    # holding a real PDF on disk would read as a hotlinked web article to the
+    # reader, RawFilesPanel, and paper_agent alike. The Pydantic Literal at
+    # the HTTP boundary is otherwise the only guard, and the Celery task this
+    # arrives through annotates it as a bare `str | None`. Not
+    # VALID_DOC_KINDS: that admits 'article', which is exactly the value this
+    # branch exists to move the row away from.
+    resolved_kind = kind if kind in ("book", "paper") else "paper"
     session.execute(
         text(
             "UPDATE documents SET doc_kind = :kind, filename = :fn, "
@@ -674,8 +684,18 @@ def run_article_pipeline_sync(
         session.commit()
         resource = fetch_resource(url)
         if resource.is_pdf:
+            # final_url, not url: after a redirect the pasted link is no
+            # longer where the bytes came from, and _pdf_name_from_url reads
+            # the filename off it. A DOI link (https://doi.org/10.1234/abc)
+            # landing on the publisher's own .../paper.pdf would otherwise
+            # name the row abc.pdf. source_url on the row still records what
+            # the reader actually pasted; this is only about the bytes.
             _adopt_pdf_from_url(
-                session, document_id=document_id, url=url, pdf=resource.content, kind=kind,
+                session,
+                document_id=document_id,
+                url=resource.final_url,
+                pdf=resource.content,
+                kind=kind,
             )
     except Exception as e:
         _handle_ingestion_failure(session, document_id, job_id, e)
@@ -691,7 +711,13 @@ def run_article_pipeline_sync(
         return
 
     try:
-        article = extract_article_from_html(resource.text, url)
+        # final_url is what trafilatura resolves every relative link and
+        # <img src> against, so it has to be where the HTML actually came
+        # from. Handing it the pre-redirect link (a doi.org or news
+        # shortener) resolves each relative image onto the wrong host, and
+        # _is_worth_keeping then drops every figure in the article as
+        # unreachable — a silent, whole-document failure.
+        article = extract_article_from_html(resource.text, resource.final_url)
 
         # Persist the real page title and which extractor produced this —
         # both are only knowable once extraction has actually run, same
