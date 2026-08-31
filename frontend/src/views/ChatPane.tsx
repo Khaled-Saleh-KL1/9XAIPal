@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, type ImgHTMLAttributes, type AnchorHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
+import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import type { ChatMessage } from '../types';
 import { IconSend, IconSpinner } from '../components/Icons';
 import {
@@ -154,6 +155,8 @@ function previewLabel(c: ConversationSummary): string {
   return raw.length > 48 ? raw.slice(0, 48) + '…' : raw;
 }
 
+const MAX_TEXTAREA_HEIGHT = 120;
+
 export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -237,6 +240,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
+  useAutoGrowTextarea(textareaRef, input, MAX_TEXTAREA_HEIGHT);
   // Aborts the in-flight /ask (and its follow-up history refetch) when the
   // user switches papers or the pane unmounts, so a slow answer for the OLD
   // paper can never overwrite the NEW paper's chat state.
@@ -844,7 +848,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
             className="flex-1 bg-transparent resize-none text-[13.5px] leading-[1.55]"
             style={{
               color: 'var(--fg)',
-              maxHeight: '120px',
+              maxHeight: `${MAX_TEXTAREA_HEIGHT}px`,
               outline: 'none',
             }}
           />
