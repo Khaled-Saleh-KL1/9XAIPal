@@ -69,9 +69,12 @@ async def run_research_agent(
             queries_used.append(biased)
 
             try:
-                raw = await search(biased, categories=["it", "science"], limit=RESULTS_PER_SEARCH)
-                if not raw:
-                    raw = await search(biased, limit=RESULTS_PER_SEARCH)
+                # No category filter: see external_context.py's own note — it
+                # made SearXNG return irrelevant results, and none of the six
+                # current providers have an engine-group concept to begin
+                # with, so a second retry-without-categories call was pure
+                # wasted latency on every genuinely-empty search.
+                raw = await search(biased, limit=RESULTS_PER_SEARCH)
                 ranked = rank_results(raw, max_results=RESULTS_PER_SEARCH)
             except Exception as e:
                 logger.warning("RESEARCH_AGENT search failed for %r: %s", q, e)
