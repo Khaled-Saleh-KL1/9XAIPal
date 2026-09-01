@@ -285,15 +285,28 @@ class Settings(BaseSettings):
     vector_dimension: int = 1024
 
     # ── Web search ──────────────────────────────────────────────────────────
-    # Which provider serves the EXTERNAL route, the research agent, and the
-    # paper agent's WEB tool. "auto" (default): Tavily when TAVILY_API_KEY is
-    # set, otherwise SearXNG. Pin to "tavily", "searxng", or "none".
+    # Which provider(s) serve the EXTERNAL route, the research agent, and the
+    # paper agent's WEB tool. "auto" (default): try every configured provider
+    # in priority order — google, tavily, linkup, exa, serpapi, duckduckgo —
+    # and fall through to the next the moment one errors or returns zero
+    # results. A query never goes unanswered just because the first provider
+    # in line is down or out of quota; duckduckgo needs no key at all, so
+    # "auto" always has at least one provider to fall back to. Pin to one
+    # name to force exactly that provider with no fallback (debugging only),
+    # or "none" to disable web search entirely. See app/search/web.py.
     #
-    # ⚠ This is a privacy setting as much as a quality one. SearXNG runs in the
-    # compose stack, so a query never leaves the host; Tavily is a third party
-    # and the query string does. Neither ever receives paper text, chunks, or
-    # chat history. See app/search/web.py.
+    # ⚠ The first five are hosted third parties: the query string reaches
+    # them. duckduckgo is a scrape via the `ddgs` library, not a hosted API,
+    # but the query still leaves the machine either way. None of them ever
+    # receives paper text, chunks, or chat history — only the query itself.
     web_search_provider: str = "auto"
+
+    # Google — Gemini's built-in Search-grounding tool. Not the older Custom
+    # Search JSON API (that one rejects plain API-key auth outright). A
+    # generateContent call with `tools: [{"google_search": {}}]`; sources come
+    # back as groundingChunks, not a SERP. First in the cascade: it's Google's
+    # own index, and grounding responses (unlike a raw SERP) are pre-summarized.
+    google_api_key: str = ""
 
     # Tavily (https://tavily.com) — search built for agents: ranked, already
     # extracted page content instead of a SERP that still needs scraping.
@@ -302,8 +315,24 @@ class Settings(BaseSettings):
     # and better recall on niche research queries).
     tavily_search_depth: str = "basic"
 
-    # SearXNG — the previous default, kept as the local-only alternative.
-    searxng_url: str = "http://localhost:8080"
+    # Linkup (https://linkup.so) — agent-oriented search, real page content
+    # per result plus a proper image-search mode.
+    linkup_api_key: str = ""
+
+    # Exa (https://exa.ai) — neural/semantic search over an indexed corpus,
+    # strong on academic and technical sources. No image-search endpoint (a
+    # document search engine, not a SERP) — search_images() is always [].
+    exa_api_key: str = ""
+
+    # SerpApi (https://serpapi.com) — a paid scraping API returning genuine
+    # Google SERP data (organic_results / images_results), unlike the
+    # google_api_key entry above (Gemini's grounding tool, a different
+    # product). Fifth in the cascade.
+    serpapi_api_key: str = ""
+
+    # DuckDuckGo needs no key — the `ddgs` library scrapes it directly. Last
+    # in the cascade and always "configured": see app/search/web.py and
+    # app/search/duckduckgo_client.py.
 
     # Upload limits
     max_upload_size_mb: int = 100

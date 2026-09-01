@@ -25,7 +25,7 @@
 | Celery worker | n/a | Yes | No port; consumes from Redis |
 | Ollama | `http://localhost:11434` | Optional* | Chat / VLM / classifier / embedding host |
 | MinerU CLI | binary on `$PATH` | Yes | Subprocess, not a service. `ALLOW_PYMUPDF_FALLBACK=true` degrades gracefully |
-| SearXNG | `http://localhost:8080` | Optional | Only when `WEB_SEARCH_PROVIDER=searxng`. The default provider is **Tavily**, which is reached over the public internet and runs no local service. |
+| Web search | n/a | Optional | Cascade of 6 providers (google, tavily, linkup, exa, serpapi, then duckduckgo — see `search/web.py`); no local service. The last needs no key, so this is never fully off. |
 | autoheal | n/a | Compose only | Restarts containers whose healthcheck goes unhealthy |
 
 \* **One AI backend is required**: either Ollama or a cloud API key. Neither ⇒ chat returns
@@ -77,11 +77,14 @@
                                     └─────────────────────────┘
 
                   ┌──────────────────────────────┐
-                  │ search/web.py                │
-                  │   tavily (default) ──────────┼──► api.tavily.com   ⚠ leaves the host
-                  │   searxng ───────────────────┼──► :8080               (query string only)
-                  └──────────────────────────────┘     (stays on host)
-                     the ONLY egress to the public internet, and only on the
+                  │ search/web.py — cascade,     │
+                  │ first configured one to      │
+                  │ answer wins:                 │
+                  │   1. google    4. exa        │  ⚠ leaves the host
+                  │   2. tavily    5. serpapi     ─┼──► whichever answers
+                  │   3. linkup    6. duckduckgo  │     (query string only)
+                  └──────────────────────────────┘     — #6 needs no key,
+                     the ONLY egress to the public internet, and only on the   always eligible
                      EXTERNAL route or the paper agent's WEB tool
 ```
 
@@ -98,19 +101,27 @@ flowchart TD
     W -->|subprocess| MU[MinerU CLI]
     W -->|HTTP| OL([Ollama :11434])
     API -->|HTTP| OL
-    API -->|"EXTERNAL route · WEB tool"| SX{{"search/web.py"}}
-    SX -->|"default"| TV([api.tavily.com])
-    SX -.->|"WEB_SEARCH_PROVIDER=searxng"| SXNG([SearXNG :8080])
+    API -->|"EXTERNAL route · WEB tool"| SX{{"search/web.py cascade"}}
+    SX -->|"1st"| GG([Google Search grounding])
+    SX -.->|"2nd, on failure"| TV([api.tavily.com])
+    SX -.->|"3rd, on failure"| LK([api.linkup.so])
+    SX -.->|"4th, on failure"| EX([api.exa.ai])
+    SX -.->|"5th, on failure"| SP([serpapi.com])
+    SX -.->|"6th, on failure — no key needed"| DDG([DuckDuckGo scrape])
     OL -.->|"when unreachable"| CLOUD([cloud LLM API])
-    TV --> NET([public internet])
-    SXNG -.-> NET
+    GG --> NET([public internet])
+    TV -.-> NET
+    LK -.-> NET
+    EX -.-> NET
+    SP -.-> NET
+    DDG -.-> NET
 
     classDef owned stroke:#3b82f6,stroke-width:2px
     classDef store stroke:#10b981,stroke-width:2px
     classDef ext stroke:#f59e0b,stroke-dasharray:4 3
     class API,W,MU owned
     class PG,RD store
-    class OL,TV,SXNG,CLOUD,NET ext
+    class OL,GG,TV,LK,EX,SP,DDG,CLOUD,NET ext
 ```
 
 > 🟦 owned process · 🟩 data store · 🟨 external / optional.
@@ -131,8 +142,9 @@ flowchart TD
 ⚠ In compose, `OLLAMA_BASE_URL` is deliberately **not** inherited from the host `.env`. It is
 hardcoded to `http://host.docker.internal:11434`, because a value like `http://localhost:11434`
 inside a container resolves to *that container* and every model call fails with
-connection-refused. The same trap applies to `SEARXNG_URL`, which compose sets to
-`http://searxng:8080` (service name, not localhost).
+connection-refused. The four web search providers don't have this trap — they're all reached over
+the public internet by a fixed hostname, not a compose service name, so their API keys ARE
+inherited from the host `.env` unchanged.
 
 ---
 
@@ -142,7 +154,7 @@ Two mechanisms, covering two different failure modes:
 
 | Mechanism | Covers | Applies to |
 | --- | --- | --- |
-| `restart: unless-stopped` | Process **exits**, crash, OOM-kill (exit 137) | `postgres`, `redis`, `searxng`, `celery_worker`, `api` |
+| `restart: unless-stopped` | Process **exits**, crash, OOM-kill (exit 137) | `postgres`, `redis`, `celery_worker`, `api` |
 | `autoheal` watchdog | Process **hangs**, running but healthcheck unhealthy | containers labeled `autoheal=true`: `api`, `postgres`, `redis` |
 
 `restart:` cannot see a hung-but-alive container, which is why autoheal exists; it needs

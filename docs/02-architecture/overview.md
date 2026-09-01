@@ -52,9 +52,11 @@ of a local model and the throughput of one machine.
 so does the paper agent's `WEB` tool, both opt-in per question, one chosen by the router and one
 by the model. Everything else, extraction, embedding, retrieval, reading, is local.
 
-⚠ **Since 2026-08-26 the default web provider is Tavily, which is a third party.** SearXNG ran on
-localhost, so even a web search stayed on the machine; a Tavily query does not. Only the query
-string leaves. `WEB_SEARCH_PROVIDER=searxng` takes the trade back in one line: see
+⚠ **Web search cascades through six providers: google, tavily, linkup, exa, serpapi, then
+duckduckgo** (see app/search/web.py) — the last needs no key and is always eligible, so this
+route never goes fully dark just because every paid key is unset or every paid provider is down.
+Only the query string leaves, for whichever one answers a given call — never paper text, chunks,
+or chat history. See
 [configuration.md § Web search](../03-reference/configuration.md#web-search).
 
 ---
@@ -294,8 +296,9 @@ chosen per question:
    web search provider. Only the query string goes out, and only on EXTERNAL or the paper agent's
    `WEB` tool. ⚠ Choosing a `:cloud` model in the note picker does send the paper to Ollama's
    infrastructure, which is what the local/cloud split in the picker exists to make visible.
-   ⚠ With `WEB_SEARCH_PROVIDER=tavily` (the default) the query reaches `api.tavily.com`; with
-   `searxng` it reaches only the compose service.
+   ⚠ With `WEB_SEARCH_PROVIDER=auto` (the default) the query reaches whichever of the six cascade
+   providers actually answers — `generativelanguage.googleapis.com`, `api.tavily.com`,
+   `api.linkup.so`, `api.exa.ai`, `serpapi.com`, or a direct DuckDuckGo scrape (no hosted API).
 2. **No route except EXTERNAL and the `WEB` tool touches the network** (beyond the LLM host, which
    may be local).
 3. **Vector search never changes reading order**: see rule 1.

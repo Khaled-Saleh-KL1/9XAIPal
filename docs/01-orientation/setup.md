@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | Python | 3.11+ | Backend |
 | Node.js | 18+ | Frontend (Vite 6, React 19) |
-| Docker + Compose | latest | Postgres / Redis / SearXNG (optional) / worker |
+| Docker + Compose | latest | Postgres / Redis / worker |
 | PostgreSQL | 15+ (16 in compose) | Needs `pgvector` + `uuid-ossp` |
 | Redis | 7+ | Celery broker |
 | MinerU | 3.2+ | `mineru` CLI. ⚠ `magic-pdf` 0.x is a different, abandoned package and is **not** supported |
@@ -86,7 +86,7 @@ Then edit `.env`. The minimum that must be right: Postgres credentials, one AI b
 
 ```bash
 cd backend
-docker compose up -d postgres redis searxng
+docker compose up -d postgres redis
 ```
 
 ### 3.2 Backend (host)
@@ -179,9 +179,9 @@ A sample paper ships at [`samples/attention-is-all-you-need.pdf`](../../samples/
 | Full stack in Docker | `cd backend && docker compose up -d --build` | UI + API on `:8000`, no Node needed on the host |
 | LAN server | `cd backend && ./start-lan-server.sh` | Let another device on the same Wi-Fi use the app |
 
-**Full stack** brings up every service: Postgres, Redis, SearXNG, the Celery worker, the API, and
-a one-shot container that builds the SPA into a volume the API serves at `/`. The whole app is on
-one port; there is no second dev server and no reverse proxy.
+**Full stack** brings up every service: Postgres, Redis, the Celery worker, the API, and a one-shot
+container that builds the SPA into a volume the API serves at `/`. The whole app is on one port;
+there is no second dev server and no reverse proxy.
 
 `[historical]` This used to require `--profile server`. Without the flag the frontend build never
 ran, so `up` produced an API with an empty SPA volume that served nothing at `/`. The build service
@@ -189,9 +189,9 @@ is no longer behind a profile, and `api` waits for it via
 `depends_on: {frontend-build: {condition: service_completed_successfully}}`, which also makes a
 broken frontend build **fail the `up` loudly** instead of quietly starting an API with no UI.
 
-⚠ **If another project on your machine already holds `8000`, `5432`, `6379` or `8080`, `up` fails
+⚠ **If another project on your machine already holds `8000`, `5432` or `6379`, `up` fails
 with "port is already allocated."** Every mapping is overridable in `backend/.env`:
-`API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`, `SEARXNG_PORT` (see
+`API_PORT`, `POSTGRES_PORT`, `REDIS_PORT` (see
 [`.env.example`](../../backend/.env.example)). Only the **host** side moves: containers reach each
 other by service name on the compose network, so nothing inside the stack is affected.
 
@@ -216,11 +216,11 @@ Collected because each one has cost someone an hour:
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Upload sticks at `queued` forever | No Celery worker consuming Redis | Start the worker (§3.3) |
-| `docker compose up` fails with "port is already allocated" | Another project holds `8000` / `5432` / `6379` / `8080` | Set `API_PORT` / `POSTGRES_PORT` / `REDIS_PORT` / `SEARXNG_PORT` in `backend/.env`, host side only |
+| `docker compose up` fails with "port is already allocated" | Another project holds `8000` / `5432` / `6379` | Set `API_PORT` / `POSTGRES_PORT` / `REDIS_PORT` in `backend/.env`, host side only |
 | Worker logs `Cannot connect to redis://redis:6379: Name or service not known` | A container left over from an older `up` is attached to no compose network | `docker compose up -d --force-recreate redis celery_worker` |
 | First embed 404s | `EMBEDDING_MODEL` has no matching pulled tag | Use an explicit tag, e.g. `qwen3-embedding:8b` |
 | Every model call refused, in Docker | `OLLAMA_BASE_URL=localhost` inside a container resolves to the container | Compose already sets `host.docker.internal`; do not override it from the host `.env` |
-| Web search silently returns nothing | No provider configured, or the active one is down | `WEB_SEARCH_PROVIDER=tavily` needs `TAVILY_API_KEY`; check the logs for `Tavily search failed: HTTP 401`. On `searxng`: `docker compose up -d searxng`. ⚠ `/health` cannot verify a Tavily key: see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
+| Web search silently returns nothing | No provider configured, or every configured one is down/out of quota | Set at least one of `GOOGLE_API_KEY` / `TAVILY_API_KEY` / `LINKUP_API_KEY` / `EXA_API_KEY`; check the logs for `<provider> search failed: ...`. ⚠ `/health` cannot verify a key works, only that one is configured: see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
 | Ingestion fails with `MinerUError` | MinerU missing from the worker's `$PATH` | Install it, or run the worker in compose |
 | Chat 503 `NO_LLM_CONFIGURED` | No Ollama and no cloud key | Start Ollama or paste one API key |
 | Setting seems to do nothing | Typo'd env key: `extra="ignore"` swallows unknown keys silently | Check spelling against [configuration.md](../03-reference/configuration.md) |

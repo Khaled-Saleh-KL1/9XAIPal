@@ -23,7 +23,8 @@ async def health_check():
     # LLM provider (Ollama or the configured cloud API)
     ollama_status = "ok" if await llm_available() else "unavailable"
 
-    # Web search — whichever provider is active (Tavily or SearXNG).
+    # Web search — the cascade's first-in-line provider, and whether ANY
+    # configured provider in the cascade answered (see app/search/web.py).
     provider = active_provider()
     web_status = "ok" if await web_search_available() else "unavailable"
 
@@ -35,9 +36,5 @@ async def health_check():
         ollama=ollama_status,
         web_search=web_status,
         web_search_provider=provider,
-        # ⚠ Kept so existing clients and scripts reading `searxng` do not break.
-        # It now reports the ACTIVE provider's health, which is only about
-        # SearXNG when SearXNG is the one running.
-        searxng=web_status,
     )
 

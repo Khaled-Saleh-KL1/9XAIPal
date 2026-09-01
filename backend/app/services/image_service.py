@@ -4,7 +4,7 @@ Image service: reusable server-side fetching, proxying, and local storage for we
 This module powers two important capabilities:
 
 1. Option A (Backend Image Proxy):
-   - A general-purpose proxy for any web image (SearXNG results, etc.).
+   - A general-purpose proxy for any web image (web search results, etc.).
    - Fetches on the server so the browser never makes direct requests to potentially
      hostile or hotlink-protected hosts.
 

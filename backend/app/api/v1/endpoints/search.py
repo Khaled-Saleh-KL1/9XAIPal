@@ -22,7 +22,7 @@ async def external_search(
     q: str = Query(..., description="Search query"),
     limit: int = 5,
 ):
-    """Search the web via the configured provider (Tavily or SearXNG)."""
+    """Search the web via the configured provider cascade (see app/search/web.py)."""
     raw = await web_search(q, limit=limit)
     ranked = rank_results(raw, max_results=limit)
     return {"results": ranked, "query": q, "total": len(ranked)}

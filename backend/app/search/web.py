@@ -1,48 +1,119 @@
 """The one door to the web.
 
-Every caller that wants a web result imports from here, never from a provider
-module. Two providers exist:
+Every caller that wants a web result imports from here, never from a
+provider module directly. Six providers exist, tried in this fixed order:
 
-    tavily   — the default. Hosted, LLM-shaped extracts, one HTTPS call.
-    searxng  — the previous default. Self-hosted at SEARXNG_URL, keeps the
-               query on the machine.
+    google      — Gemini's Search-grounding tool. Google's own index.
+    tavily      — LLM-shaped extracts, one HTTPS call. The long-time default.
+    linkup      — real page content per result, plus image search.
+    exa         — neural/semantic search, strong on academic sources.
+    serpapi     — genuine Google SERP data via a paid scraping API.
+    duckduckgo  — the `ddgs` library, no API key, no quota. Always
+                  "configured": the one provider that's never unavailable
+                  for lack of credentials. Last, by design — it scrapes an
+                  undocumented endpoint (no official DDG search API), so
+                  it's also the least reliable of the six.
 
-⚠ **The choice is a privacy decision, not a quality one.** SearXNG runs in the
-compose stack, so a query never left the host; Tavily is a third party and the
-query string does. Neither ever sees paper text, chunks, or chat history — the
-callers pass a query and nothing else — but "nothing leaves this machine" is
-only literally true on searxng. WEB_SEARCH_PROVIDER exists so that trade can be
-taken back with one line in .env.
+"auto" (the default) tries each configured provider in order and falls
+through to the next the moment one errors OR returns zero results — a
+single provider being down, out of quota, or rate-limited never means the
+request comes back empty as long as one of the others can still answer.
+Because duckduckgo needs no configuration, `is_configured()` is True under
+"auto" even with every API key left blank — web search is only truly off
+when WEB_SEARCH_PROVIDER is explicitly set to "none".
+
+This replaced SearXNG (self-hosted, removed 2026-08-31): SearXNG's own
+`score` field is a per-engine position weight, not a comparable relevance
+score, which silently produced irrelevant results whenever a category
+filter was applied — see git history on external_context.py for the
+concrete case (a "FlashAttention 2 paper" query returning MDN docs and
+unrelated Docker Hub images ahead of the actual paper). None of the six
+providers here have that failure mode: none accept a category filter to
+begin with (the domain bias lives entirely in
+`external_context.rewrite_query_for_papers` instead, which works for all
+six), and cascading on a bad result is strictly safer than trusting one
+provider's internal ranking blind.
 """
 
 from typing import Optional
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.search import searxng_client, tavily_client
+from app.search import (
+    duckduckgo_client,
+    exa_client,
+    google_client,
+    linkup_client,
+    serpapi_client,
+    tavily_client,
+)
 
 logger = get_logger(__name__)
 
-_TAVILY = "tavily"
-_SEARXNG = "searxng"
 _NONE = "none"
+
+# Cascade order. Index 0 is tried first on "auto"; a pin to one name skips
+# straight to that entry with no fallback. duckduckgo is last and needs no
+# key — see module docstring.
+_PROVIDERS = [
+    ("google", google_client),
+    ("tavily", tavily_client),
+    ("linkup", linkup_client),
+    ("exa", exa_client),
+    ("serpapi", serpapi_client),
+    ("duckduckgo", duckduckgo_client),
+]
+
+
+def _configured_names() -> list[str]:
+    """Providers with credentials present, in cascade order. No network I/O.
+
+    duckduckgo needs no credentials, so it's always in this list.
+    """
+    checks = {
+        "google": bool(settings.google_api_key),
+        "tavily": bool(settings.tavily_api_key),
+        "linkup": bool(settings.linkup_api_key),
+        "exa": bool(settings.exa_api_key),
+        "serpapi": bool(settings.serpapi_api_key),
+        "duckduckgo": True,
+    }
+    return [name for name, _ in _PROVIDERS if checks[name]]
+
+
+def _cascade() -> list[tuple[str, object]]:
+    """The provider list to actually try for this call, honoring a pin."""
+    pinned = (settings.web_search_provider or "auto").strip().lower()
+    if pinned == _NONE:
+        return []
+    if pinned == "auto":
+        names = set(_configured_names())
+        return [(name, client) for name, client in _PROVIDERS if name in names]
+    # Pinned to one specific provider — no fallback, matches the pre-cascade
+    # behavior for debugging a single provider in isolation.
+    for name, client in _PROVIDERS:
+        if name == pinned:
+            return [(name, client)]
+    logger.warning(f"WEB_SEARCH_PROVIDER={pinned!r} is not a known provider")
+    return []
 
 
 def active_provider() -> str:
-    """Which provider serves this call: ``tavily``, ``searxng``, or ``none``.
+    """The provider that would be tried first right now — a log/health label.
 
-    Resolved per call rather than cached at import so a key added to .env takes
-    effect on the next request instead of the next restart.
+    Resolved per call rather than cached at import so a key added to .env
+    takes effect on the next request instead of the next restart. With a
+    cascade, this names only the FIRST provider that would be attempted, not
+    necessarily the one that ends up serving any specific query — see
+    `configured_providers()` for the full list.
     """
-    pinned = (settings.web_search_provider or "auto").strip().lower()
-    if pinned in (_TAVILY, _SEARXNG, _NONE):
-        return pinned
-    # auto: a configured key means the operator chose the hosted provider.
-    if settings.tavily_api_key:
-        return _TAVILY
-    if settings.searxng_url:
-        return _SEARXNG
-    return _NONE
+    cascade = _cascade()
+    return cascade[0][0] if cascade else _NONE
+
+
+def configured_providers() -> list[str]:
+    """Every provider that would be tried, in order — for the /health payload."""
+    return [name for name, _ in _cascade()]
 
 
 async def search(
@@ -53,42 +124,55 @@ async def search(
 ) -> list[dict]:
     """Web results as ``{title, url, snippet, source_engine, score}``.
 
-    Returns ``[]`` rather than raising on every failure path — a dead search
-    provider degrades an answer, it does not break the request.
+    Tries each configured provider in cascade order; falls through to the
+    next on any exception or an empty result list. Returns ``[]`` only once
+    every configured provider has been tried and none produced anything —
+    a dead or exhausted provider degrades an answer, it does not break the
+    request.
     """
-    provider = active_provider()
-    if provider == _TAVILY:
-        return await tavily_client.search(query, categories=categories, limit=limit)
-    if provider == _SEARXNG:
-        return await searxng_client.search(query, categories=categories, limit=limit)
-    logger.warning("web search requested with no provider configured")
+    for name, client in _cascade():
+        try:
+            results = await client.search(query, categories=categories, limit=limit)
+        except Exception as e:
+            logger.warning(f"{name} search raised, falling through: {e}")
+            continue
+        if results:
+            return results
+        logger.info(f"{name} returned no results, falling through")
     return []
 
 
 async def search_images(query: str, *, limit: int = 4) -> list[dict]:
     """Image results as ``{img_url, thumbnail, title, source_url, source_engine}``."""
-    provider = active_provider()
-    if provider == _TAVILY:
-        return await tavily_client.search_images(query, limit=limit)
-    if provider == _SEARXNG:
-        return await searxng_client.search_images(query, limit=limit)
+    for name, client in _cascade():
+        try:
+            results = await client.search_images(query, limit=limit)
+        except Exception as e:
+            logger.warning(f"{name} image search raised, falling through: {e}")
+            continue
+        if results:
+            return results
     return []
 
 
 async def is_available() -> bool:
-    """Whether the active provider can answer right now."""
-    provider = active_provider()
-    if provider == _TAVILY:
-        return await tavily_client.is_available()
-    if provider == _SEARXNG:
-        return await searxng_client.is_available()
+    """Whether at least one configured provider can answer right now."""
+    for name, client in _cascade():
+        try:
+            if await client.is_available():
+                return True
+        except Exception:
+            continue
     return False
 
 
 def is_configured() -> bool:
-    """Whether a provider is configured at all — no network call.
+    """Whether at least one provider is configured at all — no network call.
 
-    Used on hot paths (the paper agent decides whether to offer the WEB tool on
-    every question) where paying for a live probe per request is not affordable.
+    Used on hot paths (the paper agent decides whether to offer the WEB tool
+    on every question) where paying for a live probe per request is not
+    affordable. True under "auto" even with every API key blank, since
+    duckduckgo needs none — only an explicit WEB_SEARCH_PROVIDER=none (or a
+    pin to a provider with no key) makes this False.
     """
-    return active_provider() != _NONE
+    return bool(_cascade())

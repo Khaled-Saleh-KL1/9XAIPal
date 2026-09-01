@@ -34,6 +34,14 @@ dependencies = [
     # sites during development, see the doc_kind='article' import pipeline.
     "trafilatura==2.2.0",
 
+    # Web search: the last, keyless fallback in the cascade (search/web.py,
+    # search/duckduckgo_client.py). Scrapes DuckDuckGo directly — no
+    # official API exists — via the actively-maintained `ddgs` package (the
+    # project was renamed from `duckduckgo-search`; that old name is now a
+    # dead/unmaintained shim). Verified live 2026-09-01: correct, relevant
+    # text and image results for a real query.
+    "ddgs",
+
     # Auth: Argon2id password hashing (OWASP-recommended default) + email
     # validation for pydantic's EmailStr (fastapi[standard] usually pulls
     # this in transitively, but pinning it directly avoids depending on

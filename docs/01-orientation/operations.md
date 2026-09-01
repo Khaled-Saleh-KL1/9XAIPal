@@ -23,7 +23,7 @@
 | `ask_traces` table | Postgres | Latency, token counts, which route/model served a question |
 | `conversation_turns` table | Postgres | Full chat log incl. `router_reason` and `citations` |
 | `ingestion_jobs` table | Postgres | Pipeline state machine, `started_at` / `completed_at` |
-| `GET /api/v1/health` | HTTP | Liveness of database / Ollama / SearXNG |
+| `GET /api/v1/health` | HTTP | Liveness of database / Ollama / web search |
 | `docker compose ps` | Shell | Container health status (`unhealthy` triggers autoheal) |
 
 ### Ops: inspect ask traces
@@ -75,7 +75,7 @@ ORDER BY last DESC;
 | Container hung but running | Healthcheck `unhealthy` | autoheal restarts it | Brief stall | Automatic |
 | Worker crashes mid-ingestion | Doc stuck in `extracting`/`chunking`/`embedding` | Job never completes | Overlay spins | `POST /papers/{id}/reextract` |
 | MinerU not installed | `MinerUError` | Doc marked `failed` | Error in the overlay | Install MinerU, or `ALLOW_PYMUPDF_FALLBACK=true` for degraded mode |
-| Web search down or misconfigured | EXTERNAL and the paper agent's `WEB` tool return `[]` | Answer is ungrounded but does not crash | Fewer/no web citations; a trail row reading "nothing came back" | On `searxng`: `docker compose up -d searxng`. On `tavily`: check the logs for `Tavily search failed: HTTP 401` (bad key) or `429` (quota), `/health` cannot tell you, see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
+| Web search down or misconfigured | Every configured provider in the cascade errored or returned `[]` | Answer is ungrounded but does not crash | Fewer/no web citations; a trail row reading "nothing came back" | Check the logs for `<provider> search failed: ...` (401 = bad key, 429 = quota) — the cascade already tried every other configured provider before giving up, `/health` cannot tell you which one actually failed, see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
 | Answers wander off-domain | n/a | Guardrail + `DOMAIN_PREAMBLE` + cross-field gate | Off-topic content | See [chat-and-ask.md](../02-architecture/chat-and-ask.md) |
 | Off-domain citation chips | n/a | `_filter_unused_web_citations` drops URLs absent from the answer | Stray chips | Already mitigated |
 | `Sources: None.` in the answer | n/a | Stripped server-side; defensive client strip in `ChatPane` | A stray literal line | Already mitigated |

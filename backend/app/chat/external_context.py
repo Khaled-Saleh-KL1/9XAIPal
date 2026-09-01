@@ -75,7 +75,7 @@ async def build_external_context(
     max_results: int = 5,
     paper_title: Optional[str] = None,
 ) -> dict:
-    """Build context from SearXNG web search, biased toward tech research.
+    """Build context from web search, biased toward tech research.
 
     Always fetches a handful of image results in parallel so the prompt can
     invite the model to embed them inline (``![alt](url)``). When the query
@@ -83,10 +83,13 @@ async def build_external_context(
     """
     biased_query = rewrite_query_for_papers(query, paper_title=paper_title)
 
-    # Text search first (with category bias, fall back to plain).
-    raw_results = await search(biased_query, categories=["it", "science"])
-    if not raw_results:
-        raw_results = await search(biased_query)
+    # No category filter: verified (2026-08-31) that restricting SearXNG to
+    # categories=["it","science"] made it return irrelevant results (Docker
+    # Hub, GitHub, MDN docs outranking the actual paper) for a plain query
+    # like "FlashAttention 2 paper" — none of the current providers have an
+    # engine-group concept anyway, so there's nothing to restrict. The domain
+    # bias lives entirely in rewrite_query_for_papers above.
+    raw_results = await search(biased_query)
     ranked = rank_results(raw_results, max_results=max_results)
 
     # Image search runs in parallel-ish: small additional latency, big UX win.

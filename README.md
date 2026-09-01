@@ -37,7 +37,7 @@ Everything runs locally by default. Your documents and conversations never leave
 | **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed, no config switching |
 | **PDF extraction** | **MinerU** 3.x (with PyMuPDF fallback) | State-of-the-art structural extraction: OCR, table recognition, equation → LaTeX |
 | **Background jobs** | Celery + Redis | Heavy extraction runs asynchronously so uploads never hang |
-| **Web search** | Tavily (default) or self-hosted SearXNG | Tavily returns ranked, already-extracted page text in one call, so the model reads sources instead of 280-character snippets. ⚠ It is a third party: the **query string** leaves the machine (never paper text, chunks, or chat history). Set `WEB_SEARCH_PROVIDER=searxng` to keep even the query local, see [configuration](docs/03-reference/configuration.md#web-search) |
+| **Web search** | Google → Tavily → Linkup → Exa, cascading | Each is tried in order; a provider that errors or comes back empty falls through to the next automatically, so one being down or out of quota never leaves a question unanswered. ⚠ All four are third parties: the **query string** leaves the machine for whichever one answers (never paper text, chunks, or chat history), see [configuration](docs/03-reference/configuration.md#web-search) |
 | **Vector index** | pgvector HNSW | Fast approximate nearest neighbors inside Postgres; no extra service to run |
 
 ---
@@ -103,16 +103,16 @@ npm run dev      # opens at http://localhost:5173
 cd backend
 docker compose up -d --build
 ```
-Brings up Postgres, Redis, SearXNG, the Celery worker, the API, and a one-shot container that
-builds the SPA, then serves **the UI and the API on a single port**: <http://localhost:8000>.
-No Node or Python needed on the host. Ollama stays on your machine.
+Brings up Postgres, Redis, the Celery worker, the API, and a one-shot container that builds the
+SPA, then serves **the UI and the API on a single port**: <http://localhost:8000>. No Node or
+Python needed on the host. Ollama stays on your machine.
 
-If another project already holds `8000`, `5432`, `6379` or `8080`, override the host side in
-`backend/.env`: `API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`, `SEARXNG_PORT`.
+If another project already holds `8000`, `5432` or `6379`, override the host side in
+`backend/.env`: `API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`.
 
 Just the infrastructure, if you want to run the app from source:
 ```bash
-docker compose up -d postgres redis searxng
+docker compose up -d postgres redis
 ```
 
 ### 🌐 LAN server mode

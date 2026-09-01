@@ -8,7 +8,7 @@ The `core` directory contains application-wide infrastructure: configuration, lo
 
 ### `config.py`
 
-Defines typed settings loaded from environment variables. Important settings include the PostgreSQL connection URL, storage root, MinerU location, Ollama base URL, chat model, VLM model, embedding model, SearXNG URL, vector dimension, and upload limits.
+Defines typed settings loaded from environment variables. Important settings include the PostgreSQL connection URL, storage root, MinerU location, Ollama base URL, chat model, VLM model, embedding model, the six web search provider API keys, vector dimension, and upload limits.
 
 ### `logging.py`
 

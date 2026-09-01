@@ -30,7 +30,7 @@ Builds context using vector retrieval across PostgreSQL. It embeds the user quer
 
 ### `external_context.py`
 
-Builds context from SearXNG results when the user asks for current, recent, or out-of-document information.
+Builds context from the web search cascade (`search/web.py`) when the user asks for current, recent, or out-of-document information.
 
 ### `citations.py`
 
@@ -48,6 +48,6 @@ Formats citations for chunk IDs, sequence IDs, pages, image assets, and external
 
 `chat.global_context` depends on `services.retrieval`, `embeddings.service`, and `database.pgvector` through the repository layer.
 
-`chat.external_context` depends on `search.searxng_client` and `search.ranking`.
+`chat.external_context` depends on `search.web` and `search.ranking`.
 
 `chat.orchestrator` depends on `llm.ollama_client`, `llm.multimodal`, and `database.repositories.conversations`.

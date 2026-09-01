@@ -108,11 +108,11 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Planned direction
 
-- ~~**Replace SearXNG with Exa + Firecrawl**~~: **superseded 2026-08-26** by **Tavily**, which
-  returns ranked, already-extracted page text in one call rather than assembling it from two
-  vendors. Providers now dispatch through
-  [`app/search/web.py`](../backend/app/search/web.py); SearXNG remains as the local-only option.
-  Original design, never implemented:
+- ~~**Replace SearXNG with Exa + Firecrawl**~~: **superseded 2026-08-26** by **Tavily**, then
+  **2026-08-31** by a 6-provider cascade (google, tavily, linkup, exa, serpapi) with a
+  DuckDuckGo library fallback needing no key at all — see
+  [`app/search/web.py`](../backend/app/search/web.py). SearXNG itself is gone; Exa ended up
+  joining the cascade anyway, just not paired with Firecrawl. Original design, never implemented:
   [archive/2026-08-26/exa-firecrawl-research-stack.md](archive/2026-08-26/exa-firecrawl-research-stack.md).
 - ~~**Paper-only mode**~~: **superseded 2026-07-25** by `INGEST_PROFILE=fast`, which skips the
   whole post-chunking chain for papers rather than embeddings alone, and answers at question time
