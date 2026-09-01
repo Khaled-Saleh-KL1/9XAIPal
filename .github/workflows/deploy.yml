@@ -143,6 +143,16 @@ jobs:
             exit 1
           fi
 
-      - name: Reclaim disk space from old image layers
+      # BuildKit build cache is unbounded by default and unrelated to the
+      # rollback mechanism above — that path rebuilds from source at
+      # $GOOD_SHA via the exact same deploy-once.sh, it never reuses a
+      # saved image or cache layer. So there's nothing here worth keeping
+      # around between deploys; -a wipes ALL build cache, not just dangling
+      # layers, on every run. (Left unpruned, this alone grew to 55GB over
+      # 3 days of deploys.) The tradeoff: every build is a full rebuild —
+      # no warm cache to speed up dependency installs.
+      - name: Reclaim disk space (old image layers + build cache)
         if: always()
-        run: docker image prune -f
+        run: |
+          docker image prune -f
+          docker builder prune -af
