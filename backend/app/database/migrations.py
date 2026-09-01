@@ -173,6 +173,24 @@ async def _ensure_recent_columns() -> None:
         # Fraction (0-1) of progress within the current job status, e.g. pages
         # extracted so far / total pages while status='extracting'.
         "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_fraction REAL",
+        # Raw HTML snapshot status for doc_kind='article' rows (see
+        # raw_snapshot_pages below). Never affects `status` — a queued/failed
+        # snapshot crawl doesn't block reading or chatting with the article.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS raw_snapshot_status TEXT NOT NULL DEFAULT 'none'",
+        # Created here too, same reasoning as studies/study_papers above: a
+        # brand-new table is exactly as exposed to a partial split-on-`;` run
+        # as they were, and this is the recovery path for that.
+        """CREATE TABLE IF NOT EXISTS raw_snapshot_pages (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            title TEXT,
+            depth INT NOT NULL DEFAULT 0,
+            storage_filename TEXT NOT NULL,
+            byte_size INT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_raw_snapshot_pages_document ON raw_snapshot_pages(document_id, depth, created_at)",
     ]
 
     async with engine.begin() as conn:

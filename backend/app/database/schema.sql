@@ -83,7 +83,15 @@ CREATE TABLE IF NOT EXISTS documents (
     -- at ingestion and never re-derived, so changing PAPER_ONLY_MAX_TOKENS
     -- cannot retroactively reclassify a library.
     embedding_mode TEXT NOT NULL DEFAULT 'embedded',
-    embedding_skip_reason TEXT
+    embedding_skip_reason TEXT,
+
+    -- Whether a raw HTML snapshot (see raw_snapshot_pages below) has been
+    -- saved for this doc_kind='article' row: 'none' (not an article, or not
+    -- attempted yet), 'pending' (crawl dispatched, not finished), 'complete',
+    -- or 'failed'. A failed/pending crawl never affects `status` above — the
+    -- article itself can be fully read and chatted with regardless of
+    -- whether its raw copy ever finishes.
+    raw_snapshot_status TEXT NOT NULL DEFAULT 'none'
 );
 
 COMMENT ON COLUMN documents.reading_order IS 'Array of original chunk sequence_ids in LLM-corrected logical reading order. Used to fix two-column and complex layout extraction issues.';
@@ -354,6 +362,30 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_status ON ingestion_jobs(status);
 -- list_documents runs on every library poll.
 CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_document_created
     ON ingestion_jobs(document_id, created_at DESC);
+
+-- Raw, sanitized HTML snapshots of an imported article (doc_kind='article')
+-- and, for a "book-like" multi-page docs site, a bounded set of same-site
+-- pages found by following links from it (see services/article_crawl.py).
+-- The doc_kind='article' equivalent of the original PDF documents_dir()
+-- already keeps for a paper/book — the point is letting the reader open the
+-- exact HTML the extractor had to work with, to check nothing was missed.
+CREATE TABLE IF NOT EXISTS raw_snapshot_pages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    title TEXT,
+    -- 0 = the originally-imported URL itself; >0 = found by following a
+    -- same-site link that many hops deep (see MAX_CRAWL_DEPTH).
+    depth INT NOT NULL DEFAULT 0,
+    -- Filename under core/paths.py's raw_snapshots_dir(document_id) — the
+    -- sanitized HTML actually lives on disk, not in this table.
+    storage_filename TEXT NOT NULL,
+    byte_size INT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_snapshot_pages_document
+    ON raw_snapshot_pages(document_id, depth, created_at);
 
 -- ============================================================================
 -- Section Summaries: Pre-computed hierarchical overviews for high-quality

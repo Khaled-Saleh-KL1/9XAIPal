@@ -41,6 +41,19 @@ def covers_dir() -> Path:
     return _root() / "covers"
 
 
+def raw_snapshots_dir(document_id: Optional[Union[UUID, str]] = None) -> Path:
+    """Sanitized raw-HTML snapshots of imported articles (see
+    services/article_crawl.py) — the doc_kind='article' equivalent of the
+    original PDF documents_dir() already keeps for a paper/book. One
+    subfolder per document, one file per crawled page (root page + any
+    same-site links followed).
+    """
+    base = _root() / "raw_snapshots"
+    if document_id:
+        return base / str(document_id)
+    return base
+
+
 def research_images_dir(conversation_id: Optional[Union[UUID, str]] = None) -> Path:
     """
     Returns the directory for permanently stored research images.
@@ -66,6 +79,7 @@ def ensure_storage_dirs() -> None:
         assets_dir(),
         logs_dir(),
         covers_dir(),
+        raw_snapshots_dir(),
         # research images base (per-conversation folders are created on demand)
         research_images_dir(),
     ]:

@@ -52,6 +52,10 @@ export interface PaperMeta {
   // Real progress *within* job_status (e.g. pages extracted / total while
   // extracting). null/undefined when nothing finer than the status exists.
   job_progress_fraction?: number | null;
+  // Raw HTML snapshot crawl for a doc_kind='article' import — see
+  // ProgressResponse above for the same fields' meaning.
+  raw_snapshot_status?: string | null;
+  raw_page_count?: number | null;
 }
 
 export interface ChunkData {
@@ -129,6 +133,12 @@ export interface ProgressResponse {
   page_count: number | null;
   error_message?: string | null;
   extractor?: string | null;    // "mineru" | "pymupdf_fallback"
+  // Raw HTML snapshot crawl for a doc_kind='article' import (see backend
+  // services/article_crawl.py). 'none' for anything that isn't an article.
+  // Independent of `status` above — a failed/pending snapshot never means
+  // the article itself failed to import.
+  raw_snapshot_status?: string | null;  // "none" | "pending" | "complete" | "failed"
+  raw_page_count?: number | null;
 }
 
 export async function reextractPaper(paperId: string): Promise<{ paper_id: string; status: string; job_id: string; message: string }> {
@@ -888,9 +898,18 @@ export async function checkHealth(): Promise<{ status: string; database: string 
 
 // ── Raw Files ─────────────────────────────────────────────────────────────────
 
-/** URL to view/download the raw PDF for a paper */
-export function getRawPdfUrl(paperId: string): string {
+/** URL to view/download the raw copy of a document: the original PDF for a
+ * paper/book, or a sanitized raw HTML snapshot (single page, or a small
+ * index of pages if the import crawled a multi-page docs site) for an
+ * imported article — the backend branches on doc_kind, this URL is the same
+ * either way. */
+export function getRawFileUrl(paperId: string): string {
   return `${BASE}/papers/${paperId}/raw`;
+}
+
+/** URL to view one specific page of a multi-page raw HTML snapshot. */
+export function getRawSnapshotPageUrl(paperId: string, pageId: string): string {
+  return `${BASE}/papers/${paperId}/raw/${pageId}`;
 }
 
 /** URL to the static asset PDF (for embedding in iframe/viewer) */
