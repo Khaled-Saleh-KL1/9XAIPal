@@ -45,7 +45,7 @@ def clean_state(monkeypatch):
 
 def test_fetch_resource_uses_firecrawl_when_configured():
     with patch.object(settings, "firecrawl_api_key", "fc-key"), \
-         patch.object(firecrawl_client, "fetch_html", return_value=("<html>hi</html>", _URL)) as fc, \
+         patch.object(firecrawl_client, "fetch_html", return_value=("<html>hi</html>", _URL, False)) as fc, \
          patch.object(crw_client, "fetch_html") as crw, \
          patch.object(article_extraction, "_fetch_direct") as direct:
         resource = fetch_resource(_URL)
@@ -61,7 +61,7 @@ def test_fetch_resource_falls_through_to_crw_on_firecrawl_failure():
     with patch.object(settings, "firecrawl_api_key", "fc-key"), \
          patch.object(settings, "crw_api_key", "crw-key"), \
          patch.object(firecrawl_client, "fetch_html", side_effect=FetchProviderError("down")), \
-         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL)) as crw, \
+         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL, False)) as crw, \
          patch.object(article_extraction, "_fetch_direct") as direct:
         resource = fetch_resource(_URL)
 
@@ -89,7 +89,7 @@ def test_fetch_resource_skips_unconfigured_providers():
     """Only CRW has a key — Firecrawl must not even be attempted."""
     with patch.object(settings, "crw_api_key", "crw-key"), \
          patch.object(firecrawl_client, "fetch_html") as fc, \
-         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL)) as crw:
+         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL, False)) as crw:
         resource = fetch_resource(_URL)
 
     assert resource.content == b"<html>crw</html>"
@@ -106,6 +106,45 @@ def test_fetch_resource_raises_original_direct_fetch_error_when_everything_fails
          ):
         with pytest.raises(ArticleExtractionError, match="direct fetch also failed"):
             fetch_resource(_URL)
+
+
+def test_fetch_resource_fetches_directly_when_firecrawl_resolves_a_pdf():
+    """Reproduces the real bug: an arXiv /pdf/ link has no .pdf extension, so
+    nothing about the URL itself reveals it's a PDF — only Firecrawl's own
+    metadata.contentType does (confirmed against the live API). Firecrawl's
+    HTML conversion of a PDF is lossy (see firecrawl_client.fetch_html's
+    docstring) and must be discarded in favor of a real direct fetch, which
+    correctly reports FetchedResource.is_pdf so the caller
+    (extraction/pipeline_sync.py) routes it into the real MinerU pipeline
+    instead of importing a headless, imageless "article"."""
+    from app.services.article_extraction import FetchedResource
+
+    with patch.object(settings, "firecrawl_api_key", "fc-key"), \
+         patch.object(firecrawl_client, "fetch_html", return_value=("<html>lossy pdf conversion</html>", _URL, True)) as fc, \
+         patch.object(crw_client, "fetch_html") as crw, \
+         patch.object(article_extraction, "_fetch_direct") as direct:
+        direct.return_value = FetchedResource(content=b"%PDF-1.4 real bytes", content_type="application/pdf", final_url=_URL)
+        resource = fetch_resource(_URL)
+
+    fc.assert_called_once()
+    crw.assert_not_called()  # Firecrawl already answered the question — no need to ask CRW too
+    direct.assert_called_once_with(_URL)
+    assert resource.is_pdf is True
+    assert resource.content == b"%PDF-1.4 real bytes"
+
+
+def test_firecrawl_pdf_detection_does_not_trip_its_circuit_breaker():
+    """Firecrawl correctly answered (it just answered 'this is a PDF') — that
+    is a success, not a provider failure, and must not count against it."""
+    from app.services.article_extraction import FetchedResource
+
+    with patch.object(settings, "firecrawl_api_key", "fc-key"), \
+         patch.object(firecrawl_client, "fetch_html", return_value=("<html>x</html>", _URL, True)), \
+         patch.object(article_extraction, "_fetch_direct") as direct:
+        direct.return_value = FetchedResource(content=b"%PDF", content_type="application/pdf", final_url=_URL)
+        fetch_resource(_URL)
+
+    assert circuit_breaker.is_open("firecrawl") is False
 
 
 def test_ssrf_guard_runs_before_any_provider_is_tried():
@@ -129,7 +168,7 @@ def test_repeated_firecrawl_failures_trip_the_breaker_and_skip_it():
     with patch.object(settings, "firecrawl_api_key", "fc-key"), \
          patch.object(settings, "crw_api_key", "crw-key"), \
          patch.object(firecrawl_client, "fetch_html", side_effect=FetchProviderError("down")) as fc, \
-         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL)):
+         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL, False)):
 
         for _ in range(circuit_breaker.FAILURE_THRESHOLD):
             fetch_resource(_URL)
@@ -147,7 +186,7 @@ def test_empty_is_not_a_concept_here_only_exceptions_trip_the_breaker():
     with patch.object(settings, "firecrawl_api_key", "fc-key"), \
          patch.object(settings, "crw_api_key", "crw-key"), \
          patch.object(firecrawl_client, "fetch_html", side_effect=FetchProviderError("down")), \
-         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL)):
+         patch.object(crw_client, "fetch_html", return_value=("<html>crw</html>", _URL, False)):
 
         for _ in range(circuit_breaker.FAILURE_THRESHOLD):
             fetch_resource(_URL)

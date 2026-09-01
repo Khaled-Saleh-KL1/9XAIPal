@@ -39,13 +39,24 @@ _TIMEOUT = 75.0
 _EXHAUSTED_STATUSES = {401, 402, 429}
 
 
-def fetch_html(url: str) -> tuple[str, str]:
-    """Fetch `url` via Firecrawl's /v2/scrape and return (html, final_url).
+def fetch_html(url: str) -> tuple[str, str, bool]:
+    """Fetch `url` via Firecrawl's /v2/scrape and return (html, final_url, is_pdf).
 
     Raises FetchProviderError on any failure — unconfigured (no key), a
     rejected/exhausted key, a server error, or a response that didn't carry
     the html this needs. The caller (fetch_resource's cascade) falls through
     to the next provider either way.
+
+    ⚠ Firecrawl transparently scrapes PDF URLs too, converting them to HTML
+    server-side — confirmed empirically (an arXiv /pdf/ link returns
+    `metadata.contentType: "application/pdf"` alongside normal-looking
+    `data.html`). That conversion is lossy (no images at all; headings that
+    run on into the following paragraph's text) next to what this app's own
+    MinerU pipeline produces from the real bytes — and, before this cascade
+    existed, a PDF URL's content-type was exactly how fetch_resource() told
+    a PDF apart from a web page to route it there. is_pdf lets the caller
+    detect that Firecrawl already made that call for us and get the real
+    bytes directly instead of settling for this lossy conversion.
     """
     api_key = settings.firecrawl_api_key
     if not api_key:
@@ -80,8 +91,10 @@ def fetch_html(url: str) -> tuple[str, str]:
     if not html:
         raise FetchProviderError("Firecrawl response carried no html")
 
-    final_url = (data.get("metadata") or {}).get("sourceURL") or url
-    return html, final_url
+    metadata = data.get("metadata") or {}
+    final_url = metadata.get("sourceURL") or url
+    content_type = (metadata.get("contentType") or "").split(";")[0].strip().lower()
+    return html, final_url, content_type == "application/pdf"
 
 
 def is_configured() -> bool:
