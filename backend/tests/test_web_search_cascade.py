@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core import circuit_breaker
 from app.core.config import settings
 from app.search import (
     duckduckgo_client,
@@ -26,15 +27,23 @@ from app.search import (
     tavily_client,
     web,
 )
+from app.search.errors import ProviderError
 
 
 @pytest.fixture(autouse=True)
 def clean_provider_state(monkeypatch):
     """No keyed providers configured, auto mode, duckduckgo stubbed to []
     by default so it can't silently mask a gap in an individual test's
-    setup — each test opts back into whatever it needs."""
+    setup — each test opts back into whatever it needs.
+
+    ⚠ The circuit breaker keeps module-level state, so it MUST be reset
+    around every test: a test that trips a provider would otherwise have it
+    skipped in the next test, and the failure would look like a cascade bug.
+    """
+    circuit_breaker.reset()
     monkeypatch.setattr(settings, "web_search_provider", "auto")
     monkeypatch.setattr(settings, "google_api_key", "")
+    monkeypatch.setattr(settings, "google_search_cx", "")
     monkeypatch.setattr(settings, "tavily_api_key", "")
     monkeypatch.setattr(settings, "linkup_api_key", "")
     monkeypatch.setattr(settings, "exa_api_key", "")
@@ -42,10 +51,14 @@ def clean_provider_state(monkeypatch):
     monkeypatch.setattr(duckduckgo_client, "search", AsyncMock(return_value=[]))
     monkeypatch.setattr(duckduckgo_client, "search_images", AsyncMock(return_value=[]))
     yield
+    circuit_breaker.reset()
 
 
 def _configure_all(monkeypatch):
+    # Google needs BOTH to count as configured (Custom Search cannot run
+    # on the key alone) — see web._configured_names.
     monkeypatch.setattr(settings, "google_api_key", "g-key")
+    monkeypatch.setattr(settings, "google_search_cx", "g-cx")
     monkeypatch.setattr(settings, "tavily_api_key", "t-key")
     monkeypatch.setattr(settings, "linkup_api_key", "l-key")
     monkeypatch.setattr(settings, "exa_api_key", "e-key")
@@ -224,8 +237,22 @@ def test_active_provider_none_when_explicitly_disabled(monkeypatch):
 def test_configured_providers_lists_all_in_cascade_order(monkeypatch):
     monkeypatch.setattr(settings, "exa_api_key", "e-key")
     monkeypatch.setattr(settings, "google_api_key", "g-key")
+    monkeypatch.setattr(settings, "google_search_cx", "g-cx")
 
     assert web.configured_providers() == ["google", "exa", "duckduckgo"]
+
+
+def test_google_needs_both_key_and_cx_to_count_as_configured(monkeypatch):
+    """Custom Search cannot run on an API key alone — it returns 400 without
+    a Programmable Search Engine ID. Treating a key-only setup as
+    "configured" would put a provider in the cascade that can only ever
+    fail, which is exactly the dead-first-provider problem the circuit
+    breaker exists to contain."""
+    monkeypatch.setattr(settings, "google_api_key", "g-key")
+    assert "google" not in web.configured_providers()
+
+    monkeypatch.setattr(settings, "google_search_cx", "g-cx")
+    assert "google" in web.configured_providers()
 
 
 async def test_is_available_true_if_any_provider_available(monkeypatch):
@@ -255,3 +282,96 @@ async def test_exa_search_images_is_always_empty_and_falls_through():
     must behave exactly like any other provider returning [], not raise."""
     from app.search import exa_client as real_exa_client
     assert await real_exa_client.search_images("query") == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Circuit breaker: a repeatedly-failing provider stops being called, while a
+# provider that merely finds nothing keeps its place. The distinction is the
+# whole reason clients raise ProviderError instead of returning []
+# (app/search/errors.py).
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def test_repeated_provider_errors_trip_the_breaker_and_stop_the_calls(monkeypatch):
+    """The motivating case: google is first and permanently broken. After
+    FAILURE_THRESHOLD failures it must stop being called at all, so it stops
+    costing a round-trip on every later search."""
+    _configure_all(monkeypatch)
+    google_mock = AsyncMock(side_effect=ProviderError("google (429: quota exhausted)"))
+    monkeypatch.setattr(google_client, "search", google_mock)
+    monkeypatch.setattr(tavily_client, "search", AsyncMock(return_value=[_hit("t")]))
+
+    for _ in range(circuit_breaker.FAILURE_THRESHOLD):
+        assert [r["title"] for r in await web.search("query")] == ["t"]
+
+    calls_before = google_mock.await_count
+    # Breaker is now open: further searches must skip google entirely.
+    assert [r["title"] for r in await web.search("query")] == ["t"]
+    assert google_mock.await_count == calls_before, "google was called while tripped"
+    assert circuit_breaker.is_open("google") is True
+
+
+async def test_empty_results_never_trip_the_breaker(monkeypatch):
+    """A provider answering "no hits" for an obscure query is healthy.
+    Tripping it would skip a working provider on every later search."""
+    _configure_all(monkeypatch)
+    google_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(google_client, "search", google_mock)
+    monkeypatch.setattr(tavily_client, "search", AsyncMock(return_value=[_hit("t")]))
+
+    for _ in range(circuit_breaker.FAILURE_THRESHOLD + 2):
+        await web.search("query")
+
+    assert circuit_breaker.is_open("google") is False
+    assert google_mock.await_count == circuit_breaker.FAILURE_THRESHOLD + 2
+
+
+async def test_a_success_after_failures_keeps_the_provider_in_rotation(monkeypatch):
+    _configure_all(monkeypatch)
+    calls = {"n": 0}
+
+    async def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise ProviderError("google (transient 500)")
+        return [_hit("g")]
+
+    monkeypatch.setattr(google_client, "search", flaky)
+    monkeypatch.setattr(tavily_client, "search", AsyncMock(return_value=[_hit("t")]))
+
+    await web.search("query")   # fail 1 -> tavily
+    await web.search("query")   # fail 2 -> tavily
+    assert [r["title"] for r in await web.search("query")] == ["g"]  # recovers
+    assert circuit_breaker.is_open("google") is False
+
+    # The streak was reset by that success, so one more failure must not trip it.
+    calls["n"] = 0
+    await web.search("query")
+    assert circuit_breaker.is_open("google") is False
+
+
+async def test_a_pin_bypasses_the_breaker(monkeypatch):
+    """Pinning exists to watch one provider, including watching it fail —
+    the breaker must not silently skip it and return nothing instead."""
+    _configure_all(monkeypatch)
+    monkeypatch.setattr(settings, "web_search_provider", "google")
+    google_mock = AsyncMock(side_effect=ProviderError("google (429)"))
+    monkeypatch.setattr(google_client, "search", google_mock)
+
+    for _ in range(circuit_breaker.FAILURE_THRESHOLD + 2):
+        assert await web.search("query") == []
+
+    assert google_mock.await_count == circuit_breaker.FAILURE_THRESHOLD + 2
+
+
+async def test_cascade_still_answers_when_every_provider_is_tripped(monkeypatch):
+    """filter_open's safety valve, end to end: with everything tripped the
+    cascade must still try (and here, still succeed), not skip to empty."""
+    _configure_all(monkeypatch)
+    for name in ["google", "tavily", "linkup", "exa", "serpapi", "duckduckgo"]:
+        for _ in range(circuit_breaker.FAILURE_THRESHOLD):
+            circuit_breaker.record_failure(name)
+
+    monkeypatch.setattr(google_client, "search", AsyncMock(side_effect=ProviderError("still down")))
+    monkeypatch.setattr(tavily_client, "search", AsyncMock(return_value=[_hit("t")]))
+
+    assert [r["title"] for r in await web.search("query")] == ["t"]

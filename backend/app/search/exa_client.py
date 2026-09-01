@@ -13,6 +13,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.search.errors import ProviderError
 
 logger = get_logger(__name__)
 
@@ -58,8 +59,7 @@ async def search(
             response.raise_for_status()
             data = response.json()
     except Exception as e:
-        logger.error(f"Exa search failed: {e}")
-        return []
+        raise ProviderError(f"Exa search failed: {e}") from e
 
     results = []
     for item in data.get("results", [])[:limit]:

@@ -38,6 +38,7 @@ from typing import Optional
 import httpx
 
 from app.api.errors import ModelUnavailable, NoLLMConfigured
+from app.core import circuit_breaker
 from app.core.config import settings
 from app.core.logging import get_logger
 
@@ -284,6 +285,8 @@ def llm_cascade_sync(ollama_up: Optional[bool] = None) -> list[LLMTarget]:
     """
     explicit = _explicit_llm_provider()
     if explicit:
+        # A pin deliberately bypasses the circuit breaker too: pinning exists
+        # to watch one specific backend, including watching it fail.
         return [resolve_llm_sync(ollama_up=ollama_up)]
     up = ollama_reachable_sync() if ollama_up is None else ollama_up
     targets: list[LLMTarget] = []
@@ -294,7 +297,12 @@ def llm_cascade_sync(ollama_up: Optional[bool] = None) -> list[LLMTarget]:
             targets.append(_cloud_llm_target(provider))
     if not targets:
         raise NoLLMConfigured(NO_LLM_MESSAGE.format(ollama_url=settings.ollama_base_url))
-    return targets
+    # Skip backends that have failed repeatedly (app/core/circuit_breaker.py),
+    # keeping their priority intact for when they recover. filter_open returns
+    # the full list unchanged if EVERY backend is tripped — a slow answer from
+    # a struggling provider still beats refusing to try at all.
+    live = set(circuit_breaker.filter_open([t.provider for t in targets]))
+    return [t for t in targets if t.provider in live]
 
 
 async def llm_cascade(ollama_up: Optional[bool] = None) -> list[LLMTarget]:

@@ -28,6 +28,22 @@ One client per provider, each exposing the same three functions (`search`, `sear
 official DuckDuckGo search API. `exa_client.py`'s `search_images` is always `[]` (Exa is a
 document index, not a SERP); `google_client.py`'s is too (Search grounding is text-only).
 
+### `errors.py`
+
+`ProviderError` — raised by a client when it genuinely FAILED (network error, auth,
+quota exhausted, unusable response), as opposed to returning `[]` when it worked and simply
+found nothing. `web.py` treats both as "fall through to the next provider", but the circuit
+breaker must not: tripping a provider because someone searched for a nonsense string would skip
+a healthy provider on every later query.
+
+### `quota.py`
+
+Hard daily caps for metered providers, counted in Redis so they hold across both API workers and
+the Celery worker. Google's Custom Search bills past 100 queries/day, so every Google call
+reserves a slot first and the provider is skipped once the day's allowance is spent. Reserves
+*before* the call and never refunds on failure (miscounting can only ever keep us under), and
+fails closed if Redis is unreachable — an uncountable call is exactly the one that could bill.
+
 ### `ranking.py`
 
 Ranks and filters search results before they are passed to the LLM. It removes duplicate URLs,

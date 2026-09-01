@@ -18,6 +18,7 @@ from typing import Optional
 from ddgs import DDGS
 
 from app.core.logging import get_logger
+from app.search.errors import ProviderError
 
 logger = get_logger(__name__)
 
@@ -47,8 +48,7 @@ async def search(
     try:
         raw = await asyncio.to_thread(_text_sync, query, limit)
     except Exception as e:
-        logger.error(f"DuckDuckGo search failed: {e}")
-        return []
+        raise ProviderError(f"DuckDuckGo search failed: {e}") from e
 
     results = []
     for item in raw[:limit]:
@@ -67,8 +67,7 @@ async def search_images(query: str, *, limit: int = 4) -> list[dict]:
     try:
         raw = await asyncio.to_thread(_images_sync, query, limit)
     except Exception as e:
-        logger.warning(f"DuckDuckGo image search failed: {e}")
-        return []
+        raise ProviderError(f"DuckDuckGo image search failed: {e}") from e
 
     out: list[dict] = []
     for item in raw[:limit]:

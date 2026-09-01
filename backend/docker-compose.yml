@@ -86,6 +86,8 @@ services:
       # host .env unchanged; duckduckgo needs no key at all.
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_SEARCH_CX: ${GOOGLE_SEARCH_CX:-}
+      GOOGLE_SEARCH_DAILY_LIMIT: ${GOOGLE_SEARCH_DAILY_LIMIT:-100}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
       LINKUP_API_KEY: ${LINKUP_API_KEY:-}
@@ -197,6 +199,8 @@ services:
       # host .env unchanged; duckduckgo needs no key at all.
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_SEARCH_CX: ${GOOGLE_SEARCH_CX:-}
+      GOOGLE_SEARCH_DAILY_LIMIT: ${GOOGLE_SEARCH_DAILY_LIMIT:-100}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
       LINKUP_API_KEY: ${LINKUP_API_KEY:-}
