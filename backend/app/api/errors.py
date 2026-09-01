@@ -97,7 +97,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=423,
             content={
-                "detail": "The site is at capacity right now — you're in the queue.",
+                "detail": "The site is at capacity right now, you're in the queue.",
                 "code": "NOT_ADMITTED",
                 "queue_position": exc.queue_position,
             },
