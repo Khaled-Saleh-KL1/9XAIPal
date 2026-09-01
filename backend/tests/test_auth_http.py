@@ -19,11 +19,6 @@ from app.core.config import settings
 
 
 @pytest.fixture(autouse=True)
-def _invite_code(monkeypatch):
-    monkeypatch.setattr(settings, "signup_invite_code", "test-invite-code")
-
-
-@pytest.fixture(autouse=True)
 async def _fresh_redis_client():
     """app.core.redis caches one client for the process lifetime, which is
     correct for a real server (one event loop for the whole process) but not
@@ -49,16 +44,9 @@ async def client():
 
 
 @pytest.mark.asyncio
-async def test_signup_requires_correct_invite_code(client):
+async def test_signup_is_open_no_invite_code_needed(client):
     resp = await client.post("/api/v1/auth/signup", json={
         "email": "alice@example.com", "password": "correct horse battery",
-        "invite_code": "wrong-code",
-    })
-    assert resp.status_code == 403
-
-    resp = await client.post("/api/v1/auth/signup", json={
-        "email": "alice@example.com", "password": "correct horse battery",
-        "invite_code": "test-invite-code",
     })
     assert resp.status_code == 201
     assert resp.json()["email"] == "alice@example.com"
@@ -66,10 +54,25 @@ async def test_signup_requires_correct_invite_code(client):
 
 
 @pytest.mark.asyncio
+async def test_signup_duplicate_email_rejected_with_generic_message(client):
+    first = await client.post("/api/v1/auth/signup", json={
+        "email": "dupe@example.com", "password": "correct horse battery",
+    })
+    assert first.status_code == 201
+
+    second = await client.post("/api/v1/auth/signup", json={
+        "email": "dupe@example.com", "password": "another password entirely",
+    })
+    assert second.status_code == 409
+    # Wording must not confirm the email specifically exists — that's a user
+    # enumeration leak now that signup is open to the public.
+    assert "already registered" not in second.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_signup_login_me_logout_cycle(client):
     signup = await client.post("/api/v1/auth/signup", json={
         "email": "bob@example.com", "password": "correct horse battery",
-        "invite_code": "test-invite-code",
     })
     assert signup.status_code == 201
 
@@ -99,7 +102,6 @@ async def test_signup_login_me_logout_cycle(client):
 async def test_login_wrong_password_rejected(client):
     await client.post("/api/v1/auth/signup", json={
         "email": "carol@example.com", "password": "correct horse battery",
-        "invite_code": "test-invite-code",
     })
     resp = await client.post("/api/v1/auth/login", json={
         "email": "carol@example.com", "password": "wrong password",

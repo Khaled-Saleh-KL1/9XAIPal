@@ -10,7 +10,6 @@ from pydantic import BaseModel, EmailStr, Field
 class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=200)
-    invite_code: str
     display_name: Optional[str] = Field(default=None, max_length=120)
 
 

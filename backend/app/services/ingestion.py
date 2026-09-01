@@ -6,12 +6,37 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.errors import TooManyQueuedJobs
+from app.core.config import settings
 from app.database.repositories import documents as doc_repo
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import assets as asset_repo
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+async def check_queue_capacity(session: AsyncSession) -> None:
+    """Raise TooManyQueuedJobs if the ingestion queue is at its ceiling.
+
+    Celery runs this box's extraction pipeline at --concurrency=1 (see
+    docker-compose.prod.yml), so an unbounded number of accepted-but-not-yet-
+    processed jobs would just grow disk/DB rows without bound under a real
+    burst. Call this BEFORE any destructive work (writing a file, deleting a
+    paper's existing chunks for a re-ingest) — every caller does real I/O
+    right after creating the job row, so checking any later than "first
+    thing in the request" would leave a half-done upload or a wiped paper
+    behind on rejection.
+    """
+    result = await session.execute(
+        text("""
+            SELECT COUNT(*) FROM ingestion_jobs
+            WHERE status NOT IN ('complete', 'failed')
+        """)
+    )
+    count = result.scalar_one()
+    if count >= settings.max_queued_ingestion_jobs:
+        raise TooManyQueuedJobs(count, settings.max_queued_ingestion_jobs)
 
 
 async def create_ingestion_job(session: AsyncSession, document_id: UUID) -> dict:

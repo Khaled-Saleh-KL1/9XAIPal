@@ -26,7 +26,7 @@ from app.schemas.documents import (
 )
 from app.services import covers as cover_service
 from app.services import documents as doc_service
-from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
+from app.services.ingestion import check_queue_capacity, create_ingestion_job, update_job_status as update_job_status_svc
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
 from app.workers.tasks import (
     process_ingestion,
@@ -52,6 +52,11 @@ async def upload_paper(
 
     ``kind`` is ``"book"`` (chapter-by-chapter reading) or ``"paper"`` (linear).
     """
+    # First thing, before reading the upload into memory or touching disk:
+    # reject up front if the ingestion queue is already full, rather than
+    # doing all that work and creating a documents row only to fail later.
+    await check_queue_capacity(db)
+
     doc_kind = kind if kind in ("book", "paper") else "paper"
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
 
@@ -192,6 +197,10 @@ async def import_article(
     if not url:
         raise HTTPException(status_code=422, detail="A URL is required.")
 
+    # Before creating anything: reject up front if the ingestion queue is
+    # already full (see upload_paper's identical check for why "up front").
+    await check_queue_capacity(db)
+
     try:
         doc = await doc_service.create_document(
             db,
@@ -326,10 +335,11 @@ async def get_paper_progress(
     # "Extracting" / "Chunking" / "Embedding" steps while processing.
     job_status = None
     progress_fraction = None
+    queue_position = None
     try:
         job_row = await db.execute(
             text("""
-                SELECT status, progress_fraction
+                SELECT status, progress_fraction, created_at
                 FROM ingestion_jobs
                 WHERE document_id = :doc_id
                 ORDER BY created_at DESC
@@ -341,6 +351,19 @@ async def get_paper_progress(
         if job:
             job_status = job["status"]
             progress_fraction = job["progress_fraction"]
+            # Celery runs this box's pipeline at --concurrency=1, so while
+            # still 'queued' this job's actual position is just how many
+            # other still-queued jobs got there first — same table the
+            # capacity ceiling in ingestion.py::check_queue_capacity counts.
+            if job_status == "queued":
+                pos_row = await db.execute(
+                    text("""
+                        SELECT COUNT(*) FROM ingestion_jobs
+                        WHERE status = 'queued' AND created_at < :created_at
+                    """),
+                    {"created_at": job["created_at"]},
+                )
+                queue_position = pos_row.scalar_one() + 1
     except Exception:
         pass
 
@@ -351,6 +374,9 @@ async def get_paper_progress(
         # Real progress *within* job_status (e.g. pages extracted / total
         # while extracting) — None when there's nothing finer than the status.
         "progress_fraction": progress_fraction,
+        # 1-based position among still-queued jobs, only while job_status is
+        # 'queued' — None once it starts extracting (nothing left to wait on).
+        "queue_position": queue_position,
         "page_count": doc.get("page_count"),
         "error_message": doc.get("error_message"),
         "extractor": doc.get("extractor"),
@@ -690,6 +716,13 @@ async def reextract_paper(
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
+
+    # Before wiping anything: reject up front if the ingestion queue is
+    # already full. This one matters most of the three call sites — the code
+    # below deletes the paper's existing chunks/embeddings before recreating
+    # the job, so checking any later would leave a paper with nothing to
+    # read and no job queued to fix it.
+    await check_queue_capacity(db)
 
     # Mark document back to processing + clear any prior error so the UI shows
     # the processing overlay again.

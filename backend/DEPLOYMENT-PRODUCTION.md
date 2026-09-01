@@ -8,7 +8,7 @@ exists today, so the next domain migration, cert renewal question, or "why is th
 stuck" doesn't have to be re-derived from scratch.
 
 **No secrets live in this file, in code, or in CI/CD. Ever.** Every credential
-(`OLLAMA_API_KEY`, `POSTGRES_PASSWORD`, `HF_TOKEN`, `TAVILY_API_KEY`, `SIGNUP_INVITE_CODE`, …)
+(`OLLAMA_API_KEY`, `POSTGRES_PASSWORD`, `HF_TOKEN`, `TAVILY_API_KEY`, …)
 exists in exactly one place: the untracked `backend/.env` file on the server, `chmod 600`. Every
 reference below is to the variable *name*, never a value. See
 [configuration.md](../docs/03-reference/configuration.md) for the full list of names.
