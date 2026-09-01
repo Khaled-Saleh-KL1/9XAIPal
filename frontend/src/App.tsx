@@ -16,6 +16,7 @@ import { useAuth } from './contexts/AuthContext';
 const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
+import { RawArticleViewer } from './views/RawArticleViewer';
 import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
 import { IconLink } from './components/Icons';
 import { displayTitle } from './lib/titles';
@@ -459,24 +460,34 @@ export function App() {
       )}
 
       {route === 'pdf-viewer' && viewingPdf && (
-        <Suspense
-          fallback={
-            <div className="h-screen flex items-center justify-center text-[13px]" style={{ color: 'var(--muted)' }}>
-              Loading PDF viewer…
-            </div>
-          }
-        >
-          <PdfViewer
+        viewingPdf.doc_kind === 'article' ? (
+          // No react-pdf involved for a raw HTML snapshot, so this one
+          // isn't behind the same lazy Suspense boundary as PdfViewer —
+          // nothing heavy to defer loading of.
+          <RawArticleViewer
             paper={viewingPdf}
             onBack={() => { setViewingPdf(null); setRoute('library'); }}
-            onReadStructured={(p) => {
-              setActivePaper(metaToPaper(p));
-              setActivePaperId(p.id);
-              setViewingPdf(null);
-              setRoute('reading');
-            }}
           />
-        </Suspense>
+        ) : (
+          <Suspense
+            fallback={
+              <div className="h-screen flex items-center justify-center text-[13px]" style={{ color: 'var(--muted)' }}>
+                Loading PDF viewer…
+              </div>
+            }
+          >
+            <PdfViewer
+              paper={viewingPdf}
+              onBack={() => { setViewingPdf(null); setRoute('library'); }}
+              onReadStructured={(p) => {
+                setActivePaper(metaToPaper(p));
+                setActivePaperId(p.id);
+                setViewingPdf(null);
+                setRoute('reading');
+              }}
+            />
+          </Suspense>
+        )
       )}
 
       {route === 'processing' && uploadingFile && (

@@ -34,6 +34,15 @@ dependencies = [
     # sites during development, see the doc_kind='article' import pipeline.
     "trafilatura==2.2.0",
 
+    # Sanitizing raw HTML snapshots before serving them from our own origin
+    # (services/article_crawl.py) — strips <script>/event-handlers/embeds so
+    # a malicious imported page can't run JS against a logged-in session.
+    # Was already present transitively via trafilatura -> lxml, but that's
+    # not something a security-load-bearing import should depend on staying
+    # true by accident, so it's declared directly. Pinned to the version
+    # already resolved and verified 2026-09-01.
+    "lxml-html-clean==0.4.5",
+
     # Web search: the last, keyless fallback in the cascade (search/web.py,
     # search/duckduckgo_client.py). Scrapes DuckDuckGo directly — no
     # official API exists — via the actively-maintained `ddgs` package (the

@@ -32,6 +32,7 @@ GET    /papers
 GET    /papers/{paper_id}
 GET    /papers/{paper_id}/progress
 GET    /papers/{paper_id}/raw
+GET    /papers/{paper_id}/raw/{page_id}
 GET    /papers/{paper_id}/cover
 PATCH  /papers/{paper_id}
 DELETE /papers/{paper_id}
@@ -266,7 +267,9 @@ The frontend's polling endpoint during ingestion.
   "queue_position": <int|null>,
   "page_count": <int|null>,
   "error_message": <string|null>,
-  "extractor": "mineru|pymupdf_fallback|null"
+  "extractor": "mineru|pymupdf_fallback|null",
+  "raw_snapshot_status": "none|pending|complete|failed",
+  "raw_page_count": <int|null>
 }
 ```
 
@@ -274,11 +277,37 @@ The frontend's polling endpoint during ingestion.
 `--concurrency=1`, so it's a real wait, not decoration: how many other still-queued jobs got there
 first. `null` once extraction actually starts.
 
+`raw_snapshot_status`/`raw_page_count` are `article`-only (`"none"` for a `paper`/`book`) — the
+raw HTML snapshot crawl (`GET /papers/{paper_id}/raw`, above) is dispatched as its own follow-up
+task after the article itself finishes importing, so it can still be `"pending"` even once
+`status` is already `"complete"`. A `"failed"` snapshot never means the article failed to
+import — only that its raw copy didn't finish saving.
+
 ### `GET /papers/{paper_id}/raw`
 
-Streams the original uploaded PDF as `application/pdf`, with
-`Content-Disposition` honoring the original filename. Falls back from
-`assets/<id>.pdf` to `documents/<filename>` if needed.
+The raw copy of this document — what it actually branches on is `doc_kind`:
+
+- **`paper`/`book`:** streams the original uploaded PDF as `application/pdf`, with
+  `Content-Disposition` honoring the original filename. Falls back from
+  `assets/<id>.pdf` to `documents/<filename>` if needed.
+- **`article`:** a sanitized raw HTML snapshot of the imported page (see
+  [`services/article_crawl.py`](../../backend/app/services/article_crawl.py)) — served
+  as `text/html` with `Content-Security-Policy: script-src 'none'; object-src 'none'`
+  (the snapshot's `<script>` tags and event-handler attributes are already stripped at
+  crawl time; this header is defense in depth, not the only protection). One page
+  fetched, one page served directly; a "book-like" import that followed same-site links
+  serves a small server-rendered index linking to each one instead
+  (`GET /papers/{paper_id}/raw/{page_id}` per page). If no snapshot exists yet
+  (`raw_snapshot_status` is still `"pending"`, a background crawl that never blocks the
+  article's own import) a small "try again in a moment" page is returned — this endpoint
+  is meant for direct browser navigation, not JSON error handling.
+
+### `GET /papers/{paper_id}/raw/{page_id}`
+
+One specific page from a multi-page raw HTML snapshot (`article`s only). Same
+`Content-Security-Policy` as above. `404 DocumentNotFound` if `page_id` doesn't belong to
+`paper_id` — ownership-checked the same way every other resource in this app is (the
+cross-tenant-404 invariant, not a 403).
 
 ### `PATCH /papers/{paper_id}`
 

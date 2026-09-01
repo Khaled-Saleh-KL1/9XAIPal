@@ -642,7 +642,7 @@ def run_article_pipeline_sync(
     job_id: UUID,
     url: str,
     kind: Optional[str] = None,
-) -> None:
+) -> bool:
     """Fetch and extract a web article, then hand off to the same
     chunk/asset/dispatch tail the PDF pipeline uses (_finish_ingestion).
 
@@ -661,6 +661,12 @@ def run_article_pipeline_sync(
     only in the PDF branch (_adopt_pdf_from_url) — a link that turns out not
     to be a PDF becomes a normal article regardless of ``kind``, since there
     is no PDF-based pipeline to honor the hint with.
+
+    Returns True if this ended up as a real web article (doc_kind stayed
+    'article'), False if the URL turned out to be a PDF and got adopted into
+    the PDF pipeline instead — the caller (workers/tasks.py) uses this to
+    decide whether dispatching a raw-HTML snapshot crawl even makes sense;
+    a PDF already has its own real raw file, nothing to crawl.
     """
     from app.services.article_extraction import (
         extract_article_from_html,
@@ -708,7 +714,7 @@ def run_article_pipeline_sync(
             job_id=job_id,
             pdf_path=documents_dir() / f"{document_id}.pdf",
         )
-        return
+        return False
 
     try:
         # final_url is what trafilatura resolves every relative link and
@@ -754,6 +760,7 @@ def run_article_pipeline_sync(
             asset_map=article.asset_map,
             page_count=None,
         )
+        return True
 
     except Exception as e:
         _handle_ingestion_failure(session, document_id, job_id, e)

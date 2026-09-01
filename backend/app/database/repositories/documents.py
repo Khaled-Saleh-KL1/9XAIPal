@@ -71,11 +71,14 @@ async def list_documents(
     and its ``progress_fraction`` (real progress within that status, e.g.
     pages extracted / total while extracting — None when nothing finer than
     the status is available), so the library UI can render a live, honest
-    progress bar without an N+1 poll-per-card.
+    progress bar without an N+1 poll-per-card. Same reasoning for
+    ``raw_page_count`` (see raw_snapshot_status's own column comment in
+    schema.sql) — RawFilesPanel needs it per-row without an extra request.
     """
     result = await session.execute(
         text("""
-            SELECT d.*, j.status AS job_status, j.progress_fraction AS job_progress_fraction
+            SELECT d.*, j.status AS job_status, j.progress_fraction AS job_progress_fraction,
+                   COALESCE(r.raw_page_count, 0) AS raw_page_count
             FROM documents d
             LEFT JOIN LATERAL (
                 SELECT status, progress_fraction
@@ -84,6 +87,11 @@ async def list_documents(
                 ORDER BY created_at DESC
                 LIMIT 1
             ) j ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS raw_page_count
+                FROM raw_snapshot_pages
+                WHERE document_id = d.id
+            ) r ON TRUE
             WHERE d.user_id = :user_id
             ORDER BY d.created_at DESC
             LIMIT :limit OFFSET :offset

@@ -1,5 +1,6 @@
 """Paper endpoints: upload, list, detail, progress, delete."""
 
+import html
 import os
 import shutil
 import traceback
@@ -7,7 +8,7 @@ from uuid import UUID, uuid4
 
 import aiofiles
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,7 @@ from app.api.deps import get_db, get_settings, get_current_user
 from app.api.errors import DocumentNotFound
 from app.core.config import Settings
 from app.core.logging import get_logger
-from app.core.paths import documents_dir, assets_dir, extracted_dir, images_dir, ensure_storage_dirs
+from app.core.paths import documents_dir, assets_dir, extracted_dir, images_dir, raw_snapshots_dir, ensure_storage_dirs
 from app.schemas.documents import (
     DocumentResponse,
     DocumentListResponse,
@@ -259,16 +260,138 @@ async def import_article(
         ) from exc
 
 
+def _raw_html_headers() -> dict:
+    """Response headers for any raw-snapshot HTML this app serves.
+
+    Content-Security-Policy is the load-bearing one: the HTML underneath was
+    fetched from a third party (see services/article_crawl.py) and, despite
+    having its <script> tags/event-handler attributes stripped at save time,
+    this is defense in depth for that same guarantee at serve time — a
+    belt-and-suspenders pair, not a single point of failure. script-src
+    'none' means even a sanitizer bug can't turn into script execution
+    against this authenticated origin. X-Content-Type-Options is also set
+    globally (SecurityHeadersMiddleware, via setdefault), so this is
+    additive there, not a conflict.
+    """
+    return {
+        "Content-Security-Policy": "script-src 'none'; object-src 'none'",
+        "X-Content-Type-Options": "nosniff",
+    }
+
+
+def _raw_response_kind(doc_kind: str | None, pages: list, raw_snapshot_status: str | None) -> str:
+    """Pure decision behind GET /{paper_id}/raw, pulled out of the endpoint
+    so it's unit-testable without a DB or the FastAPI/ASGI stack — same
+    reasoning as _to_storage_path (notes.py) and _pdf_name_from_url
+    (pipeline_sync.py). Returns one of:
+      'pdf'         — anything that isn't doc_kind='article' (unchanged today).
+      'pending'     — an article whose crawl (services/article_crawl.py)
+                      hasn't produced a page yet, but is still running.
+      'unavailable' — an article with no pages and no crawl in flight
+                      (crawl failed before saving anything, or never ran).
+      'single'      — exactly one snapshot page: serve it directly.
+      'index'       — more than one (a "book-like" import): serve the index.
+    """
+    if doc_kind != "article":
+        return "pdf"
+    if not pages:
+        return "pending" if raw_snapshot_status == "pending" else "unavailable"
+    if len(pages) == 1:
+        return "single"
+    return "index"
+
+
+async def _raw_snapshot_index_html(doc: dict, pages: list) -> str:
+    """A small, server-authored (trusted markup, untrusted TEXT) index page
+    linking to each crawled page — used only when a "book-like" import found
+    more than one page. Keeps GET /{paper_id}/raw a single stable URL for
+    every doc_kind, so the frontend never needs doc_kind-aware branching to
+    know what to open.
+
+    Every page's `title` came from a third-party site's own <title> tag
+    (see article_crawl.py's _page_title) — html.escape() here is defense in
+    depth alongside this response's own Content-Security-Policy header
+    (_raw_html_headers): a page titled `<script>...` must not become live
+    markup in a response WE authored, even though CSP would already block
+    it from executing.
+    """
+    title = html.escape((doc.get("title") or doc.get("original_filename") or "Raw pages").strip())
+
+    def _row(p: dict) -> str:
+        link_text = html.escape((p["title"] or p["url"])[:200])
+        depth_label = "root page" if p["depth"] == 0 else f"+{p['depth']}"
+        href = f"/api/v1/papers/{doc['id']}/raw/{p['id']}"
+        return f'<li><a href="{href}">{link_text}</a> <span class="depth">({depth_label})</span></li>'
+
+    rows = "\n".join(_row(p) for p in pages)
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>{title} — raw pages</title>
+<style>
+body {{ font-family: -apple-system, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1.5rem; color: #1a1a1a; }}
+h1 {{ font-size: 1.1rem; font-weight: 600; }}
+ul {{ padding-left: 1.2rem; }}
+li {{ margin: 0.5rem 0; }}
+.depth {{ color: #888; font-size: 0.85em; }}
+</style></head>
+<body>
+<h1>{title}</h1>
+<p>{len(pages)} raw page(s) were saved when this article was imported.</p>
+<ul>{rows}</ul>
+</body></html>"""
+
+
 @router.get("/{paper_id}/raw")
 async def download_raw_paper(
     paper_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Download the original raw PDF file."""
+    """The raw copy of this document: the original PDF for a paper/book, or
+    a sanitized raw HTML snapshot for an imported article (see
+    services/article_crawl.py) — one page directly, or a small index linking
+    to each one if the import crawled more than one same-site page.
+    """
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
+
+    pages: list = []
+    if doc.get("doc_kind") == "article":
+        rows = await db.execute(
+            text(
+                "SELECT id, url, title, depth, storage_filename FROM raw_snapshot_pages "
+                "WHERE document_id = :id ORDER BY depth, created_at"
+            ),
+            {"id": paper_id},
+        )
+        pages = [dict(r) for r in rows.mappings().all()]
+
+    kind = _raw_response_kind(doc.get("doc_kind"), pages, doc.get("raw_snapshot_status"))
+
+    if kind == "pending" or kind == "unavailable":
+        # Opened directly in a browser tab, not fetched by frontend JS —
+        # a small readable message, not a bare JSON 404.
+        message = (
+            "Still saving a raw copy of this article — try again in a moment."
+            if kind == "pending"
+            else "No raw copy is available for this article."
+        )
+        return HTMLResponse(
+            f"<!DOCTYPE html><html><body style='font-family:-apple-system,sans-serif;"
+            f"max-width:32rem;margin:4rem auto;padding:0 1.5rem;color:#444'>{message}</body></html>",
+            headers=_raw_html_headers(),
+        )
+
+    if kind == "single":
+        page = pages[0]
+        html_path = raw_snapshots_dir(paper_id) / page["storage_filename"]
+        if not html_path.exists():
+            raise DocumentNotFound(str(paper_id))
+        return HTMLResponse(html_path.read_text(encoding="utf-8"), headers=_raw_html_headers())
+
+    if kind == "index":
+        index_html = await _raw_snapshot_index_html(doc, pages)
+        return HTMLResponse(index_html, headers=_raw_html_headers())
 
     raw_path = assets_dir() / f"{paper_id}.pdf"
     if not raw_path.exists():
@@ -289,6 +412,42 @@ async def download_raw_paper(
         filename=download_name,
         media_type="application/pdf",
     )
+
+
+@router.get("/{paper_id}/raw/{page_id}")
+async def get_raw_snapshot_page(
+    paper_id: UUID,
+    page_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """One specific crawled page from a multi-page raw snapshot. Ownership-
+    checked the same way every other resource in this app is (see
+    docs/02-architecture/auth.md's per-user isolation section): the parent
+    document is loaded scoped to current_user first, and the page must
+    belong to it — a page id that exists but belongs to someone else's
+    document 404s exactly like a nonexistent one, never 403.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    row = await db.execute(
+        text(
+            "SELECT storage_filename FROM raw_snapshot_pages "
+            "WHERE id = :page_id AND document_id = :document_id"
+        ),
+        {"page_id": page_id, "document_id": paper_id},
+    )
+    page = row.mappings().first()
+    if not page:
+        raise DocumentNotFound(str(paper_id))
+
+    html_path = raw_snapshots_dir(paper_id) / page["storage_filename"]
+    if not html_path.exists():
+        raise DocumentNotFound(str(paper_id))
+
+    return HTMLResponse(html_path.read_text(encoding="utf-8"), headers=_raw_html_headers())
 
 
 @router.get("", response_model=DocumentListResponse)
@@ -367,6 +526,14 @@ async def get_paper_progress(
     except Exception:
         pass
 
+    raw_page_count = None
+    if doc.get("doc_kind") == "article":
+        count_row = await db.execute(
+            text("SELECT COUNT(*) FROM raw_snapshot_pages WHERE document_id = :id"),
+            {"id": paper_id},
+        )
+        raw_page_count = count_row.scalar_one()
+
     return {
         "paper_id": str(paper_id),
         "status": doc["status"],
@@ -380,6 +547,12 @@ async def get_paper_progress(
         "page_count": doc.get("page_count"),
         "error_message": doc.get("error_message"),
         "extractor": doc.get("extractor"),
+        # Raw-HTML snapshot crawl (see services/article_crawl.py) — 'none'
+        # for anything that isn't doc_kind='article'. Independent of the
+        # fields above: a 'failed' or still-'pending' snapshot never means
+        # the article itself failed to import.
+        "raw_snapshot_status": doc.get("raw_snapshot_status"),
+        "raw_page_count": raw_page_count,
     }
 
 

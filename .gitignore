@@ -42,6 +42,7 @@ backend/app/storage/logs/*
 backend/app/storage/assets/*
 # Derived cache: every file regenerates from the PDF in assets/.
 backend/app/storage/covers/*
+backend/app/storage/raw_snapshots/*
 
 # Large media (keep demos on YouTube instead)
 *.mp4

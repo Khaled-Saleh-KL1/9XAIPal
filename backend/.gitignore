@@ -4,6 +4,7 @@ app/storage/images/*
 app/storage/logs/*
 app/storage/assets/*
 app/storage/covers/*
+app/storage/raw_snapshots/*
 app/storage/*.sqlite3
 app/storage/*.sqlite3-*
 __pycache__/

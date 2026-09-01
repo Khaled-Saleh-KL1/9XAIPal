@@ -54,6 +54,7 @@ documents (1) ─────< (N) chunks ─────────< (1) chunk
             conversation_turns ── parent_turn_id → conversation_turns.id (sub-threads)
 
 documents (1) ─────< (N) ingestion_jobs
+documents (1) ─────< (N) raw_snapshot_pages
 documents (1) ─────< (N) section_summaries
 documents (1) ─────< (N) figure_descriptions
 documents (1) ─────< (N) paper_notes
@@ -89,6 +90,7 @@ erDiagram
     users               |o--o{ conversation_turns : "cascade, nullable FK"
     documents          ||--o{ chunks             : "cascade"
     documents          ||--o{ ingestion_jobs     : "cascade"
+    documents          ||--o{ raw_snapshot_pages : "cascade"
     documents          ||--o{ section_summaries  : "cascade"
     documents          ||--o{ figure_descriptions: "cascade"
     documents          ||--o{ paper_notes        : "cascade"
@@ -161,6 +163,7 @@ The library row.
 | `doc_kind`                  | `TEXT`      | `paper` (default) or `book`. Chosen at upload; decides which reader opens it and which ingest chain it takes. |
 | `embedding_mode`            | `TEXT`      | `embedded` (default) or `skipped`. Decided once at ingestion, never re-derived. |
 | `embedding_skip_reason`     | `TEXT`      | Why, for audit: `fast_ingest`, `fits(N<=M)`, `too_large(...)`, `feature_disabled`. |
+| `raw_snapshot_status`       | `TEXT`      | `none` (default; anything that isn't `doc_kind='article'`) / `pending` / `complete` / `failed`. See `raw_snapshot_pages` below — never affects `status` above. |
 | `created_at`                | `TIMESTAMPTZ` | `DEFAULT NOW()`.                                    |
 | `updated_at`                | `TIMESTAMPTZ` | Bumped by `update_document_status`.                 |
 
@@ -274,6 +277,26 @@ One row per upload; tracks the pipeline state machine.
 | `created_at`    | `TIMESTAMPTZ` |                                                        |
 
 Index: `idx_ingestion_jobs_status(status)`.
+
+### `raw_snapshot_pages`
+
+Sanitized raw HTML for a `doc_kind='article'` import — the root page fetched, plus a bounded
+set of same-site linked pages found by following it (see
+[`services/article_crawl.py`](../../backend/app/services/article_crawl.py)). Empty for anything
+that isn't an article.
+
+| Column              | Type          | Notes                                                    |
+| ------------------- | ------------- | --------------------------------------------------------- |
+| `id`                | `UUID`        | PK.                                                       |
+| `document_id`       | `UUID`        | FK → `documents.id`, cascade.                             |
+| `url`               | `TEXT`        | The page's own URL (after redirects).                     |
+| `title`             | `TEXT`        | That page's `<title>`, or the URL if it had none.         |
+| `depth`             | `INT`         | `0` = the originally-imported URL; `>0` = hops via same-site links, capped at `MAX_CRAWL_DEPTH`. |
+| `storage_filename`  | `TEXT`        | Filename under `raw_snapshots_dir(document_id)` — the sanitized HTML lives on disk, not in this table. |
+| `byte_size`         | `INT`         |                                                            |
+| `created_at`        | `TIMESTAMPTZ` |                                                            |
+
+Index: `idx_raw_snapshot_pages_document(document_id, depth, created_at)`.
 
 ### `section_summaries`
 
@@ -539,6 +562,18 @@ queued → extracting → chunking ─────┴─────────
 
 any state ─────────────────────────────────────────────────────────────► failed
 ```
+
+**`documents.raw_snapshot_status`** (`doc_kind='article'` only — `none` for everything else):
+
+```
+none ──► pending ──► complete
+              └────► failed
+```
+
+Set to `pending` when `crawl_raw_snapshot` (a separate Celery task, dispatched only after the
+article itself finishes importing) starts, `complete`/`failed` when it ends. Entirely independent
+of `documents.status`/`ingestion_jobs.status` above — this never gates whether the article can be
+read or chatted with.
 
 ⚠ `chunking → complete` is the fast path, and it is the one place other than
 `generate_section_summaries` that sets completion. That is safe only because nothing is

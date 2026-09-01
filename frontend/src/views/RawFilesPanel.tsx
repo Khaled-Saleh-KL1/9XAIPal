@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { PaperMeta } from '../api';
-import { getRawPdfUrl } from '../api';
+import { getRawFileUrl } from '../api';
 import { IconSearch, IconDoc } from '../components/Icons';
 import { displayTitle } from '../lib/titles';
 
@@ -14,9 +14,10 @@ interface Props {
 export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
   const [query, setQuery] = useState('');
 
-  // An imported article has no raw PDF behind it (see documents.source_url),
-  // so there is nothing this panel could open for one, and it never belongs here.
-  const rawPapers = useMemo(() => papers.filter((p) => p.doc_kind !== 'article'), [papers]);
+  // Every document has a raw copy now: the original PDF for a paper/book,
+  // or a sanitized raw HTML snapshot for an imported article (see backend
+  // services/article_crawl.py) — nothing left to exclude.
+  const rawPapers = papers;
 
   const filtered = useMemo(() => {
     if (!query) return rawPapers;
@@ -132,9 +133,11 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
 }
 
 function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }) {
+  const isArticle = paper.doc_kind === 'article';
   const progress = paper.status === 'complete' ? 1 : paper.status === 'processing' ? 0.5 : 0;
   const added = new Date(paper.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const sizeMB = paper.file_size_bytes ? (paper.file_size_bytes / (1024 * 1024)).toFixed(1) : '?';
+  const rawPages = paper.raw_page_count ?? 0;
 
   return (
     <div
@@ -142,12 +145,17 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
       style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
     >
       <div className="flex gap-3">
-        {/* PDF icon */}
+        {/* File-type icon */}
         <div
           className="w-10 h-12 rounded flex items-center justify-center shrink-0"
           style={{ background: 'var(--bg)', border: '1px solid var(--border)' }}
         >
-          <span className="text-[9px] font-mono font-bold" style={{ color: '#c0392b' }}>PDF</span>
+          <span
+            className="text-[9px] font-mono font-bold"
+            style={{ color: isArticle ? '#2980b9' : '#c0392b' }}
+          >
+            {isArticle ? 'HTML' : 'PDF'}
+          </span>
         </div>
 
         <div className="flex-1 min-w-0">
@@ -170,13 +178,25 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
             </div>
           )}
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
-              {sizeMB} MB
-            </span>
-            <span className="text-[11px]" style={{ color: 'var(--muted)' }}>·</span>
-            <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
-              {paper.page_count || '?'}p
-            </span>
+            {isArticle ? (
+              // Snapshot page count instead of file size/PDF page count —
+              // those don't apply to an imported web page (see
+              // services/article_crawl.py). A "book-like" import that
+              // followed same-site links shows how many pages it found.
+              <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
+                {rawPages} raw page{rawPages === 1 ? '' : 's'}
+              </span>
+            ) : (
+              <>
+                <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
+                  {sizeMB} MB
+                </span>
+                <span className="text-[11px]" style={{ color: 'var(--muted)' }}>·</span>
+                <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
+                  {paper.page_count || '?'}p
+                </span>
+              </>
+            )}
             <span className="text-[11px]" style={{ color: 'var(--muted)' }}>·</span>
             <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
               {added}
@@ -219,10 +239,17 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
               <span>👁</span> Open
             </button>
             <a
-              href={getRawPdfUrl(paper.id)}
-              // Just a hint: the server has the last word via its own
-              // Content-Disposition header, which now agrees with this.
-              download={paper.title?.trim() ? `${paper.title.trim()}.pdf` : paper.original_filename}
+              href={getRawFileUrl(paper.id)}
+              // Just a hint: for a PDF, the server has the last word via its
+              // own Content-Disposition header, which agrees with this. An
+              // article's raw snapshot has no such header (it's served as
+              // an ordinary HTMLResponse so "Open" can view it inline too),
+              // so this attribute is what actually triggers a save for it.
+              download={
+                isArticle
+                  ? `${(paper.title?.trim() || paper.original_filename).replace(/\.html?$/i, '')}.html`
+                  : paper.title?.trim() ? `${paper.title.trim()}.pdf` : paper.original_filename
+              }
               className="text-[11.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5 no-underline"
               style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
             >

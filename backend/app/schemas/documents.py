@@ -31,6 +31,10 @@ class DocumentResponse(BaseModel):
     # Real progress *within* job_status (e.g. pages extracted / total while
     # extracting). None when there's nothing finer-grained than the status.
     job_progress_fraction: Optional[float] = None
+    # Raw HTML snapshot crawl for a doc_kind='article' import (see
+    # services/article_crawl.py). 'none' for anything that isn't an article.
+    raw_snapshot_status: Optional[str] = None
+    raw_page_count: Optional[int] = None
 
 
 class DocumentListResponse(BaseModel):
