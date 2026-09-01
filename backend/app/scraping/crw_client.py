@@ -29,11 +29,16 @@ _TIMEOUT = 75.0
 _EXHAUSTED_STATUSES = {401, 402, 429}
 
 
-def fetch_html(url: str) -> tuple[str, str]:
-    """Fetch `url` via CRW's /v1/scrape and return (html, final_url).
+def fetch_html(url: str) -> tuple[str, str, bool]:
+    """Fetch `url` via CRW's /v1/scrape and return (html, final_url, is_pdf).
 
     Raises FetchProviderError on any failure. See firecrawl_client.fetch_html
-    for the shared reasoning — this is CRW's counterpart, same contract.
+    for the shared reasoning — this is CRW's counterpart, same contract,
+    including the PDF-detection metadata field (unverified against a live
+    CRW response — its OpenAPI spec documents the same `metadata` shape as
+    Firecrawl's, which is where contentType was confirmed; if CRW's actual
+    field ever differs, this just never sets is_pdf and behaves exactly as
+    it did before this existed).
     """
     api_key = settings.crw_api_key
     if not api_key:
@@ -68,8 +73,10 @@ def fetch_html(url: str) -> tuple[str, str]:
     if not html:
         raise FetchProviderError("CRW response carried no html")
 
-    final_url = (data.get("metadata") or {}).get("sourceURL") or url
-    return html, final_url
+    metadata = data.get("metadata") or {}
+    final_url = metadata.get("sourceURL") or url
+    content_type = (metadata.get("contentType") or "").split(";")[0].strip().lower()
+    return html, final_url, content_type == "application/pdf"
 
 
 def is_configured() -> bool:

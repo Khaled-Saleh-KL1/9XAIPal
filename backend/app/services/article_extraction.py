@@ -324,7 +324,7 @@ def fetch_resource(url: str) -> FetchedResource:
             continue
         if not circuit_breaker.is_open(name):
             try:
-                html, final_url = client.fetch_html(url)
+                html, final_url, is_pdf_source = client.fetch_html(url)
             except FetchProviderError as e:
                 logger.warning(f"{name} fetch failed, falling through: {e}")
                 circuit_breaker.record_failure(name)
@@ -336,6 +336,22 @@ def fetch_resource(url: str) -> FetchedResource:
                 last_error = e
                 continue
             circuit_breaker.record_success(name)
+            if is_pdf_source:
+                # `name` correctly reached the URL and told us the truth —
+                # this isn't a provider failure, so its circuit breaker
+                # keeps the success recorded above. Its HTML is a lossy
+                # server-side PDF-to-HTML conversion (no images; headings
+                # fused into the following paragraph — see
+                # firecrawl_client.fetch_html's docstring), so it's
+                # discarded in favor of the real bytes, fetched directly:
+                # a PDF is a static file, essentially never behind the kind
+                # of bot/JS challenge this cascade exists for, so the free
+                # direct fetch reaching it is the common case, not the
+                # exception. That gets is_pdf right and this routes into
+                # the real MinerU pipeline exactly like a PDF link found
+                # any other way.
+                logger.info(f"{name} resolved {url} to a PDF; fetching it directly instead of using its HTML conversion")
+                return _fetch_direct(final_url)
             return FetchedResource(
                 content=html.encode("utf-8"), content_type="text/html", final_url=final_url,
             )
