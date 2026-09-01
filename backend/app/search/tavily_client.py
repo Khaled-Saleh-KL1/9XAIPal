@@ -18,6 +18,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.search.errors import ProviderError
 
 logger = get_logger(__name__)
 
@@ -37,7 +38,9 @@ def _headers() -> dict:
 
 
 async def _post(payload: dict) -> Optional[dict]:
-    """One Tavily call. Returns None on any failure — callers degrade to []."""
+    """One Tavily call. Returns None only when no key is configured; raises
+    ProviderError on a real failure so the cascade's circuit breaker can tell
+    "broken" apart from "no hits" (see app/search/errors.py)."""
     if not settings.tavily_api_key:
         logger.warning("Tavily search requested but TAVILY_API_KEY is empty")
         return None
@@ -48,13 +51,13 @@ async def _post(payload: dict) -> Optional[dict]:
             return response.json()
     except httpx.HTTPStatusError as e:
         # 401 = bad key, 429 = quota. Both are operator problems, not transient,
-        # so they are worth naming rather than folding into a generic warning.
+        # so they are worth naming rather than folding into a generic message.
         body = (e.response.text or "")[:200]
-        logger.error("Tavily search failed: HTTP %s %s", e.response.status_code, body)
-        return None
+        raise ProviderError(
+            f"Tavily search failed: HTTP {e.response.status_code} {body}"
+        ) from e
     except Exception as e:
-        logger.error("Tavily search failed: %s", e)
-        return None
+        raise ProviderError(f"Tavily search failed: {e}") from e
 
 
 async def search(

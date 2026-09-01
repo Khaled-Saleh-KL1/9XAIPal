@@ -12,6 +12,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.search.errors import ProviderError
 
 logger = get_logger(__name__)
 
@@ -27,6 +28,9 @@ def _headers() -> dict:
 
 
 async def _post(payload: dict) -> Optional[dict]:
+    """Returns None only when no key is configured; raises ProviderError on a
+    real failure so the cascade's circuit breaker can tell "broken" apart from
+    "no hits" (see app/search/errors.py)."""
     if not settings.linkup_api_key:
         return None
     try:
@@ -35,8 +39,7 @@ async def _post(payload: dict) -> Optional[dict]:
             response.raise_for_status()
             return response.json()
     except Exception as e:
-        logger.error(f"Linkup search failed: {e}")
-        return None
+        raise ProviderError(f"Linkup search failed: {e}") from e
 
 
 async def search(

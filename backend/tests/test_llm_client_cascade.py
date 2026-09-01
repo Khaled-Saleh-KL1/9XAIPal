@@ -14,8 +14,19 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api.errors import ModelUnavailable
+from app.core import circuit_breaker
 from app.llm import client, ollama_client, resolver
 from app.llm.resolver import LLMTarget
+
+
+@pytest.fixture(autouse=True)
+def clean_breaker():
+    """The circuit breaker keeps module-level state — reset it around every
+    test or a tripped provider leaks into the next one and the failure looks
+    like a cascade bug."""
+    circuit_breaker.reset()
+    yield
+    circuit_breaker.reset()
 
 
 def _target(provider: str) -> LLMTarget:

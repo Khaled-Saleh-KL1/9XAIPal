@@ -13,11 +13,32 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.search.errors import ProviderError
 
 logger = get_logger(__name__)
 
 _URL = "https://serpapi.com/search.json"
 _TIMEOUT = 20.0
+
+# SerpApi answers HTTP 200 with an ``error`` field for BOTH a real failure
+# (bad key, quota exhausted) and a perfectly successful search that simply
+# matched nothing ("Google hasn't returned any results for this query.").
+# Only the first kind is a provider failure — treating "no hits on an obscure
+# query" as one would trip the circuit breaker on a healthy provider and skip
+# it for every later search.
+_EMPTY_RESULT_MARKERS = (
+    "hasn't returned any results",
+    "has not returned any results",
+)
+
+
+def _raise_unless_empty_results(error: str, label: str) -> None:
+    """Raise ProviderError unless ``error`` just means "no matches"."""
+    lowered = str(error).lower()
+    if any(marker in lowered for marker in _EMPTY_RESULT_MARKERS):
+        logger.info(f"{label}: no results for this query")
+        return
+    raise ProviderError(f"{label} failed: {error}")
 
 
 async def search(
@@ -42,11 +63,10 @@ async def search(
             response.raise_for_status()
             data = response.json()
     except Exception as e:
-        logger.error(f"SerpApi search failed: {e}")
-        return []
+        raise ProviderError(f"SerpApi search failed: {e}") from e
 
     if data.get("error"):
-        logger.error(f"SerpApi search failed: {data['error']}")
+        _raise_unless_empty_results(data["error"], "SerpApi search")
         return []
 
     results = []
@@ -75,11 +95,10 @@ async def search_images(query: str, *, limit: int = 4) -> list[dict]:
             response.raise_for_status()
             data = response.json()
     except Exception as e:
-        logger.warning(f"SerpApi image search failed: {e}")
-        return []
+        raise ProviderError(f"SerpApi image search failed: {e}") from e
 
     if data.get("error"):
-        logger.warning(f"SerpApi image search failed: {data['error']}")
+        _raise_unless_empty_results(data["error"], "SerpApi image search")
         return []
 
     out: list[dict] = []

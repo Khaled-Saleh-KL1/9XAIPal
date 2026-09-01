@@ -7,6 +7,7 @@ whether Ollama is actually running on the machine.
 import pytest
 
 from app.api.errors import ModelUnavailable, NoLLMConfigured
+from app.core import circuit_breaker
 from app.core.config import settings
 from app.llm import resolver
 
@@ -15,6 +16,7 @@ from app.llm import resolver
 def clean_resolver_state(monkeypatch):
     """Blank keys, auto mode, fresh caches — each test opts into its setup."""
     resolver.reset_resolution_cache()
+    circuit_breaker.reset()
     monkeypatch.setattr(settings, "llm_provider", "auto")
     monkeypatch.setattr(settings, "embedding_provider", "auto")
     monkeypatch.setattr(settings, "llm_api_key", "")
@@ -26,6 +28,7 @@ def clean_resolver_state(monkeypatch):
         monkeypatch.setattr(settings, f"{provider}_api_key", "")
     yield
     resolver.reset_resolution_cache()
+    circuit_breaker.reset()
 
 
 def test_auto_uses_ollama_when_reachable():

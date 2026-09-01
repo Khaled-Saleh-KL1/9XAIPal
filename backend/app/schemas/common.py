@@ -28,4 +28,10 @@ class HealthResponse(BaseModel):
     # answer any given query — see app.search.web.active_provider).
     web_search: Optional[str] = None
     web_search_provider: Optional[str] = None
+    # Providers (search or LLM) currently being skipped for repeated
+    # failures, mapped to their consecutive-failure count. Absent when
+    # everything is healthy — see app/core/circuit_breaker.py. Without this
+    # a dead key is invisible: the cascade routes around it and the app
+    # looks completely fine.
+    tripped_providers: Optional[dict[str, int]] = None
 

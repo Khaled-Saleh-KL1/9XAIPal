@@ -301,12 +301,23 @@ class Settings(BaseSettings):
     # receives paper text, chunks, or chat history — only the query itself.
     web_search_provider: str = "auto"
 
-    # Google — Gemini's built-in Search-grounding tool. Not the older Custom
-    # Search JSON API (that one rejects plain API-key auth outright). A
-    # generateContent call with `tools: [{"google_search": {}}]`; sources come
-    # back as groundingChunks, not a SERP. First in the cascade: it's Google's
-    # own index, and grounding responses (unlike a raw SERP) are pre-summarized.
+    # Google — Custom Search JSON API. Needs THREE things, two of them
+    # outside this repo: this key (the Cloud "AIzaSy..." form), the Custom
+    # Search API enabled on that key's Cloud project, and a Programmable
+    # Search Engine ID below. See app/search/google_client.py.
     google_api_key: str = ""
+    # Programmable Search Engine ID from programmablesearchengine.google.com,
+    # configured to search the entire web. Without it the API returns 400 —
+    # there is no "just search Google" mode.
+    google_search_cx: str = ""
+    # ⚠ HARD daily cap on Google search requests, enforced in code before
+    # each call (app/search/quota.py), counted in Redis so it holds across
+    # the API's workers AND the Celery worker. Custom Search bills beyond
+    # 100/day, so this defaults to exactly the free allowance and the
+    # provider is skipped once it's spent. Text and image searches share it,
+    # because Google counts them together. Set to 0 to disable Google
+    # entirely without unsetting the key.
+    google_search_daily_limit: int = 100
 
     # Tavily (https://tavily.com) — search built for agents: ranked, already
     # extracted page content instead of a SERP that still needs scraping.

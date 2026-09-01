@@ -3,7 +3,10 @@
 Every caller that wants a web result imports from here, never from a
 provider module directly. Six providers exist, tried in this fixed order:
 
-    google      — Gemini's Search-grounding tool. Google's own index.
+    google      — Custom Search JSON API: a real Google SERP, text and
+                  images. Needs a key AND a Programmable Search Engine ID,
+                  and is capped at a hard 100 requests/day because Google
+                  bills past that (app/search/quota.py).
     tavily      — LLM-shaped extracts, one HTTPS call. The long-time default.
     linkup      — real page content per result, plus image search.
     exa         — neural/semantic search, strong on academic sources.
@@ -13,6 +16,13 @@ provider module directly. Six providers exist, tried in this fixed order:
                   for lack of credentials. Last, by design — it scrapes an
                   undocumented endpoint (no official DDG search API), so
                   it's also the least reliable of the six.
+
+Providers that fail repeatedly are skipped for a cooldown by
+app/core/circuit_breaker.py — their PRIORITY never changes, so one that
+recovers is picked up again automatically. This is what keeps a
+permanently-dead provider (a revoked key, an exhausted quota) from costing
+a network round-trip and an ERROR log on every single request while it
+still sits first in the configured order.
 
 "auto" (the default) tries each configured provider in order and falls
 through to the next the moment one errors OR returns zero results — a
@@ -37,8 +47,10 @@ provider's internal ranking blind.
 
 from typing import Optional
 
+from app.core import circuit_breaker
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.search.errors import ProviderError
 from app.search import (
     duckduckgo_client,
     exa_client,
@@ -71,7 +83,9 @@ def _configured_names() -> list[str]:
     duckduckgo needs no credentials, so it's always in this list.
     """
     checks = {
-        "google": bool(settings.google_api_key),
+        # Google needs BOTH a key and a Programmable Search Engine ID —
+        # Custom Search cannot run on the key alone (see google_client.py).
+        "google": bool(settings.google_api_key and settings.google_search_cx),
         "tavily": bool(settings.tavily_api_key),
         "linkup": bool(settings.linkup_api_key),
         "exa": bool(settings.exa_api_key),
@@ -82,12 +96,20 @@ def _configured_names() -> list[str]:
 
 
 def _cascade() -> list[tuple[str, object]]:
-    """The provider list to actually try for this call, honoring a pin."""
+    """The provider list to actually try for this call, honoring a pin.
+
+    Under "auto", providers whose circuit breaker is open (repeatedly failing
+    — see app/core/circuit_breaker.py) are skipped so a known-dead provider
+    stops costing a round-trip on every request. Their PRIORITY is unchanged:
+    the moment one recovers it goes back to being tried in its configured
+    position. A pin deliberately bypasses the breaker — pinning exists to
+    watch one specific provider, including watching it fail.
+    """
     pinned = (settings.web_search_provider or "auto").strip().lower()
     if pinned == _NONE:
         return []
     if pinned == "auto":
-        names = set(_configured_names())
+        names = set(circuit_breaker.filter_open(_configured_names()))
         return [(name, client) for name, client in _PROVIDERS if name in names]
     # Pinned to one specific provider — no fallback, matches the pre-cascade
     # behavior for debugging a single provider in isolation.
@@ -133,24 +155,49 @@ async def search(
     for name, client in _cascade():
         try:
             results = await client.search(query, categories=categories, limit=limit)
+        except ProviderError as e:
+            logger.warning(f"{name} search failed, falling through: {e}")
+            circuit_breaker.record_failure(name)
+            continue
         except Exception as e:
-            logger.warning(f"{name} search raised, falling through: {e}")
+            # A bug in a client, not a provider failure it declared. Still
+            # counted: from here it is indistinguishable from being broken.
+            logger.exception(f"{name} search raised unexpectedly, falling through: {e}")
+            circuit_breaker.record_failure(name)
             continue
         if results:
+            circuit_breaker.record_success(name)
             return results
+        # Empty means the provider worked and found nothing (clients raise
+        # ProviderError for real failures). Fall through to try a provider
+        # with a different index, but do NOT penalize this one — tripping a
+        # healthy provider over an obscure query would skip it for every
+        # later search.
         logger.info(f"{name} returned no results, falling through")
     return []
 
 
 async def search_images(query: str, *, limit: int = 4) -> list[dict]:
-    """Image results as ``{img_url, thumbnail, title, source_url, source_engine}``."""
+    """Image results as ``{img_url, thumbnail, title, source_url, source_engine}``.
+
+    ⚠ google and exa always return ``[]`` here by design (neither has an
+    image endpoint — see their clients). That is an empty result, not a
+    failure, so it never counts against them in the circuit breaker: a
+    provider skipped for images stays first in line for text.
+    """
     for name, client in _cascade():
         try:
             results = await client.search_images(query, limit=limit)
+        except ProviderError as e:
+            logger.warning(f"{name} image search failed, falling through: {e}")
+            circuit_breaker.record_failure(name)
+            continue
         except Exception as e:
-            logger.warning(f"{name} image search raised, falling through: {e}")
+            logger.exception(f"{name} image search raised unexpectedly, falling through: {e}")
+            circuit_breaker.record_failure(name)
             continue
         if results:
+            circuit_breaker.record_success(name)
             return results
     return []
 

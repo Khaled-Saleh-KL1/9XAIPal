@@ -39,6 +39,7 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from app.api.errors import ModelUnavailable
+from app.core import circuit_breaker
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.llm import ollama_client, resolver
@@ -202,13 +203,17 @@ async def chat(
     for target in targets:
         resolved = model or target.model_for_role(role)
         try:
-            return await _chat_once(
+            result = await _chat_once(
                 target, messages, resolved=resolved, temperature=temperature,
                 num_predict=num_predict, keep_alive=keep_alive,
             )
         except ModelUnavailable as e:
             logger.warning(f"{target.provider} chat failed, falling through: {e}")
+            circuit_breaker.record_failure(target.provider)
             last_error = e
+            continue
+        circuit_breaker.record_success(target.provider)
+        return result
     raise last_error or ModelUnavailable("no LLM provider configured")
 
 
@@ -310,8 +315,10 @@ async def stream_chat(
             ):
                 yielded_any = True
                 yield event
+            circuit_breaker.record_success(target.provider)
             return
         except ModelUnavailable as e:
+            circuit_breaker.record_failure(target.provider)
             if yielded_any:
                 raise
             logger.warning(f"{target.provider} stream failed before any output, falling through: {e}")
@@ -407,10 +414,14 @@ def chat_sync(
     for target in targets:
         resolved = model or target.model_for_role(role)
         try:
-            return _chat_sync_once(
+            result = _chat_sync_once(
                 target, messages, resolved=resolved, temperature=temperature, images=images,
             )
         except ModelUnavailable as e:
             logger.warning(f"[sync] {target.provider} chat failed, falling through: {e}")
+            circuit_breaker.record_failure(target.provider)
             last_error = e
+            continue
+        circuit_breaker.record_success(target.provider)
+        return result
     raise last_error or ModelUnavailable("no LLM provider configured")

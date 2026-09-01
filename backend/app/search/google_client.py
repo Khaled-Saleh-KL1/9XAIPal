@@ -1,23 +1,31 @@
-"""Google web search client — Gemini's built-in Search-grounding tool.
+"""Google web search client — Custom Search JSON API.
 
-⚠ Not the Custom Search JSON API. That one was tried first and rejected the
-key outright: "API keys are not supported by this API. Expected OAuth2
-access token." (Custom Search wants an OAuth principal or a different,
-older key style, and additionally needs a Programmable Search Engine `cx`
-ID this app has none of.) Search grounding is Google's current API-key-auth
-web-search surface: a normal ``generateContent`` call with
-``tools: [{"google_search": {}}]`` makes the model run a live Google search
-and ground its answer in the results, returned as ``groundingMetadata``
-rather than a plain results list.
+⚠ This replaced an earlier attempt that used Gemini's Search-grounding tool
+(a `generateContent` call with `tools: [{"google_search": {}}]`). That was a
+dead end here: the key available for it was free-tier, and free-tier Gemini
+is unavailable in the EEA, so every grounding call from this EU-hosted
+server returned 429 RESOURCE_EXHAUSTED — 100% failure, forever, with no
+code-side fix. Custom Search is the right surface anyway: it returns an
+actual SERP (not a model's grounded prose), and it has a real image mode,
+which grounding never had.
 
-⚠ **This shape was never exercised end-to-end.** The key itself is
-confirmed valid (auth succeeds — errors are 429 RESOURCE_EXHAUSTED, which
-only fires post-auth, never 401/403), but every live grounding call made
-while building this hit that same quota wall, so the parsing below is
-written from Google's documented response shape, not a captured real
-response. First in the cascade, but the moment quota/billing allows a real
-call through, watch its logs for a parse coming back empty when it
-shouldn't.
+**Setup is three things, and two of them are outside this repo:**
+
+1. ``GOOGLE_API_KEY`` — a Google Cloud API key (the ``AIzaSy...`` form).
+2. The **Custom Search API must be enabled** on that key's Cloud project,
+   or every call returns ``403 PERMISSION_DENIED: This project does not
+   have the access to Custom Search JSON API``.
+3. ``GOOGLE_SEARCH_CX`` — a Programmable Search Engine ID from
+   <https://programmablesearchengine.google.com/>, configured to search the
+   entire web. Without it the API returns ``400 INVALID_ARGUMENT``; there
+   is no "just search Google" mode.
+
+⚠ **This provider is metered and this module refuses to exceed the free
+tier.** Custom Search allows 100 queries/day free and then bills. Every
+call reserves a slot through :mod:`app.search.quota` first, and is skipped
+entirely once ``GOOGLE_SEARCH_DAILY_LIMIT`` (default 100) is used up for the
+day, or if the counter can't be read at all. Text and image searches draw
+on the SAME quota — Google counts them together, so this does too.
 """
 
 from typing import Optional
@@ -26,32 +34,54 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.search.errors import ProviderError
+from app.search import quota
 
 logger = get_logger(__name__)
 
-# The model Google's own API pointed at when gemini-2.5-flash came back
-# "no longer available to new users" during testing (2026-08-31).
-_MODEL = "gemini-3.6-flash"
-_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{_MODEL}:generateContent"
-_TIMEOUT = 20.0
+_URL = "https://www.googleapis.com/customsearch/v1"
+_TIMEOUT = 15.0
+
+# Custom Search caps `num` at 10 per request and bills per request, so there
+# is never a reason to ask for more than one page.
+_MAX_PER_REQUEST = 10
+
+_QUOTA_PROVIDER = "google"
 
 
-def _snippets_by_chunk(grounding_supports: list[dict]) -> dict[int, list[str]]:
-    """Map each groundingChunk index to the answer text segments that cite it.
+def _configured() -> bool:
+    return bool(settings.google_api_key and settings.google_search_cx)
 
-    Grounding gives no meta-description snippet the way a SERP would — the
-    closest real substitute is the model's own generated text for whichever
-    segments it grounded on that chunk, which is arguably more useful (it's
-    already a read-and-summarized excerpt, not a raw page fragment).
+
+async def _get(params: dict, *, label: str) -> Optional[dict]:
+    """One Custom Search call, quota-guarded.
+
+    Returns None when the provider is unconfigured or its daily free quota
+    is spent — both are "skip me", not failures, so they must not count
+    against the circuit breaker (a used-up quota is the provider working
+    exactly as intended).
     """
-    by_chunk: dict[int, list[str]] = {}
-    for support in grounding_supports:
-        text = ((support.get("segment") or {}).get("text") or "").strip()
-        if not text:
-            continue
-        for idx in support.get("groundingChunkIndices") or []:
-            by_chunk.setdefault(idx, []).append(text)
-    return by_chunk
+    if not _configured():
+        return None
+    if not await quota.try_consume(_QUOTA_PROVIDER, settings.google_search_daily_limit):
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.get(_URL, params={
+                "key": settings.google_api_key,
+                "cx": settings.google_search_cx,
+                **params,
+            })
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        body = (e.response.text or "")[:300]
+        raise ProviderError(
+            f"{label} failed: HTTP {e.response.status_code} {body}"
+        ) from e
+    except Exception as e:
+        raise ProviderError(f"{label} failed: {e}") from e
 
 
 async def search(
@@ -60,71 +90,71 @@ async def search(
     categories: Optional[list[str]] = None,
     limit: int = 10,
 ) -> list[dict]:
-    """Search via Gemini grounding and return normalized results.
+    """Search Google and return normalized results.
 
-    ``categories`` is accepted and ignored, matching every other client —
-    Google Search grounding has no engine-group concept.
+    ``categories`` is accepted and ignored, same as every other client.
     """
-    if not settings.google_api_key:
-        return []
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(
-                _URL,
-                params={"key": settings.google_api_key},
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": query}]}],
-                    "tools": [{"google_search": {}}],
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-    except Exception as e:
-        logger.error(f"Google search (Gemini grounding) failed: {e}")
+    data = await _get(
+        {"q": query, "num": max(1, min(limit, _MAX_PER_REQUEST))},
+        label="Google search",
+    )
+    if not data:
         return []
 
-    try:
-        candidates = data.get("candidates") or []
-        if not candidates:
-            return []
-        grounding = candidates[0].get("groundingMetadata") or {}
-        chunks = grounding.get("groundingChunks") or []
-        if not chunks:
-            return []
-        snippets = _snippets_by_chunk(grounding.get("groundingSupports") or [])
-
-        results = []
-        for i, chunk in enumerate(chunks[:limit]):
-            web = chunk.get("web") or {}
-            url = web.get("uri") or ""
-            if not url:
-                continue
-            results.append({
-                "title": web.get("title") or "",
-                "url": url,
-                "snippet": " ".join(snippets.get(i, []))[:500],
-                "source_engine": "google",
-                "score": None,
-            })
-        return results
-    except Exception as e:
-        # Parsing, not the network call, failed — the shape assumed above
-        # didn't hold. Degrade to [] like every other failure path rather
-        # than take down the request.
-        logger.error(f"Google search (Gemini grounding) response parsing failed: {e}")
-        return []
+    results = []
+    for item in data.get("items", [])[:limit]:
+        results.append({
+            "title": item.get("title") or "",
+            "url": item.get("link") or "",
+            "snippet": item.get("snippet") or "",
+            "source_engine": "google",
+            # items come back in Google's own rank order; there is no
+            # per-result score to compare against other providers'.
+            "score": None,
+        })
+    return results
 
 
 async def search_images(query: str, *, limit: int = 4) -> list[dict]:
-    """Search grounding is text-only — no image results. Always ``[]``."""
-    return []
+    """Image results via Custom Search's ``searchType=image`` mode.
+
+    ⚠ Draws on the same 100/day free quota as text search — Google counts
+    both against one limit.
+    """
+    data = await _get(
+        {
+            "q": query,
+            "searchType": "image",
+            "num": max(1, min(limit, _MAX_PER_REQUEST)),
+        },
+        label="Google image search",
+    )
+    if not data:
+        return []
+
+    out: list[dict] = []
+    for item in data.get("items", [])[:limit]:
+        img_url = item.get("link") or ""
+        if not img_url:
+            continue
+        image = item.get("image") or {}
+        out.append({
+            "img_url": img_url,
+            "thumbnail": image.get("thumbnailLink") or img_url,
+            "title": (item.get("title") or "").strip(),
+            # The page the image sits on, not the image file itself.
+            "source_url": image.get("contextLink") or img_url,
+            "source_engine": "google",
+        })
+    return out
 
 
 async def is_available() -> bool:
-    """Whether Google is usable — key presence only, no network call.
+    """Whether Google is usable — configuration only, no network call.
 
-    Same reasoning as every other provider: billed/quota-limited, no free
-    health endpoint, and this is polled by /health every 15-30s forever.
+    Deliberately does not check remaining quota: /health polls this every
+    15-30s, and a Redis round-trip per poll to answer a question nobody
+    asked is the same waste the other providers' is_available() avoids. A
+    spent quota surfaces as the provider being skipped at search time.
     """
-    return bool(settings.google_api_key)
+    return _configured()
