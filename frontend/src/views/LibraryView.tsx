@@ -39,6 +39,7 @@ function metaToPaper(m: PaperMeta): Paper {
     // expose raw status so cards can show "Processing..." / "Failed" labels
     rawStatus: m.status,
     jobStatus: m.job_status ?? null,
+    docKind: m.doc_kind ?? null,
     tags: [],
   };
 }
@@ -47,6 +48,10 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const [over, setOver] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
+  // Which doc_kind chips are active. Empty = no filter, show everything —
+  // filters are additive constraints, so "none selected" reads as
+  // "unconstrained" rather than "show nothing", the more useful default.
+  const [kindFilters, setKindFilters] = useState<Set<string>>(new Set());
   const [papers, setPapers] = useState<Paper[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -108,15 +113,31 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     const q = debouncedQuery.toLowerCase();
     let xs = papers.filter(
       (p) =>
-        p.title.toLowerCase().includes(q) ||
-        p.authors.toLowerCase().includes(q),
+        (p.title.toLowerCase().includes(q) ||
+          p.authors.toLowerCase().includes(q)) &&
+        (kindFilters.size === 0 || kindFilters.has(p.docKind || 'paper')),
     );
     if (sort === 'title') xs = [...xs].sort((a, b) => a.title.localeCompare(b.title));
     if (sort === 'pages') xs = [...xs].sort((a, b) => b.pages - a.pages);
     return xs;
-  }, [debouncedQuery, sort, papers]);
+  }, [debouncedQuery, sort, kindFilters, papers]);
 
   const cycleSorts: SortKey[] = ['recent', 'title', 'pages'];
+
+  const KIND_FILTERS: { key: string; label: string }[] = [
+    { key: 'book', label: 'Books' },
+    { key: 'paper', label: 'Research' },
+    { key: 'article', label: 'Articles' },
+  ];
+
+  const toggleKindFilter = (key: string) => {
+    setKindFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const handleDelete = async (p: Paper) => {
     const ok = window.confirm(
@@ -306,6 +327,30 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               />
             </div>
             <div className="flex items-center gap-1 ml-auto">
+              {/* Kind filter chips: each toggles independently, so "Books" +
+                  "Articles" together (papers hidden) is a valid combination.
+                  None active = unconstrained, matching kindFilters' own
+                  "empty set = show everything" convention above. */}
+              <div className="flex items-center gap-1 mr-1">
+                {KIND_FILTERS.map(({ key, label }) => {
+                  const active = kindFilters.has(key);
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => toggleKindFilter(key)}
+                      className="px-2.5 py-1.5 rounded-md text-[12px]"
+                      style={{
+                        background: active ? 'var(--accent)' : 'var(--bg-2)',
+                        color: active ? 'var(--accent-fg)' : 'var(--muted)',
+                        border: '1px solid',
+                        borderColor: active ? 'var(--accent)' : 'var(--border)',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
               <button
                 onClick={() => {
                   const idx = cycleSorts.indexOf(sort);

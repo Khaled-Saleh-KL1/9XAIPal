@@ -24,6 +24,8 @@ export interface Paper {
   // (queued | extracting | chunking | embedding). Used by the library card to
   // animate a live green progress bar while work continues in the background.
   jobStatus?: string | null;
+  // "book" | "paper" | "article" — drives the library's kind filter chips.
+  docKind?: string | null;
 }
 
 /**

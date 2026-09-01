@@ -33,6 +33,7 @@ function metaToPaper(m: PaperMeta): Paper {
     progress: stageProgress(m.status, m.job_status, m.job_progress_fraction),
     rawStatus: m.status,
     jobStatus: m.job_status ?? null,
+    docKind: m.doc_kind ?? null,
     tags: [],
   };
 }
