@@ -47,7 +47,7 @@ Full resolution logic: [ai-backend.md](../02-architecture/ai-backend.md).
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `auto` | `auto` = Ollama if reachable, else first cloud key in order openai → anthropic → xai → deepseek. Pin with `ollama` \| `openai` \| `anthropic` \| `xai` \| `deepseek` \| `custom`. |
+| `LLM_PROVIDER` | `auto` | `auto` = cascade: Ollama first if reachable, then every cloud key present, in order openai → anthropic → xai → deepseek — a real failure at any point (not just Ollama being unreachable) falls through to the next with the same prompt. Pin with `ollama` \| `openai` \| `anthropic` \| `xai` \| `deepseek` \| `custom` to force exactly one, no fallback. See [ai-backend.md](../02-architecture/ai-backend.md). |
 | `LLM_API_KEY` | (empty) | Generic key for a pinned provider. Per-provider keys win when both are set. |
 | `LLM_BASE_URL` | (provider default) | Required for `custom`; otherwise an override (Azure, OpenRouter, vLLM). |
 | `OPENAI_API_KEY` | (empty) | |

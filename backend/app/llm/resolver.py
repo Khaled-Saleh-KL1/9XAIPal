@@ -1,21 +1,32 @@
-"""Backend auto-detection: which AI provider answers this process's calls.
+"""Backend auto-detection: which AI provider(s) answer this process's calls.
 
-With LLM_PROVIDER=auto (the default) the chain is:
+With LLM_PROVIDER=auto (the default), chat calls go through a cascade, not a
+single pick — see llm_cascade()/llm_cascade_sync() below, consumed by
+app.llm.client's chat()/stream_chat()/chat_sync(). Priority order:
 
-1. Ollama — if it answers at OLLAMA_BASE_URL, use it with the CHAT_MODEL /
-   VLM_MODEL / CLASSIFIER_MODEL / EMBEDDING_MODEL configured in .env.
-2. Cloud APIs, one by one — the first provider with an API key in .env wins:
+1. Ollama — if it answers at OLLAMA_BASE_URL, tried first with the CHAT_MODEL
+   / VLM_MODEL / CLASSIFIER_MODEL / EMBEDDING_MODEL configured in .env.
+2. Cloud APIs, one by one, every one with an API key in .env, in order:
    openai → anthropic → xai → deepseek. Each uses its own
    <PROVIDER>_CHAT_MODEL / <PROVIDER>_EMBEDDING_MODEL setting, never the
    Ollama model names.
 3. Nothing configured → NoLLMConfigured, whose message tells the user exactly
    what to put in backend/.env.
 
+Ollama passing its cheap reachability probe doesn't guarantee the real chat
+call succeeds (wrong model pulled, OOM, a crash mid-generation) — client.py's
+retry loop catches that too and falls through to the next configured
+provider, the same "try each, fall through on failure" shape the web search
+cascade uses (app/search/web.py).
+
 Setting LLM_PROVIDER / EMBEDDING_PROVIDER explicitly pins a backend and skips
-the probing. The Ollama reachability probe is cached briefly so the chain
-doesn't add a round trip to every model call; the embedding choice is pinned
-for the process lifetime so one library is never embedded by two different
-models within a run.
+both the probing and the cascade — a pin means exactly that one provider, no
+fallback, same rule as a pinned WEB_SEARCH_PROVIDER. The Ollama reachability
+probe is cached briefly so the chain doesn't add a round trip to every model
+call; the embedding choice is pinned for the process lifetime so one library
+is never embedded by two different models within a run (embeddings have no
+cascade — a mid-run backend switch would produce vectors the rest of the
+library isn't comparable against).
 """
 
 from __future__ import annotations
@@ -245,6 +256,53 @@ async def resolve_llm(ollama_up: Optional[bool] = None) -> LLMTarget:
     if explicit is not None or ollama_up is not None:
         return resolve_llm_sync(ollama_up=ollama_up)
     return resolve_llm_sync(ollama_up=await ollama_reachable())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Chat cascade: every target "auto" would try, in order
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# resolve_llm() above picks ONE target and stops — today, if Ollama passes its
+# cheap /api/tags probe but the real completion call then fails (wrong model
+# pulled, OOM, mid-generation crash), the whole request dies even when a cloud
+# key is configured and would have answered. app.llm.client wraps the actual
+# chat/stream_chat/chat_sync calls in a retry loop over this list instead: the
+# probe still avoids paying a full connect-timeout on every request when
+# Ollama is simply not running, but a REAL failure past that point now falls
+# through to the next provider — the same "try each, fall through on failure"
+# shape as the web search cascade (app/search/web.py).
+
+
+def llm_cascade_sync(ollama_up: Optional[bool] = None) -> list[LLMTarget]:
+    """Every target to try, in priority order, for THIS call.
+
+    An explicit LLM_PROVIDER pin returns exactly that one target (or raises,
+    via resolve_llm_sync's existing validation) — no fallback, matching how a
+    pinned web search provider also skips the cascade. This is deliberate:
+    a pin exists to force one specific backend for debugging, and silently
+    falling through would defeat that.
+    """
+    explicit = _explicit_llm_provider()
+    if explicit:
+        return [resolve_llm_sync(ollama_up=ollama_up)]
+    up = ollama_reachable_sync() if ollama_up is None else ollama_up
+    targets: list[LLMTarget] = []
+    if up:
+        targets.append(_ollama_target())
+    for provider in CLOUD_PROVIDER_ORDER:
+        if cloud_api_key(provider):
+            targets.append(_cloud_llm_target(provider))
+    if not targets:
+        raise NoLLMConfigured(NO_LLM_MESSAGE.format(ollama_url=settings.ollama_base_url))
+    return targets
+
+
+async def llm_cascade(ollama_up: Optional[bool] = None) -> list[LLMTarget]:
+    """Async variant of llm_cascade_sync (uses the async Ollama probe)."""
+    explicit = _explicit_llm_provider()
+    if explicit is not None or ollama_up is not None:
+        return llm_cascade_sync(ollama_up=ollama_up)
+    return llm_cascade_sync(ollama_up=await ollama_reachable())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

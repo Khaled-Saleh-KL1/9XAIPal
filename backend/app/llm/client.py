@@ -1,14 +1,28 @@
 """Provider-agnostic LLM client.
 
-Every chat call in the app goes through this module. The backend is picked by
-app.llm.resolver (LLM_PROVIDER=auto: Ollama when reachable, otherwise the
-first cloud API key found, otherwise a clear configure-me error) and the call
-dispatches to either local Ollama (native API — keeps tag resolution and
-keep_alive semantics) or any OpenAI-compatible cloud API. OpenAI, Anthropic,
-xAI (Grok) and DeepSeek all expose the OpenAI chat-completions protocol, so a
-single HTTP implementation covers all of them; "custom" lets
-the user point LLM_BASE_URL at anything else that speaks the same protocol
-(OpenRouter, vLLM, llama.cpp server, ...).
+Every chat call in the app goes through this module. With LLM_PROVIDER=auto
+(the default), each of chat()/stream_chat()/chat_sync() below tries every
+configured backend in priority order (app.llm.resolver.llm_cascade: Ollama
+first if reachable, then every cloud provider with a key set, in order) and
+falls through to the next on failure — the SAME messages get resent to the
+next provider, never re-sent to the caller to retry itself. A pinned
+LLM_PROVIDER still means exactly that one backend, no fallback.
+
+⚠ **Streaming's fallback only covers pre-first-token failures.** Once even
+one token has reached the caller (already rendered in the UI), silently
+discarding it and restarting on a different provider would be a worse
+experience than a clean error — so a stream that fails after starting to
+answer raises, same as before this cascade existed. A stream that fails
+before yielding anything (the common real case: a provider is down,
+rate-limited, or misconfigured) falls through exactly like chat()/chat_sync()
+do, with no visible effect on the caller at all.
+
+Local Ollama uses its native API (keeps tag resolution and keep_alive
+semantics); any cloud provider dispatches to its OpenAI-compatible endpoint.
+OpenAI, Anthropic, xAI (Grok) and DeepSeek all expose the OpenAI
+chat-completions protocol, so a single HTTP implementation covers all of
+them; "custom" lets the user point LLM_BASE_URL at anything else that speaks
+the same protocol (OpenRouter, vLLM, llama.cpp server, ...).
 
 Callers say what KIND of call they make via ``role`` ("chat", "classifier",
 "vlm") instead of naming a model, so the right model is used whichever
@@ -121,19 +135,18 @@ def _openai_payload(
 # Async chat (FastAPI request path)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def chat(
+async def _chat_once(
+    target: LLMTarget,
     messages: list[dict],
     *,
-    model: Optional[str] = None,
-    role: str = "chat",
-    temperature: float = 0.7,
-    num_predict: Optional[int] = None,
-    keep_alive: Optional[str] = None,
+    resolved: str,
+    temperature: float,
+    num_predict: Optional[int],
+    keep_alive: Optional[str],
 ) -> dict:
-    """Provider-dispatched chat completion. Same return shape as
-    ollama_client.chat: {content, model, prompt_tokens, completion_tokens}."""
-    target = await resolver.resolve_llm()
-    resolved = model or target.model_for_role(role)
+    """One provider, one attempt. Raises ModelUnavailable on any failure —
+    never partially handled, so the cascade loop in chat() can always just
+    catch-and-continue without guessing what state was left behind."""
     if target.provider == "ollama":
         return await ollama_client.chat(
             messages, model=resolved, temperature=temperature,
@@ -152,7 +165,6 @@ async def chat(
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
-            logger.error(f"{target.provider} chat HTTP {e.response.status_code}: {body}")
             raise ModelUnavailable(f"{resolved} ({e.response.status_code}: {body})")
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved} (network error: {e})")
@@ -168,7 +180,7 @@ async def chat(
     }
 
 
-async def stream_chat(
+async def chat(
     messages: list[dict],
     *,
     model: Optional[str] = None,
@@ -176,14 +188,43 @@ async def stream_chat(
     temperature: float = 0.7,
     num_predict: Optional[int] = None,
     keep_alive: Optional[str] = None,
-) -> AsyncIterator[dict]:
-    """Provider-dispatched streaming chat.
+) -> dict:
+    """Provider-dispatched chat completion. Same return shape as
+    ollama_client.chat: {content, model, prompt_tokens, completion_tokens}.
 
-    Yields ``{"type": "token", "text": ...}`` per token, then a final
-    ``{"type": "done", "content", "model", "prompt_tokens", "completion_tokens"}``.
+    Tries every target in the cascade with the SAME messages, in order,
+    until one succeeds. No partial output is possible here (unlike
+    stream_chat), so a failure at any point is a clean, invisible-to-the-
+    caller fall-through to the next provider.
     """
-    target = await resolver.resolve_llm()
-    resolved = model or target.model_for_role(role)
+    targets = await resolver.llm_cascade()
+    last_error: Optional[ModelUnavailable] = None
+    for target in targets:
+        resolved = model or target.model_for_role(role)
+        try:
+            return await _chat_once(
+                target, messages, resolved=resolved, temperature=temperature,
+                num_predict=num_predict, keep_alive=keep_alive,
+            )
+        except ModelUnavailable as e:
+            logger.warning(f"{target.provider} chat failed, falling through: {e}")
+            last_error = e
+    raise last_error or ModelUnavailable("no LLM provider configured")
+
+
+async def _stream_once(
+    target: LLMTarget,
+    messages: list[dict],
+    *,
+    resolved: str,
+    temperature: float,
+    num_predict: Optional[int],
+    keep_alive: Optional[str],
+) -> AsyncIterator[dict]:
+    """One provider, one streaming attempt. Raises ModelUnavailable on
+    failure at any point — stream_chat() below decides whether that's safe
+    to retry based on whether it had already forwarded a token to ITS
+    caller when the exception arrived."""
     if target.provider == "ollama":
         async for event in ollama_client.stream_chat(
             messages, model=resolved, temperature=temperature,
@@ -205,7 +246,6 @@ async def stream_chat(
             async with client.stream("POST", url, json=payload, headers=_headers(target)) as response:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", "replace")[:500]
-                    logger.error(f"{target.provider} stream HTTP {response.status_code}: {body}")
                     raise ModelUnavailable(f"{resolved} ({response.status_code}: {body})")
                 async for line in response.aiter_lines():
                     line = line.strip()
@@ -236,37 +276,83 @@ async def stream_chat(
     }
 
 
+async def stream_chat(
+    messages: list[dict],
+    *,
+    model: Optional[str] = None,
+    role: str = "chat",
+    temperature: float = 0.7,
+    num_predict: Optional[int] = None,
+    keep_alive: Optional[str] = None,
+) -> AsyncIterator[dict]:
+    """Provider-dispatched streaming chat.
+
+    Yields ``{"type": "token", "text": ...}`` per token, then a final
+    ``{"type": "done", "content", "model", "prompt_tokens", "completion_tokens"}``.
+
+    Falls through to the next cascade target on a failure that happens
+    BEFORE any token reached the caller — a dead/misconfigured/rate-limited
+    provider is invisible to whoever is rendering the stream. Once a token
+    has gone out, a later failure raises instead of silently restarting:
+    discarding visible partial output and resuming on a different provider
+    (possibly a different model, different voice, duplicated content) is a
+    worse experience than a clean error the caller can show and retry.
+    """
+    targets = await resolver.llm_cascade()
+    last_error: Optional[ModelUnavailable] = None
+    for target in targets:
+        resolved = model or target.model_for_role(role)
+        yielded_any = False
+        try:
+            async for event in _stream_once(
+                target, messages, resolved=resolved, temperature=temperature,
+                num_predict=num_predict, keep_alive=keep_alive,
+            ):
+                yielded_any = True
+                yield event
+            return
+        except ModelUnavailable as e:
+            if yielded_any:
+                raise
+            logger.warning(f"{target.provider} stream failed before any output, falling through: {e}")
+            last_error = e
+    raise last_error or ModelUnavailable("no LLM provider configured")
+
+
 async def is_available() -> bool:
-    """Reachability check for the active provider (used by /health)."""
+    """Whether at least one cascade target answers right now (used by /health)."""
     try:
-        target = await resolver.resolve_llm()
+        targets = await resolver.llm_cascade()
     except ModelUnavailable:
         return False
-    if target.provider == "ollama":
-        return await ollama_client.is_available()
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{target.base_url}/models", headers=_headers(target))
-            return resp.status_code == 200
-    except Exception:
-        return False
+    for target in targets:
+        try:
+            if target.provider == "ollama":
+                if await ollama_client.is_available():
+                    return True
+                continue
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{target.base_url}/models", headers=_headers(target))
+                if resp.status_code == 200:
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sync chat (Celery workers: summaries, figure descriptions)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def chat_sync(
+def _chat_sync_once(
+    target: LLMTarget,
     messages: list[dict],
     *,
-    model: Optional[str] = None,
-    role: str = "chat",
-    temperature: float = 0.3,
-    images: Optional[list[str]] = None,
+    resolved: str,
+    temperature: float,
+    images: Optional[list[str]],
 ) -> dict:
-    """Provider-dispatched synchronous chat for Celery workers."""
-    target = resolver.resolve_llm_sync()
-    resolved = model or target.model_for_role(role)
+    """One provider, one attempt. Raises ModelUnavailable on any failure."""
     if target.provider == "ollama":
         return ollama_client.chat_sync(
             messages, model=resolved, temperature=temperature, images=images,
@@ -287,7 +373,6 @@ def chat_sync(
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
-            logger.error(f"[sync] {target.provider} chat HTTP {e.response.status_code}: {body}")
             raise ModelUnavailable(f"{resolved} ({e.response.status_code}: {body})")
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved} (network error: {e})")
@@ -301,3 +386,31 @@ def chat_sync(
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
     }
+
+
+def chat_sync(
+    messages: list[dict],
+    *,
+    model: Optional[str] = None,
+    role: str = "chat",
+    temperature: float = 0.3,
+    images: Optional[list[str]] = None,
+) -> dict:
+    """Provider-dispatched synchronous chat for Celery workers.
+
+    Same cascade as chat(): tries every configured target with the SAME
+    messages until one succeeds. No streaming here, so no partial-output
+    caveat — every failure is a clean fall-through.
+    """
+    targets = resolver.llm_cascade_sync()
+    last_error: Optional[ModelUnavailable] = None
+    for target in targets:
+        resolved = model or target.model_for_role(role)
+        try:
+            return _chat_sync_once(
+                target, messages, resolved=resolved, temperature=temperature, images=images,
+            )
+        except ModelUnavailable as e:
+            logger.warning(f"[sync] {target.provider} chat failed, falling through: {e}")
+            last_error = e
+    raise last_error or ModelUnavailable("no LLM provider configured")

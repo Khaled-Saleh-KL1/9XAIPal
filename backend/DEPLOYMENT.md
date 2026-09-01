@@ -44,13 +44,29 @@ By default the containers reach your host Ollama via `host.docker.internal:11434
 
 ## AI Backend (Ollama or any cloud API)
 
-`app/llm/resolver.py` auto-detects the backend on every call (`LLM_PROVIDER=auto`, default):
+`app/llm/resolver.py` + `app/llm/client.py` cascade through every configured backend on each chat
+call (`LLM_PROVIDER=auto`, default) — not just a single pick:
 
-1. **Ollama reachable** → uses it with your `CHAT_MODEL` / `VLM_MODEL` / `EMBEDDING_MODEL`.
-2. **Otherwise** → the first cloud key set in `.env`, in order: `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` → `XAI_API_KEY` → `DEEPSEEK_API_KEY`. Each provider has its own model setting (`OPENAI_CHAT_MODEL=gpt-4o`, `ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6`, …) so Ollama tags are never sent to a cloud API.
-3. **Neither** → every request answers 503 with exact instructions: *"No AI backend is configured. Put your API key or your Ollama connection in backend/.env…"*.
+1. **Ollama** tried first if it answers its reachability probe, with your `CHAT_MODEL` /
+   `VLM_MODEL` / `EMBEDDING_MODEL`.
+2. **Every cloud key set in `.env`**, in order: `OPENAI_API_KEY` → `ANTHROPIC_API_KEY` →
+   `XAI_API_KEY` → `DEEPSEEK_API_KEY`. Each provider has its own model setting
+   (`OPENAI_CHAT_MODEL=gpt-4o`, `ANTHROPIC_CHAT_MODEL=claude-sonnet-4-6`, …) so Ollama tags are
+   never sent to a cloud API. If Ollama's probe passed but the real call then fails (wrong model,
+   OOM, a crash mid-generation), or a cloud provider errors or rate-limits, the SAME prompt is
+   retried against the next one automatically — the probe only decides what's tried *first*, not
+   whether the request ultimately succeeds.
+3. **Nothing left in the chain, or every one failed** → the request answers 503 with exact
+   instructions: *"No AI backend is configured. Put your API key or your Ollama connection in
+   backend/.env…"*.
 
-So "going cloud" is: paste one key into `.env`, `docker compose up -d api celery_worker`, done. Pin a backend explicitly with `LLM_PROVIDER=openai|anthropic|xai|deepseek|ollama|custom` if you don't want auto-detection.
+So "adding a fallback" is just: paste another key into `.env`, `docker compose up -d api
+celery_worker`, done — no code change, and it's used automatically the moment Ollama or an
+earlier-in-line key fails. Pin a single backend explicitly with
+`LLM_PROVIDER=openai|anthropic|xai|deepseek|ollama|custom` if you want to force exactly one with
+no fallback (debugging only). See [ai-backend.md](../docs/02-architecture/ai-backend.md) for the
+full cascade design, including streaming's one caveat (no fallback once a token has already been
+shown to the user).
 
 Embeddings follow the same chain (only OpenAI offers an embedding API among these providers). When you switch the embedder permanently, pin `EMBEDDING_PROVIDER=openai`: stored vectors from the old model are wiped and the whole library re-embeds automatically at the next startup (summaries/figure descriptions are cached and don't re-run). All compose services pass these variables through from `backend/.env` already.
 
