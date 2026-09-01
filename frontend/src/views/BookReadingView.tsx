@@ -1428,7 +1428,7 @@ function ChapterPicker({
   );
 }
 
-function ExtractorPill({
+export function ExtractorPill({
   extractor,
   onReextract,
   onRechunk,

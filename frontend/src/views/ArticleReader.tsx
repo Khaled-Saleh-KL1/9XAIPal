@@ -4,6 +4,7 @@ import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
 import { displayTitle } from '../lib/titles';
 import { ArticleBlock } from './ArticleBlock';
+import { ExtractorPill } from './BookReadingView';
 import { AskComposer, type ComposerTarget } from './AskComposer';
 import { NoteCardView, PendingNoteCard, type NoteGroup, type PendingNote } from './NoteCard';
 import {
@@ -50,6 +51,8 @@ import {
   listStudies,
   moveNote as moveNoteApi,
   putDecks,
+  rechunkPaper,
+  reextractPaper,
   renamePaper,
   updatePersonalNote as updatePersonalNoteApi,
   type DocBlock,
@@ -1830,6 +1833,45 @@ export function ArticleReader({
                 </>
               )}
             </button>
+          )}
+
+          {/* extractor pill: confirms which parser produced these chunks. Not
+              shown for doc_kind='article' — a web import has no PDF to
+              re-extract or re-chunk from. */}
+          {doc?.extractor && doc.doc_kind !== 'article' && (
+            <ExtractorPill
+              extractor={doc.extractor}
+              onReextract={async () => {
+                if (!confirm(
+                  'Re-extract this paper with MinerU?\n\n' +
+                  'This will wipe the cached chunks/embeddings and re-run MinerU ' +
+                  'from the original PDF.'
+                )) return;
+                try {
+                  await reextractPaper(paperId);
+                  const d = await getFullDocument(paperId);
+                  setDoc(d);
+                } catch (e) {
+                  alert(`Re-extract failed: ${(e as Error).message}`);
+                }
+              }}
+              onRechunk={async () => {
+                if (!confirm(
+                  'Re-chunk this paper from the cached extraction?\n\n' +
+                  'Fast (seconds): re-runs only the chunker (gap-free sequencing, ' +
+                  'code/JSON blocks, inline math) on the already-extracted output. ' +
+                  'Embeddings regenerate in the background afterward.'
+                )) return;
+                try {
+                  const r = await rechunkPaper(paperId);
+                  const d = await getFullDocument(paperId);
+                  setDoc(d);
+                  alert(`Re-chunked: ${r.chunks_total} chunks.`);
+                } catch (e) {
+                  alert(`Re-chunk failed: ${(e as Error).message}`);
+                }
+              }}
+            />
           )}
 
           <button
