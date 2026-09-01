@@ -82,10 +82,56 @@ _CLEANER = Cleaner(
 )
 
 
+# A plain-language readability reset, appended as the LAST child of <head>
+# (after any surviving original <style> block) so it wins the cascade for
+# equal-specificity element selectors (body, p, img, ...) — a page's own
+# more SPECIFIC rules (a class selector like .tab-panel) still apply, since
+# a class selector always outranks an element selector regardless of order.
+#
+# This exists because the Cleaner strips every <link rel="stylesheet">
+# (see its own comment above) — without this, a raw snapshot renders in the
+# browser's bare default styling: no margins, no reading width, giant
+# unstyled images, Times New Roman. This app-authored stylesheet is not
+# trying to reproduce the original site's design; the point of a raw
+# snapshot is auditing content, not appearance, so a clean, generic reading
+# layout serves that better than fighting to preserve a design that's
+# already lost most of its CSS anyway.
+_READABILITY_CSS = """
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 5rem;
+  line-height: 1.65;
+  font-size: 17px;
+  color: #1a1a1a;
+  background: #fff;
+}
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.6em 0 0.6em; font-weight: 600; }
+h1 { font-size: 1.6em; }
+h2 { font-size: 1.35em; }
+h3 { font-size: 1.15em; }
+p, ul, ol, blockquote, table, pre { margin: 0 0 1.1em; }
+img, video { max-width: 100%; height: auto; display: block; margin: 1.5em auto; border-radius: 4px; }
+figcaption { font-size: 0.85em; color: #666; text-align: center; margin-top: -1em; margin-bottom: 1.5em; }
+a { color: #2563eb; }
+pre { background: #f4f4f5; border-radius: 6px; padding: 1em; overflow-x: auto; }
+code { background: #f4f4f5; border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.9em; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 3px solid #ddd; padding: 0.2em 1.2em; color: #555; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #e5e5e5; padding: 0.5em 0.8em; text-align: left; }
+ul, ol { padding-left: 1.5em; }
+hr { border: none; border-top: 1px solid #e5e5e5; margin: 2em 0; }
+"""
+
+
 def sanitize_html(html: str, page_url: str) -> str:
     """Strip live-code vectors, then anchor surviving relative URLs
     (images, any stylesheet link that happens to survive, in-page anchors)
-    back at the real page so the snapshot still looks and links correctly.
+    back at the real page, and apply a clean readability reset so the
+    snapshot is pleasant to actually read (see _READABILITY_CSS above) —
+    not just safe and technically correct.
     """
     cleaned = _CLEANER.clean_html(html)
     tree = lxml_html.fromstring(cleaned)
@@ -96,6 +142,11 @@ def sanitize_html(html: str, page_url: str) -> str:
     base = lxml_html.Element("base")
     base.set("href", page_url)
     head.insert(0, base)
+
+    style = lxml_html.Element("style")
+    style.text = _READABILITY_CSS
+    head.append(style)
+
     return lxml_html.tostring(tree, encoding="unicode", doctype="<!DOCTYPE html>")
 
 

@@ -87,6 +87,30 @@ def test_sanitize_html_strips_iframe_and_form():
     assert "evil.example" not in out
 
 
+def test_sanitize_html_injects_a_readability_stylesheet():
+    """The Cleaner strips every <link rel="stylesheet"> (see its own
+    comment) — without an app-authored fallback, a raw snapshot would
+    render in the browser's bare default styling. This is the fix, not
+    an attempt to reproduce the original site's own design."""
+    out = sanitize_html("<html><body><p>hi</p></body></html>", "https://example.com/x")
+    assert "<style>" in out
+    assert "max-width: 720px" in out
+    assert "font-family" in out
+
+
+def test_sanitize_html_readability_css_comes_after_original_style_block():
+    """Cascade order matters: this app's baseline typography must come AFTER
+    any surviving original <style> block in document order, so it wins for
+    equal-specificity element selectors (body, p, ...) — a more specific
+    original rule (a class selector) still applies regardless, since
+    specificity outranks order."""
+    page = '<html><head><style>body { color: red; }</style></head><body><p>hi</p></body></html>'
+    out = sanitize_html(page, "https://example.com/x")
+    original_pos = out.index("color: red")
+    readability_pos = out.index("max-width: 720px")
+    assert readability_pos > original_pos
+
+
 # ── _page_title ──────────────────────────────────────────────────────────────
 
 def test_page_title_reads_title_tag():
