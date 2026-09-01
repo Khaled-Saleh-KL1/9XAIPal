@@ -16,6 +16,7 @@ from typing import Optional
 
 import httpx
 
+from app.core import circuit_breaker
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.search.errors import ProviderError
@@ -30,34 +31,77 @@ _SEARCH_URL = "https://api.tavily.com/search"
 _TIMEOUT = 20.0
 
 
-def _headers() -> dict:
+def _headers(api_key: str) -> dict:
     return {
-        "Authorization": f"Bearer {settings.tavily_api_key}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
 
+def _breaker_id(index: int) -> str:
+    """Circuit-breaker name for one key. Per-KEY, not per-provider: an
+    exhausted key must stop being tried without taking Tavily as a whole
+    out of the cascade, since the other keys are still good."""
+    return f"tavily#{index}"
+
+
+# Statuses that mean "this KEY is done" rather than "Tavily is down".
+# Rotating to the next key only helps for these; for a 500 or a network
+# error every key would hit the same wall, so those fail the provider
+# immediately instead of burning a request per key to prove it.
+_KEY_EXHAUSTED_STATUSES = {401, 403, 429}
+
+
 async def _post(payload: dict) -> Optional[dict]:
-    """One Tavily call. Returns None only when no key is configured; raises
-    ProviderError on a real failure so the cascade's circuit breaker can tell
-    "broken" apart from "no hits" (see app/search/errors.py)."""
-    if not settings.tavily_api_key:
+    """One Tavily call, rotating across every configured key.
+
+    Returns None only when no key is configured at all. Raises ProviderError
+    once every key has been tried and failed, so the cascade in web.py moves
+    on to the next provider (and its circuit breaker can tell "broken" apart
+    from "no hits" — see app/search/errors.py).
+    """
+    keys = settings.tavily_api_keys
+    if not keys:
         logger.warning("Tavily search requested but TAVILY_API_KEY is empty")
         return None
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(_SEARCH_URL, json=payload, headers=_headers())
-            response.raise_for_status()
-            return response.json()
-    except httpx.HTTPStatusError as e:
-        # 401 = bad key, 429 = quota. Both are operator problems, not transient,
-        # so they are worth naming rather than folding into a generic message.
-        body = (e.response.text or "")[:200]
-        raise ProviderError(
-            f"Tavily search failed: HTTP {e.response.status_code} {body}"
-        ) from e
-    except Exception as e:
-        raise ProviderError(f"Tavily search failed: {e}") from e
+
+    # Skip keys already known to be spent, keeping their order. filter_open
+    # hands back the full list if EVERY key is tripped, so a stale breaker
+    # can never make this give up without trying.
+    live_ids = set(circuit_breaker.filter_open([_breaker_id(i) for i in range(len(keys))]))
+    candidates = [(i, k) for i, k in enumerate(keys) if _breaker_id(i) in live_ids]
+
+    last_error: Optional[Exception] = None
+    for index, api_key in candidates:
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                response = await client.post(
+                    _SEARCH_URL, json=payload, headers=_headers(api_key)
+                )
+                response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            body = (e.response.text or "")[:200]
+            status = e.response.status_code
+            if status in _KEY_EXHAUSTED_STATUSES:
+                logger.warning(
+                    "Tavily key %d/%d rejected (HTTP %s) — trying the next key",
+                    index + 1, len(keys), status,
+                )
+                circuit_breaker.record_failure(_breaker_id(index))
+                last_error = e
+                continue
+            # A server-side problem: another key would hit the same wall.
+            raise ProviderError(f"Tavily search failed: HTTP {status} {body}") from e
+        except Exception as e:
+            raise ProviderError(f"Tavily search failed: {e}") from e
+
+        circuit_breaker.record_success(_breaker_id(index))
+        return response.json()
+
+    raise ProviderError(
+        f"Tavily search failed: all {len(keys)} configured key(s) exhausted "
+        f"or rejected (last: {last_error})"
+    )
 
 
 async def search(
@@ -155,4 +199,4 @@ async def is_available() -> bool:
     searches a day to answer a question nobody asked. A bad key surfaces as a
     logged 401 on the first real search instead.
     """
-    return bool(settings.tavily_api_key)
+    return bool(settings.tavily_api_keys)

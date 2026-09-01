@@ -626,9 +626,10 @@ If the current chunk is a figure, the model literally sees the picture.
 
 1. Rewrites the query toward CS/ML (`rewrite_query_for_papers`) so an ambiguous term like
    "transduction" does not return genetics hits.
-2. Calls [`search/web.py`](../../backend/app/search/web.py): a cascade of google → tavily →
-   linkup → exa → serpapi → duckduckgo, first configured one to answer wins (duckduckgo needs
-   no key, so this never runs fully dry). Never a provider module directly.
+2. Calls [`search/web.py`](../../backend/app/search/web.py): a cascade of tavily → linkup →
+   exa → serpapi → duckduckgo, first configured one to answer wins (tavily itself rotates
+   across a comma-separated key list before giving up, and duckduckgo needs no key at all, so
+   this never runs fully dry). Never a provider module directly.
 3. Ranks results via `search/ranking.py` (dedup + scoring).
 4. Returns at most 5 results.
 

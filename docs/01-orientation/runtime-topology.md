@@ -25,7 +25,7 @@
 | Celery worker | n/a | Yes | No port; consumes from Redis |
 | Ollama | `http://localhost:11434` | Optional* | Chat / VLM / classifier / embedding host |
 | MinerU CLI | binary on `$PATH` | Yes | Subprocess, not a service. `ALLOW_PYMUPDF_FALLBACK=true` degrades gracefully |
-| Web search | n/a | Optional | Cascade of 6 providers (google, tavily, linkup, exa, serpapi, then duckduckgo — see `search/web.py`); no local service. The last needs no key, so this is never fully off. |
+| Web search | n/a | Optional | Cascade of 5 providers (tavily, linkup, exa, serpapi, then duckduckgo — see `search/web.py`); no local service. Tavily rotates across a list of keys first. The last needs no key, so this is never fully off. |
 | autoheal | n/a | Compose only | Restarts containers whose healthcheck goes unhealthy |
 
 \* **One AI backend is required**: either Ollama or a cloud API key. Neither ⇒ chat returns
@@ -80,10 +80,10 @@
                   │ search/web.py — cascade,     │
                   │ first configured one to      │
                   │ answer wins:                 │
-                  │   1. google    4. exa        │  ⚠ leaves the host
-                  │   2. tavily    5. serpapi     ─┼──► whichever answers
-                  │   3. linkup    6. duckduckgo  │     (query string only)
-                  └──────────────────────────────┘     — #6 needs no key,
+                  │   1. tavily    4. serpapi    │  ⚠ leaves the host
+                  │   2. linkup    5. duckduckgo  ─┼──► whichever answers
+                  │   3. exa                      │     (query string only)
+                  └──────────────────────────────┘     — #5 needs no key,
                      the ONLY egress to the public internet, and only on the   always eligible
                      EXTERNAL route or the paper agent's WEB tool
 ```
@@ -102,15 +102,13 @@ flowchart TD
     W -->|HTTP| OL([Ollama :11434])
     API -->|HTTP| OL
     API -->|"EXTERNAL route · WEB tool"| SX{{"search/web.py cascade"}}
-    SX -->|"1st"| GG([Google Search grounding])
-    SX -.->|"2nd, on failure"| TV([api.tavily.com])
-    SX -.->|"3rd, on failure"| LK([api.linkup.so])
-    SX -.->|"4th, on failure"| EX([api.exa.ai])
-    SX -.->|"5th, on failure"| SP([serpapi.com])
-    SX -.->|"6th, on failure — no key needed"| DDG([DuckDuckGo scrape])
+    SX -->|"1st — rotates across its key list"| TV([api.tavily.com])
+    SX -.->|"2nd, on failure"| LK([api.linkup.so])
+    SX -.->|"3rd, on failure"| EX([api.exa.ai])
+    SX -.->|"4th, on failure"| SP([serpapi.com])
+    SX -.->|"5th, on failure — no key needed"| DDG([DuckDuckGo scrape])
     OL -.->|"when unreachable"| CLOUD([cloud LLM API])
-    GG --> NET([public internet])
-    TV -.-> NET
+    TV --> NET([public internet])
     LK -.-> NET
     EX -.-> NET
     SP -.-> NET
@@ -121,7 +119,7 @@ flowchart TD
     classDef ext stroke:#f59e0b,stroke-dasharray:4 3
     class API,W,MU owned
     class PG,RD store
-    class OL,GG,TV,LK,EX,SP,DDG,CLOUD,NET ext
+    class OL,TV,LK,EX,SP,DDG,CLOUD,NET ext
 ```
 
 > 🟦 owned process · 🟩 data store · 🟨 external / optional.

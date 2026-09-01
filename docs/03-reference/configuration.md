@@ -47,7 +47,7 @@ Full resolution logic: [ai-backend.md](../02-architecture/ai-backend.md).
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `LLM_PROVIDER` | `auto` | `auto` = cascade: Ollama first if reachable, then every cloud key present, in order openai → anthropic → xai → deepseek — a real failure at any point (not just Ollama being unreachable) falls through to the next with the same prompt. Pin with `ollama` \| `openai` \| `anthropic` \| `xai` \| `deepseek` \| `custom` to force exactly one, no fallback. See [ai-backend.md](../02-architecture/ai-backend.md). |
+| `LLM_PROVIDER` | `auto` | `auto` = cascade: every Ollama key first (if reachable), then every cloud key present, in order openai → anthropic → xai → deepseek — a real failure at any point (not just Ollama being unreachable) falls through to the next with the same prompt. Pin with `ollama` \| `openai` \| `anthropic` \| `xai` \| `deepseek` \| `custom` to force exactly one, no fallback. See [ai-backend.md](../02-architecture/ai-backend.md). |
 | `LLM_API_KEY` | (empty) | Generic key for a pinned provider. Per-provider keys win when both are set. |
 | `LLM_BASE_URL` | (provider default) | Required for `custom`; otherwise an override (Azure, OpenRouter, vLLM). |
 | `OPENAI_API_KEY` | (empty) | |
@@ -183,17 +183,14 @@ and never from a provider module.
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `WEB_SEARCH_PROVIDER` | `auto` | `auto` \| `google` \| `tavily` \| `linkup` \| `exa` \| `serpapi` \| `duckduckgo` \| `none`. `auto` tries every configured key below in cascade order and falls through to the next the moment one errors or returns zero results. Pinning to one name forces exactly that provider with no fallback (debugging only). `none` makes every web call return `[]` and withdraws the `WEB` tool from the paper agent — the only way to fully disable web search, since `duckduckgo` needs no key. |
-| `GOOGLE_API_KEY` | (empty) | Google Cloud API key (`AIzaSy...`) for the **Custom Search JSON API**. First in the cascade. ⚠ Also requires the *Custom Search API* to be **enabled** on that Cloud project (otherwise every call is `403 PERMISSION_DENIED`) and a `GOOGLE_SEARCH_CX` below. |
-| `GOOGLE_SEARCH_CX` | (empty) | Programmable Search Engine ID from <https://programmablesearchengine.google.com>, set to search the entire web. Custom Search returns `400` without it — there is no "just search Google" mode. Google is left out of the cascade unless BOTH this and the key are set. |
-| `GOOGLE_SEARCH_DAILY_LIMIT` | `100` | ⚠ **Hard cap, enforced in code** (`app/search/quota.py`) before every Google call, counted in Redis so it holds across both API workers and the Celery worker. Custom Search is free to 100 queries/day and **bills** beyond it, so this defaults to exactly the free allowance and Google is skipped for the rest of the day once spent (US/Pacific, matching Google's reset). Text and image search share the budget. `0` disables Google without unsetting the key. |
-| `TAVILY_API_KEY` | (empty) | Key from <https://app.tavily.com>. Free tier is 1,000 searches/month. |
+| `TAVILY_API_KEY` | (empty) | Key from <https://app.tavily.com>. Free tier is 1,000 searches/month **per key**. ⚠ Accepts a **comma-separated list** — the client rotates through them, moving to the next when one is exhausted or rejected, and only falls through to Linkup once every key is spent. More free headroom = more keys, no code change. |
 | `TAVILY_SEARCH_DEPTH` | `basic` | `basic` (1 credit, fast) or `advanced` (2 credits, deeper extraction, better recall on niche research queries). |
 | `LINKUP_API_KEY` | (empty) | Key from <https://app.linkup.so>. Real page content per result, plus a proper image-search mode. |
 | `EXA_API_KEY` | (empty) | Key from <https://exa.ai>. Neural/semantic search, strong on academic sources. No image-search endpoint — a document index, not a SERP. |
 | `SERPAPI_API_KEY` | (empty) | Key from <https://serpapi.com>. Genuine Google SERP data (organic + image results) via a paid scraping API — a different product from `GOOGLE_API_KEY` above. |
 | *(none — `ddgs` library)* | always on | DuckDuckGo via the `ddgs` package. Last in the cascade, no key, no quota — the one provider that's always "configured". Least reliable of the six: it scrapes an undocumented endpoint, since DuckDuckGo has no official search API. |
 
-⚠ **This is a privacy setting as much as a quality one.** The first five providers are hosted
+⚠ **This is a privacy setting as much as a quality one.** The first four providers are hosted
 third parties: **the query string** leaves the machine for whichever one answers a given call.
 duckduckgo is a direct scrape, not a hosted API, but the query still leaves the machine. Paper
 text, chunks, and chat history never leave — callers pass a query and nothing else. See

@@ -12,11 +12,24 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _ollama_headers() -> dict:
-    """Headers for native Ollama endpoints; adds Bearer auth when a key is set."""
+def _ollama_headers(api_key: Optional[str] = None) -> dict:
+    """Headers for native Ollama endpoints; adds Bearer auth when a key is set.
+
+    ⚠ ``api_key`` must be passed on every request path that runs inside the
+    chat cascade, because OLLAMA_API_KEY may hold a COMMA-SEPARATED LIST of
+    keys (see settings.ollama_api_keys) and the resolver hands out one
+    LLMTarget per key. Reading the raw setting here instead would send the
+    whole joined string as one Bearer token and 401 on every key — which is
+    exactly the bug this parameter exists to prevent.
+
+    When no key is given (reachability probe, model catalog) the FIRST
+    configured key is used: those endpoints only need to prove the host is
+    up, and any valid key does that.
+    """
+    key = api_key if api_key is not None else (settings.ollama_api_keys[0] if settings.ollama_api_keys else "")
     headers = {}
-    if settings.ollama_api_key:
-        headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     return headers
 
 
@@ -70,6 +83,7 @@ async def chat(
     stream: bool = False,
     num_predict: Optional[int] = None,
     keep_alive: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> dict:
     """Send a chat completion request to Ollama.
 
@@ -101,7 +115,7 @@ async def chat(
             "options": options,
         }
         try:
-            response = await client.post(url, json=payload, headers=_ollama_headers())
+            response = await client.post(url, json=payload, headers=_ollama_headers(api_key))
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
@@ -126,6 +140,7 @@ async def stream_chat(
     temperature: float = 0.7,
     num_predict: Optional[int] = None,
     keep_alive: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """Stream a chat completion from Ollama token by token.
 
@@ -155,7 +170,7 @@ async def stream_chat(
             "options": options,
         }
         try:
-            async with client.stream("POST", url, json=payload, headers=_ollama_headers()) as response:
+            async with client.stream("POST", url, json=payload, headers=_ollama_headers(api_key)) as response:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", "replace")[:500]
                     logger.error(f"Ollama stream HTTP {response.status_code}: {body}")
@@ -192,6 +207,7 @@ async def generate(
     *,
     model: Optional[str] = None,
     system: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> dict:
     """Send a generation request to Ollama."""
     model = model or settings.chat_model
@@ -208,7 +224,7 @@ async def generate(
     timeout = httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
-            response = await client.post(url, json=payload, headers=_ollama_headers())
+            response = await client.post(url, json=payload, headers=_ollama_headers(api_key))
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
@@ -276,6 +292,7 @@ def chat_sync(
     model: Optional[str] = None,
     temperature: float = 0.3,   # Slightly lower default for factual summarization
     images: Optional[list[str]] = None,  # base64 encoded images for vision models
+    api_key: Optional[str] = None,
 ) -> dict:
     """Synchronous chat completion for Celery workers (supports vision via images)."""
     import httpx
@@ -305,7 +322,7 @@ def chat_sync(
 
     with httpx.Client(timeout=300.0) as client:  # 5 minutes per section is generous
         try:
-            response = client.post(url, json=payload, headers=_ollama_headers())
+            response = client.post(url, json=payload, headers=_ollama_headers(api_key))
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]

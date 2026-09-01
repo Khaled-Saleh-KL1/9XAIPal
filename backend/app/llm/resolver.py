@@ -81,6 +81,17 @@ class LLMTarget:
     chat_model: str
     classifier_model: str
     vlm_model: str
+    # Which of the provider's configured keys this target uses. Providers
+    # that accept a comma-separated key list (OLLAMA_API_KEY) produce one
+    # target per key, so an exhausted key falls through to the next with the
+    # same prompt instead of failing the request.
+    key_index: int = 0
+
+    @property
+    def breaker_id(self) -> str:
+        """Circuit-breaker name. Per-KEY, not per-provider: one spent key
+        must stop being tried without taking the whole provider out."""
+        return f"{self.provider}#{self.key_index}"
 
     def model_for_role(self, role: str) -> str:
         if role == "classifier":
@@ -166,15 +177,29 @@ def _explicit_llm_provider() -> Optional[str]:
     return None if p in ("", "auto") else p
 
 
-def _ollama_target() -> LLMTarget:
+def _ollama_target(api_key: str = "", key_index: int = 0) -> LLMTarget:
     return LLMTarget(
         provider="ollama",
-        api_key=settings.ollama_api_key,
+        api_key=api_key,
         base_url=settings.ollama_base_url,
         chat_model=settings.chat_model,
         classifier_model=settings.effective_classifier_model,
         vlm_model=settings.effective_vlm_model,
+        key_index=key_index,
     )
+
+
+def _ollama_targets() -> list[LLMTarget]:
+    """One target per configured Ollama key, in order.
+
+    A local Ollama needs no key at all, so an empty OLLAMA_API_KEY still
+    yields exactly one (keyless) target — the single-key and no-key cases
+    behave exactly as they did before multi-key support.
+    """
+    keys = settings.ollama_api_keys
+    if not keys:
+        return [_ollama_target()]
+    return [_ollama_target(key, i) for i, key in enumerate(keys)]
 
 
 def _cloud_llm_target(provider: str) -> LLMTarget:
@@ -235,13 +260,13 @@ def resolve_llm_sync(ollama_up: Optional[bool] = None) -> LLMTarget:
     """Pick the chat backend. ``ollama_up`` injects the probe result (tests)."""
     explicit = _explicit_llm_provider()
     if explicit == "ollama":
-        target = _ollama_target()
+        target = _ollama_targets()[0]
     elif explicit:
         target = _cloud_llm_target(explicit)
     else:
         up = ollama_reachable_sync() if ollama_up is None else ollama_up
         if up:
-            target = _ollama_target()
+            target = _ollama_targets()[0]
         else:
             cloud = _first_cloud_llm()
             if cloud is None:
@@ -291,18 +316,22 @@ def llm_cascade_sync(ollama_up: Optional[bool] = None) -> list[LLMTarget]:
     up = ollama_reachable_sync() if ollama_up is None else ollama_up
     targets: list[LLMTarget] = []
     if up:
-        targets.append(_ollama_target())
+        # One entry per configured Ollama key: an exhausted or rate-limited
+        # key then falls through to the next with the same prompt, using the
+        # same retry loop that handles falling through to a cloud provider.
+        targets.extend(_ollama_targets())
     for provider in CLOUD_PROVIDER_ORDER:
         if cloud_api_key(provider):
             targets.append(_cloud_llm_target(provider))
     if not targets:
         raise NoLLMConfigured(NO_LLM_MESSAGE.format(ollama_url=settings.ollama_base_url))
     # Skip backends that have failed repeatedly (app/core/circuit_breaker.py),
-    # keeping their priority intact for when they recover. filter_open returns
-    # the full list unchanged if EVERY backend is tripped — a slow answer from
-    # a struggling provider still beats refusing to try at all.
-    live = set(circuit_breaker.filter_open([t.provider for t in targets]))
-    return [t for t in targets if t.provider in live]
+    # keeping their priority intact for when they recover. Keyed per-KEY, so
+    # one spent Ollama key doesn't take the others down with it. filter_open
+    # returns the full list unchanged if EVERY backend is tripped — a slow
+    # answer from a struggling provider still beats refusing to try at all.
+    live = set(circuit_breaker.filter_open([t.breaker_id for t in targets]))
+    return [t for t in targets if t.breaker_id in live]
 
 
 async def llm_cascade(ollama_up: Optional[bool] = None) -> list[LLMTarget]:

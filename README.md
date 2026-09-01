@@ -37,7 +37,7 @@ Everything runs locally by default. Your documents and conversations never leave
 | **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed, no config switching |
 | **PDF extraction** | **MinerU** 3.x (with PyMuPDF fallback) | State-of-the-art structural extraction: OCR, table recognition, equation → LaTeX |
 | **Background jobs** | Celery + Redis | Heavy extraction runs asynchronously so uploads never hang |
-| **Web search** | Google → Tavily → Linkup → Exa, cascading | Each is tried in order; a provider that errors or comes back empty falls through to the next automatically, so one being down or out of quota never leaves a question unanswered. ⚠ All four are third parties: the **query string** leaves the machine for whichever one answers (never paper text, chunks, or chat history), see [configuration](docs/03-reference/configuration.md#web-search) |
+| **Web search** | Tavily → Linkup → Exa → SerpApi → DuckDuckGo, cascading | Each is tried in order; a provider that errors or comes back empty falls through to the next automatically, so one being down or out of quota never leaves a question unanswered. ⚠ All four are third parties: the **query string** leaves the machine for whichever one answers (never paper text, chunks, or chat history), see [configuration](docs/03-reference/configuration.md#web-search) |
 | **Vector index** | pgvector HNSW | Fast approximate nearest neighbors inside Postgres; no extra service to run |
 
 ---

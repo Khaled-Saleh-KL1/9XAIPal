@@ -1,13 +1,20 @@
 """The one door to the web.
 
 Every caller that wants a web result imports from here, never from a
-provider module directly. Six providers exist, tried in this fixed order:
+provider module directly. Five providers exist, tried in this fixed order:
 
-    google      — Custom Search JSON API: a real Google SERP, text and
-                  images. Needs a key AND a Programmable Search Engine ID,
-                  and is capped at a hard 100 requests/day because Google
-                  bills past that (app/search/quota.py).
-    tavily      — LLM-shaped extracts, one HTTPS call. The long-time default.
+⚠ Google was removed 2026-09-01. It was tried twice — Gemini Search
+grounding (free tier unavailable in the EEA, so 100% 429 from this host)
+and then the Custom Search JSON API (works, but only 100 free queries/day
+before it bills). Neither was worth a slot: the deliberate decision is that
+no provider here should be able to cost money, and Tavily's per-key monthly
+allowance scales by adding keys instead.
+
+    tavily      — LLM-shaped extracts, one HTTPS call. First in the
+                  cascade. Accepts a COMMA-SEPARATED list of keys and
+                  rotates across them: each Tavily key carries its own free
+                  monthly allowance, so an exhausted key falls to the next
+                  before the cascade moves on to another provider at all.
     linkup      — real page content per result, plus image search.
     exa         — neural/semantic search, strong on academic sources.
     serpapi     — genuine Google SERP data via a paid scraping API.
@@ -37,11 +44,11 @@ This replaced SearXNG (self-hosted, removed 2026-08-31): SearXNG's own
 score, which silently produced irrelevant results whenever a category
 filter was applied — see git history on external_context.py for the
 concrete case (a "FlashAttention 2 paper" query returning MDN docs and
-unrelated Docker Hub images ahead of the actual paper). None of the six
+unrelated Docker Hub images ahead of the actual paper). None of the five
 providers here have that failure mode: none accept a category filter to
 begin with (the domain bias lives entirely in
 `external_context.rewrite_query_for_papers` instead, which works for all
-six), and cascading on a bad result is strictly safer than trusting one
+five), and cascading on a bad result is strictly safer than trusting one
 provider's internal ranking blind.
 """
 
@@ -54,7 +61,6 @@ from app.search.errors import ProviderError
 from app.search import (
     duckduckgo_client,
     exa_client,
-    google_client,
     linkup_client,
     serpapi_client,
     tavily_client,
@@ -68,7 +74,6 @@ _NONE = "none"
 # straight to that entry with no fallback. duckduckgo is last and needs no
 # key — see module docstring.
 _PROVIDERS = [
-    ("google", google_client),
     ("tavily", tavily_client),
     ("linkup", linkup_client),
     ("exa", exa_client),
@@ -83,10 +88,8 @@ def _configured_names() -> list[str]:
     duckduckgo needs no credentials, so it's always in this list.
     """
     checks = {
-        # Google needs BOTH a key and a Programmable Search Engine ID —
-        # Custom Search cannot run on the key alone (see google_client.py).
-        "google": bool(settings.google_api_key and settings.google_search_cx),
-        "tavily": bool(settings.tavily_api_key),
+        # Any one of the comma-separated Tavily keys is enough to count.
+        "tavily": bool(settings.tavily_api_keys),
         "linkup": bool(settings.linkup_api_key),
         "exa": bool(settings.exa_api_key),
         "serpapi": bool(settings.serpapi_api_key),
@@ -180,8 +183,8 @@ async def search(
 async def search_images(query: str, *, limit: int = 4) -> list[dict]:
     """Image results as ``{img_url, thumbnail, title, source_url, source_engine}``.
 
-    ⚠ google and exa always return ``[]`` here by design (neither has an
-    image endpoint — see their clients). That is an empty result, not a
+    ⚠ exa always returns ``[]`` here by design (it has no image endpoint —
+    it indexes documents, not media; see its client). That is an empty result, not a
     failure, so it never counts against them in the circuit breaker: a
     provider skipped for images stays first in line for text.
     """

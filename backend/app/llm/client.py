@@ -152,6 +152,9 @@ async def _chat_once(
         return await ollama_client.chat(
             messages, model=resolved, temperature=temperature,
             num_predict=num_predict, keep_alive=keep_alive,
+            # This target's OWN key — OLLAMA_API_KEY may be a list, and
+            # sending the joined string would 401 on every key.
+            api_key=target.api_key,
         )
 
     cap = num_predict if num_predict is not None else (settings.chat_num_predict or None)
@@ -209,10 +212,10 @@ async def chat(
             )
         except ModelUnavailable as e:
             logger.warning(f"{target.provider} chat failed, falling through: {e}")
-            circuit_breaker.record_failure(target.provider)
+            circuit_breaker.record_failure(target.breaker_id)
             last_error = e
             continue
-        circuit_breaker.record_success(target.provider)
+        circuit_breaker.record_success(target.breaker_id)
         return result
     raise last_error or ModelUnavailable("no LLM provider configured")
 
@@ -234,6 +237,7 @@ async def _stream_once(
         async for event in ollama_client.stream_chat(
             messages, model=resolved, temperature=temperature,
             num_predict=num_predict, keep_alive=keep_alive,
+            api_key=target.api_key,
         ):
             yield event
         return
@@ -315,10 +319,10 @@ async def stream_chat(
             ):
                 yielded_any = True
                 yield event
-            circuit_breaker.record_success(target.provider)
+            circuit_breaker.record_success(target.breaker_id)
             return
         except ModelUnavailable as e:
-            circuit_breaker.record_failure(target.provider)
+            circuit_breaker.record_failure(target.breaker_id)
             if yielded_any:
                 raise
             logger.warning(f"{target.provider} stream failed before any output, falling through: {e}")
@@ -363,6 +367,7 @@ def _chat_sync_once(
     if target.provider == "ollama":
         return ollama_client.chat_sync(
             messages, model=resolved, temperature=temperature, images=images,
+            api_key=target.api_key,
         )
 
     final_messages = list(messages)
@@ -419,9 +424,9 @@ def chat_sync(
             )
         except ModelUnavailable as e:
             logger.warning(f"[sync] {target.provider} chat failed, falling through: {e}")
-            circuit_breaker.record_failure(target.provider)
+            circuit_breaker.record_failure(target.breaker_id)
             last_error = e
             continue
-        circuit_breaker.record_success(target.provider)
+        circuit_breaker.record_success(target.breaker_id)
         return result
     raise last_error or ModelUnavailable("no LLM provider configured")

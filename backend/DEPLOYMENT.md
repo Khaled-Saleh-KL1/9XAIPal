@@ -31,7 +31,7 @@ Then open **http://localhost:8000** in your browser. Everything (library, reader
 - **api**: FastAPI (async, 2 workers by default) + optional SPA mount for the frontend.
 - **frontend-build** (one-shot): Builds the Vite/React app and leaves dist in a volume.
 - postgres, redis: unchanged.
-- Web search: a cascade of 6 providers (google, tavily, linkup, exa, serpapi, then duckduckgo — see `app/search/web.py`), no local service. The last needs no key, so web search is never fully off.
+- Web search: a cascade of 5 providers (tavily, linkup, exa, serpapi, then duckduckgo — see `app/search/web.py`), no local service. Tavily rotates across a comma-separated list of keys first. The last needs no key, so web search is never fully off.
 - celery_worker: unchanged (uses the same image).
 
 ## Networking for Ollama (Your LLM)

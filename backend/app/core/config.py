@@ -120,7 +120,10 @@ class Settings(BaseSettings):
 
     # Ollama (local default backend; model names live in .env)
     ollama_base_url: str = "http://localhost:11434"
-    # Optional API key for hosted/protected Ollama endpoints (leave empty for local).
+    # Optional API key for hosted/protected Ollama endpoints (leave empty for
+    # local). ⚠ Accepts a COMMA-SEPARATED LIST, same as tavily_api_key: each
+    # key becomes its own entry in the chat cascade, so an exhausted or
+    # rate-limited key falls through to the next one with the same prompt.
     ollama_api_key: str = ""
     chat_model: str = "gemma4:26b"
     # Vision model for figure descriptions / image questions. Empty = reuse
@@ -179,6 +182,30 @@ class Settings(BaseSettings):
     @property
     def effective_classifier_model(self) -> str:
         return self.classifier_model or self.chat_model
+
+    @staticmethod
+    def _split_keys(raw: str) -> list[str]:
+        """Parse a comma-separated credential setting into a list.
+
+        Several providers hand out per-key free allowances, so the natural
+        way to get more headroom is more keys rather than a paid plan. Both
+        OLLAMA_API_KEY and TAVILY_API_KEY therefore accept either a single
+        key (unchanged behavior) or a comma-separated list, which the
+        respective clients rotate through. Blanks and stray whitespace are
+        dropped so a trailing comma or a wrapped .env line can't inject an
+        empty key that would fail every request it served.
+        """
+        return [k.strip() for k in (raw or "").split(",") if k.strip()]
+
+    @property
+    def ollama_api_keys(self) -> list[str]:
+        """Every configured Ollama key, in cascade order. May be empty."""
+        return self._split_keys(self.ollama_api_key)
+
+    @property
+    def tavily_api_keys(self) -> list[str]:
+        """Every configured Tavily key, in rotation order. May be empty."""
+        return self._split_keys(self.tavily_api_key)
 
     # ── Ingest profile ──────────────────────────────────────────────────────
     # "fast" (default): a paper is DONE the moment MinerU has extracted it and
@@ -287,7 +314,7 @@ class Settings(BaseSettings):
     # ── Web search ──────────────────────────────────────────────────────────
     # Which provider(s) serve the EXTERNAL route, the research agent, and the
     # paper agent's WEB tool. "auto" (default): try every configured provider
-    # in priority order — google, tavily, linkup, exa, serpapi, duckduckgo —
+    # in priority order — tavily, linkup, exa, serpapi, duckduckgo —
     # and fall through to the next the moment one errors or returns zero
     # results. A query never goes unanswered just because the first provider
     # in line is down or out of quota; duckduckgo needs no key at all, so
@@ -295,32 +322,18 @@ class Settings(BaseSettings):
     # name to force exactly that provider with no fallback (debugging only),
     # or "none" to disable web search entirely. See app/search/web.py.
     #
-    # ⚠ The first five are hosted third parties: the query string reaches
+    # ⚠ The first four are hosted third parties: the query string reaches
     # them. duckduckgo is a scrape via the `ddgs` library, not a hosted API,
     # but the query still leaves the machine either way. None of them ever
     # receives paper text, chunks, or chat history — only the query itself.
     web_search_provider: str = "auto"
 
-    # Google — Custom Search JSON API. Needs THREE things, two of them
-    # outside this repo: this key (the Cloud "AIzaSy..." form), the Custom
-    # Search API enabled on that key's Cloud project, and a Programmable
-    # Search Engine ID below. See app/search/google_client.py.
-    google_api_key: str = ""
-    # Programmable Search Engine ID from programmablesearchengine.google.com,
-    # configured to search the entire web. Without it the API returns 400 —
-    # there is no "just search Google" mode.
-    google_search_cx: str = ""
-    # ⚠ HARD daily cap on Google search requests, enforced in code before
-    # each call (app/search/quota.py), counted in Redis so it holds across
-    # the API's workers AND the Celery worker. Custom Search bills beyond
-    # 100/day, so this defaults to exactly the free allowance and the
-    # provider is skipped once it's spent. Text and image searches share it,
-    # because Google counts them together. Set to 0 to disable Google
-    # entirely without unsetting the key.
-    google_search_daily_limit: int = 100
-
     # Tavily (https://tavily.com) — search built for agents: ranked, already
     # extracted page content instead of a SERP that still needs scraping.
+    # ⚠ Accepts a COMMA-SEPARATED LIST of keys. Each Tavily key has its own
+    # monthly free allowance, so the client rotates: when one is exhausted
+    # or rejected it moves to the next, and only reports failure once every
+    # key is spent. A single key still works exactly as before.
     tavily_api_key: str = ""
     # "basic" (one credit, fast) or "advanced" (two credits, deeper extraction
     # and better recall on niche research queries).
@@ -336,9 +349,10 @@ class Settings(BaseSettings):
     exa_api_key: str = ""
 
     # SerpApi (https://serpapi.com) — a paid scraping API returning genuine
-    # Google SERP data (organic_results / images_results), unlike the
-    # google_api_key entry above (Gemini's grounding tool, a different
-    # product). Fifth in the cascade.
+    # Google SERP data (organic_results / images_results). This is the only
+    # way Google's index is reached now: the Google APIs themselves were
+    # removed 2026-09-01 (grounding was geo-blocked; Custom Search bills
+    # past 100 queries/day, and nothing here should be able to cost money).
     serpapi_api_key: str = ""
 
     # DuckDuckGo needs no key — the `ddgs` library scrapes it directly. Last

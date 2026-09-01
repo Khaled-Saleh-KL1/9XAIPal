@@ -3,7 +3,7 @@
 # The one and only deployment target — a self-contained stack running the
 # WHOLE backend (API + Celery worker + Postgres + Redis) on one box, so the
 # app is "entirely on the web" and does NOT depend on your local machine.
-#   • Web search: a 6-provider cascade (google, tavily, linkup, exa,
+#   • Web search: a 5-provider cascade (tavily, linkup, exa,
 #     serpapi, duckduckgo — see app/search/web.py), no self-hosted search
 #     engine on this box. Every provider client catches its own exceptions
 #     and degrades to an empty result list, and the /health endpoint's
@@ -170,16 +170,13 @@ services:
        # Extract large documents in page-range batches so peak RAM stays
        # bounded regardless of length. 0 disables batching.
       MINERU_PAGE_BATCH_SIZE: ${MINERU_PAGE_BATCH_SIZE:-100}
-       # Web search cascade: google -> tavily -> linkup -> exa -> serpapi ->
+       # Web search cascade: tavily -> linkup -> exa -> serpapi ->
        # duckduckgo, first configured one that answers wins (see
        # app/search/web.py). Query strings reach whichever provider actually
        # serves the call — see config.py's note. duckduckgo needs no key
        # and is always eligible, so this box always has web search even if
        # every paid key above is empty.
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      GOOGLE_SEARCH_CX: ${GOOGLE_SEARCH_CX:-}
-      GOOGLE_SEARCH_DAILY_LIMIT: ${GOOGLE_SEARCH_DAILY_LIMIT:-100}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       LINKUP_API_KEY: ${LINKUP_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
@@ -284,16 +281,13 @@ services:
       EXTRACTOR_PROVIDER: mineru
       INGEST_PROFILE: ${INGEST_PROFILE:-full}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-true}
-       # Web search cascade: google -> tavily -> linkup -> exa -> serpapi ->
+       # Web search cascade: tavily -> linkup -> exa -> serpapi ->
        # duckduckgo, first configured one that answers wins (see
        # app/search/web.py). Query strings reach whichever provider actually
        # serves the call — see config.py's note. duckduckgo needs no key
        # and is always eligible, so this box always has web search even if
        # every paid key above is empty.
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      GOOGLE_SEARCH_CX: ${GOOGLE_SEARCH_CX:-}
-      GOOGLE_SEARCH_DAILY_LIMIT: ${GOOGLE_SEARCH_DAILY_LIMIT:-100}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       LINKUP_API_KEY: ${LINKUP_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}

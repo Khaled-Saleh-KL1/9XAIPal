@@ -58,7 +58,7 @@ strings, not for synonyms.
 | **LOCAL** | Current chunk + neighbours + inline images. |
 | **GLOBAL** | pgvector similarity search across one document. |
 | **OVERVIEW** | Pre-computed hierarchical summaries (`section_summaries`), no vector search. |
-| **EXTERNAL** | Live web search, cascading through google → tavily → linkup → exa → serpapi → duckduckgo. With the paper agent's `WEB` tool, the only path that reaches the public internet, and only the query string does. |
+| **EXTERNAL** | Live web search, cascading through tavily → linkup → exa → serpapi → duckduckgo. With the paper agent's `WEB` tool, the only path that reaches the public internet, and only the query string does. |
 | **turn** | One message in a conversation. Row in `conversation_turns`. |
 | **sub-thread** | A tangent branched off a turn via `parent_turn_id`. Deliberately paper-free. |
 | **compaction** | A `role='compaction'` turn holding a dense summary of earlier turns, so long chats don't overflow the context window. |
