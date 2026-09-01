@@ -47,7 +47,7 @@ export function WaitingRoomView() {
                 You're <span style={{ color: 'var(--fg)' }}>#{queuePosition}</span> in line.
               </>
             )}
-            {' '}You'll be let in automatically the moment a spot opens up — no need to refresh.
+            {' '}You'll be let in automatically the moment a spot opens up, no need to refresh.
           </div>
         </div>
         <div
