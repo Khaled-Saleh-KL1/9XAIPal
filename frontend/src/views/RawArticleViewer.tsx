@@ -11,15 +11,14 @@ interface Props {
 
 /**
  * Sibling to PdfViewer.tsx, for a doc_kind='article' document's raw HTML
- * snapshot(s) (see backend services/article_crawl.py) instead of a PDF.
+ * snapshot (see backend services/article_crawl.py) instead of a PDF.
  *
- * Deliberately much simpler than PdfViewer: no page/zoom controls, because
- * the backend's GET /papers/{id}/raw already decides what to show — one
- * sanitized page directly, or (for a "book-like" import that crawled several
- * same-site pages) a small server-rendered index of links. Either way this
- * is just an iframe pointed at that one URL; clicking a link in a multi-page
- * index navigates the iframe itself via ordinary same-origin browser
- * behavior, so there's no page-picker state to build or keep in sync here.
+ * Deliberately much simpler than PdfViewer: no page/zoom controls, no
+ * page-picker state — just an iframe pointed at GET /papers/{id}/raw, which
+ * serves the one sanitized page directly. The page's own hyperlinks are
+ * preserved as ordinary clickable links in the extracted article content
+ * itself (see article_extraction.py's include_links=True) rather than
+ * anything this viewer needs to handle.
  */
 export function RawArticleViewer({ paper, onBack }: Props) {
   const rawUrl = getRawFileUrl(paper.id);

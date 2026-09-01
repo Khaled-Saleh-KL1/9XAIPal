@@ -1,6 +1,5 @@
 """Paper endpoints: upload, list, detail, progress, delete."""
 
-import html
 import os
 import shutil
 import traceback
@@ -279,65 +278,23 @@ def _raw_html_headers() -> dict:
     }
 
 
-def _raw_response_kind(doc_kind: str | None, pages: list, raw_snapshot_status: str | None) -> str:
+def _raw_response_kind(doc_kind: str | None, pages: list) -> str:
     """Pure decision behind GET /{paper_id}/raw, pulled out of the endpoint
     so it's unit-testable without a DB or the FastAPI/ASGI stack — same
     reasoning as _to_storage_path (notes.py) and _pdf_name_from_url
     (pipeline_sync.py). Returns one of:
       'pdf'         — anything that isn't doc_kind='article' (unchanged today).
-      'pending'     — an article whose crawl (services/article_crawl.py)
-                      hasn't produced a page yet, but is still running.
-      'unavailable' — an article with no pages and no crawl in flight
-                      (crawl failed before saving anything, or never ran).
-      'single'      — exactly one snapshot page: serve it directly.
-      'index'       — more than one (a "book-like" import): serve the index.
+      'unavailable' — an article with no saved snapshot (the save failed, or
+                      never ran — see extraction/pipeline_sync.py, which
+                      saves this inline as part of the import itself, so
+                      there's no meaningful "still saving" state to report:
+                      by the time the article is readable at all, its raw
+                      snapshot has already either saved or failed).
+      'single'      — the one snapshot page for this article: serve it.
     """
     if doc_kind != "article":
         return "pdf"
-    if not pages:
-        return "pending" if raw_snapshot_status == "pending" else "unavailable"
-    if len(pages) == 1:
-        return "single"
-    return "index"
-
-
-async def _raw_snapshot_index_html(doc: dict, pages: list) -> str:
-    """A small, server-authored (trusted markup, untrusted TEXT) index page
-    linking to each crawled page — used only when a "book-like" import found
-    more than one page. Keeps GET /{paper_id}/raw a single stable URL for
-    every doc_kind, so the frontend never needs doc_kind-aware branching to
-    know what to open.
-
-    Every page's `title` came from a third-party site's own <title> tag
-    (see article_crawl.py's _page_title) — html.escape() here is defense in
-    depth alongside this response's own Content-Security-Policy header
-    (_raw_html_headers): a page titled `<script>...` must not become live
-    markup in a response WE authored, even though CSP would already block
-    it from executing.
-    """
-    title = html.escape((doc.get("title") or doc.get("original_filename") or "Raw pages").strip())
-
-    def _row(p: dict) -> str:
-        link_text = html.escape((p["title"] or p["url"])[:200])
-        depth_label = "root page" if p["depth"] == 0 else f"+{p['depth']}"
-        href = f"/api/v1/papers/{doc['id']}/raw/{p['id']}"
-        return f'<li><a href="{href}">{link_text}</a> <span class="depth">({depth_label})</span></li>'
-
-    rows = "\n".join(_row(p) for p in pages)
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{title} — raw pages</title>
-<style>
-body {{ font-family: -apple-system, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1.5rem; color: #1a1a1a; }}
-h1 {{ font-size: 1.1rem; font-weight: 600; }}
-ul {{ padding-left: 1.2rem; }}
-li {{ margin: 0.5rem 0; }}
-.depth {{ color: #888; font-size: 0.85em; }}
-</style></head>
-<body>
-<h1>{title}</h1>
-<p>{len(pages)} raw page(s) were saved when this article was imported.</p>
-<ul>{rows}</ul>
-</body></html>"""
+    return "single" if pages else "unavailable"
 
 
 @router.get("/{paper_id}/raw")
@@ -347,9 +304,8 @@ async def download_raw_paper(
     current_user: dict = Depends(get_current_user),
 ):
     """The raw copy of this document: the original PDF for a paper/book, or
-    a sanitized raw HTML snapshot for an imported article (see
-    services/article_crawl.py) — one page directly, or a small index linking
-    to each one if the import crawled more than one same-site page.
+    a sanitized raw HTML snapshot of the imported page for an article (see
+    services/article_crawl.py).
     """
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
@@ -360,25 +316,21 @@ async def download_raw_paper(
         rows = await db.execute(
             text(
                 "SELECT id, url, title, depth, storage_filename FROM raw_snapshot_pages "
-                "WHERE document_id = :id ORDER BY depth, created_at"
+                "WHERE document_id = :id ORDER BY created_at"
             ),
             {"id": paper_id},
         )
         pages = [dict(r) for r in rows.mappings().all()]
 
-    kind = _raw_response_kind(doc.get("doc_kind"), pages, doc.get("raw_snapshot_status"))
+    kind = _raw_response_kind(doc.get("doc_kind"), pages)
 
-    if kind == "pending" or kind == "unavailable":
+    if kind == "unavailable":
         # Opened directly in a browser tab, not fetched by frontend JS —
         # a small readable message, not a bare JSON 404.
-        message = (
-            "Still saving a raw copy of this article — try again in a moment."
-            if kind == "pending"
-            else "No raw copy is available for this article."
-        )
         return HTMLResponse(
-            f"<!DOCTYPE html><html><body style='font-family:-apple-system,sans-serif;"
-            f"max-width:32rem;margin:4rem auto;padding:0 1.5rem;color:#444'>{message}</body></html>",
+            "<!DOCTYPE html><html><body style='font-family:-apple-system,sans-serif;"
+            "max-width:32rem;margin:4rem auto;padding:0 1.5rem;color:#444'>"
+            "No raw copy is available for this article.</body></html>",
             headers=_raw_html_headers(),
         )
 
@@ -388,10 +340,6 @@ async def download_raw_paper(
         if not html_path.exists():
             raise DocumentNotFound(str(paper_id))
         return HTMLResponse(html_path.read_text(encoding="utf-8"), headers=_raw_html_headers())
-
-    if kind == "index":
-        index_html = await _raw_snapshot_index_html(doc, pages)
-        return HTMLResponse(index_html, headers=_raw_html_headers())
 
     raw_path = assets_dir() / f"{paper_id}.pdf"
     if not raw_path.exists():

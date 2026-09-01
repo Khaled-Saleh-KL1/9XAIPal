@@ -144,7 +144,7 @@ def process_article_ingestion(
 
     try:
         with sync_session() as session:
-            is_article = run_article_pipeline_sync(
+            run_article_pipeline_sync(
                 session,
                 document_id=doc_uuid,
                 job_id=job_uuid,
@@ -155,86 +155,16 @@ def process_article_ingestion(
         logger.exception(f"[celery] process_article_ingestion failed document={document_id}: {exc}")
         raise
 
-    # A raw-HTML snapshot only makes sense for a real web article — a URL
-    # that turned out to be a PDF already has its own real raw file (the PDF
-    # itself), nothing to crawl. Dispatched as a separate task, not run
-    # inline here, so a slow/bounded crawl (up to CRAWL_TIME_BUDGET_SEC) never
-    # adds to how long the reader waits for the article they just imported to
-    # become readable — see services/article_crawl.py.
-    if is_article:
-        try:
-            crawl_raw_snapshot.delay(document_id, url)  # type: ignore[attr-defined]
-        except Exception:
-            logger.exception(
-                f"[celery] Failed to dispatch crawl_raw_snapshot for {document_id} "
-                "(non-fatal) — article import itself already succeeded"
-            )
-
+    # The raw HTML snapshot (see services/article_crawl.py) is saved INLINE
+    # inside run_article_pipeline_sync now, not dispatched as a separate
+    # task — it's just the page already fetched, sanitized and written to
+    # disk, no extra network round trip. An earlier version of this crawled
+    # same-site linked pages too, which genuinely did need its own task to
+    # keep a slow multi-page crawl off the reader's critical path; that idea
+    # was dropped (see article_crawl.py's module docstring) along with the
+    # task that existed only to run it.
     logger.info(f"[celery] process_article_ingestion done document={document_id}")
     return {"document_id": document_id, "job_id": job_id, "status": "complete"}
-
-
-@celery_app.task(
-    name="9xaipal.crawl_raw_snapshot",
-    bind=True,
-    max_retries=0,
-    acks_late=True,
-)
-def crawl_raw_snapshot(self, document_id: str, url: str) -> dict:
-    """Best-effort raw HTML snapshot crawl for a doc_kind='article' document
-    (see services/article_crawl.py) — the root page plus a bounded set of
-    same-site linked pages, sanitized and saved so a reader can open exactly
-    what the extractor had to work with.
-
-    Deliberately never touches documents.status or documents.error_message —
-    only documents.raw_snapshot_status. A slow, partial, or failed crawl must
-    never affect the article's actual read/chat experience, which already
-    finished successfully in process_article_ingestion before this was even
-    dispatched.
-    """
-    logger.info(f"[celery] crawl_raw_snapshot start document={document_id}")
-    sync_engine.dispose()
-    doc_uuid = UUID(document_id)
-
-    with sync_session() as session:
-        session.execute(
-            text("UPDATE documents SET raw_snapshot_status = 'pending' WHERE id = :id"),
-            {"id": doc_uuid},
-        )
-        session.commit()
-
-    try:
-        from app.services.article_extraction import fetch_resource
-        from app.services.article_crawl import crawl_article_pages, save_crawled_pages
-
-        resource = fetch_resource(url)
-        if resource.is_pdf:
-            raise ValueError("root URL now resolves to a PDF, nothing to crawl as HTML")
-
-        pages = crawl_article_pages(resource.final_url, resource.text)
-        with sync_session() as session:
-            saved = save_crawled_pages(session, doc_uuid, pages)
-            session.execute(
-                text("UPDATE documents SET raw_snapshot_status = 'complete' WHERE id = :id"),
-                {"id": doc_uuid},
-            )
-            session.commit()
-
-        logger.info(f"[celery] crawl_raw_snapshot done document={document_id} pages={saved}")
-        return {"document_id": document_id, "pages": saved, "status": "complete"}
-
-    except Exception as exc:
-        logger.exception(f"[celery] crawl_raw_snapshot failed document={document_id}: {exc}")
-        try:
-            with sync_session() as session:
-                session.execute(
-                    text("UPDATE documents SET raw_snapshot_status = 'failed' WHERE id = :id"),
-                    {"id": doc_uuid},
-                )
-                session.commit()
-        except Exception:
-            logger.error(f"[celery] Failed to mark raw_snapshot_status='failed' for {document_id}")
-        return {"document_id": document_id, "status": "failed", "error": str(exc)}
 
 
 # ── Embedding ─────────────────────────────────────────────────────────────────
