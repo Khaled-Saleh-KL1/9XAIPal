@@ -241,6 +241,24 @@ def fetch_resource(url: str) -> FetchedResource:
         raise ArticleExtractionError("That link redirects too many times to follow.") from e
     except UnsafeRedirectError as e:
         raise ArticleExtractionError("That link redirects somewhere that can't be imported.") from e
+    except httpx.HTTPStatusError as e:
+        # Caught before the broader httpx.HTTPError below (HTTPStatusError is
+        # a subclass): a 403/429 almost always means anti-bot protection
+        # (Cloudflare, Akamai, PerimeterX, ...), not a real "you can't have
+        # this" from the site — and that class of block requires actually
+        # running a browser to clear (a JS challenge, sometimes a CAPTCHA),
+        # which nothing short of full browser automation gets past. Saying
+        # so plainly beats a bare "403 Forbidden" that reads like our bug.
+        if e.response.status_code in (403, 429):
+            hint = ""
+            if e.response.headers.get("cf-mitigated") or "cloudflare" in e.response.headers.get("server", "").lower():
+                hint = " (Cloudflare)"
+            raise ArticleExtractionError(
+                f"That site blocked the request{hint} — this usually means bot/anti-scraping "
+                "protection that can't be bypassed without running a real browser. Try pasting "
+                "the article text directly, or look for a plain-text/AMP version of the page."
+            ) from e
+        raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
     except httpx.HTTPError as e:
         raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
     finally:
