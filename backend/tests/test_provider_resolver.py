@@ -107,6 +107,63 @@ def test_pinned_cloud_provider_without_key_fails_clearly(monkeypatch):
     assert "XAI_API_KEY" in str(exc_info.value.model)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# llm_cascade_sync / llm_cascade: every target "auto" would try, in order —
+# consumed by app.llm.client's retry loop (chat/stream_chat/chat_sync).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_cascade_includes_ollama_first_when_reachable(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
+    targets = resolver.llm_cascade_sync(ollama_up=True)
+    assert [t.provider for t in targets] == ["ollama", "anthropic"]
+
+
+def test_cascade_skips_ollama_when_unreachable(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "sk-oa-test")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")
+    targets = resolver.llm_cascade_sync(ollama_up=False)
+    assert [t.provider for t in targets] == ["openai", "anthropic"]
+
+
+def test_cascade_includes_every_configured_cloud_provider_in_order(monkeypatch):
+    monkeypatch.setattr(settings, "deepseek_api_key", "sk-ds-test")
+    monkeypatch.setattr(settings, "openai_api_key", "sk-oa-test")
+    monkeypatch.setattr(settings, "xai_api_key", "xai-test")
+    targets = resolver.llm_cascade_sync(ollama_up=False)
+    # CLOUD_PROVIDER_ORDER is openai -> anthropic -> xai -> deepseek;
+    # anthropic has no key here, so it's skipped, not left as a gap.
+    assert [t.provider for t in targets] == ["openai", "xai", "deepseek"]
+
+
+def test_cascade_raises_no_llm_configured_when_nothing_is_available():
+    with pytest.raises(NoLLMConfigured):
+        resolver.llm_cascade_sync(ollama_up=False)
+
+
+def test_cascade_with_pin_returns_single_target_no_fallback(monkeypatch):
+    """A pin means exactly that provider, full stop — matches the pinned
+    WEB_SEARCH_PROVIDER rule (app/search/web.py): a pin exists to force one
+    specific backend for debugging, so it must never silently fall through."""
+    monkeypatch.setattr(settings, "llm_provider", "openai")
+    monkeypatch.setattr(settings, "openai_api_key", "sk-oa-test")
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-ant-test")  # must be ignored
+    targets = resolver.llm_cascade_sync(ollama_up=True)  # ollama up must also be ignored
+    assert [t.provider for t in targets] == ["openai"]
+
+
+def test_cascade_with_pin_and_no_key_raises_immediately(monkeypatch):
+    monkeypatch.setattr(settings, "llm_provider", "xai")
+    with pytest.raises(ModelUnavailable):
+        resolver.llm_cascade_sync()
+
+
+@pytest.mark.asyncio
+async def test_async_cascade_matches_sync(monkeypatch):
+    monkeypatch.setattr(settings, "openai_api_key", "sk-oa-test")
+    targets = await resolver.llm_cascade(ollama_up=False)
+    assert [t.provider for t in targets] == ["openai"]
+
+
 @pytest.mark.asyncio
 async def test_async_resolution_matches_sync(monkeypatch):
     monkeypatch.setattr(settings, "xai_api_key", "xai-test")

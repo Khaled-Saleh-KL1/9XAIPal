@@ -10,10 +10,10 @@
 > **Does not own:** env-var defaults ([configuration.md](../03-reference/configuration.md)),
 > prompt content ([chat-and-ask.md](chat-and-ask.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-25 against
+> **Status:** current · **Last verified:** 2026-09-01 against
 > [`llm/resolver.py`](../../backend/app/llm/resolver.py) and
 > [`llm/client.py`](../../backend/app/llm/client.py)
-> **Verify with:** `cd backend && pytest tests/test_provider_resolver.py -v`
+> **Verify with:** `cd backend && pytest tests/test_provider_resolver.py tests/test_llm_client_cascade.py -v`
 
 ---
 
@@ -27,7 +27,9 @@
    503 `NO_LLM_CONFIGURED` carrying configure-me instructions. Stored papers still serve.
 4. Within one process lifetime, the **embedding** provider is pinned after first successful
    resolution: a mid-run provider switch can never mix incomparable vectors into one library.
-5. Provider reachability is probed, not assumed, and the probe result is cached for 30 s.
+   **Chat has no such pin** — see §2, it retries every call against the full cascade.
+5. Provider reachability is probed, not assumed, and the probe result is cached for 30 s — this
+   governs only whether Ollama is *attempted*, not whether the request succeeds; see §2.
 
 ---
 
@@ -53,6 +55,13 @@ and nothing else**, your Ollama tags stay where they are and are simply not used
 
 ## 2. Resolution chain
 
+Chat is a **cascade**, not a single pick: `app.llm.client`'s `chat()` / `stream_chat()` /
+`chat_sync()` each try every target `resolver.llm_cascade()` returns, in order, with the SAME
+messages, until one succeeds. This closed a real gap: Ollama passing its cheap reachability probe
+never guaranteed the actual completion call would succeed — the wrong model, an OOM, or a crash
+mid-generation used to be fatal even with a cloud key sitting right there in `.env`. Now that
+failure is just a fall-through, invisible to the caller.
+
 ```text
                       ┌─────────────────────────┐
    every model call ──►  LLM_PROVIDER == ?      │
@@ -61,22 +70,32 @@ and nothing else**, your Ollama tags stay where they are and are simply not used
            ┌──────────────────────┼──────────────────────┐
            │ "auto" (default)     │ pinned               │
            ▼                      ▼                      │
-   probe GET {OLLAMA_BASE_URL}/api/tags            use that provider
-   timeout 3s · result cached 30s                  (error if unusable)
-           │
-     ┌─────┴─────┐
-  reachable   unreachable
+   probe GET {OLLAMA_BASE_URL}/api/tags            use ONLY that provider
+   timeout 3s · result cached 30s                  (error if unusable,
+           │                                        no fallback — a pin
+     ┌─────┴─────┐                                  means exactly that
+  reachable   unreachable                           one backend)
      │             │
      ▼             ▼
-  OLLAMA      walk cloud keys in order:
-  namespace   openai → anthropic → xai → deepseek
-                   │                          │
-             first key set                 none set
-                   │                          │
-                   ▼                          ▼
-             that provider's         raise NoLLMConfigured
-             CLOUD namespace         → HTTP 503 NO_LLM_CONFIGURED
-                                     → verbatim setup instructions
+  cascade = [ollama,   cascade = walk cloud keys in order:
+  ...every cloud key   openai → anthropic → xai → deepseek,
+  present, in order]   whichever have a key set
+           │
+           ▼
+   try cascade[0] with the messages
+           │
+     ┌─────┴─────┐
+  succeeds     ModelUnavailable
+     │             │
+     ▼             ▼
+  return       log + try cascade[1] with the SAME messages, and so on
+                   │
+             every target failed
+                   │
+                   ▼
+             raise the last ModelUnavailable
+             (or NoLLMConfigured if the cascade was empty to begin with)
+             → HTTP 503, verbatim setup instructions
 ```
 
 ### (rendered)
@@ -84,30 +103,43 @@ and nothing else**, your Ollama tags stay where they are and are simply not used
 ```mermaid
 %%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
 flowchart TD
-    C[model call<br/>role: chat/vlm/classifier/embedding] --> P{{LLM_PROVIDER}}
-    P -->|pinned| USE[use that provider]
+    C[model call<br/>role: chat/vlm/classifier] --> P{{LLM_PROVIDER}}
+    P -->|pinned| USE[use ONLY that provider<br/>no fallback]
     P -->|auto| PROBE{{"GET /api/tags<br/>3s timeout · 30s cache"}}
-    PROBE -->|reachable| OLL[Ollama namespace<br/>CHAT_MODEL · VLM_MODEL · CLASSIFIER_MODEL]
-    PROBE -->|unreachable| CHAIN{{first key set?<br/>openai→anthropic→xai→deepseek}}
-    CHAIN -->|yes| CLOUD[that provider's *_CHAT_MODEL]
-    CHAIN -->|no| ERR[/NoLLMConfigured<br/>503 NO_LLM_CONFIGURED/]
-    OLL --> T[ollama_client.py<br/>POST /api/chat]
-    CLOUD --> O[client.py<br/>POST /chat/completions<br/>Bearer key]
+    PROBE -->|reachable| CASC["cascade = [ollama, ...every<br/>cloud key present, in order]"]
+    PROBE -->|unreachable| CASC2["cascade = every cloud key<br/>present: openai→anthropic→xai→deepseek"]
+    CASC --> TRY{{"try cascade[0] with the messages"}}
+    CASC2 --> TRY
+    TRY -->|success| DONE[return]
+    TRY -->|ModelUnavailable| NEXT{{"more targets left?"}}
+    NEXT -->|yes| TRY2["try cascade[i+1], SAME messages"]
+    TRY2 --> TRY
+    NEXT -->|no| ERR[/raise last ModelUnavailable<br/>or NoLLMConfigured if cascade was empty<br/>→ HTTP 503/]
 
     classDef owned stroke:#3b82f6,stroke-width:2px
     classDef bad stroke:#ef4444,stroke-width:2px
-    class P,PROBE,CHAIN,T,O owned
+    class P,PROBE,CASC,CASC2,TRY,NEXT,TRY2 owned
     class ERR bad
 ```
 
 Transport differs by target: Ollama goes through
 [`ollama_client.py`](../../backend/app/llm/ollama_client.py) (`POST {base}/api/chat`); every cloud
-provider speaks the OpenAI-compatible `POST {base}/chat/completions` with a Bearer key. All four
-cloud providers therefore share one code path.
+provider speaks the OpenAI-compatible `POST {base}/chat/completions` with a Bearer key. All cloud
+providers therefore share one code path — see `app.llm.client._chat_once` /
+`_stream_once` / `_chat_sync_once`.
 
-⚠ `httpx.Timeout` is `connect=10s, **read=600s**, write=10s, pool=10s`. The 10-minute read is
-deliberate: a large local model on cold start will blow through any default, and the previous
-120-second timeout produced HTTP 500s at exactly 2 minutes.
+⚠ **Streaming's fallback only covers pre-first-token failures.** Once a token has already reached
+whoever is rendering the stream, a later failure on that provider raises instead of silently
+restarting on the next one — discarding visible partial output and resuming (possibly a different
+model, different voice, duplicated content) is worse than a clean error. A stream that fails before
+yielding anything falls through exactly like `chat()`/`chat_sync()` do, with no visible effect.
+
+⚠ `httpx.Timeout` is `connect=10s, **read=600s**, write=10s, pool=10s`, per target attempted. The
+10-minute read is deliberate: a large local model on cold start will blow through any default, and
+the previous 120-second timeout produced HTTP 500s at exactly 2 minutes. This means a worst case
+where every configured provider hangs (not fails fast) rather than erroring could take a while to
+exhaust the whole cascade — in practice, every failure mode observed so far (bad model, rate limit,
+auth error, connection refused) fails within a few seconds, not minutes.
 
 ---
 
@@ -192,8 +224,15 @@ operation with no confirmation prompt**. It happens on the next start.
   [plans/ollama-local-gemma4-cloud.md](../plans/ollama-local-gemma4-cloud.md).
 - **DeepSeek has no vision.** With it active, figure images cannot be described; captions still
   work. Nothing errors: the feature just quietly does less.
-- **The 30 s probe cache means failover is not instant.** When Ollama dies with a cloud key
-  present, up to 30 seconds of requests can fail before `auto` reroutes.
+- ~~**The 30 s probe cache means failover is not instant.**~~ **Fixed 2026-09-01** by the cascade
+  in §2: the probe only decides whether Ollama is *attempted* first, not whether the request
+  ultimately succeeds. If the probe is stale (says reachable, Ollama actually isn't) the real call
+  fails within its own connect timeout and falls through to the next configured provider on that
+  SAME request — no 30-second window where requests are simply lost.
 - **`custom` reuses the Ollama namespace.** `LLM_PROVIDER=custom` + `LLM_BASE_URL` speaks
   OpenAI-compatible HTTP but reads `CHAT_MODEL`, not `OPENAI_CHAT_MODEL`. Reasonable once you know
-  it; surprising until then.
+  it; surprising until then. ⚠ `custom` is also always a single target: `LLM_PROVIDER=custom`
+  counts as a pin (§2), so it never falls through to anything else even in "auto"'s spirit.
+- **Embeddings have no cascade.** Only chat retries across providers — see invariant 4. A mid-run
+  embedding failure still surfaces immediately rather than silently switching models, because
+  vectors from two different models are not comparable within one library.
