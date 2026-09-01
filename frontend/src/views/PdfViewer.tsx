@@ -2,14 +2,20 @@ import { useState, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
+import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { getStaticPdfUrl } from '../api';
 import { displayTitle } from '../lib/titles';
 import type { PaperMeta } from '../api';
 import { IconBack } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
 
-// Set up PDF.js worker
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+// ⚠ Bundled from the installed pdfjs-dist, not fetched from unpkg on every
+// open. A live CDN round-trip on the render path added latency to every
+// single open and, worse, occasionally left the viewer blank with no error
+// (a slow/blocked fetch to a third-party host, not a PDF parsing failure the
+// Document `error` prop below ever sees) until a page refresh warmed the
+// browser's cache. Same-origin and build-pinned removes both failure modes.
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 
 interface Props {
   paper: PaperMeta;

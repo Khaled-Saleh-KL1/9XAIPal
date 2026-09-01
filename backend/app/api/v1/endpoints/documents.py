@@ -339,7 +339,14 @@ async def download_raw_paper(
         html_path = raw_snapshots_dir(paper_id) / page["storage_filename"]
         if not html_path.exists():
             raise DocumentNotFound(str(paper_id))
-        return HTMLResponse(html_path.read_text(encoding="utf-8"), headers=_raw_html_headers())
+        # A blocking read here stalls this worker's whole event loop for as
+        # long as the file takes to read — every other request it's holding
+        # (including this same user's own document-list polling) stalls with
+        # it, which is what made a big snapshot look like "the app went
+        # blank" rather than just "this one tab is slow".
+        async with aiofiles.open(html_path, mode="r", encoding="utf-8") as f:
+            html = await f.read()
+        return HTMLResponse(html, headers=_raw_html_headers())
 
     raw_path = assets_dir() / f"{paper_id}.pdf"
     if not raw_path.exists():
@@ -395,7 +402,9 @@ async def get_raw_snapshot_page(
     if not html_path.exists():
         raise DocumentNotFound(str(paper_id))
 
-    return HTMLResponse(html_path.read_text(encoding="utf-8"), headers=_raw_html_headers())
+    async with aiofiles.open(html_path, mode="r", encoding="utf-8") as f:
+        html = await f.read()
+    return HTMLResponse(html, headers=_raw_html_headers())
 
 
 @router.get("", response_model=DocumentListResponse)
