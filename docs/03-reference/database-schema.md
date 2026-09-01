@@ -280,10 +280,12 @@ Index: `idx_ingestion_jobs_status(status)`.
 
 ### `raw_snapshot_pages`
 
-Sanitized raw HTML for a `doc_kind='article'` import — the root page fetched, plus a bounded
-set of same-site linked pages found by following it (see
+A sanitized raw HTML snapshot for a `doc_kind='article'` import — the page as fetched (see
 [`services/article_crawl.py`](../../backend/app/services/article_crawl.py)). Empty for anything
-that isn't an article.
+that isn't an article. One row per article: an earlier version of this also crawled same-site
+linked pages (hence the one-to-many FK and the `depth` column), which was dropped in favor of
+keeping the page's own hyperlinks as ordinary clickable links in the extracted content instead —
+see `article_crawl.py`'s module docstring.
 
 | Column              | Type          | Notes                                                    |
 | ------------------- | ------------- | --------------------------------------------------------- |
@@ -291,7 +293,7 @@ that isn't an article.
 | `document_id`       | `UUID`        | FK → `documents.id`, cascade.                             |
 | `url`               | `TEXT`        | The page's own URL (after redirects).                     |
 | `title`             | `TEXT`        | That page's `<title>`, or the URL if it had none.         |
-| `depth`             | `INT`         | `0` = the originally-imported URL; `>0` = hops via same-site links, capped at `MAX_CRAWL_DEPTH`. |
+| `depth`             | `INT`         | Always `0` now (the originally-imported URL itself).      |
 | `storage_filename`  | `TEXT`        | Filename under `raw_snapshots_dir(document_id)` — the sanitized HTML lives on disk, not in this table. |
 | `byte_size`         | `INT`         |                                                            |
 | `created_at`        | `TIMESTAMPTZ` |                                                            |

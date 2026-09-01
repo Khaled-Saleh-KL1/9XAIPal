@@ -181,6 +181,12 @@ services:
       LINKUP_API_KEY: ${LINKUP_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
       SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+      # Managed scrape APIs fronting article-import fetch (see
+      # app/services/article_extraction.py) — same "third-party network
+      # egress for one URL, nothing else leaves" shape as the web-search
+      # keys just above.
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
+      CRW_API_KEY: ${CRW_API_KEY:-}
       STORAGE_ROOT: /data/storage
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}
@@ -292,6 +298,12 @@ services:
       LINKUP_API_KEY: ${LINKUP_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
       SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+      # Managed scrape APIs fronting article-import fetch (see
+      # app/services/article_extraction.py) — same "third-party network
+      # egress for one URL, nothing else leaves" shape as the web-search
+      # keys just above.
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:-}
+      CRW_API_KEY: ${CRW_API_KEY:-}
       STORAGE_ROOT: /data/storage
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}

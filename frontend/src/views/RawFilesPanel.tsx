@@ -137,7 +137,7 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
   const progress = paper.status === 'complete' ? 1 : paper.status === 'processing' ? 0.5 : 0;
   const added = new Date(paper.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const sizeMB = paper.file_size_bytes ? (paper.file_size_bytes / (1024 * 1024)).toFixed(1) : '?';
-  const rawPages = paper.raw_page_count ?? 0;
+  const hasRawSnapshot = (paper.raw_page_count ?? 0) > 0;
 
   return (
     <div
@@ -179,12 +179,13 @@ function RawFileCard({ paper, onOpen }: { paper: PaperMeta; onOpen: () => void }
           )}
           <div className="flex items-center gap-2 mt-1">
             {isArticle ? (
-              // Snapshot page count instead of file size/PDF page count —
-              // those don't apply to an imported web page (see
-              // services/article_crawl.py). A "book-like" import that
-              // followed same-site links shows how many pages it found.
+              // File size / PDF page count don't apply to an imported web
+              // page — show whether a raw copy of it actually saved instead
+              // (see services/article_crawl.py; a failed save never blocks
+              // reading the article itself, so this can legitimately read "no
+              // raw copy" for an otherwise-fine article).
               <span className="text-[11px] font-mono" style={{ color: 'var(--muted)' }}>
-                {rawPages} raw page{rawPages === 1 ? '' : 's'}
+                {hasRawSnapshot ? 'raw copy saved' : 'no raw copy'}
               </span>
             ) : (
               <>

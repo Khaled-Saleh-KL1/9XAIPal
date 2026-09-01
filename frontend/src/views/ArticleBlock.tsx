@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
+import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_LINK_COMPONENT } from '../lib/markdown';
 import type { DocBlock } from '../api';
 
 /**
@@ -14,7 +14,11 @@ import type { DocBlock } from '../api';
 function Md({ children, className = '' }: { children: string; className?: string }) {
   return (
     <div className={`md-body ${className}`}>
-      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE}>
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK}
+        rehypePlugins={MARKDOWN_REHYPE}
+        components={MARKDOWN_LINK_COMPONENT}
+      >
         {children}
       </ReactMarkdown>
     </div>
@@ -26,7 +30,7 @@ function InlineMd({ children }: { children: string }) {
     <ReactMarkdown
       remarkPlugins={MARKDOWN_REMARK}
       rehypePlugins={MARKDOWN_REHYPE}
-      components={{ p: ({ children: c }) => <span>{c}</span> }}
+      components={{ ...MARKDOWN_LINK_COMPONENT, p: ({ children: c }) => <span>{c}</span> }}
     >
       {children}
     </ReactMarkdown>

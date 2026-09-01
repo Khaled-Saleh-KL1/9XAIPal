@@ -17,12 +17,14 @@
  * points it at the app's muted-text color instead (see .katex-error in
  * index.css for the rest of the calmer, code-like treatment).
  */
+import { createElement } from 'react';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import type { PluggableList } from 'unified';
+import type { Components } from 'react-markdown';
 
 const SANITIZE_SCHEMA: typeof defaultSchema = {
   ...defaultSchema,
@@ -49,3 +51,15 @@ export const MARKDOWN_REHYPE: PluggableList = [
   [rehypeSanitize, SANITIZE_SCHEMA],
   [rehypeKatex, { errorColor: 'var(--muted)' }],
 ];
+
+/**
+ * A link in extracted content — most commonly an article's own hyperlinks,
+ * kept as real markdown links since services/article_extraction.py started
+ * passing include_links=True to trafilatura — should open in a new tab, not
+ * navigate the reader's SPA away. react-markdown's default <a> has no
+ * target/rel at all; spread this into any ReactMarkdown's `components` prop.
+ */
+export const MARKDOWN_LINK_COMPONENT: Pick<Components, 'a'> = {
+  a: ({ href, children, ...rest }) =>
+    createElement('a', { href, target: '_blank', rel: 'noopener noreferrer', ...rest }, children),
+};

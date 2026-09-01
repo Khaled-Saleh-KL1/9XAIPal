@@ -359,6 +359,27 @@ class Settings(BaseSettings):
     # in the cascade and always "configured": see app/search/web.py and
     # app/search/duckduckgo_client.py.
 
+    # ── Article scraping ─────────────────────────────────────────────────────
+    # Managed scrape APIs that front app/services/article_extraction.py's
+    # article-import fetch, ahead of this box's own free direct fetch. Each
+    # runs a real browser on its own infrastructure, which can get past a JS
+    # bot-challenge (Cloudflare, etc.) no plain HTTP client — however good its
+    # headers — ever can. Tried in this order, each circuit-broken
+    # independently, falling through to the next on any failure; the free
+    # direct fetch is always the last tier, so an unconfigured/exhausted key
+    # here degrades to today's behavior rather than breaking imports.
+    #
+    # Tavily Extract is a THIRD, separate last-resort tier (see
+    # try_tavily_extract_fallback), reusing tavily_api_key above — no
+    # extra setting needed for it.
+
+    # Firecrawl (https://firecrawl.dev) — first in the cascade.
+    firecrawl_api_key: str = ""
+
+    # CRW (https://fastcrw.com) — a Firecrawl-response-compatible managed
+    # scrape API, tried second.
+    crw_api_key: str = ""
+
     # Upload limits
     max_upload_size_mb: int = 100
     # Hard ceiling on ingestion jobs that are queued or in progress at once

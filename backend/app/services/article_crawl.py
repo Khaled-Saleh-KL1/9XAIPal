@@ -1,41 +1,28 @@
-"""Bounded, safe crawl of a "book-like" multi-page docs site, plus the raw
-HTML sanitizer both this and the single-page snapshot path use.
+"""Sanitizer for a raw HTML snapshot of an imported article — just the one
+page that was actually imported, nothing it links to.
 
-Sibling to article_extraction.py, reusing its fetch primitive directly:
-fetch_resource() already does the SSRF-guarded, redirect-safe, size-capped,
-hard-timeout fetch a single URL needs (see net_safety.py) — every page this
-module follows a link to goes through that exact same fetch, not a
-second-guessed reimplementation of it.
+An earlier version of this module followed same-site links a bounded depth
+to snapshot a "book-like" multi-page docs site too. Dropped: the reader's
+own call was simpler and more honest than chasing that — extract the page's
+real hyperlinks into the article content instead (see
+article_extraction.py's include_links=True) so they render as ordinary
+clickable links, and let the reader follow one themselves if they want to
+read further. Nothing to crawl, cache, sanitize, or keep in sync with a
+site that can change out from under a saved snapshot.
 
-Why this exists: the article import pipeline (extraction/pipeline_sync.py)
-already fetches one page and hands it to trafilatura for markdown
-extraction. That's the read-and-chat experience. This module is a SEPARATE,
-best-effort side quest: save what the page(s) actually looked like, raw, so
-a reader unsure whether the extractor caught everything (a JS-hidden tab
-panel, a docs site split across chapters) can open the real HTML and check.
-A failure here must never affect the article the reader is actually using —
-see workers/tasks.py's crawl_raw_snapshot, which only ever sets
-documents.raw_snapshot_status, never documents.status.
-
-Bounded on every axis, because this runs on a --concurrency=1 worker with no
-global task_time_limit: MAX_CRAWL_PAGES caps total pages fetched,
-MAX_CRAWL_DEPTH caps how many hops from the root URL a link may be, and
-CRAWL_TIME_BUDGET_SEC is a wall-clock ceiling checked between fetches (not
-just a per-request timeout) so a site with many fast-but-numerous pages
-can't run indefinitely either.
-
-Same-site only, and strictly so: a candidate link is followed only if its
-hostname is an EXACT match for the root URL's hostname. No subdomain
-fuzziness (accepting docs.example.com from a link found on example.com, say)
-— a documentation site occasionally spans subdomains, but the false-positive
-cost (silently crawling somewhere the reader didn't paste a link to) isn't
-worth it for what is fundamentally a verification tool, not a mirroring tool.
+Why this exists at all: the article import pipeline
+(extraction/pipeline_sync.py) already fetches the page and hands it to
+trafilatura for markdown extraction. That's the read-and-chat experience.
+This module is a SEPARATE, best-effort side quest: save what the page
+actually looked like, raw, so a reader unsure whether the extractor caught
+everything (a JS-hidden tab panel, say) can open the real HTML and check. A
+failure here must never affect the article the reader is actually using —
+see extraction/pipeline_sync.py::run_article_pipeline_sync, which only ever
+sets documents.raw_snapshot_status, never documents.status, around this.
 """
 
-import time
 import uuid
 from dataclasses import dataclass
-from urllib.parse import urljoin, urlparse
 
 from lxml import html as lxml_html
 from lxml.html.clean import Cleaner
@@ -44,16 +31,8 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.core.paths import raw_snapshots_dir
-from app.services.article_extraction import fetch_resource
 
 logger = get_logger(__name__)
-
-MAX_CRAWL_PAGES = 15
-MAX_CRAWL_DEPTH = 2
-CRAWL_TIME_BUDGET_SEC = 60.0
-# A crawled page that turns out to be enormous (a giant single-page docs
-# site) still gets the same MAX_PAGE_BYTES ceiling fetch_resource() already
-# enforces on every page — no separate cap needed here.
 
 
 @dataclass
@@ -61,7 +40,10 @@ class CrawledPage:
     url: str
     title: str
     html: str  # sanitized, ready to write to disk as-is
-    depth: int
+    depth: int  # always 0 now — kept so raw_snapshot_pages' schema and the
+                # backend's existing single-vs-multi-page /raw handling
+                # (services/article_extraction.py callers,
+                # api/v1/endpoints/documents.py) need no changes.
 
 
 # Cleaner config, verified empirically against a realistic sample page (a
@@ -128,107 +110,31 @@ def _page_title(html: str, fallback: str) -> str:
     return fallback
 
 
-def _same_site_links(html: str, page_url: str, hostname: str) -> list[str]:
-    """Same-hostname http(s) links found on this page, absolute, deduped,
-    in document order. Fragment-only links (#section) resolve to the same
-    URL as the page itself and are dropped — they're not a different page.
+def snapshot_article_page(url: str, html: str) -> list[CrawledPage]:
+    """Sanitize an already-fetched page and wrap it as the raw snapshot.
+
+    Returns a list (0 or 1 items, never more) rather than a single
+    CrawledPage so the caller (save_crawled_pages below, and everything
+    downstream of it — the raw_snapshot_pages table, the /raw endpoint's
+    single-vs-multi-page handling) is unchanged from when this module did
+    real multi-page crawling. Empty only if `html` is too malformed for
+    lxml to parse at all, which sanitize_html would raise on — that
+    exception is the caller's to handle, same as any other best-effort step
+    in the pipeline.
     """
-    try:
-        tree = lxml_html.fromstring(html)
-    except Exception:
-        return []
-
-    seen: list[str] = []
-    for href in tree.xpath("//a/@href"):
-        href = (href or "").strip()
-        if not href or href.startswith(("#", "mailto:", "javascript:", "tel:")):
-            continue
-        absolute = urljoin(page_url, href)
-        parsed = urlparse(absolute)
-        if parsed.scheme not in ("http", "https"):
-            continue
-        if parsed.hostname != hostname:
-            continue
-        # Normalize away the fragment so #section links to the same page
-        # don't count as a new URL to crawl.
-        normalized = absolute.split("#", 1)[0]
-        if normalized != page_url.split("#", 1)[0] and normalized not in seen:
-            seen.append(normalized)
-    return seen
-
-
-def crawl_article_pages(root_url: str, root_html: str) -> list[CrawledPage]:
-    """BFS out from an already-fetched root page, following same-site links
-    up to MAX_CRAWL_DEPTH hops, MAX_CRAWL_PAGES total pages, and
-    CRAWL_TIME_BUDGET_SEC wall-clock — whichever limit is hit first ends the
-    crawl and returns whatever was gathered so far (a partial result is
-    still useful; this is best-effort, not all-or-nothing).
-
-    root_html is the UNsanitized HTML pipeline_sync already fetched for
-    trafilatura — sanitized once here, not re-fetched.
-    """
-    hostname = urlparse(root_url).hostname
-    started = time.monotonic()
-    pages: list[CrawledPage] = []
-    visited: set[str] = {root_url.split("#", 1)[0]}
-
-    root_title = _page_title(root_html, fallback=root_url)
-    pages.append(CrawledPage(
-        url=root_url, title=root_title,
-        html=sanitize_html(root_html, root_url), depth=0,
-    ))
-
-    # (url, depth, raw_html) frontier — raw_html carried along so a link's
-    # own outgoing links can be discovered without a second fetch.
-    frontier: list[tuple[str, int]] = [
-        (u, 1) for u in _same_site_links(root_html, root_url, hostname)
-    ]
-
-    while frontier and len(pages) < MAX_CRAWL_PAGES:
-        if time.monotonic() - started > CRAWL_TIME_BUDGET_SEC:
-            logger.info(f"[article_crawl] time budget exhausted for {root_url}, stopping at {len(pages)} pages")
-            break
-
-        url, depth = frontier.pop(0)
-        if url in visited:
-            continue
-        visited.add(url)
-        if depth > MAX_CRAWL_DEPTH:
-            continue
-
-        try:
-            resource = fetch_resource(url)
-        except Exception as exc:
-            logger.debug(f"[article_crawl] skipping {url}: {exc}")
-            continue
-
-        if resource.is_pdf:
-            continue  # a linked PDF isn't a "page" this crawl can sanitize/serve as HTML
-
-        page_html = resource.text
-        pages.append(CrawledPage(
-            url=resource.final_url,
-            title=_page_title(page_html, fallback=url),
-            html=sanitize_html(page_html, resource.final_url),
-            depth=depth,
-        ))
-
-        if depth < MAX_CRAWL_DEPTH and len(pages) < MAX_CRAWL_PAGES:
-            for link in _same_site_links(page_html, resource.final_url, hostname):
-                if link not in visited:
-                    frontier.append((link, depth + 1))
-
-    logger.info(f"[article_crawl] {root_url}: saved {len(pages)} page(s) ({time.monotonic() - started:.1f}s)")
-    return pages
+    return [CrawledPage(
+        url=url, title=_page_title(html, fallback=url),
+        html=sanitize_html(html, url), depth=0,
+    )]
 
 
 def save_crawled_pages(session: Session, document_id, pages: list[CrawledPage]) -> int:
     """Write each page's sanitized HTML to raw_snapshots_dir(document_id) and
     insert its raw_snapshot_pages row. One page failing to write/insert
     (a disk error, an oversized title) is logged and skipped rather than
-    losing every other already-fetched page — this is a best-effort save,
-    matching crawl_article_pages' own "partial result is still useful"
-    stance. Returns how many pages were actually saved.
+    losing every other page — best-effort, matching this module's own
+    "a snapshot failure must never affect the actual article" stance.
+    Returns how many pages were actually saved.
 
     Sync throughout (a plain SQLAlchemy Session, not AsyncSession) — the
     only caller is the Celery worker, which runs everything synchronously

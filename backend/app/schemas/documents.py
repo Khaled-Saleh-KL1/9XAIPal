@@ -20,7 +20,7 @@ class DocumentResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    extractor: Optional[str] = None  # "mineru", "pymupdf_fallback", or "trafilatura"
+    extractor: Optional[str] = None  # "mineru", "pymupdf_fallback", "trafilatura", or "tavily-extract"
     doc_kind: Optional[str] = None  # "book" (chapter navigation), "paper" (linear), or "article"
     # The page a doc_kind='article' row was imported from; None otherwise.
     source_url: Optional[str] = None

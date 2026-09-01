@@ -24,6 +24,22 @@ bytes to a static-HTML extractor, which produced a near-empty result and an
 error message blaming a login/paywall/JavaScript for what was really just a
 PDF.
 
+fetch_resource() is a cascade, not a single fetch (see app/scraping/ and the
+_HTML_PROVIDERS list below), for the same reason app/search/web.py cascades
+across providers: some pages are behind bot protection (Cloudflare, etc.)
+that no plain HTTP client — however good its headers — can get past, only a
+real browser can, and Firecrawl/CRW run one on their own infrastructure.
+Tried in order, each circuit-broken independently: Firecrawl, then CRW, then
+this box's own free direct fetch last. Every tier ends up as the same
+FetchedResource shape, so every existing caller — extract_article_from_html
+below, and run_article_pipeline_sync's raw-snapshot save (services/
+article_crawl.py) — reuses the ONE fetch this makes, with no changes or
+second fetch of its own. Tavily Extract is a separate, LAST-resort tier
+(try_tavily_extract_fallback, called from run_article_pipeline_sync when
+even the direct fetch fails): it returns already-extracted text, never HTML,
+so it can save an article from failing outright but leaves nothing for the
+raw-snapshot save to work with.
+
 ⚠ Images are hotlinked, never downloaded — by request. The tradeoff this
 buys: no storage, no risk of pulling arbitrary bytes onto this server for an
 image, but also no way to attach one to a VLM call (see chat/paper_agent.py
@@ -34,10 +50,12 @@ the AI to look closely at one specific photo isn't supported for articles.
 
 import re
 from dataclasses import dataclass, field
+from typing import Optional
 
 import httpx
 import trafilatura
 
+from app.core import circuit_breaker
 from app.core.logging import get_logger
 from app.core.net_safety import (
     TooManyRedirectsError,
@@ -45,6 +63,8 @@ from app.core.net_safety import (
     resolves_to_private_address_sync,
     safe_send_sync,
 )
+from app.scraping import crw_client, firecrawl_client, tavily_extract_client
+from app.scraping.errors import FetchProviderError
 
 logger = get_logger(__name__)
 
@@ -193,16 +213,18 @@ def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
         return False
 
 
-def fetch_resource(url: str) -> FetchedResource:
-    """Fetch `url` and report what it turned out to be.
+def _fetch_direct(url: str) -> FetchedResource:
+    """This box's own direct fetch — no third party involved. Last tier in
+    fetch_resource()'s cascade now, but on its own this is exactly what
+    fetch_resource() used to be before Firecrawl/CRW were added in front of
+    it: still the free, unlimited, SSRF-guarded path that handles the
+    overwhelming majority of ordinary (non-bot-protected) pages.
 
     Streamed rather than read whole so an oversized response is abandoned
     partway instead of being pulled entirely into memory first, and so the
     size ceiling can be raised the moment the body reveals itself to be a
     PDF (which is a document, not a page of prose).
     """
-    _check_url_is_fetchable(url)
-
     resp = None
     try:
         with httpx.Client(timeout=PAGE_FETCH_TIMEOUT) as client:
@@ -268,6 +290,91 @@ def fetch_resource(url: str) -> FetchedResource:
     return FetchedResource(content=content, content_type=content_type, final_url=final_url)
 
 
+# Tier 1 of the article-fetch cascade: HTML-capable providers, tried in this
+# order, each falling through to the next on any failure. Firecrawl and CRW
+# run a real browser on their own infrastructure — they can get past a JS
+# challenge (Cloudflare, etc.) this box's own direct fetch never could (see
+# the Medium/Cloudflare case in git history, which is why this cascade
+# exists at all). _fetch_direct is demoted to last: free and unlimited, but
+# it's OUR server making the raw request rather than a managed provider's.
+#
+# Every entry here ends up as the exact same FetchedResource shape, so every
+# existing caller of fetch_resource() — extract_article() below — benefits
+# automatically with no changes of its own.
+_HTML_PROVIDERS = [
+    ("firecrawl", firecrawl_client),
+    ("crw", crw_client),
+]
+
+
+def fetch_resource(url: str) -> FetchedResource:
+    """Fetch `url` and report what it turned out to be — trying, in order,
+    Firecrawl, CRW, then this box's own direct fetch (_fetch_direct), each
+    circuit-broken independently so a dead/exhausted provider stops costing
+    a round-trip on every call once it's proven itself down.
+
+    Raises ArticleExtractionError only once every tier — including the free
+    direct fetch — has failed.
+    """
+    _check_url_is_fetchable(url)
+
+    last_error: Exception | None = None
+    for name, client in _HTML_PROVIDERS:
+        if not client.is_configured():
+            continue
+        if not circuit_breaker.is_open(name):
+            try:
+                html, final_url = client.fetch_html(url)
+            except FetchProviderError as e:
+                logger.warning(f"{name} fetch failed, falling through: {e}")
+                circuit_breaker.record_failure(name)
+                last_error = e
+                continue
+            except Exception as e:
+                logger.exception(f"{name} fetch raised unexpectedly, falling through: {e}")
+                circuit_breaker.record_failure(name)
+                last_error = e
+                continue
+            circuit_breaker.record_success(name)
+            return FetchedResource(
+                content=html.encode("utf-8"), content_type="text/html", final_url=final_url,
+            )
+
+    try:
+        return _fetch_direct(url)
+    except ArticleExtractionError as e:
+        # Only reached if every managed provider (configured or not, tripped
+        # or not) also failed to produce anything — the direct fetch's own
+        # error is the most informative one to surface, since it's the one
+        # that actually touched the real site.
+        raise e from (last_error if last_error else None)
+
+
+def try_tavily_extract_fallback(url: str) -> Optional[ArticleExtraction]:
+    """Absolute last resort, called by run_article_pipeline_sync only when
+    fetch_resource()'s entire cascade — Firecrawl, CRW, and this box's own
+    free direct fetch — has already failed for `url`.
+
+    Tavily Extract (app/scraping/tavily_extract_client.py) returns
+    already-extracted markdown, never the page's real HTML, so this skips
+    trafilatura entirely and builds an ArticleExtraction straight from what
+    Tavily handed back — the article is still readable and chattable, it
+    just has no raw HTML for the raw-snapshot save (services/
+    article_crawl.py) to work with for this particular fetch.
+
+    Returns None (never raises) on any failure of its own — this is
+    optional, best-effort, so a caller reports the ORIGINAL fetch_resource()
+    failure instead of this one, which is almost always less informative
+    ("every key exhausted" says less than "that site blocked the request").
+    """
+    try:
+        title, markdown, asset_map = tavily_extract_client.extract(url)
+    except FetchProviderError as e:
+        logger.info(f"Tavily Extract fallback also failed for {url}: {e}")
+        return None
+    return ArticleExtraction(title=title, markdown=markdown, asset_map=asset_map)
+
+
 def extract_article(url: str) -> ArticleExtraction:
     """Fetch `url` and extract its readable content.
 
@@ -296,7 +403,14 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
         url=url,
         output_format="markdown",
         include_images=True,
-        include_links=False,
+        # Kept as real [text](url) markdown links, which the frontend's
+        # existing markdown pipeline (remark-gfm) already renders as
+        # ordinary clickable <a> tags with no extra plumbing — this is the
+        # reader's own way to explore further, rather than this app trying
+        # to pre-fetch/snapshot everything a page links to (see
+        # services/article_crawl.py's docstring for why that idea was
+        # dropped in favor of this simpler one).
+        include_links=True,
         with_metadata=True,
     )
     if not markdown or len(markdown.strip()) < MIN_EXTRACTED_CHARS:

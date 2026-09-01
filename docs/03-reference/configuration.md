@@ -201,6 +201,25 @@ verify a key is to spend a search credit, and the container healthcheck polls `/
 seconds. `health.web_search` therefore reports "a key is configured", not "the key works"; a bad key
 surfaces as a logged `401` on the first real search.
 
+## Article scraping
+
+Fronts the article-import fetch (`POST /papers/import-url`) ahead of this box's own free direct
+fetch. Dispatch lives in
+[`app/services/article_extraction.py::fetch_resource`](../../backend/app/services/article_extraction.py);
+each runs a real browser on its own infrastructure, which can get past a JS bot-challenge
+(Cloudflare, etc.) no plain HTTP client — however good its headers — ever can. See that module's
+own docstring for the full cascade order and reasoning.
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `FIRECRAWL_API_KEY` | (empty) | Key from <https://firecrawl.dev>. First in the cascade. Free tier includes a monthly credit allowance, no card required. |
+| `CRW_API_KEY` | (empty) | Key from <https://fastcrw.com/register>. Second in the cascade — a self-described "Firecrawl-compatible" managed scrape API (confirmed via its own OpenAPI spec: same response shape). Free credits, no card required. |
+| *(reuses `TAVILY_API_KEY` above)* | — | A third, separate LAST-resort tier (`try_tavily_extract_fallback`), tried only once even the free direct fetch has failed. Structurally different from the other two: Tavily's `/extract` endpoint returns already-extracted text, never HTML, so it can save an article from failing outright but leaves nothing for the raw-snapshot save (`services/article_crawl.py`) to work with. |
+
+⚠ Leaving both `FIRECRAWL_API_KEY` and `CRW_API_KEY` empty is not a broken configuration — the
+cascade just skips straight to the free direct fetch, which is exactly what article import already
+did before these existed. They only change behavior for the pages that fetch would have failed on.
+
 ## Background jobs
 
 | Key | Default | Purpose |

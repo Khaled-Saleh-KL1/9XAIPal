@@ -40,7 +40,7 @@ export interface PaperMeta {
   error_message: string | null;
   created_at: string;
   updated_at: string | null;
-  extractor?: string | null;            // "mineru" | "pymupdf_fallback" | "trafilatura"
+  extractor?: string | null;            // "mineru" | "pymupdf_fallback" | "trafilatura" | "tavily-extract"
   doc_kind?: string | null;             // "book" | "paper" | "article"
   /** The page a doc_kind='article' row was imported from. null otherwise. */
   source_url?: string | null;
@@ -899,17 +899,11 @@ export async function checkHealth(): Promise<{ status: string; database: string 
 // ── Raw Files ─────────────────────────────────────────────────────────────────
 
 /** URL to view/download the raw copy of a document: the original PDF for a
- * paper/book, or a sanitized raw HTML snapshot (single page, or a small
- * index of pages if the import crawled a multi-page docs site) for an
- * imported article — the backend branches on doc_kind, this URL is the same
- * either way. */
+ * paper/book, or a sanitized raw HTML snapshot of the imported page for an
+ * article — the backend branches on doc_kind, this URL is the same either
+ * way. */
 export function getRawFileUrl(paperId: string): string {
   return `${BASE}/papers/${paperId}/raw`;
-}
-
-/** URL to view one specific page of a multi-page raw HTML snapshot. */
-export function getRawSnapshotPageUrl(paperId: string, pageId: string): string {
-  return `${BASE}/papers/${paperId}/raw/${pageId}`;
 }
 
 /** URL to the static asset PDF (for embedding in iframe/viewer) */

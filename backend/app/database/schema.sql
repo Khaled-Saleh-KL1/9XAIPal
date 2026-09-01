@@ -363,19 +363,23 @@ CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_status ON ingestion_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_document_created
     ON ingestion_jobs(document_id, created_at DESC);
 
--- Raw, sanitized HTML snapshots of an imported article (doc_kind='article')
--- and, for a "book-like" multi-page docs site, a bounded set of same-site
--- pages found by following links from it (see services/article_crawl.py).
--- The doc_kind='article' equivalent of the original PDF documents_dir()
--- already keeps for a paper/book — the point is letting the reader open the
--- exact HTML the extractor had to work with, to check nothing was missed.
+-- A raw, sanitized HTML snapshot of an imported article (doc_kind='article')
+-- — the page actually fetched, exactly as it was (see
+-- services/article_crawl.py). The doc_kind='article' equivalent of the
+-- original PDF documents_dir() already keeps for a paper/book — the point
+-- is letting the reader open the exact HTML the extractor had to work with,
+-- to check nothing was missed. One row per article: an earlier version of
+-- this also crawled same-site linked pages, which is why `depth` and a
+-- one-to-many document_id FK still exist, but every row is depth=0 now —
+-- see article_crawl.py's module docstring for why that idea was dropped.
 CREATE TABLE IF NOT EXISTS raw_snapshot_pages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     url TEXT NOT NULL,
     title TEXT,
-    -- 0 = the originally-imported URL itself; >0 = found by following a
-    -- same-site link that many hops deep (see MAX_CRAWL_DEPTH).
+    -- Always 0 now (the originally-imported URL itself) — kept rather than
+    -- dropped so the column doesn't need a migration if per-page crawling
+    -- ever comes back.
     depth INT NOT NULL DEFAULT 0,
     -- Filename under core/paths.py's raw_snapshots_dir(document_id) — the
     -- sanitized HTML actually lives on disk, not in this table.

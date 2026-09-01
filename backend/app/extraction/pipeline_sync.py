@@ -664,13 +664,14 @@ def run_article_pipeline_sync(
 
     Returns True if this ended up as a real web article (doc_kind stayed
     'article'), False if the URL turned out to be a PDF and got adopted into
-    the PDF pipeline instead — the caller (workers/tasks.py) uses this to
-    decide whether dispatching a raw-HTML snapshot crawl even makes sense;
-    a PDF already has its own real raw file, nothing to crawl.
+    the PDF pipeline instead — a PDF already has its own real raw file, no
+    separate raw-HTML snapshot needed.
     """
     from app.services.article_extraction import (
+        ArticleExtractionError,
         extract_article_from_html,
         fetch_resource,
+        try_tavily_extract_fallback,
     )
 
     # What the link turned out to be decides which pipeline runs. A PDF URL
@@ -685,11 +686,26 @@ def run_article_pipeline_sync(
     # run_pipeline_sync takes over it runs _handle_ingestion_failure itself,
     # and calling that from both would double-log the traceback and re-clean
     # the row.
+    resource = None
+    tavily_article = None
     try:
         update_job_status_sync(session, job_id, JobStatus.EXTRACTING)
         session.commit()
-        resource = fetch_resource(url)
-        if resource.is_pdf:
+        try:
+            resource = fetch_resource(url)
+        except ArticleExtractionError as fetch_exc:
+            # Absolute last resort: every HTML-capable provider — Firecrawl,
+            # CRW, and this box's own free direct fetch, in that order (see
+            # article_extraction.fetch_resource) — has already failed.
+            # Tavily Extract returns already-extracted text, never HTML, so
+            # there's no `resource` at all past this point: no PDF check to
+            # run, and nothing to hand the raw-snapshot crawler for this
+            # particular fetch — the article can still be read and chatted
+            # with, it just won't have a raw copy.
+            tavily_article = try_tavily_extract_fallback(url)
+            if tavily_article is None:
+                raise fetch_exc  # the original, more informative failure
+        if resource is not None and resource.is_pdf:
             # final_url, not url: after a redirect the pasted link is no
             # longer where the bytes came from, and _pdf_name_from_url reads
             # the filename off it. A DOI link (https://doi.org/10.1234/abc)
@@ -707,7 +723,7 @@ def run_article_pipeline_sync(
         _handle_ingestion_failure(session, document_id, job_id, e)
         raise e
 
-    if resource.is_pdf:
+    if resource is not None and resource.is_pdf:
         run_pipeline_sync(
             session,
             document_id=document_id,
@@ -717,13 +733,18 @@ def run_article_pipeline_sync(
         return False
 
     try:
-        # final_url is what trafilatura resolves every relative link and
-        # <img src> against, so it has to be where the HTML actually came
-        # from. Handing it the pre-redirect link (a doi.org or news
-        # shortener) resolves each relative image onto the wrong host, and
-        # _is_worth_keeping then drops every figure in the article as
-        # unreachable — a silent, whole-document failure.
-        article = extract_article_from_html(resource.text, resource.final_url)
+        if tavily_article is not None:
+            article = tavily_article
+            extractor = "tavily-extract"
+        else:
+            # final_url is what trafilatura resolves every relative link and
+            # <img src> against, so it has to be where the HTML actually came
+            # from. Handing it the pre-redirect link (a doi.org or news
+            # shortener) resolves each relative image onto the wrong host, and
+            # _is_worth_keeping then drops every figure in the article as
+            # unreachable — a silent, whole-document failure.
+            article = extract_article_from_html(resource.text, resource.final_url)
+            extractor = "trafilatura"
 
         # Persist the real page title and which extractor produced this —
         # both are only knowable once extraction has actually run, same
@@ -734,13 +755,43 @@ def run_article_pipeline_sync(
             session.execute(
                 text(
                     "UPDATE documents SET original_filename = :title, "
-                    "extractor = 'trafilatura' WHERE id = :id"
+                    "extractor = :extractor WHERE id = :id"
                 ),
-                {"title": article.title[:500], "id": document_id},
+                {"title": article.title[:500], "extractor": extractor, "id": document_id},
             )
             session.commit()
         except Exception as e:
             logger.warning(f"Could not persist article metadata for {document_id}: {e}")
+
+        # Raw HTML snapshot (see services/article_crawl.py) — the sanitized
+        # page this app actually fetched, saved so a reader unsure whether
+        # the extraction above caught everything can open the real HTML and
+        # check. Only possible when `resource` carries real HTML: the Tavily
+        # Extract fallback (tavily_article is not None) never does, so there
+        # is nothing to snapshot for that path — raw_snapshot_status simply
+        # stays at its 'none' default. Cheap now (no extra network round
+        # trip — resource.text is already in hand) and, like the metadata
+        # persist above, never allowed to fail the article itself.
+        if resource is not None:
+            try:
+                from app.services.article_crawl import save_crawled_pages, snapshot_article_page
+                pages = snapshot_article_page(resource.final_url, resource.text)
+                saved = save_crawled_pages(session, document_id, pages)
+                session.execute(
+                    text("UPDATE documents SET raw_snapshot_status = :status WHERE id = :id"),
+                    {"status": "complete" if saved else "failed", "id": document_id},
+                )
+                session.commit()
+            except Exception as e:
+                logger.warning(f"Raw snapshot save failed for {document_id} (non-fatal): {e}")
+                try:
+                    session.execute(
+                        text("UPDATE documents SET raw_snapshot_status = 'failed' WHERE id = :id"),
+                        {"id": document_id},
+                    )
+                    session.commit()
+                except Exception:
+                    logger.error(f"Failed to mark raw_snapshot_status='failed' for {document_id}")
 
         update_job_status_sync(session, job_id, JobStatus.CHUNKING)
         session.commit()

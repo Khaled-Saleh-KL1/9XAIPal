@@ -278,10 +278,11 @@ The frontend's polling endpoint during ingestion.
 first. `null` once extraction actually starts.
 
 `raw_snapshot_status`/`raw_page_count` are `article`-only (`"none"` for a `paper`/`book`) — the
-raw HTML snapshot crawl (`GET /papers/{paper_id}/raw`, above) is dispatched as its own follow-up
-task after the article itself finishes importing, so it can still be `"pending"` even once
-`status` is already `"complete"`. A `"failed"` snapshot never means the article failed to
-import — only that its raw copy didn't finish saving.
+raw HTML snapshot (`GET /papers/{paper_id}/raw`, above) is saved inline, using the HTML already
+fetched for extraction, no second network round trip — so by the time `status` reads
+`"complete"`, `raw_snapshot_status` is already resolved to `"complete"` or `"failed"` too, not
+left `"pending"` in the background. A `"failed"` snapshot never means the article failed to
+import — only that its raw copy didn't save.
 
 ### `GET /papers/{paper_id}/raw`
 
@@ -290,24 +291,22 @@ The raw copy of this document — what it actually branches on is `doc_kind`:
 - **`paper`/`book`:** streams the original uploaded PDF as `application/pdf`, with
   `Content-Disposition` honoring the original filename. Falls back from
   `assets/<id>.pdf` to `documents/<filename>` if needed.
-- **`article`:** a sanitized raw HTML snapshot of the imported page (see
-  [`services/article_crawl.py`](../../backend/app/services/article_crawl.py)) — served
-  as `text/html` with `Content-Security-Policy: script-src 'none'; object-src 'none'`
-  (the snapshot's `<script>` tags and event-handler attributes are already stripped at
-  crawl time; this header is defense in depth, not the only protection). One page
-  fetched, one page served directly; a "book-like" import that followed same-site links
-  serves a small server-rendered index linking to each one instead
-  (`GET /papers/{paper_id}/raw/{page_id}` per page). If no snapshot exists yet
-  (`raw_snapshot_status` is still `"pending"`, a background crawl that never blocks the
-  article's own import) a small "try again in a moment" page is returned — this endpoint
-  is meant for direct browser navigation, not JSON error handling.
+- **`article`:** a sanitized raw HTML snapshot of the imported page — just that one page, not
+  anything it links to (see
+  [`services/article_crawl.py`](../../backend/app/services/article_crawl.py)) — served as
+  `text/html` with `Content-Security-Policy: script-src 'none'; object-src 'none'` (the
+  snapshot's `<script>` tags and event-handler attributes are already stripped at save time;
+  this header is defense in depth, not the only protection). If no snapshot exists yet or the
+  save failed, a small readable message is returned instead of a bare JSON 404 — this endpoint
+  is meant for direct browser navigation.
 
 ### `GET /papers/{paper_id}/raw/{page_id}`
 
-One specific page from a multi-page raw HTML snapshot (`article`s only). Same
-`Content-Security-Policy` as above. `404 DocumentNotFound` if `page_id` doesn't belong to
+One specific raw HTML snapshot page. `404 DocumentNotFound` if `page_id` doesn't belong to
 `paper_id` — ownership-checked the same way every other resource in this app is (the
-cross-tenant-404 invariant, not a 403).
+cross-tenant-404 invariant, not a 403). ⚠ Reachable via the row's own `id`, but
+`GET /papers/{paper_id}/raw` (above) is the one URL to actually use — with at most one snapshot
+page per article now, it already serves that page directly.
 
 ### `PATCH /papers/{paper_id}`
 
