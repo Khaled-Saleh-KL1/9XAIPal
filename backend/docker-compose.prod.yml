@@ -302,10 +302,17 @@ services:
       DEBUG: "false"
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-100}
-      # Auth. Only the api service needs this — celery_worker never handles
-      # signup/login, and by the time a task runs, user_id is already durably
-      # stored on the documents row from upload time.
-      SIGNUP_INVITE_CODE: ${SIGNUP_INVITE_CODE:-}
+      # Capacity: signup is open (no invite code — removed 2026-09-01), so
+      # this is what actually protects a single box with no autoscaling from
+      # a burst of new signups/uploads all arriving at once (app/core/
+      # capacity.py, app/services/ingestion.py::check_queue_capacity). Only
+      # the api service needs these — celery_worker never handles
+      # signup/login or upload requests, and by the time a task runs, the
+      # job's already past the queue-capacity check that would have rejected
+      # it.
+      MAX_ACTIVE_USERS: ${MAX_ACTIVE_USERS:-30}
+      ACTIVE_WINDOW_SECONDS: ${ACTIVE_WINDOW_SECONDS:-300}
+      MAX_QUEUED_INGESTION_JOBS: ${MAX_QUEUED_INGESTION_JOBS:-50}
     volumes:
        - ./app/storage:/data/storage
     extra_hosts:

@@ -27,30 +27,54 @@ def get_settings() -> Settings:
 # ------------------------------------------------------------------
 
 
-async def get_current_user(
-    request: Request, db: AsyncSession = Depends(get_db)
-) -> dict:
-    """The logged-in user, or 401 if the session cookie is missing/invalid/expired.
+async def _resolve_session_user(request: Request, db: AsyncSession) -> dict | None:
+    """Session cookie -> user row, or None if missing/invalid/expired.
 
-    A cross-tenant resource access (a valid session hitting someone else's
-    paper/study/etc.) is NOT this dependency's job — that 404s at the point
-    the resource is loaded (see the endpoints' `_require_document`-style
-    helpers), not here. This only establishes "who is asking".
+    Pure session resolution — no capacity/admission check. Shared by
+    get_current_user (which enforces admission on top of this) and
+    get_current_user_optional (which deliberately does NOT — GET /me needs
+    to know a user is logged in even while they're queued, so it can report
+    that instead of "not logged in").
     """
     from app.core.auth import get_session_user_id
     from app.database.repositories import users as user_repo
 
     token = request.cookies.get(settings.session_cookie_name)
     if not token:
-        raise HTTPException(status_code=401, detail="Not logged in")
+        return None
 
     user_id = await get_session_user_id(token)
     if not user_id:
-        raise HTTPException(status_code=401, detail="Session expired — please log in again")
+        return None
 
-    user = await user_repo.get_user_by_id(db, user_id)
+    return await user_repo.get_user_by_id(db, user_id)
+
+
+async def get_current_user(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """The logged-in, ADMITTED user — 401 if the session cookie is missing/
+    invalid/expired, or 423 (via NotAdmitted) if the site is at its
+    concurrent-active-user cap and this session hasn't been let in yet (see
+    app.core.capacity). Every real endpoint depends on this, so a queued
+    user's requests are refused here regardless of what their tab shows.
+
+    A cross-tenant resource access (a valid session hitting someone else's
+    paper/study/etc.) is NOT this dependency's job — that 404s at the point
+    the resource is loaded (see the endpoints' `_require_document`-style
+    helpers), not here. This only establishes "who is asking, and are they
+    allowed in right now".
+    """
+    from app.api.errors import NotAdmitted
+    from app.core import capacity
+
+    user = await _resolve_session_user(request, db)
     if not user:
         raise HTTPException(status_code=401, detail="Session expired — please log in again")
+
+    admitted, queue_position = await capacity.touch_and_check_admission(user["id"])
+    if not admitted:
+        raise NotAdmitted(queue_position)
 
     return user
 
@@ -60,11 +84,10 @@ async def get_current_user_optional(
 ) -> dict | None:
     """Like get_current_user, but returns None instead of 401 — for GET /auth/me,
     which the frontend polls on load precisely to find out whether anyone is
-    logged in."""
-    try:
-        return await get_current_user(request, db)
-    except HTTPException:
-        return None
+    logged in. Deliberately does NOT enforce the capacity/admission check
+    get_current_user does: /me is exactly what a queued user's tab polls to
+    learn when they've been let in, so it must keep answering for them."""
+    return await _resolve_session_user(request, db)
 
 
 # ------------------------------------------------------------------

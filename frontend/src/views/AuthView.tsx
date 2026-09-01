@@ -20,7 +20,6 @@ export function AuthView() {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -33,7 +32,7 @@ export function AuthView() {
       if (mode === 'login') {
         await login(email, password);
       } else {
-        await signup(email, password, inviteCode, displayName || undefined);
+        await signup(email, password, displayName || undefined);
       }
     } catch (err) {
       setError((err as Error).message || 'Something went wrong');
@@ -56,7 +55,7 @@ export function AuthView() {
             {mode === 'login' ? 'Welcome back' : 'Create an account'}
           </div>
           <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
-            {mode === 'login' ? '9XAIPal: sign in to your library.' : 'You need an invite code to sign up.'}
+            {mode === 'login' ? '9XAIPal: sign in to your library.' : 'Create your free account.'}
           </div>
         </div>
 
@@ -82,25 +81,14 @@ export function AuthView() {
             style={inputStyle}
           />
           {mode === 'signup' && (
-            <>
-              <input
-                type="text"
-                required
-                placeholder="Invite code"
-                value={inviteCode}
-                onChange={(e) => setInviteCode(e.target.value)}
-                className="w-full rounded-md px-3 py-2 text-[13px] outline-none"
-                style={inputStyle}
-              />
-              <input
-                type="text"
-                placeholder="Display name (optional)"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full rounded-md px-3 py-2 text-[13px] outline-none"
-                style={inputStyle}
-              />
-            </>
+            <input
+              type="text"
+              placeholder="Display name (optional)"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="w-full rounded-md px-3 py-2 text-[13px] outline-none"
+              style={inputStyle}
+            />
           )}
 
           {error && (

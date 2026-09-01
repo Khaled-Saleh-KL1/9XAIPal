@@ -129,22 +129,25 @@ provider, and the cascade falls through to the next one.
 ## Auth
 
 Source: [endpoints/auth.py](../../backend/app/api/v1/endpoints/auth.py). See
-[auth.md](../02-architecture/auth.md) for the design (session mechanics, invite-code gating,
-password hashing).
+[auth.md](../02-architecture/auth.md) for the design (session mechanics, the concurrent-user
+capacity cap, password hashing).
 
 ### `POST /auth/signup`
+
+Open — anyone can create an account, no invite code.
 
 Request:
 
 ```json
-{ "email": "you@example.com", "password": "<8-200 chars>", "invite_code": "<shared secret>", "display_name": "optional" }
+{ "email": "you@example.com", "password": "<8-200 chars>", "display_name": "optional" }
 ```
 
 Response: `201 Created`, sets the session cookie, body is a `UserResponse` (`id`, `email`,
 `display_name`, `created_at`, never `password_hash`).
 
-Errors: `403` if `SIGNUP_INVITE_CODE` is unset (signup closed) or the code doesn't match
-(`secrets.compare_digest`, constant-time). `409` if the email is already registered.
+Errors: `409` if the email is already registered (generic message — signup being open makes this
+otherwise a user-enumeration leak). `429 QUEUE_FULL` never applies to signup itself, only uploads
+— see [`POST /papers/upload`](#post-papersupload).
 
 ### `POST /auth/login`
 
@@ -163,8 +166,18 @@ still succeeds.
 
 ### `GET /auth/me`
 
-No auth required to call it, that's the point. `200 OK` with `{ "user": <UserResponse> | null }`.
-The frontend calls this once on load to decide whether to show the app or the login screen.
+No auth required to call it, that's the point. `200 OK` with
+`{ "user": <UserResponse> | null, "admitted": bool, "queue_position": int | null }`. The frontend
+calls this once on load to decide whether to show the app, the login screen, or the waiting room
+(`admitted: false` — the site is at its concurrent-user cap and this session hasn't been let in
+yet), and polls it every few seconds *while* showing the waiting room. This is the one endpoint
+that answers `200` for a logged-in-but-queued user; every other endpoint 423s them — see the note
+below.
+
+⚠ **Every endpoint behind `get_current_user`** (everything except `/auth/*`) can answer
+`423 Locked` with `{ "detail": ..., "code": "NOT_ADMITTED", "queue_position": N }` instead of its
+normal response — a queued session simply can't use anything until admitted. See
+[auth.md § capacity](../02-architecture/auth.md#4-capacity-the-waiting-room).
 
 ---
 
@@ -177,6 +190,10 @@ Source: [endpoints/documents.py](../../backend/app/api/v1/endpoints/documents.py
 Multipart upload of a single PDF.
 
 Request: `multipart/form-data` with `file=<binary>`.
+
+Errors: `429 QUEUE_FULL` if the ingestion queue is already at `MAX_QUEUED_INGESTION_JOBS` — checked
+before anything is written to disk. Same check, same error, on `POST /papers/import-url` and
+`POST /papers/{paper_id}/reextract` below.
 
 Response: `201 Created`
 
@@ -245,11 +262,17 @@ The frontend's polling endpoint during ingestion.
   "paper_id": "<uuid>",
   "status": "queued|complete|failed",
   "job_status": "queued|extracting|chunking|embedding|summarizing|complete|failed",
+  "progress_fraction": <float|null>,
+  "queue_position": <int|null>,
   "page_count": <int|null>,
   "error_message": <string|null>,
   "extractor": "mineru|pymupdf_fallback|null"
 }
 ```
+
+`queue_position` is 1-based, only while `job_status === "queued"` — this box's Celery worker runs
+`--concurrency=1`, so it's a real wait, not decoration: how many other still-queued jobs got there
+first. `null` once extraction actually starts.
 
 ### `GET /papers/{paper_id}/raw`
 

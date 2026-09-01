@@ -361,6 +361,13 @@ class Settings(BaseSettings):
 
     # Upload limits
     max_upload_size_mb: int = 100
+    # Hard ceiling on ingestion jobs that are queued or in progress at once
+    # (see app/services/ingestion.py::create_ingestion_job) — Celery runs
+    # this box's extraction pipeline at --concurrency=1, so this is what
+    # stops an extreme burst of uploads from growing disk/DB rows without
+    # bound; a fresh upload past the ceiling is rejected with a clear error
+    # instead of silently queuing forever.
+    max_queued_ingestion_jobs: int = 50
 
     # Max characters of a chunk's text sent to the embedder. Ollama's
     # /api/embed hard-400s when inputs exceed the model context window (dense
@@ -382,15 +389,25 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     # ── Auth ─────────────────────────────────────────────────────────────────
-    # Shared secret gating self-service signup (POST /api/v1/auth/signup).
-    # Not open registration — friends need this code, distributed out-of-band.
-    # Empty disables signup entirely (login still works for existing users).
-    signup_invite_code: str = ""
+    # Signup is open — anyone can create an account, no invite code (removed
+    # 2026-09-01). See app.core.capacity for what actually protects a single
+    # box with no autoscaling from a burst of new signups all showing up at
+    # once.
+    #
     # Session cookie name and sliding TTL. Refreshed on every authenticated
     # request, so an active user is never logged out mid-session; an idle one
     # expires this many seconds after their last request.
     session_cookie_name: str = "9xaipal_session"
     session_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+
+    # ── Capacity: concurrent-active-user cap + waiting queue ────────────────
+    # See app/core/capacity.py. "Active" = made an authenticated request in
+    # the last ACTIVE_WINDOW_SECONDS, not "has a valid session" — a session
+    # lasts 30 days, so that can never be the presence signal. A slot frees
+    # automatically this many seconds after someone goes idle, or immediately
+    # on logout.
+    max_active_users: int = 30
+    active_window_seconds: int = 300  # 5 minutes
 
     # Celery / Redis
     redis_url: str = "redis://localhost:6379/0"

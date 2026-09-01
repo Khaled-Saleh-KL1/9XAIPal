@@ -1,4 +1,4 @@
-"""Auth endpoints: signup (invite-code gated), login, logout, and /me.
+"""Auth endpoints: signup (open), login, logout, and /me.
 
 Session is a Redis-backed opaque token in an httponly cookie — see
 app.core.auth. `SameSite=Lax` is sufficient here without a separate CSRF
@@ -9,8 +9,6 @@ allow_credentials=True. If that ever changes to allow a broader origin set,
 this reasoning needs revisiting.
 """
 
-import secrets
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +18,9 @@ from app.core.auth import (
     verify_password_timing_safe,
     create_session,
     delete_session,
+    get_session_user_id,
 )
+from app.core import capacity
 from app.core.config import settings
 from app.database.repositories import users as user_repo
 from app.schemas.auth import SignupRequest, LoginRequest, UserResponse
@@ -47,19 +47,14 @@ async def signup(
     db: AsyncSession = Depends(get_db),
     _rl: None = Depends(enforce_auth_rate_limit),
 ):
-    if not settings.signup_invite_code:
-        raise HTTPException(status_code=403, detail="Signups are currently closed")
-    # Constant-time comparison — the invite code is a single shared secret
-    # compared on every attempt, so a naive == would leak how many leading
-    # characters matched via timing.
-    if not secrets.compare_digest(payload.invite_code, settings.signup_invite_code):
-        raise HTTPException(status_code=403, detail="Invalid invite code")
-
     existing = await user_repo.get_user_by_email(db, payload.email)
     if existing:
-        # Invite-gated (not open to the internet), so a specific message here
-        # is an acceptable, low-risk UX tradeoff over a generic one.
-        raise HTTPException(status_code=409, detail="This email is already registered — try logging in")
+        # Signup is open to the internet now, so confirming a specific email
+        # is already registered is a user enumeration leak an attacker can
+        # farm — a generic message costs a real user nothing (the login page
+        # says "invalid email or password" either way) but denies that
+        # farming surface.
+        raise HTTPException(status_code=409, detail="Could not create account — check your details or try logging in")
 
     user = await user_repo.create_user(
         db,
@@ -104,12 +99,30 @@ async def logout(request: Request, response: Response):
     from the caller's point of view."""
     token = request.cookies.get(settings.session_cookie_name)
     if token:
+        user_id = await get_session_user_id(token)
         await delete_session(token)
+        if user_id:
+            # Free the capacity slot NOW rather than making whoever's next
+            # in the queue wait out the idle window for no reason — this
+            # user is deliberately leaving, not just gone quiet.
+            await capacity.release(user_id)
     response.delete_cookie(key=settings.session_cookie_name, path="/")
 
 
 @router.get("/me")
 async def me(user: dict | None = Depends(get_current_user_optional)):
-    """Whether anyone is logged in, and who — the frontend calls this once on
-    load to decide whether to show the app or the login screen."""
-    return {"user": UserResponse(**user) if user else None}
+    """Whether anyone is logged in, who, and whether the site has let them
+    in yet. The frontend polls this on load AND, while queued, every few
+    seconds — it's the one endpoint that must always answer 200 for a
+    logged-in user regardless of capacity (see get_current_user_optional),
+    so a waiting user has something to poll that tells them when a slot
+    opened up.
+    """
+    if not user:
+        return {"user": None, "admitted": True, "queue_position": None}
+    admitted, queue_position = await capacity.touch_and_check_admission(user["id"])
+    return {
+        "user": UserResponse(**user),
+        "admitted": admitted,
+        "queue_position": queue_position,
+    }

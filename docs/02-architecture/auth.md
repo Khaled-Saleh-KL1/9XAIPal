@@ -1,22 +1,24 @@
 # Auth: sessions, signup, and per-user data isolation
 
-> **What this is:** how a request becomes "logged in as user X", how signup is gated, and how
-> every other table in the app scopes itself to one user.
+> **What this is:** how a request becomes "logged in as user X", how signup works, how the site
+> caps concurrent usage, and how every other table in the app scopes itself to one user.
 >
 > **How to read it:** §1 signup/login/logout → §2 the session → §3 per-user data isolation →
-> §4 sharp edges.
+> §4 capacity: the waiting room → §5 sharp edges.
 >
-> **Owns:** session mechanics, password handling, invite-code gating, the ownership-scoping
-> pattern used by every other resource.
+> **Owns:** session mechanics, password handling, the concurrent-user capacity cap, the
+> ownership-scoping pattern used by every other resource.
 > **Does not own:** the `users` table's columns ([database-schema.md](../03-reference/database-schema.md)),
-> the `SIGNUP_INVITE_CODE` / `SESSION_*` env vars ([configuration.md](../03-reference/configuration.md)),
+> the `MAX_ACTIVE_USERS` / `ACTIVE_WINDOW_SECONDS` / `SESSION_*` env vars
+> ([configuration.md](../03-reference/configuration.md)),
 > exact request/response shapes ([api.md](../03-reference/api.md)).
 >
-> **Status:** current · **Last verified:** 2026-08-27 against
+> **Status:** current · **Last verified:** 2026-09-01 against
 > [`core/auth.py`](../../backend/app/core/auth.py),
+> [`core/capacity.py`](../../backend/app/core/capacity.py),
 > [`api/deps.py`](../../backend/app/api/deps.py), and
-> [`endpoints/auth.py`](../../backend/app/api/v1/endpoints/auth.py) (`main`, 502272b)
-> **Verify with:** `cd backend && pytest tests/test_auth_http.py tests/test_ownership.py -v`
+> [`endpoints/auth.py`](../../backend/app/api/v1/endpoints/auth.py) (`feat/open-signup-capacity-limits`)
+> **Verify with:** `cd backend && pytest tests/test_auth_http.py tests/test_ownership.py tests/test_capacity.py -v`
 
 ---
 
@@ -39,24 +41,24 @@
 POST /auth/signup                          POST /auth/login
   │                                           │
   ▼                                           ▼
-SIGNUP_INVITE_CODE set?                get_user_by_email(email)
-  │no → 403 "closed"                          │
-  │yes                                        ▼
-  ▼                                   verify_password_timing_safe(
-compare_digest(code, real code)         password,
-  │mismatch → 403                        user.password_hash if user else None
-  ▼                                     )        ── real Argon2 verify either way,
-email already registered?                        against a precomputed dummy hash
-  │yes → 409                                      when the email doesn't exist
-  │no
-  ▼                                           │
-create_user(email, hash_password(pw))    user found AND password ok?
-  │                                           │no → 401 "Invalid email or password"
-  ▼                                           │yes
-create_session(user.id)  ◄─────────────────────┘
-  │
-  ▼
-Set-Cookie: 9xaipal_session=<token>; httponly; samesite=lax; secure=not DEBUG
+email already registered?              get_user_by_email(email)
+  │yes → 409 "unable to create              │
+  │      account with these details"        ▼
+  │no                                verify_password_timing_safe(
+  ▼                                     password,
+create_user(email, hash_password(pw))    user.password_hash if user else None
+  │                                     )        ── real Argon2 verify either way,
+  ▼                                               against a precomputed dummy hash
+touch_and_check_admission(user.id)               when the email doesn't exist
+  │                                           │
+  ▼                                     user found AND password ok?
+create_session(user.id)  ◄─────────────────────┤no → 401 "Invalid email or password"
+  │                                           │yes
+  ▼                                           ▼
+Set-Cookie: 9xaipal_session=<token>;    touch_and_check_admission(user.id)
+  httponly; samesite=lax;                     │
+  secure=not DEBUG                            ▼
+                                         create_session(user.id) ──► Set-Cookie (as left)
 ```
 
 ### (rendered)
@@ -64,31 +66,34 @@ Set-Cookie: 9xaipal_session=<token>; httponly; samesite=lax; secure=not DEBUG
 ```mermaid
 %%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
 flowchart TD
-    SU[POST /auth/signup] --> INV{{SIGNUP_INVITE_CODE set<br/>and matches?}}
-    INV -->|no| E403A[/403/]
-    INV -->|yes| DUP{{email already registered?}}
-    DUP -->|yes| E409[/409/]
+    SU[POST /auth/signup] --> DUP{{email already registered?}}
+    DUP -->|yes| E409[/"409 — generic wording,<br/>doesn't confirm the email exists"/]
     DUP -->|no| CU[create_user<br/>hash_password: Argon2id]
-    CU --> CS[create_session]
+    CU --> ADM
 
     LI[POST /auth/login] --> LOOK[get_user_by_email]
     LOOK --> VER[verify_password_timing_safe<br/>real hash, or dummy hash if no such user]
     VER --> OK{{found AND matches?}}
     OK -->|no| E401[/401 — same message either way/]
-    OK -->|yes| CS
+    OK -->|yes| ADM[touch_and_check_admission]
+    ADM --> CS[create_session]
 
     CS --> COOKIE["Set-Cookie: 9xaipal_session=&lt;token&gt;<br/>httponly · samesite=lax · secure=not DEBUG"]
 
     classDef owned stroke:#3b82f6,stroke-width:2px
     classDef bad stroke:#ef4444,stroke-width:2px
-    class CU,CS,LOOK,VER owned
-    class E403A,E409,E401 bad
+    class CU,CS,LOOK,VER,ADM owned
+    class E409,E401 bad
 ```
 
-`SIGNUP_INVITE_CODE` gates account *creation*, not login: existing accounts always work,
-regardless of the invite code's current value. Comparison is `secrets.compare_digest`, not `==`:
-a shared secret compared on every attempt leaks how many leading characters matched via timing
-under a naive comparison.
+Signup is open to anyone — there's no gate on account *creation* beyond the email not already
+being registered. The 409 for a duplicate email is deliberately generic ("unable to create an
+account with these details") rather than "email already registered": with signup public, the old
+specific wording would let anyone farm which emails have accounts on the site just by trying to
+sign up with them. `create_session` runs unconditionally on both signup and login —
+`touch_and_check_admission` (§4) never blocks getting a session, only whether the account counts
+as one of the `MAX_ACTIVE_USERS` concurrently-active slots; a fresh signup can land straight in
+the waiting room if the site's already at capacity.
 
 Passwords are hashed with Argon2id (`argon2-cffi`'s `PasswordHasher`, default parameters).
 `login`'s "no such account" and "wrong password" paths are deliberately indistinguishable: a
@@ -98,8 +103,11 @@ time. Skipping the verify for an unknown email would make lookups measurably fas
 passwords, a timing side-channel that discloses which emails are registered.
 
 `logout` (`POST /auth/logout`) is idempotent: no session, or an already-expired one, still
-succeeds. `GET /auth/me` needs no auth at all: the frontend calls it once on load specifically to
-find out whether anyone is logged in (`{"user": <UserResponse> | null}`).
+succeeds; it also calls `capacity.release(user_id)` so the freed slot is available to the waiting
+queue immediately, not after the 5-minute idle window (§4). `GET /auth/me` needs no auth at all:
+the frontend calls it once on load, and then polls it while queued, to find out whether anyone is
+logged in and whether they're currently admitted
+(`{"user": <UserResponse> | null, "admitted": bool, "queue_position": int | null}`).
 
 ---
 
@@ -135,17 +143,21 @@ preflight first, and `CORSMiddleware` never allows a wildcard origin alongside
 needs revisiting.
 
 `get_current_user` ([`api/deps.py`](../../backend/app/api/deps.py)) is the FastAPI dependency
-every protected route carries: reads the cookie → `get_session_user_id` → loads the user row →
-401s if any step fails (`"Not logged in"` with no cookie, `"Session expired — please log in
-again"` for a missing/expired session or a user that no longer exists).
-`get_current_user_optional` is the same lookup but returns `None` instead of raising, used only
-by `GET /auth/me`.
+every protected route carries. It's a thin wrapper: `_resolve_session_user` does the pure session
+lookup (reads the cookie → `get_session_user_id` → loads the user row → 401s if any step fails,
+`"Not logged in"` with no cookie, `"Session expired — please log in again"` for a missing/expired
+session or a user that no longer exists), then `get_current_user` separately calls
+`capacity.touch_and_check_admission` and raises `NotAdmitted` (423, see §4) if the caller isn't
+currently one of the admitted slots. `get_current_user_optional`, used only by `GET /auth/me`,
+calls `_resolve_session_user` **directly** — it does not go through `get_current_user` — so `/me`
+can keep answering 200 with a queue position for a logged-in-but-not-yet-admitted caller instead
+of 423ing on the one endpoint that exists to explain *why* they're locked out.
 
 **Auth-specific rate limiting.** `enforce_auth_rate_limit` (`api/deps.py`) is a separate, stricter
 Redis-backed limiter on `/auth/signup` and `/auth/login` (10 attempts / 60s per client IP),
 deliberately not the app-wide `RateLimitMiddleware`, which is in-memory and per-process (see
-[roadmap.md](../roadmap.md)) and nowhere near tight enough to blunt credential stuffing or
-invite-code brute-forcing.
+[roadmap.md](../roadmap.md)) and nowhere near tight enough to blunt credential stuffing, now that
+signup has no invite code to also slow down casual abuse.
 
 ---
 
@@ -194,19 +206,106 @@ chunks.
 
 ---
 
-## 4. Known sharp edges
+## 4. Capacity: the waiting room
+
+The site runs on one box with one Celery worker (`--concurrency=1`, no autoscaling). Signup being
+open means anyone can create an account, so there's a separate, cheap cap on how many people can
+be *actively using* the app at once — not an access-control gate, a defensive ceiling for a burst
+this box genuinely can't serve. [`core/capacity.py`](../../backend/app/core/capacity.py):
+
+```text
+touch_and_check_admission(user_id)             called from: login, signup, get_current_user
+        │
+        ▼
+ZREMRANGEBYSCORE active_users  (now - ACTIVE_WINDOW_SECONDS)   ← evict anyone gone stale
+        │
+        ▼
+already a member of active_users?
+   │yes ──► ZADD (refresh score) ──────────────────────────► admitted, no queue position
+   │no
+   ▼
+ZCARD active_users < MAX_ACTIVE_USERS?
+   │yes ──► ZADD (join) ───────────────────────────────────► admitted, no queue position
+   │no
+   ▼
+RPUSH waiting_queue (if not already queued) ──► not admitted, position = LPOS in waiting_queue
+```
+
+```mermaid
+%%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
+flowchart TD
+    T[touch_and_check_admission] --> EV[ZREMRANGEBYSCORE active_users<br/>evict stale members]
+    EV --> MEM{{already a member?}}
+    MEM -->|yes| REFRESH[ZADD refresh score]
+    MEM -->|no| ROOM{{ZCARD < MAX_ACTIVE_USERS?}}
+    ROOM -->|yes| JOIN[ZADD join]
+    ROOM -->|no| Q[RPUSH waiting_queue<br/>if not already queued]
+
+    REFRESH --> ADM[/"admitted, no queue position"/]
+    JOIN --> ADM
+    Q --> WAIT[/"not admitted,<br/>position = LPOS in waiting_queue"/]
+
+    classDef owned stroke:#3b82f6,stroke-width:2px
+    classDef bad stroke:#ef4444,stroke-width:2px
+    class REFRESH,JOIN,EV owned
+    class Q,WAIT bad
+```
+
+**"Active" is a 5-minute sliding window (`ACTIVE_WINDOW_SECONDS`, default 300), not "has a valid
+session"** (sessions last 30 days — using that as the admission signal would mean the cap fills
+up permanently after the 30th person ever logs in, and never frees again). `active_users` is a
+Redis sorted set, member = `user_id`, score = last-seen unix timestamp; every authenticated
+request through `get_current_user` refreshes the score, the same "touch on activity" idiom
+`core/auth.py`'s session TTL already uses (§2).
+
+**Admission is sticky.** Once a user is in `active_users`, they keep their slot for as long as
+they stay active — a newcomer can never bump someone already using the site, no matter how long
+the queue behind them grows. A slot frees two ways: idling past `ACTIVE_WINDOW_SECONDS` (the next
+`touch_and_check_admission` call, from anyone, evicts them via `ZREMRANGEBYSCORE`), or logging
+out (`capacity.release`, called from `auth.py::logout`, `ZREM`s them immediately — no reason to
+make someone who explicitly left wait out the idle window).
+
+**Enforcement, not just decoration.** `get_current_user` raises `NotAdmitted` (`api/errors.py`,
+→ **423 Locked**, `{"code": "NOT_ADMITTED", "queue_position": N}`) for every protected route when
+the caller isn't admitted — a queued user's requests are actually rejected, not just hidden by
+the frontend. `GET /auth/me` is the one exception: it goes through `get_current_user_optional`,
+which never raises `NotAdmitted` (§2), so it can keep answering with a queue position for the
+waiting-room UI (`WaitingRoomView.tsx`) to poll every few seconds until `admitted` flips true.
+
+**The ingestion queue is the same shape, layered on infrastructure that already existed.** Celery
+`--concurrency=1` already serializes paper processing one job at a time — that queue isn't new.
+What's new is a ceiling and visibility: `services/ingestion.py::check_queue_capacity` counts
+non-terminal `ingestion_jobs` rows and rejects new uploads with **429**
+(`{"code": "QUEUE_FULL"}`) once `MAX_QUEUED_INGESTION_JOBS` (default 50) is reached, and
+`GET /papers/{id}/progress` reports a 1-based `queue_position` while a job is still queued. Unlike
+the user cap, this check runs **before any destructive I/O** at each of its three call sites
+(`upload_paper`, URL-import, `reextract_paper`) — `reextract_paper` in particular checks capacity
+*before* wiping the existing paper's chunks/embeddings, since rejecting after that point would
+leave the paper half-deleted with nothing queued to regenerate it.
+
+⚠ Both caps are per-process-safe by construction, not per-process: they live in Redis, shared
+across the API's `--workers 2` uvicorn processes and the Celery worker, unlike an in-memory
+`asyncio.Semaphore` (used elsewhere in this codebase for `/ask` concurrency), which would give
+each process its own independent cap and silently admit `2×` the configured limit.
+
+---
+
+## 5. Known sharp edges
 
 - ⚠ **`/static/{images,extracted,assets}` bypass this entirely.** They're plain `StaticFiles`
   mounts (`app/main.py`), not FastAPI routes, so `get_current_user` never runs for them. A caller
   who already has a file path (they're UUID-derived, not sequential, so not trivially enumerable,
   but also not access-controlled) reads it with no login and no ownership check. See
   [roadmap.md](../roadmap.md).
-- **No password reset, no email verification.** Signup is invite-gated instead: the assumption is
-  a small, trusted user set who can be handed a new invite code or a manual DB fix out of band, not
-  self-service account recovery at scale.
-- **One shared `SIGNUP_INVITE_CODE`.** It's a single secret for every new signup, not a per-invite
-  token: anyone who has it can create an account, and it can't be revoked for one specific person
-  without rotating it for everyone waiting to sign up.
+- **No password reset, no email verification.** Anyone can sign up, but recovering a lost password
+  or verifying an email address is still a manual DB fix out of band, not a self-service flow.
+- **A stale tab's 423s aren't given bespoke handling.** If a user is evicted from `active_users`
+  mid-session (idle timeout) while a tab is still open and they act again, they'll see a raw 423
+  on whatever they clicked rather than being routed straight back to the waiting room — a page
+  refresh (which re-runs the `GET /auth/me` gate) resolves it. Acceptable for how rarely a 5-minute
+  idle eviction lines up with an in-flight click; revisit if it turns out to bite often.
 - **Sessions don't survive a Redis flush.** Since the session store *is* Redis with no fallback,
   clearing Redis (or Redis losing its data) logs out every user at once, the same blast radius a
-  signing-secret rotation would have had, just from a different cause.
+  signing-secret rotation would have had, just from a different cause. The same flush also empties
+  `active_users` and `waiting_queue`, which is harmless: everyone just re-admits on their next
+  request, up to the cap again.

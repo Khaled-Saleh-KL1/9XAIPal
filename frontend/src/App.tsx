@@ -7,6 +7,7 @@ import { ReadingView } from './views/ReadingView';
 import { RawFilesPanel } from './views/RawFilesPanel';
 import { DeskView } from './views/DeskView';
 import { AuthView } from './views/AuthView';
+import { WaitingRoomView } from './views/WaitingRoomView';
 import { useAuth } from './contexts/AuthContext';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
@@ -68,7 +69,7 @@ function writeHash(state: HashState) {
 }
 
 export function App() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, admitted } = useAuth();
   const [route, setRoute] = useState<Route>('library');
   const [activePaper, setActivePaper] = useState<Paper | null>(null);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
@@ -81,6 +82,9 @@ export function App() {
   // Real progress within uploadStatus (e.g. pages extracted / total while
   // extracting), null when nothing finer than the status is available.
   const [uploadProgressFraction, setUploadProgressFraction] = useState<number | null>(null);
+  // 1-based position among other still-queued jobs (this box's Celery worker
+  // runs one job at a time), null once extraction actually starts.
+  const [uploadQueuePosition, setUploadQueuePosition] = useState<number | null>(null);
   // `kind` only changes reading navigation (chapters vs linear) and the
   // overlay's completion copy: every document runs the same backend
   // pipeline (see ProcessingOverlay's header comment).
@@ -150,6 +154,7 @@ export function App() {
         const effectiveStatus = (progress.job_status || progress.status) as typeof uploadStatus;
         setUploadStatus(effectiveStatus);
         setUploadProgressFraction(progress.progress_fraction ?? null);
+        setUploadQueuePosition(progress.queue_position ?? null);
         if (progress.error_message) {
           setUploadError(progress.error_message);
         }
@@ -415,6 +420,9 @@ export function App() {
   if (!user) {
     return <AuthView />;
   }
+  if (!admitted) {
+    return <WaitingRoomView />;
+  }
 
   return (
     <>
@@ -476,6 +484,7 @@ export function App() {
           file={uploadingFile}
           status={uploadStatus}
           progressFraction={uploadProgressFraction}
+          queuePosition={uploadQueuePosition}
           errorMessage={uploadError}
           extractor={uploadExtractor}
           kind={uploadKind}

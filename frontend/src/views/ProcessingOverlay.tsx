@@ -107,6 +107,10 @@ interface Props {
   status: BackendStatus;
   /** Real progress within `status` (pages extracted / total while extracting). */
   progressFraction?: number | null;
+  /** 1-based position among other still-queued jobs (this box's Celery
+   * worker runs one at a time, so this is a real wait). Only meaningful
+   * while `status === 'queued'`. */
+  queuePosition?: number | null;
   errorMessage?: string | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | "trafilatura" | null while pending
   /**
@@ -126,7 +130,7 @@ function extractorLabel(ex: string | null | undefined): { label: string; tone: '
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
-export function ProcessingOverlay({ file, status, progressFraction, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
+export function ProcessingOverlay({ file, status, progressFraction, queuePosition, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
   // `kind` is optimistic for a URL import: a link pasted through "Book" or
@@ -233,6 +237,7 @@ export function ProcessingOverlay({ file, status, progressFraction, errorMessage
               step={step}
               state={stateFor(step, status)}
               progressFraction={status === 'extracting' ? progressFraction : null}
+              queuePosition={status === 'queued' ? queuePosition : null}
             />
           ))}
         </div>
@@ -278,13 +283,18 @@ function StepRow({
   step,
   state,
   progressFraction,
+  queuePosition,
 }: {
   step: StepDef;
   state: StepState;
   /** Real pages-done/total while this step is 'active' (extracting only). */
   progressFraction?: number | null;
+  /** 1-based queue position while this step is 'active' and the job hasn't
+   * started extracting yet. */
+  queuePosition?: number | null;
 }) {
   const showsPct = state === 'active' && typeof progressFraction === 'number' && Number.isFinite(progressFraction);
+  const showsQueue = state === 'active' && typeof queuePosition === 'number' && queuePosition > 0;
   return (
     <div className="py-5 flex gap-5">
       <StepIndicator id={step.id} state={state} />
@@ -301,7 +311,11 @@ function StepRow({
           )}
           {state === 'active' && (
             <span className="text-[11px] font-mono" style={{ color: 'var(--accent)' }}>
-              {showsPct ? `${Math.round((progressFraction as number) * 100)}% of pages…` : 'running…'}
+              {showsQueue
+                ? `you're #${queuePosition} in the queue…`
+                : showsPct
+                ? `${Math.round((progressFraction as number) * 100)}% of pages…`
+                : 'running…'}
             </span>
           )}
           {state === 'error' && (

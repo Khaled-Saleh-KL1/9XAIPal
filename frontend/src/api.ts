@@ -122,6 +122,10 @@ export interface ProgressResponse {
   // Real progress *within* job_status (e.g. pages extracted / total while
   // extracting). null when there's nothing finer than the status.
   progress_fraction?: number | null;
+  // 1-based position among still-queued jobs while job_status is 'queued'
+  // (this box's Celery worker runs at --concurrency=1, so this is a real
+  // wait, not decoration); null once extraction actually starts.
+  queue_position?: number | null;
   page_count: number | null;
   error_message?: string | null;
   extractor?: string | null;    // "mineru" | "pymupdf_fallback"
@@ -1381,11 +1385,21 @@ async function _authError(res: Response, fallback: string): Promise<never> {
   throw new Error(detail);
 }
 
-export async function getMe(): Promise<User | null> {
+export interface MeResponse {
+  user: User | null;
+  /** False when the site is at its concurrent-active-user cap and this
+   * session hasn't been let in yet (see backend app/core/capacity.py).
+   * Meaningless when `user` is null. */
+  admitted: boolean;
+  /** 1-based place in line while `admitted` is false, else null. */
+  queuePosition: number | null;
+}
+
+export async function getMe(): Promise<MeResponse> {
   const res = await fetch(`${BASE}/auth/me`, { credentials: 'include' });
-  if (!res.ok) return null;
+  if (!res.ok) return { user: null, admitted: true, queuePosition: null };
   const data = await res.json();
-  return data.user;
+  return { user: data.user, admitted: data.admitted, queuePosition: data.queue_position ?? null };
 }
 
 export async function login(email: string, password: string): Promise<User> {
@@ -1402,7 +1416,6 @@ export async function login(email: string, password: string): Promise<User> {
 export async function signup(
   email: string,
   password: string,
-  inviteCode: string,
   displayName?: string,
 ): Promise<User> {
   const res = await fetch(`${BASE}/auth/signup`, {
@@ -1412,7 +1425,6 @@ export async function signup(
     body: JSON.stringify({
       email,
       password,
-      invite_code: inviteCode,
       display_name: displayName || undefined,
     }),
   });
