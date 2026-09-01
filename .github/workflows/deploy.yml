@@ -143,6 +143,23 @@ jobs:
             exit 1
           fi
 
-      - name: Reclaim disk space from old image layers
+      # BuildKit build cache is unbounded by default and unrelated to the
+      # rollback mechanism above — that path rebuilds from source at
+      # $GOOD_SHA via the exact same deploy-once.sh, it never reuses a
+      # saved image or cache layer. Left unpruned, orphaned layer cache from
+      # old builds (whose resulting image is long gone) grew to 55GB over 3
+      # days of deploys — this clears that every run.
+      #
+      # Deliberately NOT `-a`/`--all`: that flag also wipes BuildKit's
+      # internal cache, which includes the `--mount=type=cache` mount the
+      # backend Dockerfile uses for uv's download cache (see
+      # backend/Dockerfile). Plain `-f` only removes cache no longer
+      # referenced by any current build, which leaves that mount alone —
+      # so uv still skips re-downloading unchanged wheels (torch, mineru)
+      # on the next deploy instead of every build going out to the network
+      # cold.
+      - name: Reclaim disk space (old image layers + build cache)
         if: always()
-        run: docker image prune -f
+        run: |
+          docker image prune -f
+          docker builder prune -f
