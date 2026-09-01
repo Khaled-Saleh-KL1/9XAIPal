@@ -524,7 +524,7 @@ any external caller. The routes below are unchanged.
 | LOCAL    | The question is about what's currently on screen           | The current chunk (± neighbors) + its image   | `system + "Context:\n<chunks>"` + image as base64 (multimodal) |
 | GLOBAL   | The question requires searching the whole paper            | Top-K similar chunks by pgvector cosine       | `system + "Context:\n<chunks with similarity scores>"`        |
 | OVERVIEW | The question is paper-level ("summarize the paper")        | Pre-computed section_summaries (hierarchical) | `system + "Context:\n<structured outline>"`                   |
-| EXTERNAL | The question is about something outside the paper          | Top-K web results from SearXNG                | `system + "Context:\n<title/url/snippet rows>"`               |
+| EXTERNAL | The question is about something outside the paper          | Top-K web results from the search cascade      | `system + "Context:\n<title/url/snippet rows>"`               |
 
 ## The flow ([chat/orchestrator.py](../../backend/app/chat/orchestrator.py))
 
@@ -626,14 +626,19 @@ If the current chunk is a figure, the model literally sees the picture.
 
 1. Rewrites the query toward CS/ML (`rewrite_query_for_papers`) so an ambiguous term like
    "transduction" does not return genetics hits.
-2. Calls [`search/web.py`](../../backend/app/search/web.py): Tavily by default, SearXNG when
-   pinned. Never a provider module directly.
+2. Calls [`search/web.py`](../../backend/app/search/web.py): a cascade of google → tavily →
+   linkup → exa → serpapi → duckduckgo, first configured one to answer wins (duckduckgo needs
+   no key, so this never runs fully dry). Never a provider module directly.
 3. Ranks results via `search/ranking.py` (dedup + scoring).
 4. Returns at most 5 results.
 
-⚠ The `categories` argument survives only for SearXNG. Tavily has no engine-group concept and
-ignores it; the domain bias those categories used to buy now comes entirely from step 1, which
-works for both providers.
+⚠ No `categories`/engine-group filter is applied here. It used to bias SearXNG toward "it" and
+"science" engines, but verified (2026-08-31) that restricting SearXNG this way made it return
+irrelevant results — Docker Hub and GitHub repos outranking the actual paper for a plain query
+like "FlashAttention 2 paper" — because SearXNG's per-result `score` is a per-engine position
+weight, not a comparable relevance score across the several engines a category filter turns on.
+None of the four current providers have an engine-group concept anyway; the domain bias comes
+entirely from step 1.
 
 ## Research Agent ([chat/research_agent.py](../../backend/app/chat/research_agent.py))
 

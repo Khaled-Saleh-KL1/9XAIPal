@@ -16,7 +16,7 @@ cp .env.example .env
 # 2. (First time only — this builds the React UI once into a volume)
 docker compose up frontend-build
 
-# 3. Bring up the full server (postgres + redis + searxng + api on :8000)
+# 3. Bring up the full server (postgres + redis + api on :8000)
 # The api service serves BOTH the React UI and the /api/v1 backend on a single port.
 docker compose up -d api
 
@@ -30,7 +30,8 @@ Then open **http://localhost:8000** in your browser. Everything (library, reader
 
 - **api**: FastAPI (async, 2 workers by default) + optional SPA mount for the frontend.
 - **frontend-build** (one-shot): Builds the Vite/React app and leaves dist in a volume.
-- postgres, redis, searxng: unchanged.
+- postgres, redis: unchanged.
+- Web search: a cascade of 6 providers (google, tavily, linkup, exa, serpapi, then duckduckgo — see `app/search/web.py`), no local service. The last needs no key, so web search is never fully off.
 - celery_worker: unchanged (uses the same image).
 
 ## Networking for Ollama (Your LLM)
@@ -57,7 +58,7 @@ Embeddings follow the same chain (only OpenAI offers an embedding API among thes
 
 Two layers, both already wired in `docker-compose.yml`:
 
-1. **`restart: unless-stopped`** on every long-running service (postgres, redis, searxng, celery_worker, api, autoheal). A container that crashes or exits, e.g. the worker OOM-killed by a 700-page book (exit 137), restarts automatically; queued uploads resume.
+1. **`restart: unless-stopped`** on every long-running service (postgres, redis, celery_worker, api, autoheal). A container that crashes or exits, e.g. the worker OOM-killed by a 700-page book (exit 137), restarts automatically; queued uploads resume.
 2. **`autoheal` watchdog** (`willfarrell/autoheal`, Docker socket mounted): restarts any container labeled `autoheal=true` (api, postgres, redis) whose healthcheck turns **unhealthy**: the "running but hung" case that restart policies can't see.
 
 Neither mechanism touches data volumes. A deliberate `docker compose down` (or stopping the LAN script) is final: nothing restarts after that.

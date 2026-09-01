@@ -24,8 +24,8 @@ function openLightbox(detail: LightboxDetail) {
 // with a blurred backdrop (handled inside ChatPane).
 //
 // We use a small SafeWebImage wrapper so we can cleanly handle hotlink failures
-// (common with images returned by SearXNG / web research). Instead of a broken
-// red X, we show a helpful fallback with a direct link to the original source.
+// (common with images returned by web search / web research). Instead of a
+// broken red X, we show a helpful fallback with a direct link to the source.
 const SafeWebImage: React.FC<ImgHTMLAttributes<HTMLImageElement>> = ({ src, alt, ...rest }) => {
   const [failed, setFailed] = useState(false);
 

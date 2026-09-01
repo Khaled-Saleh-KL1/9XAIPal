@@ -36,10 +36,10 @@ Owns the `/ask` HTTP endpoint. It validates request data and delegates routing, 
 
 ### `v1/endpoints/search.py`
 
-Optional debugging and developer-facing endpoint group for local vector search, sequential lookup, and external SearXNG search.
+Optional debugging and developer-facing endpoint group for local vector search, sequential lookup, and external web search (via the search cascade).
 
 ## Data Dependencies
 
 `api` imports `schemas` for request and response models, `services` for document and retrieval workflows, `chat` for `/ask`, and `core` for app settings.
 
-`api` must not directly call MinerU, Ollama, SearXNG, raw PostgreSQL SQL, or pgvector queries.
+`api` must not directly call MinerU, Ollama, web search providers, raw PostgreSQL SQL, or pgvector queries.

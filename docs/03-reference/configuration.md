@@ -182,15 +182,19 @@ and never from a provider module.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `WEB_SEARCH_PROVIDER` | `auto` | `auto` \| `tavily` \| `searxng` \| `none`. `auto` picks Tavily when `TAVILY_API_KEY` is set, otherwise SearXNG. `none` makes every web call return `[]` and withdraws the `WEB` tool from the paper agent. |
+| `WEB_SEARCH_PROVIDER` | `auto` | `auto` \| `google` \| `tavily` \| `linkup` \| `exa` \| `serpapi` \| `duckduckgo` \| `none`. `auto` tries every configured key below in cascade order and falls through to the next the moment one errors or returns zero results. Pinning to one name forces exactly that provider with no fallback (debugging only). `none` makes every web call return `[]` and withdraws the `WEB` tool from the paper agent — the only way to fully disable web search, since `duckduckgo` needs no key. |
+| `GOOGLE_API_KEY` | (empty) | Gemini's Search-grounding tool, from <https://aistudio.google.com>. Not the Custom Search JSON API — that one rejects plain API-key auth. First in the cascade. ⚠ Search grounding's free-tier quota has been observed as effectively zero from an EU-hosted server; confirm yours actually has grounding quota, not just a valid key. |
 | `TAVILY_API_KEY` | (empty) | Key from <https://app.tavily.com>. Free tier is 1,000 searches/month. |
 | `TAVILY_SEARCH_DEPTH` | `basic` | `basic` (1 credit, fast) or `advanced` (2 credits, deeper extraction, better recall on niche research queries). |
-| `SEARXNG_URL` | `http://localhost:8080` | The local-only alternative, served by the `searxng` compose service. Point at an unreachable URL to disable the EXTERNAL path when SearXNG is the active provider. |
+| `LINKUP_API_KEY` | (empty) | Key from <https://app.linkup.so>. Real page content per result, plus a proper image-search mode. |
+| `EXA_API_KEY` | (empty) | Key from <https://exa.ai>. Neural/semantic search, strong on academic sources. No image-search endpoint — a document index, not a SERP. |
+| `SERPAPI_API_KEY` | (empty) | Key from <https://serpapi.com>. Genuine Google SERP data (organic + image results) via a paid scraping API — a different product from `GOOGLE_API_KEY` above. |
+| *(none — `ddgs` library)* | always on | DuckDuckGo via the `ddgs` package. Last in the cascade, no key, no quota — the one provider that's always "configured". Least reliable of the six: it scrapes an undocumented endpoint, since DuckDuckGo has no official search API. |
 
-⚠ **The provider choice is a privacy decision, not only a quality one.** SearXNG runs inside the
-compose stack, so a query never leaves the host. Tavily is a third party and **the query string
-does** leave. Neither ever receives paper text, chunks, or chat history: callers pass a query and
-nothing else, but "nothing leaves this machine" is only literally true on `searxng`. See
+⚠ **This is a privacy setting as much as a quality one.** The first five providers are hosted
+third parties: **the query string** leaves the machine for whichever one answers a given call.
+duckduckgo is a direct scrape, not a hosted API, but the query still leaves the machine. Paper
+text, chunks, and chat history never leave — callers pass a query and nothing else. See
 [overview.md §7](../02-architecture/overview.md#7-what-never-happens).
 
 ⚠ **`/api/v1/health` does not probe Tavily.** Tavily exposes no health endpoint, so the only way to

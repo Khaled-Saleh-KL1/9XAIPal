@@ -101,4 +101,4 @@ Global retrieval should use pgvector similarity against `chunk_embeddings.embedd
 
 `database` is used by `extraction` through `services.ingestion` to persist ordered chunks, `embeddings` to store vectors, `services` to retrieve documents and chunks, `chat.global_context` for pgvector retrieval, and `chat.local_context` for current chunk lookup.
 
-`database` should not call MinerU, Ollama, SearXNG, or FastAPI routers.
+`database` should not call MinerU, Ollama, web search providers, or FastAPI routers.

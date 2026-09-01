@@ -2,17 +2,14 @@
 
 Tavily is a search API built for LLM agents: one HTTPS call returns ranked,
 already-summarised page extracts rather than a SERP that still has to be
-scraped. It replaced SearXNG as the default provider on 2026-08-26.
+scraped. Second in the cascade (see app/search/web.py), after Google.
 
-⚠ **This provider is a network egress.** SearXNG ran on localhost, so the
-EXTERNAL route stayed inside the machine even while it reached the public web.
-Tavily does not: the query string leaves for ``api.tavily.com``. Paper text,
-chunks, and chat history still never go out — only the query — but the claim
-"nothing leaves this machine" now has a second, deliberate hole in it. See
-docs/02-architecture/overview.md §7.
+⚠ **This provider is a network egress.** The query string leaves for
+``api.tavily.com``. Paper text, chunks, and chat history never go out —
+only the query.
 
-The module deliberately mirrors ``searxng_client``'s three functions and their
-return shapes, so the two are interchangeable behind ``app.search.web``.
+The module deliberately mirrors the other three clients' three functions and
+their return shapes, so all four are interchangeable behind ``app.search.web``.
 """
 
 from typing import Optional
@@ -66,15 +63,13 @@ async def search(
     categories: Optional[list[str]] = None,
     limit: int = 10,
 ) -> list[dict]:
-    """Search the web and return rows shaped like the SearXNG client's.
+    """Search the web and return normalized results.
 
-    ``categories`` is accepted and ignored. SearXNG routed a query to engine
-    groups ("it", "science"); Tavily has no such concept, and its ``topic``
-    parameter only distinguishes news from general. The parameter stays in the
-    signature so the two providers remain drop-in swappable — the domain bias
-    the categories used to buy is applied in
+    ``categories`` is accepted and ignored, same as every other client —
+    none of the four providers have an engine-group concept. The domain bias
+    that idea used to buy lives in
     :func:`app.chat.external_context.rewrite_query_for_papers` instead, which
-    works for both.
+    works for all of them.
     """
     data = await _post({
         "query": query,
@@ -101,7 +96,7 @@ async def search(
 
 
 async def search_images(query: str, *, limit: int = 4) -> list[dict]:
-    """Image results, in the same shape ``searxng_client.search_images`` returns.
+    """Image results, in the same shape every other client's ``search_images`` returns.
 
     Tavily has no separate image endpoint: images ride along on a normal search
     when ``include_images`` is set. That makes this a second billed call for the

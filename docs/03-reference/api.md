@@ -105,22 +105,24 @@ Source: [endpoints/health.py](../../backend/app/api/v1/endpoints/health.py).
   "database": "ok" | "unavailable",
   "ollama":   "ok" | "unavailable",
   "web_search": "ok" | "unavailable",
-  "web_search_provider": "tavily" | "searxng" | "none",
-  "searxng":  "ok" | "unavailable"
+  "web_search_provider": "google" | "tavily" | "linkup" | "exa" | "serpapi" | "duckduckgo" | "none"
 }
 ```
 
-Probes the DB, Ollama (`/api/tags`), and the active web-search provider. Overall `status` is
-`degraded` if the database is unavailable.
+Probes the DB, Ollama (`/api/tags`), and the web search cascade. Overall `status` is `degraded` if
+the database is unavailable.
 
-⚠ `searxng` is a **deprecated alias for `web_search`**, kept so older clients keep parsing. It
-carries the *active* provider's status: it says nothing about SearXNG specifically unless SearXNG
-is the one running.
+⚠ `web_search_provider` names the **first** provider in cascade order that has a key configured —
+not necessarily the one that answers any given query, since a later provider may serve a request
+the first one failed or returned empty for. See [configuration.md § Web
+search](configuration.md#web-search) for the full cascade order.
 
-⚠ **`web_search` does not prove a Tavily key works.** Tavily exposes no health endpoint, so the
-only way to verify a key is to spend a search credit, and this endpoint is the container
-healthcheck polled every 30 seconds. On `tavily` the field means "a key is configured"; a bad key
-surfaces as a logged `401` on the first real search.
+⚠ **`web_search` does not prove a key actually works.** None of the five keyed providers expose a
+health endpoint, so the only way to verify a key is to spend a search credit, and this endpoint is
+the container healthcheck polled every 15-30 seconds. The field means "at least one provider is
+usable" — which, since `duckduckgo` needs no key at all, is effectively always true; a bad key
+surfaces as a logged `401`/`403` on the first real search for that
+provider, and the cascade falls through to the next one.
 
 ---
 
@@ -872,7 +874,7 @@ Embeds the query and returns the top-K chunks by cosine similarity.
 
 ### `GET /search/web?q=...&limit=5`
 
-Bypasses the chat router and hits SearXNG directly, with the same
+Bypasses the chat router and hits the web search cascade directly, with the same
 ranking that EXTERNAL would apply.
 
 ---

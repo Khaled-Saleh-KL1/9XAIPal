@@ -6,7 +6,7 @@
 # the same Wi-Fi/LAN can reach it for testing.
 #
 #   • Brings up the full Docker stack (API + UI on one port, Postgres, Redis,
-#     SearXNG, Celery worker) and builds the React SPA.
+#     Celery worker) and builds the React SPA.
 #   • Removes the 100 MB upload cap so a 700-page PDF uploads with no size
 #     limit, no proxy in the path, and no HTTP timeout (heavy extraction runs
 #     asynchronously in the Celery worker, so the upload request itself is
@@ -117,7 +117,7 @@ compose down --remove-orphans >/dev/null 2>&1 || true
 # Belt-and-suspenders: drop any stray containers using our fixed names, even if
 # they belong to a different compose context.
 docker rm -f 9xaipal-api 9xaipal-celery-worker 9xaipal-postgres \
-              9xaipal-redis 9xaipal-searxng 9xaipal-frontend-build \
+              9xaipal-redis 9xaipal-frontend-build \
               9xaipal-autoheal >/dev/null 2>&1 || true
 
 # Bring everything up. --build is required so the worker picks up the

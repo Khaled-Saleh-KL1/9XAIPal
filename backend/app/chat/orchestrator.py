@@ -274,7 +274,7 @@ async def _prepare_ask(
     # context when (a) the router explicitly chose EXTERNAL, or (b) the user
     # explicitly invokes another field (e.g. "in biology"), or (c) there's no
     # paper context to lean on. Otherwise the paper + the model's own CS/ML
-    # knowledge wins — no SearXNG noise, no biology drift.
+    # knowledge wins — no off-topic web noise, no biology drift.
     cross_field_explicit = _user_explicitly_mentioned_other_field(prompt)
     has_paper_context = bool(paper_block)
 
@@ -486,7 +486,7 @@ async def _finalize_ask(
 ) -> AskResponse:
     """Steps 4–5 of /ask: citation hygiene, persistence, trace, compaction."""
     # Drop web citations whose URL never appears in the final answer.
-    # This prevents off-domain SearXNG results (biology dictionaries, random
+    # This prevents off-domain web results (biology dictionaries, random
     # tutorials, etc.) — which the model correctly ignored in the body — from
     # being rendered as citation chips beneath the answer.
     citations = _filter_unused_web_citations(prep.citations, answer)

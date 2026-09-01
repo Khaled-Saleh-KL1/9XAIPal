@@ -36,18 +36,6 @@ services:
     labels:
       autoheal: "true"
 
-  searxng:
-    image: searxng/searxng:latest
-    container_name: 9xaipal-searxng
-    ports:
-      - "${SEARXNG_PORT:-8080}:8080"
-    volumes:
-      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
-    environment:
-      BASE_URL: http://localhost:${SEARXNG_PORT:-8080}/
-      INSTANCE_NAME: 9xaipal-searxng
-    restart: unless-stopped
-
   celery_worker:
     build:
       context: .
@@ -91,17 +79,18 @@ services:
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
       CHAT_NUM_PREDICT: ${CHAT_NUM_PREDICT:-0}
-      # SearXNG runs as a compose service on the same network, so reach it by
-      # service name. Do NOT inherit SEARXNG_URL from the host .env here: a
-      # local-dev value like http://localhost:8080 resolves to *this container*
-      # and makes web search fail with connection-refused.
-      SEARXNG_URL: http://searxng:8080
-      # Web search provider. Tavily is hosted and reached over the public
-      # internet from inside the container, so unlike SEARXNG_URL it can be
-      # inherited from the host .env unchanged.
+      # Web search cascade: google -> tavily -> linkup -> exa -> serpapi ->
+      # duckduckgo (see app/search/web.py). The first five are hosted and
+      # reached over the public internet from inside the container, so
+      # unlike a self-hosted service they can all be inherited from the
+      # host .env unchanged; duckduckgo needs no key at all.
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
+      LINKUP_API_KEY: ${LINKUP_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
       MINERU_BINARY: ${MINERU_BINARY:-mineru}
       # Tells mineru_client.py that pipeline models are pre-baked into the
       # image (Dockerfile.mineru runs `mineru-models-download` at build time).
@@ -202,14 +191,17 @@ services:
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL:-}
       CHAT_NUM_PREDICT: ${CHAT_NUM_PREDICT:-0}
       GUARDRAIL_SKIP_IN_PAPER: ${GUARDRAIL_SKIP_IN_PAPER:-true}
-      # Reach the SearXNG compose service by name (see celery_worker note above).
-      SEARXNG_URL: http://searxng:8080
-      # Web search provider. Tavily is hosted and reached over the public
-      # internet from inside the container, so unlike SEARXNG_URL it can be
-      # inherited from the host .env unchanged.
+      # Web search cascade: google -> tavily -> linkup -> exa -> serpapi ->
+      # duckduckgo (see app/search/web.py). The first five are hosted, so
+      # unlike a self-hosted service they can all be inherited from the
+      # host .env unchanged; duckduckgo needs no key at all.
       WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       TAVILY_SEARCH_DEPTH: ${TAVILY_SEARCH_DEPTH:-basic}
+      LINKUP_API_KEY: ${LINKUP_API_KEY:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
       STORAGE_ROOT: /data/storage
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-false}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
@@ -227,8 +219,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      searxng:
-        condition: service_started
       # The SPA has to be in the volume before this container starts serving,
       # or the first person to open the app gets a 404 at "/" and has to know
       # to reload. `service_completed_successfully` waits for the one-shot
