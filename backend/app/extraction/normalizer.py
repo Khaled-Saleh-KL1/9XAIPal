@@ -39,41 +39,56 @@ def normalize_markdown(text: str) -> str:
 # few words away, which is just as broken to read.
 #
 # What actually distinguishes this from real subscript/superscript use is
-# density, measured per PARAGRAPH, using content length as the signal: a
-# genuine subscript (a footnote marker, a chemical formula H<sub>2</sub>O,
-# a math index x<sub>i</sub>) is almost always a single character or digit;
-# MinerU's corruption instead wraps multi-letter syllable fragments
-# ("oog", "ddi", "ensure", "manner."). Two or more multi-letter (2+ chars)
-# <sub>/<sup> tags in one paragraph means that whole paragraph's OCR pass
-# was damaged — at that point every tag in it, including any stray
-# single-character ones the same corruption left behind (`i<sub>s</sub>`),
-# is stripped, since a paragraph already proven corrupted has no remaining
-# tag worth trusting as real notation. A paragraph with 0-1 multi-letter
-# tags is left completely untouched — the safe default for a genuinely
-# math/chemistry-dense paragraph that legitimately uses several short
-# subscripts.
+# CONTENT TYPE, not count or density — two earlier versions of this gated on
+# "2+ suspicious tags nearby" (first requiring 2+ chars each, then requiring
+# 2+ letter-tags in the same paragraph) and both still left real corruption
+# on the page: production chunks are small (one sentence, one table cell,
+# one caption), so a lot of this damage is a single stray tag with no
+# second offender in the same chunk to corroborate it —
+# Reci<sub>p</sub>rocal, Ima<sub>g</sub>e, nativel<sub>y</sub>, each the only
+# tag in its chunk, each still visibly broken.
+#
+# The fix is to stop requiring corroboration at all and key on content type
+# alone, as an ALLOWLIST rather than a blocklist: rather than unwrap
+# whatever looks suspicious (a letter — but a lone stray comma turned out
+# to be just as real an OCR artifact, "dataset<sub>,</sub>" — an
+# ever-growing list of shapes to catch), only the content shapes a
+# legitimate raw <sub>/<sup> tag actually takes in this pipeline's real
+# output stay protected: a bare number (a chemical formula's
+# H<sub>2</sub>O, a footnote number <sup>1</sup>, a signed/decimal
+# exponent like <sup>-4</sup>), or a footnote/citation marker symbol
+# (*, †, ‡, ∗), each optionally backslash-escaped the way markdown
+# serialization sometimes leaves them. (A genuine math variable subscript
+# like x_i comes through as LaTeX, $x_i$, rendered by KaTeX — a wholly
+# separate path from raw HTML sub/sup tags, see remark-math in
+# frontend/src/lib/markdown.ts — so it never reaches this function at
+# all.) Everything else — a letter, a stray comma, any other punctuation —
+# is unwrapped, unconditionally, no matter how many others are (or
+# aren't) nearby.
+#
+# This is deliberately one-sided: unwrapping never deletes anything, it
+# just keeps the tag's text in place without the tag (x<sub>i</sub> becomes
+# xi, not gone) — so the failure mode of over-firing on some legitimate
+# edge case this allowlist doesn't yet know about (an ordinal suffix set
+# as "21<sup>st</sup>", say) is losing a little superscript styling, plain
+# but still perfectly readable. That is a far cheaper mistake than
+# under-firing and leaving a word visibly torn apart, which is what two
+# earlier, more "careful" versions of this still did.
 _SUB_SUP_TAG = re.compile(r"<(su[bp])>([^<>]*)</\1>")
-_MULTI_LETTER_TAG_CONTENT = re.compile(r"[A-Za-z]{2,}")
-_PARAGRAPH_SPLIT = re.compile(r"(\n\s*\n)")
-
-
-def _clean_paragraph(paragraph: str) -> str:
-    if "<sub>" not in paragraph and "<sup>" not in paragraph:
-        return paragraph
-    tags = _SUB_SUP_TAG.findall(paragraph)
-    multi_letter = sum(1 for _, content in tags if _MULTI_LETTER_TAG_CONTENT.search(content))
-    if multi_letter < 2:
-        return paragraph
-    return _SUB_SUP_TAG.sub(lambda m: m.group(2), paragraph)
+_SAFE_TAG_CONTENT = re.compile(r"^\\?[-+]?\d+(\.\d+)?$|^\\?[*∗†‡]$")
 
 
 def unwrap_garbled_sub_sup(text: str) -> str:
-    """Strip <sub>/<sup> markup (keeping its text) from any paragraph
-    containing 2+ multi-letter sub/sup tags — see the density note above."""
+    """Strip <sub>/<sup> markup (keeping its text) from any tag whose
+    content isn't one of the allowlisted safe shapes — see the note above.
+    A bare number or footnote-marker symbol (a real footnote marker, a
+    chemical formula, an exponent) is left untouched; anything else
+    (a letter, a stray comma, ...) is unwrapped."""
     if "<sub>" not in text and "<sup>" not in text:
         return text
-    parts = _PARAGRAPH_SPLIT.split(text)
-    return "".join(part if i % 2 else _clean_paragraph(part) for i, part in enumerate(parts))
+    return _SUB_SUP_TAG.sub(
+        lambda m: m.group(0) if _SAFE_TAG_CONTENT.match(m.group(2)) else m.group(2), text
+    )
 
 
 # A run of 3+ short <sup> tags separated only by whitespace. MinerU's layout
