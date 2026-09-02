@@ -21,8 +21,41 @@ from app.services.article_extraction import (
     _drop_image_refs,
     _image_urls_in,
     extract_article,
+    extract_article_from_html,
     fetch_resource,
 )
+
+
+# ── extract_article_from_html: trafilatura's metadata frontmatter leak ──────
+
+def test_extract_article_from_html_does_not_leak_yaml_frontmatter_into_the_body():
+    """Real bug, found in every article in the library: trafilatura's
+    with_metadata=True prepends a YAML block ("---\ntitle: ...\nauthor:
+    ...\n---") directly into the markdown it returns. That block was landing
+    as the article's own first chunk — rendered as markdown, a run of
+    non-blank "key: value" lines with no blank line between them collapses
+    into a single unreadable paragraph. The title this app actually uses
+    already comes from the separate extract_metadata() call, so the
+    frontmatter block bought nothing.
+    """
+    html = """
+    <html><head>
+      <title>A Real Article Title</title>
+      <meta name="author" content="Jane Doe">
+      <meta property="article:published_time" content="2026-01-15">
+    </head><body><article>
+      <h1>A Real Article Title</h1>
+      <p>""" + ("This is a real paragraph of article prose. " * 10) + """</p>
+      <p>""" + ("A second paragraph with enough length to clear the minimum. " * 10) + """</p>
+    </article></body></html>
+    """
+    article = extract_article_from_html(html, "https://example.com/a-real-article")
+
+    assert not article.markdown.lstrip().startswith("---")
+    assert "author:" not in article.markdown
+    assert "sitename:" not in article.markdown
+    assert article.title == "A Real Article Title"
+    assert "real paragraph of article prose" in article.markdown
 
 
 def test_extract_article_rejects_non_http_scheme():
