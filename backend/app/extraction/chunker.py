@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Optional
 
 from app.extraction.normalizer import (
+    degrade_inline_math,
     estimate_tokens,
     extract_plain_text,
+    latex_to_plain_text,
     normalize_markdown,
     strip_leaked_sup_run,
     unwrap_garbled_sub_sup,
@@ -977,7 +979,7 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
             label = tag or (trailing.replace("$", "") or None)
             label_suffix = f" \\quad ({label})" if label else ""
             md = f"$$\n{body}{label_suffix}\n$$"
-            plain = body + (f" ({label})" if label else "")
+            plain = latex_to_plain_text(body) + (f" ({label})" if label else "")
             # MinerU also crops a bitmap of the typeset equation. The chunk
             # still renders from LaTeX (sharp, themeable, selectable), but the
             # crop is linked so a question about a formula can hand the model
@@ -1255,7 +1257,12 @@ def create_chunks_from_markdown(markdown_content: str) -> list[dict]:
                     lambda m: f"$$\n{_normalize_math_glyphs(m.group(1).strip())}\n$$",
                     md,
                 )
-                plain = _normalize_math_glyphs(plain)
+                # Same reasoning as the content_list path's equation branch
+                # (see latex_to_plain_text's docstring): plain_text here
+                # still holds the raw "$$...$$" LaTeX at this point —
+                # extract_plain_text above never touches LaTeX syntax —
+                # and that goes straight into embeddings otherwise.
+                plain = latex_to_plain_text(_normalize_math_glyphs(plain))
 
             extra = {}
             if chunk_type == "table":
@@ -1318,18 +1325,18 @@ def _chunk(
     ``normalize=False`` skips markdown whitespace normalization — required for
     ``code`` chunks, whose indentation must survive verbatim.
     """
-    # ⚠ plain_text needs the sub/sup unwrap too, and needs it HERE rather than
-    # at each call site. normalize_markdown (which already applies it) only
-    # ever touches `md`; `plain` arrives raw from most callers — the
-    # content_list path, which is what every MinerU-extracted document
-    # actually uses, passes the entry's own text straight through. Without
-    # this, a document reads clean but its plain_text stays full of
-    # "Ridin<sub>g</sub>" — and plain_text is what gets embedded and what
-    # retrieval feeds the model, so the damage was invisible in the reader
-    # and live in every search result and chat answer. token_count is
-    # measured on the cleaned text for the same reason: tag-split words
-    # inflate the count.
-    plain = unwrap_garbled_sub_sup(plain) if normalize else plain
+    # ⚠ plain_text needs its own cleanup too, and needs it HERE rather than
+    # at each call site — normalize_markdown (which already applies the
+    # sub/sup unwrap) only ever touches `md`; `plain` arrives raw from most
+    # callers, and the content_list path (what every MinerU-extracted
+    # document actually uses) passes the entry's own text straight through.
+    # Without this a document reads clean while its plain_text — the field
+    # that gets embedded and that retrieval feeds the model — stays full of
+    # "Ridin<sub>g</sub>" or a stray inline "$\mathbf{p}_i$" left exactly as
+    # LaTeX source; either way the damage is invisible in the reader and
+    # live in every search result and chat answer. token_count is measured
+    # on the cleaned text for the same reason: markup inflates the count.
+    plain = degrade_inline_math(unwrap_garbled_sub_sup(plain)) if normalize else plain
     ch = {
         "sequence_id": sequence_id,
         "parent_sequence_id": None,
