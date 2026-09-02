@@ -126,10 +126,69 @@ hr { border: none; border-top: 1px solid #e5e5e5; margin: 2em 0; }
 """
 
 
+# Inline style="" declarations that pin absolute horizontal geometry. These
+# are almost always written by the page's OWN JavaScript at runtime — a
+# carousel measuring the viewport and hard-coding slide offsets, for
+# example — and they are the one kind of styling this snapshot cannot
+# simply let through: an inline declaration outranks every rule in a
+# stylesheet, so _READABILITY_CSS above can never win against them, and the
+# script that made those numbers coherent was stripped along with every
+# other <script>.
+#
+# Reproduced on a real page (blog.google's agentic-video post): a media
+# carousel left behind
+# `inset-inline-start: -524.5px; padding-inline: 524.5px 319.5px` — 844px of
+# horizontal padding, computed for a full-width carousel, now applied inside
+# a 720px reading column. The caption text under it rendered 67px wide and
+# 159px tall: a 40-character sentence wrapped down a sliver, one or two
+# words per line, exactly as unreadable as it sounds.
+#
+# Only horizontal geometry is dropped. `display`, `height`, `overflow` and
+# `position` stay, because visually-hidden patterns depend on them —
+# `position:absolute; width:0; height:0; overflow:hidden` around an SVG
+# sprite still collapses to nothing once `width` is gone, and stripping the
+# whole attribute instead would splash those definitions across the page.
+_LAYOUT_STYLE_PROPS = frozenset({
+    "padding", "padding-inline", "padding-inline-start", "padding-inline-end",
+    "padding-left", "padding-right",
+    "scroll-padding", "scroll-padding-inline", "scroll-padding-inline-start",
+    "scroll-padding-inline-end", "scroll-padding-left", "scroll-padding-right",
+    "margin-inline", "margin-inline-start", "margin-inline-end",
+    "margin-left", "margin-right",
+    "inset", "inset-inline", "inset-inline-start", "inset-inline-end",
+    "left", "right",
+    "width", "min-width", "max-width",
+    "transform", "translate",
+})
+
+
+def _strip_layout_styles(tree) -> None:
+    """Drop absolute horizontal geometry from every inline style attribute.
+
+    In place. An attribute left with nothing but whitespace is removed
+    entirely rather than kept as `style=""`.
+    """
+    for el in tree.xpath("//*[@style]"):
+        kept = []
+        for decl in el.get("style", "").split(";"):
+            name, sep, _ = decl.partition(":")
+            if not sep:
+                continue
+            if name.strip().lower() in _LAYOUT_STYLE_PROPS:
+                continue
+            kept.append(decl.strip())
+        if kept:
+            el.set("style", "; ".join(kept) + ";")
+        else:
+            del el.attrib["style"]
+
+
 def sanitize_html(html: str, page_url: str) -> str:
     """Strip live-code vectors, then anchor surviving relative URLs
     (images, any stylesheet link that happens to survive, in-page anchors)
-    back at the real page, and apply a clean readability reset so the
+    back at the real page, drop the JS-computed layout geometry that would
+    otherwise squeeze the page into an unreadable sliver (see
+    _LAYOUT_STYLE_PROPS above), and apply a clean readability reset so the
     snapshot is pleasant to actually read (see _READABILITY_CSS above) —
     not just safe and technically correct.
     """
@@ -142,6 +201,8 @@ def sanitize_html(html: str, page_url: str) -> str:
     base = lxml_html.Element("base")
     base.set("href", page_url)
     head.insert(0, base)
+
+    _strip_layout_styles(tree)
 
     style = lxml_html.Element("style")
     style.text = _READABILITY_CSS

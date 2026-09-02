@@ -111,6 +111,69 @@ def test_sanitize_html_readability_css_comes_after_original_style_block():
     assert readability_pos > original_pos
 
 
+# ── inline layout geometry (the unreadable-sliver bug) ──────────────────────
+
+_CAROUSEL = (
+    '<html><body>'
+    '<div class="viewport" style="inset-inline-start: -524.5px; '
+    'padding-inline: 524.5px 319.5px; scroll-padding-inline: 524.5px 319.5px;">'
+    '<p>Token-efficient long-form video analysis</p>'
+    '</div></body></html>'
+)
+
+
+def test_sanitize_html_drops_js_computed_horizontal_geometry():
+    """Reproduced from a real page (blog.google's agentic-video post): a
+    carousel's own JavaScript had hard-coded 844px of horizontal padding for
+    a full-width layout. Inside the snapshot's 720px reading column that
+    squeezed the caption to 67px wide and 159px tall — one or two words per
+    line straight down the page. An inline declaration outranks any
+    stylesheet, so _READABILITY_CSS cannot fix this from the outside."""
+    out = sanitize_html(_CAROUSEL, "https://example.com/x")
+    assert "padding-inline" not in out
+    assert "inset-inline-start" not in out
+    assert "scroll-padding-inline" not in out
+    # the content itself is untouched
+    assert "Token-efficient long-form video analysis" in out
+
+
+def test_sanitize_html_keeps_non_layout_inline_styles():
+    """Only horizontal geometry goes. Colour, weight and display are not
+    what breaks the reading column, and dropping them wholesale would change
+    the page more than it needs to be changed."""
+    page = '<html><body><p style="color: red; font-weight: 700; display: block;">hi</p></body></html>'
+    out = sanitize_html(page, "https://example.com/x")
+    assert "color: red" in out
+    assert "font-weight: 700" in out
+    assert "display: block" in out
+
+
+def test_sanitize_html_keeps_visually_hidden_pattern_hidden():
+    """The SVG-sprite / screen-reader hiding idiom is
+    `position:absolute; width:0; height:0; overflow:hidden`. `width` is
+    stripped as geometry, but `height:0` + `overflow:hidden` still collapse
+    it — so those definitions don't suddenly splash across the page. This is
+    why the attribute is filtered per-declaration rather than removed
+    wholesale."""
+    page = (
+        '<html><body><svg style="position:absolute; width:0; height:0; overflow:hidden;">'
+        '<defs></defs></svg></body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert "width:0" not in out and "width: 0" not in out
+    assert "height:0" in out or "height: 0" in out
+    assert "overflow:hidden" in out or "overflow: hidden" in out
+    assert "position:absolute" in out or "position: absolute" in out
+
+
+def test_sanitize_html_removes_the_attribute_when_nothing_survives():
+    page = '<html><body><div style="padding-inline: 500px; width: 900px;">x</div></body></html>'
+    out = sanitize_html(page, "https://example.com/x")
+    assert 'style=""' not in out
+    assert "padding-inline" not in out
+    assert "900px" not in out
+
+
 # ── _page_title ──────────────────────────────────────────────────────────────
 
 def test_page_title_reads_title_tag():
