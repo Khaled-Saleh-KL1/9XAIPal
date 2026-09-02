@@ -93,7 +93,7 @@ function splitParagraphAroundMath(text: string): Array<{ kind: 'text' | 'math'; 
 type RevealedUnit =
   | { kind: 'paragraph'; text: string; sourceChunkId: string; sourceSeq: number }
   | { kind: 'heading'; text: string; level: number; sourceChunkId: string; sourceSeq: number }
-  | { kind: 'table'; markdown: string; sourceChunkId: string; sourceSeq: number; tableJson?: any }
+  | { kind: 'table'; markdown: string; sourceChunkId: string; sourceSeq: number; tableJson?: any; imageUrl?: string }
   | { kind: 'figure'; imageUrl?: string; caption?: string; filename?: string; sourceChunkId: string; sourceSeq: number }
   | { kind: 'math'; latex: string; imageUrl?: string; sourceChunkId: string; sourceSeq: number }
   | { kind: 'code'; markdown: string; sourceChunkId: string; sourceSeq: number }
@@ -270,6 +270,11 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
         kind: 'table',
         markdown: chunk.content_markdown,
         tableJson: (chunk as any).table_json, // we added this server-side
+        // Present exactly when the backend withheld table_json because the
+        // reconciled structure was unreliable (see chunker.py's
+        // _table_rows_are_consistent) — the page crop MinerU always makes,
+        // used as the trustworthy fallback instead of guessed structure.
+        imageUrl: chunk.image_url || undefined,
         sourceChunkId: id,
         sourceSeq: seq,
       }];
@@ -1142,7 +1147,23 @@ function GranularUnit({
       );
     }
 
-    // Fallback to markdown rendering
+    // No tableJson for one of two reasons: MinerU found no structure, or the
+    // backend deliberately withheld it because the reconciled rows disagreed
+    // in width — a scrambled-but-valid table that would otherwise show
+    // plausible, wrong numbers (see chunker.py's _table_rows_are_consistent).
+    // Either way, prefer the page crop MinerU always makes over guessing at
+    // structure — same page-crop-fallback pattern the math unit already uses.
+    if (unit.imageUrl) {
+      return (
+        <div className={`${baseClass} ${lastClass} my-4`}>
+          <div className="rounded-lg border p-4 flex justify-center overflow-x-auto" style={{ borderColor: 'var(--border)', background: '#fff' }}>
+            <img src={unit.imageUrl} alt="Table, shown as an image" className="max-w-none" />
+          </div>
+        </div>
+      );
+    }
+
+    // Fallback to markdown rendering — no structure and no crop available.
     return (
       <div className={`${baseClass} ${lastClass} my-4`}>
         <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border)', background: 'var(--bg-2)' }}>

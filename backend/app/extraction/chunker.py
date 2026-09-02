@@ -504,6 +504,51 @@ def _detect_code_language(text: str) -> Optional[str]:
     return None
 
 
+# A LaTeX macro or an isolated math-italic Unicode character is a hard
+# signal that a MinerU "code"/"algorithm" block is actually pseudocode
+# carrying real math notation (papers write algorithms with 𝜂, \mathbb{R},
+# \nabla inline), not literal source code — no programming language uses
+# either. See _looks_like_math_pseudocode's docstring for why this
+# distinction changes how the block has to render.
+_LATEX_MACRO_RE = re.compile(r"\\[a-zA-Z]{2,}")
+# Unicode Mathematical Alphanumeric Symbols block: the italic/bold math
+# variables (𝜂, 𝜇, 𝑊, 𝑡, ...) OCR emits for isolated formula variables.
+_MATH_ITALIC_RE = re.compile(r"[\U0001D400-\U0001D7FF]")
+# Same escaping rule as normalizer.py's degrade_inline_math: a backslash
+# before the dollar sign makes it a literal currency mark, not a math-span
+# delimiter, and must not count as evidence of real math here either.
+_REAL_DOLLAR_MATH_RE = re.compile(
+    r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\$(.+?)(?<!\\)\$", re.DOTALL
+)
+# MinerU escapes markdown-special characters assuming the text lands in
+# unfenced prose. A genuine code/schema listing (Table-numbered tool-call
+# syntax, JSON, config) still gets this treatment, but heading into a code
+# FENCE the escapes are not just unneeded, they are wrong: a fence renders
+# its content literally, so "\_" and "\$" show their backslash instead of
+# being interpreted, which is not what a code listing looked like on the
+# page. Limited to the three characters actually observed doing this
+# (verified against DeepSeek-V4's Table 4 tool-call schema).
+_STRAY_MD_ESCAPE_RE = re.compile(r"\\([_$|])")
+
+
+def _looks_like_math_pseudocode(text: str) -> bool:
+    """True when a MinerU code/algorithm block is pseudocode carrying real
+    math notation rather than literal source code.
+
+    MinerU marks BOTH cases with the same ``sub_type: "algorithm"`` — an
+    actual Muon-optimizer algorithm block and a plain tool-call XML schema in
+    the same real paper both carried it — so sub_type cannot be the signal.
+    Content is: requires a genuine (non-escaped) math span AND a LaTeX macro
+    or an isolated math-italic character, not either alone, because a real
+    code snippet could coincidentally pair two literal dollar amounts
+    ("$5 and $10" in a comment) into what looks like one math span, but real
+    code never ALSO contains a LaTeX command or a lone math-italic variable.
+    """
+    if not _REAL_DOLLAR_MATH_RE.search(text):
+        return False
+    return bool(_LATEX_MACRO_RE.search(text) or _MATH_ITALIC_RE.search(text))
+
+
 def _fence_code(text: str, lang: str) -> str:
     """Wrap ``text`` in a fenced code block (unless it is already fenced)."""
     if text.lstrip().startswith("```"):
@@ -745,6 +790,30 @@ class _SimpleTableParser(HTMLParser):
         }
 
 
+def _table_rows_are_consistent(rows: list[list[str]], header_rows: list[list[str]]) -> bool:
+    """A well-formed HTML table has the same total column count in every
+    row once row/col-spans are reconciled — that's a property of the format
+    itself, not a heuristic: `_SimpleTableParser` already carries a rowspan
+    forward and expands a colspan into repeated cells (see its docstring),
+    so every ``row`` returned here is already "the real column count for
+    this row." If MinerU's structural recognizer drops or invents a cell —
+    a genuinely common failure on a wide, densely-merged benchmark table —
+    the reconciled rows disagree in width even though the HTML itself still
+    parses without error. That's exactly what makes a scrambled-but-valid
+    table invisible to any exception-based check: there is nothing to catch.
+
+    Verified against a real scrambled table (DeepSeek-V4's Table 6, a
+    7-column header collapsed onto benchmark-name cells that had absorbed
+    several rows' worth of labels): reconciled body rows come back as a mix
+    of width 7 and 8. A genuinely well-formed table — including a
+    legitimately sparse one, "Attention Is All You Need" Table 1's mostly-
+    empty ablation grid — always agrees, because HTML tables are rectangular
+    by construction once spans are accounted for.
+    """
+    widths = {len(r) for r in rows if r} | {len(r) for r in header_rows if r}
+    return len(widths) <= 1
+
+
 def _parse_table_body_to_json(body: str) -> Optional[dict]:
     """
     Attempt to extract structured table data from MinerU's table_body.
@@ -761,8 +830,16 @@ def _parse_table_body_to_json(body: str) -> Optional[dict]:
         try:
             parser.feed(body)
             result = parser.get_result()
-            if result["rows"] or result["headers"]:
+            if (result["rows"] or result["headers"]) and _table_rows_are_consistent(
+                parser.rows, parser._header_rows
+            ):
                 return result
+            # Inconsistent widths: the table PARSED without error but its
+            # structure is unreliable (see _table_rows_are_consistent), so
+            # returning it would show plausible-looking wrong numbers rather
+            # than no numbers. None here is what lets the "table" etype
+            # branch in create_chunks_from_content_list prefer the page-crop
+            # image MinerU already provides over this structure.
         except Exception:
             pass
 
@@ -1020,15 +1097,35 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
 
             table_json = _parse_table_body_to_json(body)
 
+            # A structurally unreliable table (see _table_rows_are_consistent)
+            # is worse than no table at all: its HTML parses, so it LOOKS
+            # like real data, but the numbers are shuffled between cells.
+            # MinerU crops the table region into an image regardless of
+            # whether the structural parse succeeds, so when the parse is
+            # unreliable — table_json came back None even though body was
+            # non-empty — prefer that crop over ever showing the scrambled
+            # HTML, in the reader AND in what reaches embeddings/chat: a
+            # chat answer built from shuffled cells states wrong numbers
+            # with total confidence, which is worse than saying nothing.
+            table_unreliable = bool(body) and table_json is None and bool(img_name)
+
             md_parts = []
             if caption:
                 md_parts.append(f"**{caption}**")
-            if body:
+            if table_unreliable:
+                md_parts.append(f"![{caption}]({img_name})")
+                md_parts.append(
+                    "*(shown as an image — the extracted table structure "
+                    "for this one could not be trusted)*"
+                )
+            elif body:
                 md_parts.append(body)
-            if img_name and not body:
+            elif img_name:
                 md_parts.append(f"![{caption}]({img_name})")
             md = "\n\n".join(md_parts) if md_parts else "[table]"
-            plain = caption + ("\n" + extract_plain_text(body) if body else "")
+            plain = caption if table_unreliable else (
+                caption + ("\n" + extract_plain_text(body) if body else "")
+            )
 
             chunk = _chunk(
                 sequence_id, "table", md, plain.strip(), page_one_indexed,
@@ -1066,6 +1163,35 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
                 sequence_id -= 1
                 continue
             caption = " ".join(_flatten(entry.get("code_caption") or []))
+
+            if _looks_like_math_pseudocode(raw):
+                # An algorithm block with real math notation must NOT be
+                # code-fenced: a fence is rendered literally by both the
+                # markdown pipeline and the frontend's own force-fence for
+                # chunk_type "code" (ArticleBlock.tsx wraps anything typed
+                # "code" in ``` even if it already has no fence), so inside
+                # one, $...$ never reaches KaTeX and <sup> never gets
+                # unwrapped — exactly the "Et trans<sub>p</sub>aren!" and
+                # unrendered-LaTeX symptoms this generalizes past the one
+                # equation-specific fix already in place. chunk_type "text"
+                # instead, through the same normalize=True pipeline every
+                # other text chunk gets: unwrap_garbled_sub_sup cleans the
+                # <sup>/<sub> noise, and normalize_markdown leaves $...$
+                # spans untouched so KaTeX still renders them.
+                md = f"**{caption}**\n\n{raw}" if caption else raw
+                chunks.append(_chunk(
+                    sequence_id, "text", md, raw,
+                    page_one_indexed, heading_path, image_refs=[], normalize=True,
+                ))
+                continue
+
+            # Otherwise this is genuinely literal code/schema/config (no math
+            # span at all, e.g. a tool-call XML/JSON listing) — keep fencing
+            # it, but first strip the markdown-escape backslashes MinerU adds
+            # assuming an unfenced-prose destination (see _STRAY_MD_ESCAPE_RE):
+            # inside an actual fence they show up as literal backslashes
+            # rather than doing anything, which is not what the page showed.
+            raw = _STRAY_MD_ESCAPE_RE.sub(r"\1", raw)
             md = raw if raw.lstrip().startswith("```") else _fence_code(raw, "code")
             if caption:
                 md = f"**{caption}**\n\n{md}"
