@@ -287,3 +287,82 @@ def test_sanitize_html_gives_videos_controls():
     assert "autoplay" not in out
     # the source itself is untouched
     assert "https://cdn.example.com/v.mp4" in out
+
+
+def test_sanitize_html_drops_crossorigin_so_video_can_actually_load():
+    """crossorigin="anonymous" makes the browser fetch media in CORS mode,
+    which fails outright unless the host sends Access-Control-Allow-Origin.
+    Verified against the real video host: no CORS header at all, so every
+    source failed with net::ERR_FAILED and the element sat at its default
+    300x150 with networkState NO_SOURCE. Plain playback needs no CORS."""
+    page = (
+        '<html><body><video crossorigin="anonymous">'
+        '<source src="https://cdn.example.com/v.mp4" type="video/mp4">'
+        '</video></body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert "crossorigin" not in out
+    assert "https://cdn.example.com/v.mp4" in out
+
+
+def test_sanitize_html_drops_a_poster_that_is_not_an_image():
+    page = (
+        '<html><body><video poster="https://example.com/the/article/" '
+        'src="https://cdn.example.com/v.mp4"></video></body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert "poster" not in out
+
+
+def test_sanitize_html_keeps_a_real_image_poster():
+    page = (
+        '<html><body><video poster="https://cdn.example.com/frame.jpg" '
+        'src="https://cdn.example.com/v.mp4"></video></body></html>'
+    )
+    assert "frame.jpg" in sanitize_html(page, "https://example.com/x")
+
+
+# ── lazy-loaded images ──────────────────────────────────────────────────────
+
+def test_sanitize_html_upgrades_a_lazy_placeholder_to_the_real_image():
+    """Lazy-loading ships a deliberately tiny image in `src` and keeps the
+    real one for the page's own JavaScript to swap in. Strip the scripts —
+    which this sanitizer must — and the swap never happens. On the real page
+    four quote cards were left showing a 100px-wide placeholder with the
+    1000px version sitting unused in data-loading."""
+    page = (
+        '<html><body><img src="https://cdn.example.com/thumb.width-100.webp" '
+        """data-loading='{"mobile": "https://cdn.example.com/m.width-500.webp", """
+        """"desktop": "https://cdn.example.com/d.width-1000.webp"}'>"""
+        '</body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert "d.width-1000.webp" in out
+    assert "thumb.width-100.webp" not in out
+    assert "data-loading" not in out
+
+
+def test_sanitize_html_prefers_the_widest_srcset_candidate():
+    page = (
+        '<html><body><img src="https://cdn.example.com/tiny.jpg" '
+        'data-srcset="https://cdn.example.com/a.jpg 300w, '
+        'https://cdn.example.com/b.jpg 1200w, https://cdn.example.com/c.jpg 800w">'
+        '</body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert "b.jpg" in out
+    assert "tiny.jpg" not in out
+
+
+def test_sanitize_html_keeps_native_lazy_loading():
+    """`loading="lazy"` is native browser behaviour that needs no
+    JavaScript, so unlike the data-* placeholders it still works in a
+    snapshot and still avoids pulling every image on a long page."""
+    page = '<html><body><img src="https://cdn.example.com/a.jpg" loading="lazy"></body></html>'
+    assert 'loading="lazy"' in sanitize_html(page, "https://example.com/x")
+
+
+def test_sanitize_html_leaves_an_ordinary_image_alone():
+    page = '<html><body><img src="https://cdn.example.com/plain.jpg" alt="x"></body></html>'
+    out = sanitize_html(page, "https://example.com/x")
+    assert "plain.jpg" in out
