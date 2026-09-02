@@ -298,3 +298,24 @@ def test_emitted_video_markup_never_autoplays():
     assert "controls" in markup
     assert 'preload="metadata"' in markup
     assert "autoplay" not in markup
+
+
+def test_chunker_keeps_video_markup_out_of_the_paragraph_split():
+    """The text branch of the markdown chunker rebuilds each chunk's
+    markdown from `plain`, and `plain` has had every HTML tag stripped (that
+    is what keeps table `colspan`/`rowspan` out of embeddings). A video
+    block routed through there loses its tag from BOTH fields, leaving the
+    reader a bare caption describing a video that isn't there."""
+    from app.extraction.chunker import create_chunks_from_markdown
+
+    md = (
+        "# Title\n\n## Capabilities\n\nProse long enough to count as a real "
+        "paragraph of body text here.\n\n"
+        '<video controls preload="metadata" src="https://cdn.example.com/d.mp4"></video>\n\n'
+        "*a caption for it*\n"
+    )
+    chunks = create_chunks_from_markdown(md)
+
+    assert any("<video" in c["markdown"] for c in chunks), "video markup lost"
+    # ...but never in the text that gets embedded
+    assert not any("<video" in (c["plain_text"] or "") for c in chunks)
