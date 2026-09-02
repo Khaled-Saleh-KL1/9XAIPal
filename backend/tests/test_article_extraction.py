@@ -203,3 +203,98 @@ def test_fetch_resource_404_keeps_the_generic_message():
 ])
 def test_pdf_name_from_url(url, expected):
     assert _pdf_name_from_url(url) == expected
+
+
+# ── videos: the one real content trafilatura reliably discards ──────────────
+
+_VIDEO_PAGE = """
+<html><body><article>
+  <h2>Benchmarks</h2>
+  <p>Some prose about benchmarks that is long enough to survive extraction,
+     repeated for length. Some prose about benchmarks that is long enough.</p>
+  <h2>Capabilities and use cases</h2>
+  <p>More prose here, also long enough to be kept by the extractor rather
+     than discarded as boilerplate chrome. More prose here, long enough.</p>
+  <div class="fancy-carousel-widget">
+    <video poster="https://cdn.example.com/frame.jpg" aria-label="a demo of the feature">
+      <source src="https://cdn.example.com/demo.mp4" type="video/mp4">
+    </video>
+  </div>
+</article></body></html>
+"""
+
+
+def test_extract_videos_finds_source_heading_and_caption():
+    from app.services.article_extraction import _extract_videos
+
+    videos = _extract_videos(_VIDEO_PAGE)
+    assert len(videos) == 1
+    v = videos[0]
+    assert v["src"] == "https://cdn.example.com/demo.mp4"
+    assert v["heading"] == "Capabilities and use cases"
+    assert v["caption"] == "a demo of the feature"
+    assert v["poster"] == "https://cdn.example.com/frame.jpg"
+
+
+def test_extract_videos_rejects_a_poster_that_is_not_an_image():
+    """Real case: the upstream scraper resolved an empty poster attribute
+    against the page URL, leaving every video pointing at an HTML document
+    as its poster frame — one guaranteed-failed request per video."""
+    from app.services.article_extraction import _extract_videos
+
+    page = (
+        '<html><body><video poster="https://example.com/some/article/" '
+        'src="https://cdn.example.com/v.mp4"></video></body></html>'
+    )
+    assert _extract_videos(page)[0]["poster"] == ""
+
+
+def test_extract_videos_ignores_a_video_with_no_usable_source():
+    from app.services.article_extraction import _extract_videos
+
+    assert _extract_videos("<html><body><video></video></body></html>") == []
+    # a relative/blob source is not something the reader's browser can fetch
+    page = '<html><body><video src="blob:abc123"></video></body></html>'
+    assert _extract_videos(page) == []
+
+
+def test_splice_videos_puts_each_video_under_its_own_heading():
+    from app.services.article_extraction import splice_videos_into_markdown
+
+    md = "# Title\n\n## Benchmarks\n\nnumbers here\n\n## Capabilities and use cases\n\ntext here\n"
+    out = splice_videos_into_markdown(md, _VIDEO_PAGE)
+
+    assert "<video" in out
+    # it belongs to the section it appeared under, not the one before it
+    caps = out.index("## Capabilities and use cases")
+    assert out.index("<video") > caps
+    assert "*a demo of the feature*" in out
+
+
+def test_splice_videos_appends_when_the_section_did_not_survive():
+    """A video whose whole section was discarded still reaches the reader —
+    at the end, rather than not at all."""
+    from app.services.article_extraction import splice_videos_into_markdown
+
+    md = "# Title\n\n## Something Else\n\nonly this section survived\n"
+    out = splice_videos_into_markdown(md, _VIDEO_PAGE)
+    assert "<video" in out
+    assert out.index("<video") > out.index("only this section survived")
+
+
+def test_splice_videos_is_a_no_op_without_video():
+    from app.services.article_extraction import splice_videos_into_markdown
+
+    md = "# Title\n\ntext\n"
+    assert splice_videos_into_markdown(md, "<html><body><p>no video</p></body></html>") == md
+
+
+def test_emitted_video_markup_never_autoplays():
+    from app.services.article_extraction import _video_markup
+
+    markup = _video_markup(
+        {"src": "https://cdn.example.com/v.mp4", "poster": "", "caption": "", "heading": ""}
+    )
+    assert "controls" in markup
+    assert 'preload="metadata"' in markup
+    assert "autoplay" not in markup

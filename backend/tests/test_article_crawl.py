@@ -265,3 +265,25 @@ def test_save_crawled_pages_failure_is_logged_and_returns_zero(db_session_sync, 
         text("SELECT url FROM raw_snapshot_pages WHERE document_id = :id"), {"id": doc_id},
     ).mappings().all()
     assert len(rows) == 0
+
+
+# ── videos in the snapshot ──────────────────────────────────────────────────
+
+def test_sanitize_html_gives_videos_controls():
+    """A page that plays video drives it from JavaScript and ships the
+    element with no controls of its own. Strip the scripts — which this
+    sanitizer must — and what's left is a still poster the reader can never
+    start. Every <video> on the real page that surfaced this had a poster,
+    `muted`, `playsinline`, and no controls."""
+    page = (
+        '<html><body><video preload="auto" autoplay muted playsinline '
+        'poster="https://cdn.example.com/f.jpg">'
+        '<source src="https://cdn.example.com/v.mp4" type="video/mp4">'
+        '</video></body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert "controls" in out
+    assert 'preload="metadata"' in out
+    assert "autoplay" not in out
+    # the source itself is untouched
+    assert "https://cdn.example.com/v.mp4" in out

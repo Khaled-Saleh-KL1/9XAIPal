@@ -183,6 +183,28 @@ def _strip_layout_styles(tree) -> None:
             del el.attrib["style"]
 
 
+def _make_videos_playable(tree) -> None:
+    """Give every surviving <video> its own controls, in place.
+
+    A page that plays video usually drives it from JavaScript and ships the
+    element with no `controls` of its own — every <video> on the real page
+    that surfaced this had a poster frame, `muted`, `playsinline` and no
+    controls at all. Strip the scripts (which this sanitizer must) and what
+    is left renders as a still poster image the reader cannot start, stop,
+    or scrub: the video is there, visibly, and simply does nothing.
+
+    `preload` is forced down to metadata as well — the pages that autoplay
+    tend to ship `preload="auto"`, which would pull whole video files down
+    on open for something the reader may never watch. `autoplay` is dropped
+    for the same reason it isn't wanted in a reading view: nothing should
+    start moving on its own.
+    """
+    for video in tree.xpath("//video"):
+        video.set("controls", "")
+        video.set("preload", "metadata")
+        video.attrib.pop("autoplay", None)
+
+
 def sanitize_html(html: str, page_url: str) -> str:
     """Strip live-code vectors, then anchor surviving relative URLs
     (images, any stylesheet link that happens to survive, in-page anchors)
@@ -203,6 +225,7 @@ def sanitize_html(html: str, page_url: str) -> str:
     head.insert(0, base)
 
     _strip_layout_styles(tree)
+    _make_videos_playable(tree)
 
     style = lxml_html.Element("style")
     style.text = _READABILITY_CSS

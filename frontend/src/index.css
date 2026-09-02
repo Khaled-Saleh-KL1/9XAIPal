@@ -402,6 +402,19 @@ body {
   border-radius: 4px;
 }
 .md-body ul, .md-body ol { padding-left: 1.4em; margin: 0.6em 0; }
+/* Videos an article actually contains, recovered by the extractor and
+   emitted as raw <video> (see services/article_extraction.py). Sized like
+   a figure so one can never overflow the reading column. */
+.md-body video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 560px;
+  margin: 1.1em auto;
+  border-radius: 8px;
+  background: #000;
+  border: 1px solid var(--border);
+}
 .md-body li { margin: 0.25em 0; }
 
 /* ── Markdown tables (rendered with proper borders, ChapterPal-style) ── */

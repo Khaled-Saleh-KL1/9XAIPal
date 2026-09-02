@@ -28,8 +28,24 @@ import type { Components } from 'react-markdown';
 
 const SANITIZE_SCHEMA: typeof defaultSchema = {
   ...defaultSchema,
+  // <video> is not in the GitHub-style default allowlist, so a video an
+  // article actually contains would be stripped back out here after
+  // rehype-raw parsed it (see services/article_extraction.py, which
+  // recovers videos trafilatura drops and emits them as raw HTML — the
+  // same path MinerU's tables already take). Only the playback attributes
+  // are allowed through: no event handlers, and no `autoplay`, so nothing
+  // in a reading view ever starts moving or making noise on its own.
+  //
+  // This is the same trust posture images already have here: the URL is
+  // hotlinked straight from the source site rather than proxied (see
+  // article_extraction.py's module docstring on that deliberate choice),
+  // so a <video> is one more remote fetch from a site the reader has
+  // already chosen to read — not a new class of exposure.
+  tagNames: [...(defaultSchema.tagNames ?? []), 'video', 'source'],
   attributes: {
     ...defaultSchema.attributes,
+    video: ['controls', 'poster', 'preload', 'src', 'width', 'height', 'playsInline', 'muted', 'loop'],
+    source: ['src', 'type'],
     code: [
       ...(defaultSchema.attributes?.code ?? []),
       ['className', 'language-math', 'math-inline', 'math-display'],
@@ -42,6 +58,13 @@ const SANITIZE_SCHEMA: typeof defaultSchema = {
       ...(defaultSchema.attributes?.div ?? []),
       ['className', 'math', 'math-display'],
     ],
+  },
+  // rehype-sanitize drops any URL whose protocol isn't allowed for that
+  // attribute; without src listed here a <video src="https://..."> would
+  // survive as a tag with no source at all.
+  protocols: {
+    ...defaultSchema.protocols,
+    src: ['http', 'https'],
   },
 };
 
