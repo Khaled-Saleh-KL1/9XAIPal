@@ -693,14 +693,27 @@ async def rechunk_paper(
     # Repair the inline math variables MinerU turned into U+FFFD. Runs here too
     # (not only in the pipeline) so a paper already on disk can be fixed with a
     # re-chunk instead of a full re-extraction.
+    from app.extraction.chunker import crop_code_blocks
     from app.extraction.glyph_repair import repair_chunks
     glyphs_repaired = 0
+    code_blocks_cropped = 0
     source_pdf = documents_dir() / (doc.get("filename") or "")
     if source_pdf.exists():
         try:
             glyphs_repaired = repair_chunks(chunks, source_pdf)
         except Exception:
             logger.exception("[glyph-repair] failed during rechunk (non-fatal)")
+        # Only meaningful for the content_list.json path — MinerU never
+        # crops literal code/schema listings itself, so bbox_json is what
+        # crop_code_blocks needs, and only create_chunks_from_content_list
+        # (not the markdown fallback) stashes it (see chunker.py).
+        if content_list is not None:
+            try:
+                code_blocks_cropped = crop_code_blocks(
+                    chunks, source_pdf, content_list.parent / "images"
+                )
+            except Exception:
+                logger.exception("[code-crop] failed during rechunk (non-fatal)")
     else:
         logger.warning("[glyph-repair] source PDF missing for %s — skipping", paper_id)
 
@@ -821,6 +834,7 @@ async def rechunk_paper(
         "chunks_total": len(chunks),
         "chunks_by_type": counts,
         "glyphs_repaired": glyphs_repaired,
+        "code_blocks_cropped": code_blocks_cropped,
         "message": (
             "Re-chunked from cached extraction. Embeddings are regenerating in "
             "the background; chat may be slow until they finish."

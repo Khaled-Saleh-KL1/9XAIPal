@@ -23,6 +23,7 @@ from app.extraction.mineru_client import (
 from app.extraction.chunker import (
     create_chunks_from_content_list,
     create_chunks_from_markdown,
+    crop_code_blocks,
 )
 from app.extraction.assets import move_asset_to_storage
 from app.extraction.glyph_repair import repair_chunks
@@ -358,6 +359,19 @@ def run_pipeline_sync(
             repair_chunks(chunks, pdf_path)
         except Exception:
             logger.exception("[glyph-repair] failed (non-fatal, chunks kept as-is)")
+
+        # Step 2c: A literal code/schema listing's exact whitespace and layout
+        # is part of what it is showing, and MinerU never crops one the way
+        # it does a table or figure — code_body is OCR text alone. Generate
+        # the crop from the PDF while it is still open, before Step 3 scans
+        # output_dir for images to register (crop_code_blocks writes into
+        # that same tree, so it must run first). Only meaningful for the
+        # content_list.json path — see crop_code_blocks's docstring.
+        if content_list is not None:
+            try:
+                crop_code_blocks(chunks, pdf_path, content_list.parent / "images")
+            except Exception:
+                logger.exception("[code-crop] failed (non-fatal, chunks kept as-is)")
 
         # Step 3: Handle physical image assets
         images = find_images(output_dir)

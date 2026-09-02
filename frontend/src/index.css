@@ -1350,6 +1350,15 @@ body {
 .article-table-ask:focus-visible { opacity: 1; transform: translateY(0); }
 .article-table-ask:hover { border-color: var(--accent); color: var(--accent); }
 .article-code .md-body { font-size: 14px; }
+.article-code-crop-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 0 10px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
 .article-footnote {
   font-size: 14px;
   line-height: 1.6;
