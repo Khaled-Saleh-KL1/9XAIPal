@@ -129,9 +129,6 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [paragraphIndexInCurrent, setParagraphIndexInCurrent] = useState(0);
 
-  // Pointer into readingOrder when useLogicalOrder is active
-  const [logicalPointer, setLogicalPointer] = useState(0);
-
   // Rich figure descriptions (generated at ingestion with VLM)
   const [figureDescriptions, setFigureDescriptions] = useState<Record<string, FigureDescription>>({});
 
@@ -877,8 +874,9 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
                         if (enabled && readingOrder) {
                           // Reset reveal when switching to logical order
                           setRevealedUnits([]);
-                          setLogicalPointer(0);
-                          // Could trigger loading first few in logical order here
+                          // TODO: the reveal loop still walks chunks in document
+                          // order here — readingOrder is collected and offered in
+                          // the UI but nothing consumes it yet.
                         }
                       }}
                     />
@@ -1050,120 +1048,6 @@ function MathBlock({ wrapped, imageUrl }: { wrapped: string; imageUrl?: string }
   return (
     <div ref={ref}>
       <Md>{wrapped}</Md>
-    </div>
-  );
-}
-
-function ApiChunkBlock({
-  chunk,
-  active,
-  isLastRevealed,
-}: {
-  chunk: ChunkData;
-  active: boolean;
-  isLastRevealed: boolean;
-}) {
-  const dim = active ? undefined : { opacity: 0.6 };
-  const cursorClass = isLastRevealed && chunk.structural_type === 'text' ? 'chunk-cursor' : '';
-
-  if (chunk.structural_type === 'heading') {
-    const text = chunk.plain_text || chunk.content_markdown.replace(/^#+\s*/, '');
-    const level = chunk.heading_path?.length ?? 1;
-    const size = level === 1 ? 32 : level === 2 ? 26 : 22;
-    return (
-      <div className="transition-opacity duration-300" style={dim}>
-        <h2
-          className="chunk-heading"
-          style={{ fontSize: size }}
-        >
-          {text}
-        </h2>
-      </div>
-    );
-  }
-
-  if (chunk.structural_type === 'figure' && chunk.image_url) {
-    const filename = chunk.image_refs?.[0] ?? '';
-    return (
-      <div className="transition-opacity duration-300" style={dim}>
-        <div className="flex flex-col items-center">
-          <img
-            src={chunk.image_url}
-            alt={chunk.plain_text || 'figure'}
-            className="max-h-[520px] object-contain rounded-sm"
-            style={{ background: '#fff', padding: 16 }}
-          />
-          {filename && (
-            <div
-              className="mt-4 text-[12.5px] font-mono self-start"
-              style={{ color: 'var(--muted)' }}
-            >
-              {filename}
-            </div>
-          )}
-          {chunk.plain_text && (
-            <div
-              className="mt-2 font-serif text-[14px] leading-[1.5] italic"
-              style={{ color: 'var(--fg-2)' }}
-            >
-              <InlineMd>{chunk.plain_text}</InlineMd>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (chunk.structural_type === 'math') {
-    // Wrap raw LaTeX in $$...$$ if the producer didn't already so rehype-katex
-    // catches it. MinerU's content_list emits bare LaTeX in the "text" field;
-    // the chunker now wraps it, but be defensive for the markdown-fallback path.
-    const body = chunk.content_markdown.trim();
-    const wrapped = body.startsWith('$$') ? body : `$$\n${body}\n$$`;
-    return (
-      <div className="transition-opacity duration-300 my-4 flex justify-center overflow-x-auto" style={dim}>
-        <MathBlock wrapped={wrapped} imageUrl={chunk.image_url || undefined} />
-      </div>
-    );
-  }
-
-  if (chunk.structural_type === 'footnote') {
-    const text = chunk.plain_text || chunk.content_markdown;
-    return (
-      <div className="transition-opacity duration-300 my-3" style={dim}>
-        <div
-          className="rounded-md border-l-4 pl-3 pr-3 py-2 text-[12.5px] leading-[1.55]"
-          style={{
-            borderColor: 'var(--accent)',
-            background: 'var(--bg-2)',
-            color: 'var(--fg-2)',
-          }}
-        >
-          <span
-            className="font-mono uppercase tracking-[1px] text-[10px] mr-2"
-            style={{ color: 'var(--accent)' }}
-          >
-            Side Note
-          </span>
-          <span className="italic"><InlineMd>{text}</InlineMd></span>
-        </div>
-      </div>
-    );
-  }
-
-  if (chunk.structural_type === 'table') {
-    return (
-      <div className="transition-opacity duration-300" style={dim}>
-        <Md>{chunk.content_markdown}</Md>
-      </div>
-    );
-  }
-
-  // Default: text chunk, render the markdown body so inline math, italics,
-  // bold, lists, and bracketed citations look right.
-  return (
-    <div className={`transition-opacity duration-300 ${cursorClass}`} style={dim}>
-      <Md>{chunk.content_markdown || chunk.plain_text}</Md>
     </div>
   );
 }
