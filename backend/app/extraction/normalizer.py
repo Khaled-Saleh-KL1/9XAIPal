@@ -122,6 +122,24 @@ def strip_leaked_sup_run(text: str) -> str:
     return re.sub(r"[ \t]{2,}", " ", text).strip()
 
 
+# Matches only tag-shaped text: "<", then a letter or "/" (every real HTML
+# tag starts one of those two ways), up to the closing ">". A bare
+# comparison in prose ("score < 0.5 and threshold > 3") never matches — the
+# character right after "<" there is a digit/space, not a letter or "/" —
+# so it survives untouched instead of being swallowed as a fake tag
+# spanning everything between the "<" and the next unrelated ">".
+#
+# MinerU emits real HTML table markup (<table><tr><td colspan="2">)
+# directly into a chunk's source in the table path (chunker.py), and this
+# is the one place in the pipeline that removes it before the text goes
+# into embeddings — without it, "colspan"/"rowspan" (attribute names, not
+# content) were showing up as ordinary words to the embedding model. Kept
+# separate from unwrap_garbled_sub_sup above, which runs first and decides
+# <sub>/<sup> case-by-case (real footnote marker vs. OCR damage) rather
+# than stripping them unconditionally like every other tag here.
+_HTML_TAG = re.compile(r"</?[a-zA-Z][^<>]*>")
+
+
 def extract_plain_text(markdown: str) -> str:
     """Strip markdown formatting to get plain text for embeddings."""
     text = unwrap_garbled_sub_sup(markdown)
@@ -137,9 +155,101 @@ def extract_plain_text(markdown: str) -> str:
     text = re.sub(r"```[\s\S]*?```", "", text)
     # Remove inline code
     text = re.sub(r"`([^`]+)`", r"\1", text)
+    # Any remaining raw HTML tag (table markup, mainly) — drop the tag and
+    # its attributes, keep whatever text sits between tags.
+    text = _HTML_TAG.sub(" ", text)
     # Collapse whitespace
     text = re.sub(r"\n{2,}", "\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
+
+
+# LaTeX command syntax leaking into embeddings: an equation chunk's
+# `markdown` keeps the real LaTeX so KaTeX can render it, but `plain_text`
+# (extraction/chunker.py's equation branch builds it straight from the
+# LaTeX body — that path never calls extract_plain_text at all) was
+# passing that same source through unchanged. A text embedding model has
+# never seen "\mathrm", "\operatorname", "\cdot", "\begin"/"\end" as
+# meaningful tokens — verified against the real papers in the library
+# ("mathrm", "cdot", "theta", "intercal", "vdots" all showed up as
+# ordinary-looking "words" once separated from their backslash by
+# plain-text tokenization).
+#
+# Not a LaTeX->English converter: a command that wraps real content
+# (\mathrm{R}, \frac{a}{b}, \sqrt{x}) keeps that content; a bare command
+# with no argument (\cdot, \quad, \begin, \theta) is dropped outright —
+# "theta" already survives on its own as the leftover once the backslash
+# is stripped, so there is no separate spell-out step needed.
+_LATEX_WRAPPING_COMMAND = re.compile(
+    r"\\(?:mathrm|mathbf|mathcal|mathbb|mathtt|mathit|boldsymbol|"
+    r"operatorname|text|textbf|textit|overline|underline|tilde|hat|bar|vec)"
+    r"\{([^{}]*)\}"
+)
+_LATEX_FRAC = re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+_LATEX_SQRT = re.compile(r"\\sqrt\{([^{}]*)\}")
+
+# Greek letters are real content — a paper's "theta" or "gamma" is a named
+# parameter, worth keeping as a plain word. Kept as its own pattern (rather
+# than folded into _LATEX_WRAPPING_COMMAND) because a bare Greek command
+# has no braces to unwrap — \theta, not \theta{...} — so it needs to keep
+# its own name, not some argument's content.
+_LATEX_GREEK = re.compile(
+    r"\\(alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|"
+    r"iota|kappa|lambda|mu|nu|xi|omicron|pi|varpi|rho|varrho|sigma|varsigma|"
+    r"tau|upsilon|phi|varphi|chi|psi|omega|"
+    r"Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|"
+    r"Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega)\b"
+)
+# Everything else bare — \cdot, \quad, \begin, \end, \left, \right, \in,
+# \forall, \times, ... — is pure LaTeX spacing/structure with no content of
+# its own, so unlike Greek letters it is dropped outright rather than kept
+# as a word.
+_LATEX_BARE_COMMAND = re.compile(r"\\[a-zA-Z]+")
+_LATEX_LEFTOVER_SYNTAX = re.compile(r"[{}\\]|\$\$?")
+
+
+def latex_to_plain_text(latex: str) -> str:
+    """Degrade LaTeX source into something closer to plain prose, for the
+    plain_text/embedding field ONLY — never call this on `markdown`, which
+    must keep the real LaTeX for KaTeX. See the note above for what this
+    is and is not."""
+    if not latex or "\\" not in latex:
+        return latex
+    text = _LATEX_WRAPPING_COMMAND.sub(r"\1", latex)
+    text = _LATEX_FRAC.sub(r"\1/\2", text)
+    text = _LATEX_SQRT.sub(r"sqrt(\1)", text)
+    text = _LATEX_GREEK.sub(r"\1", text)
+    text = _LATEX_BARE_COMMAND.sub(" ", text)
+    text = _LATEX_LEFTOVER_SYNTAX.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# Inline math, $...$/$$...$$, embedded in an ordinary prose paragraph — not
+# a standalone equation entry (that's the equation branch in chunker.py,
+# handled directly), but LaTeX MinerU mixes into a regular "text" block:
+# "where $\mathbf{p}_i \in \mathbb{R}^d$ is a d-dimensional vector...". Left
+# alone, that LaTeX source goes straight into plain_text/embeddings
+# unchanged — the same leak latex_to_plain_text exists to close, just for
+# a formula sitting inside a sentence instead of on its own.
+#
+# The span's own delimiters are what mark where the LaTeX starts and ends,
+# so this is the one case that doesn't need PDF evidence: degrade whatever
+# is between matched $ signs, leave everything outside them untouched.
+# $$...$$ is tried before $...$ so a display block's own $ signs are
+# consumed as one span rather than confusing the inline pattern.
+_MATH_SPAN = re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\$(.+?)(?<!\\)\$", re.DOTALL)
+
+
+def degrade_inline_math(text: str) -> str:
+    """Replace the content of every $...$/$$...$$ span in `text` with its
+    latex_to_plain_text degradation, keeping the surrounding prose as-is.
+    plain_text/embeddings only — never call this on `markdown`."""
+    if not text or "$" not in text:
+        return text
+    return _MATH_SPAN.sub(
+        lambda m: latex_to_plain_text(m.group(1) if m.group(1) is not None else m.group(2)),
+        text,
+    )
 
 
 def estimate_tokens(text: str) -> int:

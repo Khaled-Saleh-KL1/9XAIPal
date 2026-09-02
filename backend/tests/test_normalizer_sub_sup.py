@@ -22,7 +22,13 @@ comment for why that asymmetry (unwrap never deletes text) is the right
 tradeoff.
 """
 
-from app.extraction.normalizer import extract_plain_text, normalize_markdown, unwrap_garbled_sub_sup
+from app.extraction.normalizer import (
+    degrade_inline_math,
+    extract_plain_text,
+    latex_to_plain_text,
+    normalize_markdown,
+    unwrap_garbled_sub_sup,
+)
 
 
 def test_leaves_clean_text_untouched():
@@ -143,3 +149,75 @@ def test_code_chunks_keep_their_content_verbatim(tmp_path):
     ch = _chunk(1, "code", src, src, 1, [], image_refs=[], normalize=False)
     assert ch["plain_text"] == src
     assert ch["markdown"] == src
+
+
+# ── extract_plain_text: raw HTML leaking into embeddings ───────────────────
+
+def test_extract_plain_text_strips_table_markup_and_its_attributes():
+    """Real leak: MinerU emits raw HTML table markup into a chunk's source,
+    and 'colspan'/'rowspan' (attribute names, not content) were showing up
+    as ordinary words to the embedding model."""
+    html = '<table><tr><th rowspan="2">Model</th><td colspan="2">92.1</td></tr></table>'
+    out = extract_plain_text(html)
+    assert "colspan" not in out
+    assert "rowspan" not in out
+    assert "Model" in out and "92.1" in out
+
+
+def test_extract_plain_text_preserves_bare_comparison_operators():
+    """A tag-shaped regex without care would swallow everything between an
+    unrelated '<' and '>' used as a comparison in prose."""
+    text = "the score < 0.5 and threshold > 3 stayed within range"
+    assert extract_plain_text(text) == text
+
+
+# ── latex_to_plain_text ──────────────────────────────────────────────────
+
+def test_latex_to_plain_text_unwraps_content_commands():
+    assert latex_to_plain_text(r"\mathrm{R} = \frac{a}{b} + \sqrt{x}") == "R = a/b + sqrt(x)"
+
+
+def test_latex_to_plain_text_keeps_greek_letters_as_words():
+    """A Greek letter is real content — a paper's theta or gamma is a named
+    parameter, unlike \\cdot or \\quad which are pure formatting."""
+    assert latex_to_plain_text(r"\theta \cdot \gamma") == "theta gamma"
+
+
+def test_latex_to_plain_text_drops_pure_structural_commands():
+    assert latex_to_plain_text(r"a \quad b \cdot c") == "a b c"
+
+
+def test_latex_to_plain_text_leaves_plain_text_alone():
+    text = "no latex here at all"
+    assert latex_to_plain_text(text) == text
+    assert latex_to_plain_text("") == ""
+
+
+# ── degrade_inline_math ──────────────────────────────────────────────────
+
+def test_degrade_inline_math_cleans_a_span_embedded_in_prose():
+    text = r"where $\mathbf{p}_i \in \mathbb{R}^d$ is a d-dimensional vector"
+    out = degrade_inline_math(text)
+    assert "\\mathbf" not in out and "\\mathbb" not in out
+    assert "is a d-dimensional vector" in out
+
+
+def test_degrade_inline_math_handles_display_blocks():
+    text = "before $$\\theta = \\frac{a}{b}$$ after"
+    out = degrade_inline_math(text)
+    assert "\\theta" not in out
+    assert "theta" in out and "a/b" in out
+    assert "before" in out and "after" in out
+
+
+def test_degrade_inline_math_does_not_treat_an_escaped_dollar_as_a_delimiter():
+    """An escaped currency sign must not be mistaken for a math-span
+    delimiter and swallow real prose up to the next real $."""
+    text = "the cost was \\$5 million, different from $x$ the variable"
+    out = degrade_inline_math(text)
+    assert out == "the cost was \\$5 million, different from x the variable"
+
+
+def test_degrade_inline_math_leaves_prose_without_dollar_signs_alone():
+    text = "ordinary sentence, nothing to degrade here"
+    assert degrade_inline_math(text) == text
