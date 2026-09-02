@@ -95,3 +95,51 @@ def test_extract_plain_text_applies_the_unwrap_so_embeddings_see_real_words():
     embedding model has never seen, not just a display bug."""
     text = "G<sub>em</sub>i<sub>n</sub>i E<sub>m</sub>b<sub>e</sub>ddi<sub>ng</sub> models are useful."
     assert extract_plain_text(text) == "Gemini Embedding models are useful."
+
+
+# ── The chunker choke point (the gap the markdown-only fix left open) ───────
+
+def test_content_list_chunking_cleans_plain_text_not_just_markdown(tmp_path):
+    """The regression that shipped once already: normalize_markdown only ever
+    touches a chunk's `markdown`. In the content_list path — what every
+    MinerU-extracted document actually uses — `plain` arrives raw from the
+    entry and _chunk previously only .strip()ed it. The result read clean in
+    the reader while plain_text, the field that is embedded and that
+    retrieval feeds the model, stayed full of "Ridin<sub>g</sub>".
+    """
+    import json
+    from app.extraction.chunker import create_chunks_from_content_list
+
+    entries = [
+        {"type": "text", "text_level": 1, "text": "Introduction", "page_idx": 0},
+        {
+            "type": "text",
+            "text": "Ridin<sub>g</sub> the Waves of Culture and Forei<sub>g</sub>n Afairs "
+                    "remain the definitive works that Won<sup>’</sup>t be replaced.",
+            "page_idx": 0,
+        },
+    ]
+    p = tmp_path / "content_list.json"
+    p.write_text(json.dumps(entries), encoding="utf-8")
+
+    chunks = create_chunks_from_content_list(p)
+    body = [c for c in chunks if c["chunk_type"] == "text"][0]
+
+    assert "<sub>" not in body["plain_text"]
+    assert "<sup>" not in body["plain_text"]
+    assert "Riding the Waves of Culture" in body["plain_text"]
+    assert "Foreign Afairs" in body["plain_text"]
+    assert "Won’t be replaced" in body["plain_text"]
+    # and markdown stays clean too
+    assert "<sub>" not in body["markdown"]
+
+
+def test_code_chunks_keep_their_content_verbatim(tmp_path):
+    """normalize=False means "leave this exactly as it is" — a code block that
+    genuinely contains <sub> markup must not be rewritten by the unwrap."""
+    from app.extraction.chunker import _chunk
+
+    src = "html = '<sub>x</sub>'"
+    ch = _chunk(1, "code", src, src, 1, [], image_refs=[], normalize=False)
+    assert ch["plain_text"] == src
+    assert ch["markdown"] == src
