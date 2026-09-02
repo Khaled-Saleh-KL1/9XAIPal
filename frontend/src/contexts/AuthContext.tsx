@@ -42,6 +42,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [applyMe]);
 
+  // The browser's back-forward cache (bfcache) can restore this exact page —
+  // full JS heap, DOM, and all — from before the user ever logged in: they
+  // load the site, see the sign-in screen, log in (an in-place fetch, not a
+  // navigation, so it doesn't touch history), browse around, then hit the
+  // physical back button. If any earlier point in this tab's history was a
+  // real navigation entry captured while `user` was still null, some
+  // browsers restore that INSTANTLY from bfcache — sign-in screen and all —
+  // without re-running this component's mount effect, since the page never
+  // actually reloaded. `pageshow`'s `persisted` flag is exactly the signal
+  // for "this came from bfcache, not a fresh load"; re-running the same
+  // check to re-sync `user` against the real session is the fix. Wrapped in
+  // try/catch: the very first fetch right after a bfcache restore can
+  // itself transiently fail on some browsers (the underlying connection was
+  // torn down while the page was suspended) — one retry covers that without
+  // surfacing a scary error for what's really just a stale cache read.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      setLoading(true);
+      getMe()
+        .catch(() => getMe())
+        .then(applyMe)
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, [applyMe]);
+
   const login = useCallback(async (email: string, password: string) => {
     const u = await apiLogin(email, password);
     // login/signup succeeding means the backend already admitted this
