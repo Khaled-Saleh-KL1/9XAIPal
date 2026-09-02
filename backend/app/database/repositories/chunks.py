@@ -114,8 +114,16 @@ async def get_chunk_window(
     document_id: UUID,
     center_sequence_id: int,
     window_size: int = 2,
+    max_sequence_id: int | None = None,
 ) -> list[dict]:
-    """Fetch a window of chunks around a center sequence_id."""
+    """Fetch a window of chunks around a center sequence_id.
+
+    ``max_sequence_id`` clamps the FORWARD edge to how far the reader has
+    actually read. The window is centred, so without it "explain this bit"
+    quietly hands the model the paragraphs after the one on screen — which
+    is how an answer ends up containing something the reader has not
+    reached yet.
+    """
     result = await session.execute(
         text("""
             SELECT * FROM chunks
@@ -126,7 +134,11 @@ async def get_chunk_window(
         {
             "document_id": document_id,
             "start": center_sequence_id - window_size,
-            "end": center_sequence_id + window_size,
+            "end": (
+                center_sequence_id + window_size
+                if max_sequence_id is None
+                else min(center_sequence_id + window_size, max_sequence_id)
+            ),
         },
     )
     return [dict(r) for r in result.mappings().all()]

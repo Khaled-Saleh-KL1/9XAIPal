@@ -102,6 +102,10 @@ interface Props {
   paperId: string;
   currentSequenceOrder: number | null;
   revealedCount: number;
+  /** Furthest sequence the reader has actually revealed. Sent with every
+   *  question so the server clamps retrieval to it — without this the model
+   *  answers from the whole document and spoils a book being read in order. */
+  maxSequenceId?: number | null;
 }
 
 // Belt-and-suspenders: the backend prompt now forbids a Sources section, but
@@ -157,7 +161,7 @@ function previewLabel(c: ConversationSummary): string {
 
 const MAX_TEXTAREA_HEIGHT = 120;
 
-export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props) {
+export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequenceId = null }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
@@ -457,12 +461,17 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount }: Props
     askAbortRef.current = abort;
 
     try {
-      const threadOpts = currentThreadRoot
-        ? {
-            parentTurnId: currentThreadRoot, // for the first continuation; deeper levels can be refined by frontend if needed
-            threadRootTurnId: currentThreadRoot,
-          }
-        : undefined;
+      // maxSequenceId rides on EVERY question, threaded or not — the reading
+      // ceiling is a property of where the reader is, not of the kind of ask.
+      const threadOpts = {
+        maxSequenceId,
+        ...(currentThreadRoot
+          ? {
+              parentTurnId: currentThreadRoot, // for the first continuation; deeper levels can be refined by frontend if needed
+              threadRootTurnId: currentThreadRoot,
+            }
+          : {}),
+      };
 
       const res = await askPaperStream(
         paperId,

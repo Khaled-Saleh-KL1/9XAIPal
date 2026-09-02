@@ -357,13 +357,17 @@ export function DeskView({
   const saveNote = useCallback(
     async (board: Board, id: string, patch: NotePatch) => {
       const set = board === 'chat' ? setChatNotes : setWallNotes;
-      const previous = board === 'chat' ? chatNotes : wallNotes;
+      // Roll back only THIS note, never the whole board. The previous version
+      // restored the entire array as it was when the save started, so a note
+      // added — or another note saved — while the request was in flight was
+      // silently thrown away when that request happened to fail.
+      const original = (board === 'chat' ? chatNotes : wallNotes).find((n) => n.id === id);
       set((prev) => prev.map((n) => (n.id === id ? ({ ...n, ...patch } as Sticky) : n)));
       try {
         const saved = await updateSticky(id, patch);
         set((prev) => prev.map((n) => (n.id === id ? saved : n)));
       } catch (e) {
-        set(previous);
+        if (original) set((prev) => prev.map((n) => (n.id === id ? original : n)));
         setNotice((e as Error).message || 'Could not save the note');
       }
     },
@@ -373,12 +377,24 @@ export function DeskView({
   const removeNote = useCallback(
     async (board: Board, id: string) => {
       const set = board === 'chat' ? setChatNotes : setWallNotes;
-      const previous = board === 'chat' ? chatNotes : wallNotes;
+      // Same one-note rollback as saveNote: put back exactly the note whose
+      // delete failed, at the position it came from, and leave everything
+      // else on the board alone.
+      const list = board === 'chat' ? chatNotes : wallNotes;
+      const index = list.findIndex((n) => n.id === id);
+      const original = index === -1 ? undefined : list[index];
       set((prev) => prev.filter((n) => n.id !== id));
       try {
         await deleteSticky(id);
       } catch (e) {
-        set(previous);
+        if (original) {
+          set((prev) => {
+            if (prev.some((n) => n.id === id)) return prev;
+            const next = prev.slice();
+            next.splice(Math.min(index, next.length), 0, original);
+            return next;
+          });
+        }
         setNotice((e as Error).message || 'Could not delete the note');
       }
     },

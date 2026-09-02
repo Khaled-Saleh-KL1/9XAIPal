@@ -15,12 +15,14 @@ async def build_global_context(
     query: str,
     document_id: Optional[UUID] = None,
     limit: int = 5,
+    max_sequence_id: Optional[int] = None,
 ) -> dict:
     """Build context using vector retrieval. Also surfaces any image assets
     attached to the returned chunks so the orchestrator can pass them to the
     multimodal model (and offer them as embeddable inline images)."""
     results = await search_chunks(
-        session, query, limit=limit, document_id=document_id
+        session, query, limit=limit, document_id=document_id,
+        max_sequence_id=max_sequence_id,
     )
 
     chunk_ids = [r["id"] for r in results if r.get("id")]

@@ -655,6 +655,9 @@ export async function askPaper(
   conversationId: string | null = null,
   options?: {
     visibleSequenceOrders?: number[];
+    /** Furthest sequence the reader has revealed. Clamps retrieval server-side
+     *  so an answer cannot contain material they have not read yet. */
+    maxSequenceId?: number | null;
     focusedElement?: string | null;
     imagesB64?: string[];   // raw base64, no data: prefix; sent to multimodal model
     // Sub-thread support
@@ -672,6 +675,7 @@ export async function askPaper(
       current_sequence_order: currentSequenceOrder,
       conversation_id: conversationId,
       visible_sequence_orders: options?.visibleSequenceOrders ?? null,
+      max_sequence_id: options?.maxSequenceId ?? null,
       focused_element: options?.focusedElement ?? null,
       images_b64: options?.imagesB64 ?? null,
       parent_turn_id: options?.parentTurnId ?? null,
@@ -716,6 +720,7 @@ export async function askPaperStream(
   options:
     | {
         visibleSequenceOrders?: number[];
+        maxSequenceId?: number | null;
         focusedElement?: string | null;
         imagesB64?: string[];
         parentTurnId?: string | null;
@@ -734,6 +739,7 @@ export async function askPaperStream(
       current_sequence_order: currentSequenceOrder,
       conversation_id: conversationId,
       visible_sequence_orders: options?.visibleSequenceOrders ?? null,
+      max_sequence_id: options?.maxSequenceId ?? null,
       focused_element: options?.focusedElement ?? null,
       images_b64: options?.imagesB64 ?? null,
       parent_turn_id: options?.parentTurnId ?? null,

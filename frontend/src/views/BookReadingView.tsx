@@ -139,6 +139,13 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   const [useLogicalOrder, setUseLogicalOrder] = useState(false);
   const [reconstructionStatus, setReconstructionStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
 
+  // The reading ceiling: the furthest chunk any revealed unit came from.
+  // Everything the chat is allowed to see is bounded by this, which is what
+  // stops an answer from containing the end of a book being read in order.
+  const maxRevealedSeq = revealedUnits.length
+    ? revealedUnits.reduce((max, u) => (u.sourceSeq > max ? u.sourceSeq : max), 0)
+    : null;
+
   const readerRef = useRef<HTMLDivElement>(null);
   const dPressed = useRef(false);
 
@@ -970,8 +977,12 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
         >
           <ChatPane
             paperId={paperId}
-            currentSequenceOrder={chunks.length > 0 ? chunks[chunks.length - 1].sequence_order : null}
+            // Where the reader actually IS, not how far the loader has run
+            // ahead. `chunks` is the prefetch buffer, so using its tail put
+            // the local context window past the last revealed paragraph.
+            currentSequenceOrder={maxRevealedSeq ?? (chunks.length > 0 ? chunks[chunks.length - 1].sequence_order : null)}
             revealedCount={revealedUnits.length}
+            maxSequenceId={maxRevealedSeq}
           />
         </div>
       </div>
