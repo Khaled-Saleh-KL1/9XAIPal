@@ -1270,8 +1270,21 @@ def create_chunks_from_markdown(markdown_content: str) -> list[dict]:
                 if tj:
                     extra["table_json"] = tj
 
-            # For long text blocks in markdown fallback, also split into paragraphs
-            if chunk_type == "text":
+            # For long text blocks in markdown fallback, also split into
+            # paragraphs.
+            #
+            # ⚠ A block carrying a <video> is deliberately excluded. This
+            # branch rebuilds each chunk's markdown from `plain`, and `plain`
+            # has been through extract_plain_text, which strips every HTML
+            # tag (that is what keeps table markup's `colspan`/`rowspan` out
+            # of embeddings). Run a video block through here and the tag is
+            # gone from BOTH fields — the reader is left with a bare caption
+            # describing a video that isn't there. The else-branch below
+            # keeps `md` as normalize_markdown(block), tags intact, which is
+            # what the frontend's rehype-raw pipeline needs to render it
+            # (see services/article_extraction.py, which recovers the videos
+            # trafilatura drops).
+            if chunk_type == "text" and "<video" not in block:
                 paragraphs = _split_text_into_paragraphs(plain)
                 for i, para in enumerate(paragraphs):
                     if i > 0:
