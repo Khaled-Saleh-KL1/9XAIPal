@@ -262,6 +262,21 @@ def _upgrade_lazy_images(tree) -> None:
                      "data-original", "data-lazy-src"):
             img.attrib.pop(attr, None)
 
+        # 300x150 is the CSS default size for a replaced element with no
+        # intrinsic dimensions — it is what a browser falls back to, never a
+        # size a person types for a real image. An <img> carrying exactly
+        # that pair is boilerplate, and honouring it stretches small assets
+        # grotesquely: on the page that surfaced this, an 18px form-error
+        # icon (alert_error_form.svg) was blown up to 300px mid-article.
+        #
+        # Dropping the attributes is safe even in the unlikely case the
+        # image really is 300x150 — with _READABILITY_CSS's
+        # `max-width:100%; height:auto`, it then simply renders at its
+        # intrinsic size, which is the same 300x150.
+        if img.get("width") == "300" and img.get("height") == "150":
+            img.attrib.pop("width", None)
+            img.attrib.pop("height", None)
+
 
 def _make_videos_playable(tree) -> None:
     """Give every surviving <video> its own controls, in place.
