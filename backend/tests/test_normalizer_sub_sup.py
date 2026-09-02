@@ -1,11 +1,25 @@
 """Regression coverage for normalizer.unwrap_garbled_sub_sup.
 
 MinerU's OCR occasionally mis-detects ordinary running prose as containing
-subscripts/superscripts, wrapping arbitrary letter-clusters in <sub>/<sup> —
-reproduced against a real paper (Gemini Embedding 2, arXiv:2605.27295).
-Distinct from strip_leaked_sup_run (test_chunker_figure_captions.py), which
-handles chart/figure chrome leaking into a caption as a run of bare <sup>
-tags — this is ordinary sentences torn apart, not chart text.
+subscripts/superscripts, wrapping arbitrary letter-clusters (and, it turns
+out, stray punctuation) in <sub>/<sup> — reproduced against a real paper
+(Gemini Embedding 2, arXiv:2605.27295). Distinct from strip_leaked_sup_run
+(test_chunker_figure_captions.py), which handles chart/figure chrome
+leaking into a caption as a run of bare <sup> tags — this is ordinary
+sentences torn apart, not chart text.
+
+Two earlier versions of this function required 2+ suspicious tags to
+corroborate each other before touching anything, and a third unwrapped
+"any tag with a letter" — all three still left real corruption on the
+page: production chunks are small (one sentence, one table cell), so a lot
+of the damage is a single stray tag with no second offender nearby
+(Reci<sub>p</sub>rocal, the only tag in its chunk), and a stray comma
+(dataset<sub>,</sub>) is just as real an artifact as a letter is. The
+current version is a strict ALLOWLIST instead: only a bare number or a
+footnote-marker symbol stays protected; everything else is unwrapped,
+unconditionally, with no corroboration required — see the module's own
+comment for why that asymmetry (unwrap never deletes text) is the right
+tradeoff.
 """
 
 from app.extraction.normalizer import extract_plain_text, normalize_markdown, unwrap_garbled_sub_sup
@@ -16,62 +30,52 @@ def test_leaves_clean_text_untouched():
     assert unwrap_garbled_sub_sup(text) == text
 
 
-def test_leaves_isolated_real_subscript_alone():
-    """A paragraph with a single genuine chemistry/math subscript, and
-    nothing else suspicious, must not be touched — the false-positive risk
-    this whole function exists to avoid."""
+def test_leaves_chemical_formula_subscript_alone():
     text = "The sample was dissolved in H<sub>2</sub>O at room temperature."
     assert unwrap_garbled_sub_sup(text) == text
 
 
-def test_leaves_isolated_footnote_marker_alone():
-    text = "Madhuri Shanbhogue<sup>\\*</sup>, Zhe Li<sup>\\*</sup>, Daniel Salz"
+def test_leaves_footnote_marker_symbols_alone():
+    text = "Madhuri Shanbhogue<sup>\\*</sup>, Zhe Li<sup>\\*</sup>, Daniel Salz<sup>†</sup>"
     assert unwrap_garbled_sub_sup(text) == text
 
 
+def test_leaves_numeric_footnote_and_signed_exponent_alone():
+    text = "reported previously<sup>1</sup>, with an error of 10<sup>-4</sup> and 0.5<sup>2</sup>."
+    assert unwrap_garbled_sub_sup(text) == text
+
+
+def test_unwraps_a_stray_comma():
+    """Reproduced verbatim from the real document: a lone punctuation mark,
+    not a letter, wrapped by the same OCR pass — not on the allowlist, so
+    it's unwrapped like anything else that isn't."""
+    text = "On the Recipe1M dataset<sub>,</sub> it breaks the 90.0 barrier"
+    assert unwrap_garbled_sub_sup(text) == "On the Recipe1M dataset, it breaks the 90.0 barrier"
+
+
 def test_unwraps_a_word_fragmented_by_multiple_tags():
-    """The reproduced bug: a single word torn into several <sub>-wrapped
-    syllables with no whitespace between them."""
     text = "G<sub>em</sub>i<sub>n</sub>i E<sub>m</sub>b<sub>e</sub>ddi<sub>ng</sub>"
     assert unwrap_garbled_sub_sup(text) == "Gemini Embedding"
 
 
-def test_unwraps_stray_single_char_tags_in_an_already_corrupted_paragraph():
-    """The part the naive "2+ tags with zero whitespace between them" shape
-    check missed: a lone single-character tag sitting a few words away from
-    the dense fragmentation, in the same paragraph. Once a paragraph has 2+
-    multi-letter offenders, every tag in it — including this one — is
-    stripped, since the paragraph is already proven corrupted."""
-    text = (
-        "E<sub>m</sub>b<sub>e</sub>ddi<sub>ng mo</sub>d<sub>e</sub>l<sub>s "
-        "prov</sub>id<sub>e</sub> dense vectors capturing information "
-        "th<sub>a</sub>t i<sub>s</sub> crucial."
-    )
-    result = unwrap_garbled_sub_sup(text)
-    assert "<sub>" not in result
-    assert "<sup>" not in result
-    assert result == "Embedding models provide dense vectors capturing information that is crucial."
+def test_unwraps_a_single_lone_letter_tag_with_no_sibling_in_the_chunk():
+    """The gap two earlier versions missed: no corroborating second tag is
+    required any more. Reproduced verbatim from the real document."""
+    assert unwrap_garbled_sub_sup("were limited b<sub>y</sub> their reliance") == \
+        "were limited by their reliance"
+    assert unwrap_garbled_sub_sup("Reci<sub>p</sub>rocal Rank") == "Reciprocal Rank"
+    assert unwrap_garbled_sub_sup("Ima<sub>g</sub>e-to-Text") == "Image-to-Text"
+    assert unwrap_garbled_sub_sup(
+        "nativel<sub>y</sub> encodin<sub>g</sub> the raw audio directl<sub>y</sub>"
+    ) == "natively encoding the raw audio directly"
 
 
-def test_paragraph_with_only_one_multi_letter_tag_is_left_alone():
-    """Below the 2-tag threshold — a math-dense paragraph that legitimately
-    uses one multi-character subscript (rare, but possible) must survive."""
-    text = "The loss term L<sub>reg</sub> is added to the objective."
-    assert unwrap_garbled_sub_sup(text) == text
+def test_a_letter_tag_and_a_numeric_tag_are_judged_independently():
+    text = "Embeddin<sub>g</sub> 2 on MTEB<sup>1</sup>"
+    assert unwrap_garbled_sub_sup(text) == "Embedding 2 on MTEB<sup>1</sup>"
 
 
-def test_a_math_dense_paragraph_with_several_real_single_char_subscripts_is_untouched():
-    """Several genuine short subscripts in one paragraph (x_1..x_n style)
-    must not trip the density heuristic just because there are many of
-    them — none is multi-letter, so the count of *multi-letter* tags stays
-    at zero regardless of how many single-char ones appear."""
-    text = "We define x<sub>1</sub>, x<sub>2</sub>, ..., x<sub>n</sub> as the input sequence."
-    assert unwrap_garbled_sub_sup(text) == text
-
-
-def test_two_paragraphs_are_scored_independently():
-    """A clean paragraph next to a corrupted one must not be affected by
-    the corrupted paragraph's tag count — density is per-paragraph."""
+def test_two_paragraphs_each_get_their_own_correct_treatment():
     corrupted = "E<sub>m</sub>b<sub>e</sub>ddi<sub>ng mo</sub>d<sub>e</sub>l<sub>s work</sub> well."
     clean = "The sample was dissolved in H<sub>2</sub>O."
     text = f"{corrupted}\n\n{clean}"
