@@ -31,6 +31,26 @@ a symbol its tokenizer has probably never met.
 Repair is best-effort by design: an unrecoverable character is left as U+FFFD.
 A visible mystery glyph is a better outcome than a confidently wrong letter in
 a formula.
+
+## The second bug: the ff ligature
+
+The same module also repairs a narrower, unrelated loss. Typeset books use
+the Unicode ligature glyphs U+FB00-U+FB06 (``ﬀ``, ``ﬁ``, ``ﬂ``, ...). MinerU
+expands ``ﬁ`` and ``ﬂ`` correctly but collapses ``ﬀ`` to a *single* ``f``,
+verified against a real book (The Culture Map, 112 ``ﬀ`` in its text layer)::
+
+    PDF text layer:  "the diﬀerence between success"
+    MinerU:          "the diference between success"
+    Truth:           "the difference between success"
+
+Unlike the U+FFFD case there is no marker left behind — "diference" is an
+ordinary-looking word — so this cannot be found by scanning the text alone,
+and it is not guessable from a dictionary without risking a confidently wrong
+correction. It IS recoverable from the same source: the PDF still carries the
+real ligature, so every replacement is derived from a word this document
+demonstrably contains, never from a guess. A damaged spelling that also
+occurs literally in the PDF is left alone, so a document that genuinely uses
+the short spelling is never "corrected" into the long one.
 """
 
 from __future__ import annotations
@@ -187,6 +207,86 @@ def repair_text(
     return "".join(out), recovered
 
 
+# MinerU drops one ``f`` from a doubled-f word. Two distinct causes, same
+# symptom, both verified against real documents:
+#
+#   * a typeset book whose text layer uses the ligature U+FB00 ``ﬀ``
+#     (The Culture Map: 112 of them) — MinerU expands ``ﬁ``/``ﬂ`` correctly
+#     but collapses ``ﬀ`` to a single ``f``;
+#   * an arXiv paper whose text layer has a perfectly ordinary "different"
+#     with no ligature anywhere (Gemini Embedding 2) — MinerU drops the ``f``
+#     in its own OCR regardless.
+#
+# So keying the repair on the ligature character misses every paper. What
+# both cases share is that THE PDF STILL SPELLS THE WORD CORRECTLY, so the
+# repair is driven entirely by the document's own text layer: a word is only
+# rewritten when that layer positively contains the doubled-f spelling AND
+# does not contain the damaged one. Nothing is inferred from a dictionary, so
+# a document that really does spell a word with one ``f`` is never "corrected".
+def _raw_page_texts(pdf_path: Path) -> Optional[list[str]]:
+    """Every page's text, unmodified. Separate from _page_texts, which strips
+    whitespace for the U+FFFD context match — word-level repair needs real
+    word boundaries."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        logger.warning("glyph repair skipped: PyMuPDF is not installed")
+        return None
+    try:
+        with fitz.open(str(pdf_path)) as doc:
+            return [page.get_text() for page in doc]
+    except Exception as e:
+        logger.warning("glyph repair skipped: cannot read %s (%s)", pdf_path, e)
+        return None
+
+
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# Below this length the evidence is too thin to act on: "of" -> "off" and
+# "if" -> "iff" are real words whose doubled form also exists, and a page
+# whose text layer happens to be missing would otherwise rewrite them.
+_MIN_F_WORD_LEN = 4
+
+
+def genuine_words(raw_pages: list[str]) -> set[str]:
+    """Every word the PDF's own text layer contains, with ligatures expanded
+    (NFKD turns ``diﬀerence`` into ``difference``) so the book case and the
+    paper case produce the same evidence."""
+    text = unicodedata.normalize("NFKD", "\n".join(raw_pages))
+    return set(_WORD_RE.findall(text))
+
+
+def _restore_f(word: str, genuine: set) -> Optional[str]:
+    """The doubled-f spelling of `word` if the PDF proves exactly one."""
+    if len(word) < _MIN_F_WORD_LEN or "f" not in word.lower() or word in genuine:
+        return None
+    found = {
+        word[:i + 1] + word[i:]
+        for i, ch in enumerate(word)
+        if ch in "fF"
+        and word[i + 1:i + 2].lower() != "f"
+        and word[i - 1:i].lower() != "f"
+    } & genuine
+    return found.pop() if len(found) == 1 else None
+
+
+def repair_dropped_f(text: str, genuine: set) -> tuple[str, int]:
+    """Restore f's MinerU dropped. Returns (text, replacements)."""
+    if not text or not genuine or "f" not in text.lower():
+        return text, 0
+    count = 0
+
+    def sub(m: re.Match) -> str:
+        nonlocal count
+        fixed = _restore_f(m.group(0), genuine)
+        if fixed is None:
+            return m.group(0)
+        count += 1
+        return fixed
+
+    return _WORD_RE.sub(sub, text), count
+
+
 def repair_chunks(chunks: list[dict], pdf_path: Path) -> int:
     """Repair every damaged chunk in place. Returns the characters recovered.
 
@@ -199,12 +299,32 @@ def repair_chunks(chunks: list[dict], pdf_path: Path) -> int:
         if REPLACEMENT in (c.get("markdown") or "")
         or REPLACEMENT in (c.get("plain_text") or "")
     ]
-    if not damaged:
+
+    # The ligature loss leaves no marker to scan for (see the module
+    # docstring), so unlike the U+FFFD pass this cannot be skipped by
+    # inspecting the chunks first — the PDF has to be opened to know whether
+    # there is anything to fix at all.
+    raw_pages = _raw_page_texts(pdf_path)
+    if not raw_pages:
         return 0
 
-    page_texts = _page_texts(pdf_path)
-    if not page_texts:
-        return 0
+    genuine = genuine_words(raw_pages)
+    lig_fixed = 0
+    if genuine:
+        for chunk in chunks:
+            for field in ("markdown", "plain_text"):
+                value = chunk.get(field)
+                if not value:
+                    continue
+                chunk[field], n = repair_dropped_f(value, genuine)
+                lig_fixed += n
+        if lig_fixed:
+            logger.info("[glyph-repair] restored %d dropped f(s)", lig_fixed)
+
+    if not damaged:
+        return lig_fixed
+
+    page_texts = [_strip_ws(t) for t in raw_pages]
 
     total = 0
     for chunk in damaged:
@@ -225,4 +345,4 @@ def repair_chunks(chunks: list[dict], pdf_path: Path) -> int:
         total, len(damaged),
         f"; {still_broken} unrecoverable" if still_broken else "",
     )
-    return total
+    return total + lig_fixed
