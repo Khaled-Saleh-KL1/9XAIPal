@@ -18,6 +18,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
+from app.core.logging import get_logger
 from app.extraction.normalizer import (
     degrade_inline_math,
     estimate_tokens,
@@ -27,6 +28,8 @@ from app.extraction.normalizer import (
     strip_leaked_sup_run,
     unwrap_garbled_sub_sup,
 )
+
+logger = get_logger(__name__)
 
 _IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 
@@ -1207,9 +1210,23 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
                 plain = "\n".join(_lines)
             if caption:
                 plain = f"{caption}\n{plain}"
+            # No img_path here — unlike table/image/equation entries, MinerU
+            # never crops a literal code/schema listing. bbox + page_idx are
+            # stashed so crop_code_blocks (run after chunking, once the PDF
+            # is back in hand — same two-step shape as glyph_repair.repair_
+            # chunks) can generate one: a tool-call schema's exact
+            # indentation and layout is part of what it is showing, and OCR
+            # text, even perfectly transcribed character-for-character,
+            # already lost that structure by the time it reaches code_body.
+            bbox = entry.get("bbox")
+            code_bbox_json = (
+                {"page_idx": entry.get("page_idx"), "bbox": bbox}
+                if bbox else None
+            )
             chunks.append(_chunk(
                 sequence_id, "code", md, plain,
                 page_one_indexed, heading_path, image_refs=[], normalize=False,
+                bbox_json=code_bbox_json,
             ))
             continue
 
@@ -1491,3 +1508,111 @@ def _chunk(
     }
     ch.update(extra)  # table_json, future rich fields, etc.
     return ch
+
+
+# Higher than a screen-default render: a code/schema listing can carry
+# small text, and this crop is meant to be read closely, not thumbnailed.
+_CODE_CROP_DPI = 200
+
+
+# MinerU's "bbox" on a code/algorithm entry is NOT in PDF points — a real
+# page 595.276pt wide carried bbox values up to x1=912 in this same
+# document, which would be off the page entirely if read as points. It is
+# pixels, at an internal rendering resolution MinerU does not record
+# anywhere in content_list.json (no middle.json survives — only that file
+# is kept). Determined empirically, not from documentation: the largest x1
+# observed anywhere in a real 58-page paper (912) lines up with this page's
+# width rendered at 110 DPI (909.4px) to within 0.3%, while every other
+# common DPI tried (96/100/120/144/150/200) misses by 10%+. Padded below to
+# absorb the residual error rather than trust it to the pixel.
+_MINERU_BBOX_DPI = 110
+# Outward padding, in PDF points, applied after the DPI conversion. A little
+# extra margin costs nothing (more whitespace at the crop's edge); a bbox
+# that is a few points too tight clips the very content this exists to
+# preserve, which is the failure that actually matters here.
+_BBOX_PAD_PT = 8
+
+
+def crop_code_blocks(chunks: list[dict], pdf_path: Path, images_dir: Path) -> int:
+    """Generate a page-crop image for every literal-code chunk, so the
+    reader can see the listing exactly as the page printed it.
+
+    Run as a second pass after chunking, with the PDF back in hand — same
+    two-step shape as glyph_repair.repair_chunks, for the same reason: a
+    genuine code/schema listing's exact whitespace and indentation is part
+    of what it is showing, and by the time MinerU's OCR has produced
+    code_body as a flat string, that structure is already gone — cleaning
+    the text (stray escape backslashes, glyph repair) cannot recover it,
+    because it was never captured. The crop is the only faithful copy.
+
+    Deliberately does NOT touch chunk_type "text" (the math-pseudocode
+    branch in create_chunks_from_content_list): that path already renders
+    correctly through KaTeX, verified in a real browser against a real
+    paper, and forcing an image there would trade a searchable, selectable
+    rendering for a flat picture with nothing gained.
+
+    Deliberately does NOT reuse vlm_client._crop_figure: that function's
+    whole job is snapping a rough bbox guess onto an EMBEDDED image's true
+    geometry, which only makes sense for a real image. A code/schema
+    listing is text, so this renders the (converted, padded) rectangle
+    directly instead.
+
+    Mutates ``chunks`` in place. Writes into ``images_dir`` (the same
+    ``images/`` folder MinerU's own crops already live in, found by
+    find_images()'s output_dir.rglob scan — so a newly written file here
+    needs no change to how the caller re-registers images into asset_map).
+    Returns the number of chunks cropped.
+    """
+    import fitz  # PyMuPDF
+
+    candidates = [
+        c for c in chunks
+        if c.get("chunk_type") == "code"
+        and isinstance(c.get("bbox_json"), dict)
+        and c["bbox_json"].get("bbox")
+        and c["bbox_json"].get("page_idx") is not None
+    ]
+    if not candidates:
+        return 0
+
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception as e:
+        logger.warning("code-block crop skipped: cannot open %s (%s)", pdf_path, e)
+        return 0
+
+    to_pt = 72.0 / _MINERU_BBOX_DPI
+    zoom = _CODE_CROP_DPI / 72.0
+    cropped = 0
+    try:
+        images_dir.mkdir(parents=True, exist_ok=True)
+        for chunk in candidates:
+            page_idx = chunk["bbox_json"]["page_idx"]
+            bbox = chunk["bbox_json"]["bbox"]
+            if not (0 <= page_idx < doc.page_count):
+                continue
+            try:
+                page = doc[page_idx]
+                x0, y0, x1, y1 = (v * to_pt for v in bbox)
+                rect = fitz.Rect(x0, y0, x1, y1)
+                rect = fitz.Rect(
+                    rect.x0 - _BBOX_PAD_PT, rect.y0 - _BBOX_PAD_PT,
+                    rect.x1 + _BBOX_PAD_PT, rect.y1 + _BBOX_PAD_PT,
+                ) & page.rect
+                if rect.is_empty or rect.width < 4 or rect.height < 4:
+                    continue
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=rect)
+                # Deterministic name, not a random uuid: a re-chunk overwrites
+                # its own previous crop instead of leaving it orphaned on disk.
+                name = f"code_crop_seq{chunk['sequence_id']}.jpg"
+                pix.save(images_dir / name)
+                chunk["image_refs"] = [name]
+                cropped += 1
+            except Exception as e:
+                logger.warning("code-block crop failed p%s: %s", page_idx, e)
+    finally:
+        doc.close()
+
+    if cropped:
+        logger.info("[code-crop] generated %d page crop(s) for literal code blocks", cropped)
+    return cropped

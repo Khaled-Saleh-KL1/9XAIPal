@@ -197,3 +197,179 @@ def test_sub_type_algorithm_alone_does_not_force_math_handling(tmp_path):
     ]
     chunks = create_chunks_from_content_list(_write_content_list(tmp_path, entries))
     assert chunks[0]["chunk_type"] == "code"
+
+
+# ── crop_code_blocks: the page-crop fallback for literal code/schema ──────
+#
+# Traced from a second real failure on the same paper: the Table 4 tool-call
+# schema rendered as a *correctly transcribed* code block (see the tests
+# above) and the user still reported it broken — because the transcription,
+# however clean, had already lost the schema's real indentation (MinerU's
+# code_body is a flat string with no structure). The only faithful copy is
+# a crop of the page itself, and unlike a table or figure, MinerU never
+# makes one for a code/algorithm entry — this generates it from bbox+page_idx.
+#
+# The empirical part: MinerU's bbox on these entries is NOT in PDF points
+# (a real 595pt-wide page carried bbox values past x=900), and no page-
+# dimension metadata survives in content_list.json to derive the scale
+# properly. _MINERU_BBOX_DPI=110 is fit from the real paper's own data
+# (see chunker.py's comment) — these tests build a synthetic PDF at that
+# SAME convention, so they lock in the fit itself, not just the arithmetic
+# around it: if that empirical constant ever needs correcting, these are
+# the tests that should fail.
+
+import fitz  # noqa: E402
+
+from app.extraction.chunker import (  # noqa: E402
+    _CODE_CROP_DPI,
+    _MINERU_BBOX_DPI,
+    crop_code_blocks,
+)
+
+
+def _make_pdf_with_a_box(tmp_path, page_w_pt=595.276, page_h_pt=841.89):
+    """One page, and the pixel-space bbox (at _MINERU_BBOX_DPI, MinerU's own
+    convention) of a region covering roughly its left two-thirds — mirrors
+    the real Table 4 entry's bbox relative to its own page."""
+    doc = fitz.open()
+    page = doc.new_page(width=page_w_pt, height=page_h_pt)
+    page.insert_text((80, 100), "Tool Call Schema", fontsize=14)
+    page.insert_text((80, 130), "<|DSML|tool_calls>", fontsize=10)
+    p = tmp_path / "doc.pdf"
+    doc.save(p)
+    doc.close()
+
+    to_px = _MINERU_BBOX_DPI / 72.0
+    bbox_px = [60 * to_px, 90 * to_px, (page_w_pt - 60) * to_px, 300 * to_px]
+    return p, bbox_px
+
+
+def test_crops_a_literal_code_chunk_and_links_the_image(tmp_path):
+    pdf_path, bbox_px = _make_pdf_with_a_box(tmp_path)
+    chunks = [{
+        "sequence_id": 5, "chunk_type": "code",
+        "bbox_json": {"page_idx": 0, "bbox": bbox_px},
+        "image_refs": [],
+    }]
+    images_dir = tmp_path / "images"
+
+    n = crop_code_blocks(chunks, pdf_path, images_dir)
+
+    assert n == 1
+    assert chunks[0]["image_refs"] == ["code_crop_seq5.jpg"]
+    out = images_dir / "code_crop_seq5.jpg"
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_the_crop_captures_the_full_width_without_clipping(tmp_path):
+    """The regression this whole thing exists for: an earlier version used
+    the bbox as PDF points directly (unconverted), which either clipped the
+    real content off the right edge or errored outright since 878pt is off
+    a 595pt-wide page. The rendered crop's pixel width must correspond to
+    the real, in-bounds span the bbox actually describes, not the page's
+    full width truncated by an out-of-range rectangle."""
+    pdf_path, bbox_px = _make_pdf_with_a_box(tmp_path, page_w_pt=595.276)
+    chunks = [{
+        "sequence_id": 1, "chunk_type": "code",
+        "bbox_json": {"page_idx": 0, "bbox": bbox_px},
+        "image_refs": [],
+    }]
+    images_dir = tmp_path / "images"
+    crop_code_blocks(chunks, pdf_path, images_dir)
+
+    pix = fitz.Pixmap(str(images_dir / "code_crop_seq1.jpg"))
+    # bbox spans ~475pt of a 595pt-wide page (60pt margin each side) plus
+    # 2*8pt padding, rendered at _CODE_CROP_DPI — expect roughly that width,
+    # not the un-clipped ~1653px a 595pt page would be at _CODE_CROP_DPI.
+    expected_width_pt = (595.276 - 60 - 60) + 2 * 8
+    expected_px = expected_width_pt * _CODE_CROP_DPI / 72.0
+    assert abs(pix.width - expected_px) < 15, (
+        f"crop width {pix.width}px doesn't match the expected in-bounds "
+        f"span (~{expected_px:.0f}px) — the bbox conversion is off"
+    )
+
+
+def test_chunks_without_bbox_json_are_skipped(tmp_path):
+    pdf_path, _ = _make_pdf_with_a_box(tmp_path)
+    chunks = [{"sequence_id": 1, "chunk_type": "code", "image_refs": []}]
+    n = crop_code_blocks(chunks, pdf_path, tmp_path / "images")
+    assert n == 0
+    assert chunks[0]["image_refs"] == []
+
+
+def test_math_pseudocode_text_chunks_are_never_cropped(tmp_path):
+    """crop_code_blocks must only ever touch chunk_type == 'code'. The
+    math-pseudocode branch (chunk_type 'text') already renders correctly
+    through KaTeX — confirmed in a real browser against the real paper —
+    and must not be swapped for a flat image even if it happened to carry
+    a bbox_json."""
+    pdf_path, bbox_px = _make_pdf_with_a_box(tmp_path)
+    chunks = [{
+        "sequence_id": 1, "chunk_type": "text",
+        "bbox_json": {"page_idx": 0, "bbox": bbox_px},
+        "image_refs": [],
+    }]
+    n = crop_code_blocks(chunks, pdf_path, tmp_path / "images")
+    assert n == 0
+    assert chunks[0]["image_refs"] == []
+
+
+def test_an_out_of_range_page_idx_is_skipped_not_fatal(tmp_path):
+    pdf_path, bbox_px = _make_pdf_with_a_box(tmp_path)  # single-page PDF
+    chunks = [{
+        "sequence_id": 1, "chunk_type": "code",
+        "bbox_json": {"page_idx": 7, "bbox": bbox_px},
+        "image_refs": [],
+    }]
+    n = crop_code_blocks(chunks, pdf_path, tmp_path / "images")
+    assert n == 0
+    assert chunks[0]["image_refs"] == []
+
+
+def test_a_missing_pdf_is_non_fatal(tmp_path):
+    chunks = [{
+        "sequence_id": 1, "chunk_type": "code",
+        "bbox_json": {"page_idx": 0, "bbox": [0, 0, 100, 100]},
+        "image_refs": [],
+    }]
+    n = crop_code_blocks(chunks, tmp_path / "does-not-exist.pdf", tmp_path / "images")
+    assert n == 0
+
+
+def test_rerunning_overwrites_rather_than_accumulating(tmp_path):
+    """A re-chunk runs this again; the crop filename is keyed on sequence_id
+    (not a random uuid) specifically so a repeat run replaces its own
+    previous file instead of leaving orphans on disk."""
+    pdf_path, bbox_px = _make_pdf_with_a_box(tmp_path)
+    chunks = [{
+        "sequence_id": 3, "chunk_type": "code",
+        "bbox_json": {"page_idx": 0, "bbox": bbox_px},
+        "image_refs": [],
+    }]
+    images_dir = tmp_path / "images"
+    crop_code_blocks(chunks, pdf_path, images_dir)
+    crop_code_blocks(chunks, pdf_path, images_dir)
+    assert list(images_dir.glob("code_crop_seq3*")) == [images_dir / "code_crop_seq3.jpg"]
+
+
+# ── End-to-end through create_chunks_from_content_list + crop_code_blocks ──
+
+def test_end_to_end_literal_code_chunk_gets_a_working_image_ref(tmp_path):
+    pdf_path, bbox_px = _make_pdf_with_a_box(tmp_path)
+    entries = [
+        {"type": "code", "sub_type": "algorithm",
+         "code_caption": ["Table 4 | Tool-call schema."],
+         "code_body": LITERAL_CODE_WITH_STRAY_ESCAPES,
+         "bbox": bbox_px, "page_idx": 0},
+    ]
+    content_list = tmp_path / "content_list.json"
+    import json
+    content_list.write_text(json.dumps(entries), encoding="utf-8")
+
+    chunks = create_chunks_from_content_list(content_list)
+    assert chunks[0]["chunk_type"] == "code"
+    assert chunks[0]["bbox_json"] == {"page_idx": 0, "bbox": bbox_px}
+
+    n = crop_code_blocks(chunks, pdf_path, tmp_path / "images")
+    assert n == 1
+    assert chunks[0]["image_refs"] == ["code_crop_seq1.jpg"]

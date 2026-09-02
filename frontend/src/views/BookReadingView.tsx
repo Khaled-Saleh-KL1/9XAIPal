@@ -96,7 +96,7 @@ type RevealedUnit =
   | { kind: 'table'; markdown: string; sourceChunkId: string; sourceSeq: number; tableJson?: any; imageUrl?: string }
   | { kind: 'figure'; imageUrl?: string; caption?: string; filename?: string; sourceChunkId: string; sourceSeq: number }
   | { kind: 'math'; latex: string; imageUrl?: string; sourceChunkId: string; sourceSeq: number }
-  | { kind: 'code'; markdown: string; sourceChunkId: string; sourceSeq: number }
+  | { kind: 'code'; markdown: string; sourceChunkId: string; sourceSeq: number; imageUrl?: string }
   | { kind: 'footnote'; text: string; sourceChunkId: string; sourceSeq: number };
 
 interface Props {
@@ -302,7 +302,10 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
       // indentation survives (no paragraph splitting).
       const body = chunk.content_markdown || chunk.plain_text || '';
       const markdown = body.includes('```') ? body : `\`\`\`\n${body}\n\`\`\``;
-      return [{ kind: 'code', markdown, sourceChunkId: id, sourceSeq: seq }];
+      // A crop of the page (see chunker.py's crop_code_blocks) whenever a
+      // literal code/schema listing has one — a faithful copy of the exact
+      // layout OCR text alone can't preserve.
+      return [{ kind: 'code', markdown, sourceChunkId: id, sourceSeq: seq, imageUrl: chunk.image_url || undefined }];
     }
 
     if (chunk.structural_type === 'footnote') {
@@ -1244,6 +1247,14 @@ function GranularUnit({
     // Fenced code/JSON: render verbatim in a monospace block (remark-gfm).
     return (
       <div className={`${baseClass} ${lastClass} my-4 code-block`}>
+        {unit.imageUrl && (
+          <img
+            src={unit.imageUrl}
+            alt="Code listing, shown as it appears on the page"
+            className="w-full h-auto rounded-md border mb-2.5"
+            style={{ borderColor: 'var(--border)', background: '#fff' }}
+          />
+        )}
         <Md>{unit.markdown}</Md>
       </div>
     );

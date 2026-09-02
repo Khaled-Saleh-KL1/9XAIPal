@@ -310,6 +310,19 @@ function ArticleBlockImpl({
     return (
       <section {...common}>
         {ribbon}
+        {block.image_url && (
+          // A literal code/schema listing's exact indentation and layout is
+          // part of what it is showing, and OCR text — even transcribed
+          // perfectly, character for character — already lost that
+          // structure by the time it reaches the chunk (see chunker.py's
+          // crop_code_blocks). The page crop is the faithful copy; the text
+          // below stays for search and copy-paste, which the image can't do.
+          <img
+            className="article-code-crop-img"
+            src={block.image_url}
+            alt={block.plain_text || 'Code listing, shown as it appears on the page'}
+          />
+        )}
         <div className="article-code"><Md>{fenced}</Md></div>
       </section>
     );
