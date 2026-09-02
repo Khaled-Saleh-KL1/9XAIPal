@@ -21,8 +21,11 @@ see extraction/pipeline_sync.py::run_article_pipeline_sync, which only ever
 sets documents.raw_snapshot_status, never documents.status, around this.
 """
 
+import json
+import re
 import uuid
 from dataclasses import dataclass
+from typing import Optional
 
 from lxml import html as lxml_html
 from lxml.html.clean import Cleaner
@@ -183,6 +186,83 @@ def _strip_layout_styles(tree) -> None:
             del el.attrib["style"]
 
 
+# Same test the extraction path applies to a poster: only trust a URL that
+# actually looks like an image file.
+_IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif|bmp|svg)(\?|#|$)", re.I)
+
+
+def _largest_in_srcset(srcset: str) -> Optional[str]:
+    """The widest candidate in a srcset, or the last one when no candidate
+    carries a width descriptor."""
+    best, best_w = None, -1
+    for part in srcset.split(","):
+        bits = part.strip().split()
+        if not bits:
+            continue
+        url, width = bits[0], -1
+        for descriptor in bits[1:]:
+            if descriptor.endswith("w") and descriptor[:-1].isdigit():
+                width = int(descriptor[:-1])
+        if width >= best_w:
+            best, best_w = url, width
+    return best
+
+
+def _upgrade_lazy_images(tree) -> None:
+    """Point each <img> at the real image rather than its placeholder.
+
+    Lazy-loading ships a deliberately tiny image in `src` and keeps the real
+    one in an attribute for the page's own JavaScript to swap in on scroll.
+    Strip the scripts — which this sanitizer must — and the swap never
+    happens, so the snapshot is left showing the placeholder forever. On the
+    real page that surfaced this, four quote cards carried a 100px-wide
+    `src` with the 1000px version sitting unused in `data-loading`.
+
+    Handles the standard `srcset`/`data-srcset`, the near-universal
+    `data-src` family, and the JSON `data-loading` blob this particular site
+    uses (desktop preferred over mobile — the snapshot renders in a reading
+    column, not on a phone).
+    """
+    for img in tree.xpath("//img"):
+        candidate = None
+
+        for attr in ("data-srcset", "srcset"):
+            if img.get(attr):
+                candidate = _largest_in_srcset(img.get(attr))
+                if candidate:
+                    break
+
+        if not candidate:
+            raw = img.get("data-loading")
+            if raw:
+                try:
+                    options = json.loads(raw)
+                except (ValueError, TypeError):
+                    options = None
+                if isinstance(options, dict):
+                    candidate = options.get("desktop") or options.get("mobile")
+
+        if not candidate:
+            for attr in ("data-src", "data-original", "data-lazy-src"):
+                if img.get(attr):
+                    candidate = img.get(attr)
+                    break
+
+        if candidate:
+            candidate = candidate.strip()
+            if candidate.startswith(("http://", "https://", "/")):
+                img.set("src", candidate)
+        # The placeholder attributes have done their job; leaving them
+        # behind only invites a future reader of this HTML to wonder which
+        # source is the real one. `loading="lazy"` is deliberately KEPT —
+        # it is native browser behaviour that needs no JavaScript, so it
+        # still works in a snapshot and still saves pulling every image on
+        # a long page the reader may never scroll through.
+        for attr in ("data-srcset", "data-loading", "data-src",
+                     "data-original", "data-lazy-src"):
+            img.attrib.pop(attr, None)
+
+
 def _make_videos_playable(tree) -> None:
     """Give every surviving <video> its own controls, in place.
 
@@ -203,6 +283,24 @@ def _make_videos_playable(tree) -> None:
         video.set("controls", "")
         video.set("preload", "metadata")
         video.attrib.pop("autoplay", None)
+        # crossorigin="anonymous" makes the browser fetch the media in CORS
+        # mode, which fails outright unless the host returns
+        # Access-Control-Allow-Origin. The real page could afford it; a
+        # snapshot loaded from this app's own origin cannot. Verified
+        # against the actual video host: no CORS header at all, so every
+        # source failed with net::ERR_FAILED and the element sat at its
+        # default 300x150 with networkState NO_SOURCE. Plain playback needs
+        # no CORS — that attribute only matters for reading pixels back out
+        # (canvas/WebGL), which a snapshot never does.
+        video.attrib.pop("crossorigin", None)
+        # Same junk-poster case handled in the extraction path: an
+        # originally-empty poster resolved against the page leaves every
+        # video pointing at an HTML document as its poster frame. Better no
+        # poster (the browser shows the first frame once metadata loads)
+        # than one guaranteed-failed request per video.
+        poster = (video.get("poster") or "").strip()
+        if poster and not _IMAGE_EXT_RE.search(poster):
+            video.attrib.pop("poster", None)
 
 
 def sanitize_html(html: str, page_url: str) -> str:
@@ -225,6 +323,7 @@ def sanitize_html(html: str, page_url: str) -> str:
     head.insert(0, base)
 
     _strip_layout_styles(tree)
+    _upgrade_lazy_images(tree)
     _make_videos_playable(tree)
 
     style = lxml_html.Element("style")
