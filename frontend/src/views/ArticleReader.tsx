@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { IconBack, IconDoc } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
+import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
 import { ArticleBlock } from './ArticleBlock';
 import { ExtractorPill } from './BookReadingView';
@@ -219,6 +220,7 @@ export function ArticleReader({
   onOpenDesk,
   onBack,
 }: Props) {
+  const confirm = useConfirm();
   const [doc, setDoc] = useState<FullDocument | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   /** Whether the header title is being edited in place. */
@@ -1842,11 +1844,13 @@ export function ArticleReader({
             <ExtractorPill
               extractor={doc.extractor}
               onReextract={async () => {
-                if (!confirm(
-                  'Re-extract this paper with MinerU?\n\n' +
-                  'This will wipe the cached chunks/embeddings and re-run MinerU ' +
-                  'from the original PDF.'
-                )) return;
+                if (!(await confirm({
+                  title: 'Re-extract this paper with MinerU?',
+                  body: 'This will wipe the cached chunks/embeddings and re-run '
+                      + 'MinerU from the original PDF.',
+                  confirmLabel: 'Re-extract',
+                  tone: 'danger',
+                }))) return;
                 try {
                   await reextractPaper(paperId);
                   const d = await getFullDocument(paperId);
@@ -1856,12 +1860,14 @@ export function ArticleReader({
                 }
               }}
               onRechunk={async () => {
-                if (!confirm(
-                  'Re-chunk this paper from the cached extraction?\n\n' +
-                  'Fast (seconds): re-runs only the chunker (gap-free sequencing, ' +
-                  'code/JSON blocks, inline math) on the already-extracted output. ' +
-                  'Embeddings regenerate in the background afterward.'
-                )) return;
+                if (!(await confirm({
+                  title: 'Re-chunk this paper from the cached extraction?',
+                  body: 'Fast (seconds): re-runs only the chunker (gap-free '
+                      + 'sequencing, code/JSON blocks, inline math) on the '
+                      + 'already-extracted output. Embeddings regenerate in the '
+                      + 'background afterward.',
+                  confirmLabel: 'Re-chunk',
+                }))) return;
                 try {
                   const r = await rechunkPaper(paperId);
                   const d = await getFullDocument(paperId);

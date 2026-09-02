@@ -8,6 +8,7 @@ import {
 import { PaperCover } from './PaperCover';
 import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
+import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
 import { stageProgress } from '../lib/progress';
 import { listPapers, deletePaper, renamePaper, type PaperMeta } from '../api';
@@ -45,6 +46,7 @@ function metaToPaper(m: PaperMeta): Paper {
 }
 
 export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout }: Props) {
+  const confirm = useConfirm();
   const [over, setOver] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
@@ -140,9 +142,14 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   };
 
   const handleDelete = async (p: Paper) => {
-    const ok = window.confirm(
-      `Delete "${p.title}"?\n\nThis removes the paper from the library AND deletes the raw PDF, extracted images, and MinerU output from disk. It cannot be undone.`,
-    );
+    const ok = await confirm({
+      title: `Delete "${p.title}"?`,
+      body:
+        'This removes the paper from the library and deletes the raw PDF, ' +
+        'extracted images, and MinerU output from disk. It cannot be undone.',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
     if (!ok) return;
     try {
       await deletePaper(p.id);
