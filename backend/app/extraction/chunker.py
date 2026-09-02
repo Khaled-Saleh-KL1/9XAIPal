@@ -23,6 +23,7 @@ from app.extraction.normalizer import (
     extract_plain_text,
     normalize_markdown,
     strip_leaked_sup_run,
+    unwrap_garbled_sub_sup,
 )
 
 _IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
@@ -1317,6 +1318,18 @@ def _chunk(
     ``normalize=False`` skips markdown whitespace normalization — required for
     ``code`` chunks, whose indentation must survive verbatim.
     """
+    # ⚠ plain_text needs the sub/sup unwrap too, and needs it HERE rather than
+    # at each call site. normalize_markdown (which already applies it) only
+    # ever touches `md`; `plain` arrives raw from most callers — the
+    # content_list path, which is what every MinerU-extracted document
+    # actually uses, passes the entry's own text straight through. Without
+    # this, a document reads clean but its plain_text stays full of
+    # "Ridin<sub>g</sub>" — and plain_text is what gets embedded and what
+    # retrieval feeds the model, so the damage was invisible in the reader
+    # and live in every search result and chat answer. token_count is
+    # measured on the cleaned text for the same reason: tag-split words
+    # inflate the count.
+    plain = unwrap_garbled_sub_sup(plain) if normalize else plain
     ch = {
         "sequence_id": sequence_id,
         "parent_sequence_id": None,
