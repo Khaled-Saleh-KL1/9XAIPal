@@ -427,7 +427,18 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
         # services/article_crawl.py's docstring for why that idea was
         # dropped in favor of this simpler one).
         include_links=True,
-        with_metadata=True,
+        # NOT with_metadata=True: that makes trafilatura PREPEND a YAML
+        # frontmatter block ("---\ntitle: ...\nauthor: ...\nurl: ...\n---")
+        # directly into the returned markdown string — confirmed empirically
+        # identical body either way, this is the only difference. Every
+        # article in the library had that block sitting as its own first
+        # chunk, shown to the reader like ordinary body text: rendered as
+        # markdown, a run of non-blank "key: value" lines with no blank line
+        # between them collapses into a single paragraph — one unreadable
+        # run-on line at the top of every article. The title this app
+        # actually uses already comes from the separate extract_metadata()
+        # call below, so with_metadata here bought nothing but the bug.
+        with_metadata=False,
     )
     if not markdown or len(markdown.strip()) < MIN_EXTRACTED_CHARS:
         raise ArticleExtractionError(
