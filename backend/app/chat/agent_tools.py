@@ -184,10 +184,16 @@ async def run_search(
     query: str,
     *,
     limit: Optional[int] = None,
+    max_sequence_id: Optional[int] = None,
 ) -> list[dict]:
     """Full-text search plus a literal substring pass, de-duplicated.
 
     ``document_scope`` is one document id or a list of them.
+
+    ``max_sequence_id`` is the reader's progress ceiling and applies only to
+    the single-document scope — the reading view. The multi-document scope is
+    the desk, where the whole point is that the assistant can reach across
+    everything in the study, so it is deliberately never clamped.
 
     ⚠ The substring leg is not redundant: ``to_tsvector`` drops single Greek
     letters, equation numbers, and symbol subscripts entirely, so a reader
@@ -211,8 +217,13 @@ async def run_search(
         )
     else:
         legs_to_run = (
-            lambda: search_chunks_fulltext(session, query, limit=limit, document_id=ids[0]),
-            lambda: chunk_repo.search_chunks_substring(session, ids[0], query, limit),
+            lambda: search_chunks_fulltext(
+                session, query, limit=limit, document_id=ids[0],
+                max_sequence_id=max_sequence_id,
+            ),
+            lambda: chunk_repo.search_chunks_substring(
+                session, ids[0], query, limit, max_sequence_id=max_sequence_id,
+            ),
         )
 
     legs: list[list[dict]] = []
