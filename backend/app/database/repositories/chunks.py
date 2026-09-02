@@ -229,7 +229,8 @@ async def get_chunks_in_range(
 
 
 async def search_chunks_substring(
-    session: AsyncSession, document_id: UUID, needle: str, limit: int
+    session: AsyncSession, document_id: UUID, needle: str, limit: int,
+    max_sequence_id: int | None = None,
 ) -> list[dict]:
     """Case-insensitive substring search over a document's chunks.
 
@@ -240,15 +241,28 @@ async def search_chunks_substring(
     """
     if not needle.strip():
         return []
+    # Built conditionally rather than as a `:param IS NULL OR ...` test:
+    # asyncpg cannot infer a type for a bare NULL parameter and errors out.
+    params: dict = {
+        "document_id": document_id,
+        "pattern": f"%{needle.strip()}%",
+        "limit": limit,
+    }
+    ceiling = ""
+    if max_sequence_id is not None:
+        ceiling = "AND sequence_id <= :max_sequence_id"
+        params["max_sequence_id"] = max_sequence_id
+
     result = await session.execute(
-        text("""
+        text(f"""
             SELECT * FROM chunks
             WHERE document_id = :document_id
               AND (plain_text ILIKE :pattern OR markdown ILIKE :pattern)
+              {ceiling}
             ORDER BY sequence_id ASC
             LIMIT :limit
         """),
-        {"document_id": document_id, "pattern": f"%{needle.strip()}%", "limit": limit},
+        params,
     )
     return [dict(r) for r in result.mappings().all()]
 

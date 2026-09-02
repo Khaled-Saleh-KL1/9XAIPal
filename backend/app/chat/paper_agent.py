@@ -674,6 +674,7 @@ async def _run_call(
     call: dict,
     *,
     user_id: UUID,
+    max_sequence_id: Optional[int] = None,
 ) -> dict:
     """Execute one planned call and return it filled in.
 
@@ -720,7 +721,10 @@ async def _run_call(
         return out
 
     if tool == "SEARCH":
-        hits = await run_search(session, document_id, call["arg"])
+        # Not covered by the filtered `chunks` list: this leg queries the DB.
+        hits = await run_search(
+            session, document_id, call["arg"], max_sequence_id=max_sequence_id,
+        )
         out["observation"] = format_search_results(call["arg"], hits)
         out["label"] = f"Searched the paper for “{call['arg']}”"
         out["result"] = f"{len(hits)} matching blocks" if hits else "no matches"
@@ -791,6 +795,7 @@ async def answer_paper_question(
     model: Optional[str] = None,
     max_steps: Optional[int] = None,
     allow_web: bool = True,
+    max_sequence_id: Optional[int] = None,
 ) -> AsyncIterator[dict]:
     """Answer one anchored question, streaming.
 
@@ -823,6 +828,15 @@ async def answer_paper_question(
     """
     noun = _NOUN_BY_KIND.get(doc_kind, "paper")
     chunks = await chunk_repo.get_all_document_chunks(session, document_id)
+    # The reader's progress ceiling, applied at the source. Everything this
+    # agent can reach is derived from `chunks`: the CONTENTS index it is shown,
+    # what SECTION and READ can resolve, the anchor window, and whether the
+    # whole document fits in one pass. Filtering here is what makes the
+    # ceiling hold for a book — the earlier LOCAL/GLOBAL/OVERVIEW clamp never
+    # applies, because a book returns early into this agent and never reaches
+    # that path at all.
+    if max_sequence_id is not None:
+        chunks = [c for c in chunks if (c.get("sequence_id") or 0) <= max_sequence_id]
     if not chunks:
         yield {
             "type": "done",
@@ -989,7 +1003,10 @@ async def answer_paper_question(
 
         observations: list[str] = []
         for i, call in enumerate(plan):
-            done_call = await _run_call(session, document_id, chunks, call, user_id=user_id)
+            done_call = await _run_call(
+                session, document_id, chunks, call,
+                user_id=user_id, max_sequence_id=max_sequence_id,
+            )
             observations.append(done_call["observation"])
             event = step_event(
                 f"s{step}-{i}", step + 1, done_call,

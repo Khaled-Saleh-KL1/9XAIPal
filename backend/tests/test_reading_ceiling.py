@@ -181,3 +181,67 @@ async def test_a_partially_read_section_is_marked_not_dropped(db_session):
     section = ctx["section_summaries"][0]
     assert section["summary_plain"] == "section spanning the ceiling"
     assert section.get("partially_read") is True
+
+
+# ── The book path, which is NOT the path clamped above ───────────────────
+#
+# The first version of this ceiling clamped LOCAL/GLOBAL/OVERVIEW and was
+# still completely ineffective for a book, because a book question never
+# reaches any of them: orchestrator's stream gate sees doc_kind == "book"
+# and returns early into the paper agent, which navigates with
+# SECTION / SEARCH / READ over the document's own contents index.
+#
+# The agent derives the contents index, the anchor window and everything
+# SECTION/READ can resolve from one list of chunks, so filtering that list
+# bounds all three. SEARCH is the exception: it queries the database, so it
+# carries the ceiling separately — which is what these cover.
+
+from app.chat.agent_tools import run_search  # noqa: E402
+from app.database.repositories import chunks as chunks_repo  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_substring_search_respects_the_ceiling(db_session):
+    doc_id = await _book(db_session)
+    unbounded = await chunks_repo.search_chunks_substring(db_session, doc_id, "butler", 10)
+    assert any(r["sequence_id"] == 10 for r in unbounded)
+
+    bounded = await chunks_repo.search_chunks_substring(
+        db_session, doc_id, "butler", 10, max_sequence_id=5
+    )
+    assert bounded == []
+
+
+@pytest.mark.asyncio
+async def test_agent_search_tool_respects_the_ceiling(db_session):
+    """The agent's SEARCH tool is how a book question actually reaches the
+    text, so this is the one that matters for the reported bug."""
+    doc_id = await _book(db_session)
+    hits = await run_search(db_session, doc_id, "butler", max_sequence_id=5)
+    assert all(h["sequence_id"] <= 5 for h in hits)
+    assert not any("butler" in (h.get("plain_text") or "") for h in hits)
+
+
+@pytest.mark.asyncio
+async def test_agent_search_still_finds_what_has_been_read(db_session):
+    doc_id = await _book(db_session)
+    hits = await run_search(db_session, doc_id, "chapter", max_sequence_id=4)
+    assert hits, "the ceiling removed everything; retrieval is over-clamped"
+    assert all(h["sequence_id"] <= 4 for h in hits)
+
+
+@pytest.mark.asyncio
+async def test_the_desk_is_never_clamped(db_session):
+    """The product rule, encoded so it cannot regress by accident.
+
+    The desk is the opposite surface from the reader: everything added to a
+    study is deliberately fully available to the assistant so it can compare
+    and link across documents. run_search's multi-document scope IS the desk,
+    and it must ignore a ceiling even if one is somehow passed.
+    """
+    doc_id = await _book(db_session)
+    hits = await run_search(db_session, [doc_id], "butler", max_sequence_id=1)
+    assert any(h["sequence_id"] == 10 for h in hits), (
+        "the desk was clamped by a reading ceiling; the study agent must keep "
+        "full access to every document in its scope"
+    )

@@ -719,6 +719,7 @@ async def _stream_book_agent(
     conversation_id: Optional[UUID],
     parent_turn_id: Optional[UUID],
     thread_root_turn_id: Optional[UUID],
+    max_sequence_id: Optional[int] = None,
 ) -> AsyncIterator[dict]:
     """Answer a question about a book with the paper agent, streaming.
 
@@ -796,6 +797,11 @@ async def _stream_book_agent(
         anchor=anchor,
         doc_kind="book",  # this branch only ever runs for doc_kind == "book"
         thread=thread,
+        # The reading ceiling has to arrive HERE, not only on the router path
+        # below: a book returns early into this agent, so clamping
+        # LOCAL/GLOBAL/OVERVIEW alone would leave the book reader — the one
+        # case the ceiling exists for — completely unbounded.
+        max_sequence_id=max_sequence_id,
         max_steps=(
             settings.paper_agent_holistic_max_steps
             if anchor["kind"] == "document"
@@ -893,6 +899,7 @@ async def handle_ask_stream(
                     conversation_id=conversation_id,
                     parent_turn_id=parent_turn_id,
                     thread_root_turn_id=thread_root_turn_id,
+                    max_sequence_id=max_sequence_id,
                 ):
                     yield event
                 return
