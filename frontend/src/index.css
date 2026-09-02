@@ -3411,9 +3411,8 @@ button img,
 [data-no-lightbox] { cursor: inherit; }
 
 /* ── In-app confirmation ────────────────────────────────────
-   Replaces window.confirm. Blue behind, rust on the destructive action:
-   both come straight from the theme tokens, so this follows dark mode
-   without a second set of colours. */
+   Replaces window.confirm. Rust (--accent) on the destructive action, over
+   the same neutral blurred backdrop the image lightbox uses. */
 .confirm-backdrop {
   position: fixed;
   inset: 0;
@@ -3422,9 +3421,13 @@ button img,
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: color-mix(in oklab, var(--deck) 42%, rgb(0 0 0 / 0.55));
-  backdrop-filter: blur(10px) saturate(1.05);
-  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  /* Identical to .lightbox-backdrop on purpose: one "the app is behind a
+     modal" treatment, not two. The blue tint that used to be here fought
+     with the rust confirm button sitting on top of it. Rust stays; the
+     backdrop just gets out of its way. */
+  background: rgb(0 0 0 / 0.62);
+  backdrop-filter: blur(16px) saturate(1.05);
+  -webkit-backdrop-filter: blur(16px) saturate(1.05);
   animation: lightbox-fade 130ms ease-out;
 }
 .confirm-card {
