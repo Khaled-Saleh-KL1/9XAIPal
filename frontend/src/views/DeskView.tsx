@@ -7,6 +7,7 @@ import { PaperPicker } from './PaperPicker';
 import { StickyBoard } from './StickyBoard';
 import { StudyChat, type PendingTurn } from './StudyChat';
 import { createPacer } from '../lib/pacer';
+import { useConfirm } from '../components/ConfirmDialog';
 import {
   LIBRARY_SCOPE,
   askStudyStream,
@@ -72,6 +73,7 @@ export function DeskView({
   /** Open a paper in the reader, optionally at a block. */
   onOpenPaper: (documentId: string, sequenceId?: number) => void;
 }) {
+  const confirm = useConfirm();
   const [studies, setStudies] = useState<Study[]>([]);
   const [scope, setScope] = useState<string>(initialScope || LIBRARY_SCOPE);
   const [study, setStudy] = useState<Study | null>(null);
@@ -255,14 +257,20 @@ export function DeskView({
   }, [pending, ask]);
 
   const clearChat = useCallback(async () => {
-    if (!window.confirm('Clear this conversation? Its notes and papers stay.')) return;
+    const ok = await confirm({
+      title: 'Clear this conversation?',
+      body: 'Its notes and papers stay.',
+      confirmLabel: 'Clear',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       await clearStudyChat(scope);
       setTurns([]);
     } catch (e) {
       setNotice((e as Error).message || 'Could not clear the chat');
     }
-  }, [scope]);
+  }, [scope, confirm]);
 
   // ── Studies ──────────────────────────────────────────────────────────────
   const newStudy = useCallback(async () => {
@@ -298,10 +306,14 @@ export function DeskView({
 
   const removeStudy = useCallback(async () => {
     if (isLibrary || !study) return;
-    const ok = window.confirm(
-      `Delete "${study.name}"?\n\nIts chat goes with it. The papers stay in your ` +
-      `library, and its notes move to the universal board. Only you delete a note.`,
-    );
+    const ok = await confirm({
+      title: `Delete "${study.name}"?`,
+      body:
+        'Its chat goes with it. The papers stay in your library, and its notes ' +
+        'move to the universal board. Only you delete a note.',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
     if (!ok) return;
     try {
       await deleteStudy(scope);
@@ -310,7 +322,7 @@ export function DeskView({
     } catch (e) {
       setNotice((e as Error).message || 'Delete failed');
     }
-  }, [isLibrary, study, scope, refreshStudies, refreshWall]);
+  }, [isLibrary, study, scope, refreshStudies, refreshWall, confirm]);
 
   const applyPapers = useCallback(
     async (documentIds: string[]) => {

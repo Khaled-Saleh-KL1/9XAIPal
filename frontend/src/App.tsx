@@ -61,18 +61,40 @@ function parseHash(): HashState {
   return { route: 'library' };
 }
 
-function writeHash(state: HashState) {
+/**
+ * Sync the address bar to the current view.
+ *
+ * `mode` decides whether this navigation is something the back button can
+ * undo. It matters more than it looks: this app has no router, so the
+ * history stack is entirely whatever this function puts there. It used to
+ * always `replaceState`, which meant the whole session occupied ONE entry —
+ * opening a paper overwrote the library instead of stacking on it, so the
+ * first Back left the site entirely rather than returning to the library.
+ *
+ * 'push' therefore for real navigation, and 'replace' for the initial sync
+ * on mount (which is not a navigation and must not leave a phantom entry
+ * behind the app's first screen).
+ */
+function writeHash(state: HashState, mode: 'push' | 'replace' = 'push') {
   let next = '#/library';
   if (state.route === 'reading') next = `#/paper/${state.paperId}`;
   else if (state.route === 'pdf-viewer') next = `#/raw/${state.paperId}`;
   else if (state.route === 'desk')
     next = state.page === 'notes' ? '#/desk/notes' : `#/desk/${state.scope}`;
-  if (window.location.hash !== next) window.history.replaceState(null, '', next);
+  // Already there: nothing to record. This is also what keeps the back
+  // button from fighting itself — when a popstate moves the hash and the
+  // view follows, the sync effect below finds the hash already correct and
+  // pushes nothing, so Back doesn't immediately re-push where it came from.
+  if (window.location.hash === next) return;
+  if (mode === 'push') window.history.pushState(null, '', next);
+  else window.history.replaceState(null, '', next);
 }
 
 export function App() {
   const { user, loading: authLoading, admitted } = useAuth();
   const [route, setRoute] = useState<Route>('library');
+  /** False until the hash-sync effect has run once — see that effect. */
+  const historyPrimed = useRef(false);
   const [activePaper, setActivePaper] = useState<Paper | null>(null);
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [uploadingFile, setUploadingFile] = useState<UploadingFile | null>(null);
@@ -365,8 +387,10 @@ export function App() {
           setRoute('pdf-viewer');
         }
       } catch {
-        // Paper no longer exists, so fall back to the library and clear the hash.
-        writeHash({ route: 'library' });
+        // Paper no longer exists, so fall back to the library and clear the
+        // hash. A replace, not a push: a dead link should not become a step
+        // the back button can return to.
+        writeHash({ route: 'library' }, 'replace');
       }
     })();
     // Only run on mount; further nav updates the hash via the next effect.
@@ -374,15 +398,20 @@ export function App() {
 
   /**
    * Follow the hash when something outside React changes it: a typed URL, a
-   * bookmark, the back button after a real navigation.
+   * bookmark, or the back/forward buttons.
    *
    * ⚠ Without this the address bar and the view can disagree: changing only the
    * fragment does not reload the page, so the SPA never learns about it and
-   * sits on whatever it was already showing. `writeHash` uses `replaceState`,
-   * so this listener never fires for our own navigation.
+   * sits on whatever it was already showing.
+   *
+   * Both events are bound on purpose. Traversing history between two
+   * fragments fires `popstate` and then `hashchange`; a hash edited directly
+   * in the address bar fires only `hashchange`. Handling both costs nothing —
+   * the handler is idempotent, and the sync effect below writes nothing when
+   * the hash already matches.
    */
   useEffect(() => {
-    const onHashChange = () => {
+    const onNavigate = () => {
       const next = parseHash();
       if (next.route === 'library') { setRoute('library'); return; }
       if (next.route === 'desk') {
@@ -393,21 +422,47 @@ export function App() {
       }
       if (next.route === 'reading' && next.paperId !== activePaperId) {
         void openPaperById(next.paperId);
+        return;
+      }
+      if (next.route === 'pdf-viewer' && next.paperId !== viewingPdf?.id) {
+        // Going back INTO the raw viewer has to restore the paper it was
+        // showing; without this the hash says #/raw/<id> while the view
+        // stays wherever it was.
+        void (async () => {
+          try {
+            const meta = await getPaper(next.paperId);
+            setViewingPdf(meta);
+            setRoute('pdf-viewer');
+          } catch {
+            setRoute('library');
+          }
+        })();
       }
     };
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
-  }, [activePaperId, openPaperById]);
+    window.addEventListener('hashchange', onNavigate);
+    window.addEventListener('popstate', onNavigate);
+    return () => {
+      window.removeEventListener('hashchange', onNavigate);
+      window.removeEventListener('popstate', onNavigate);
+    };
+  }, [activePaperId, openPaperById, viewingPdf?.id]);
 
   useEffect(() => {
+    // The very first run is the app settling onto its opening screen, not a
+    // navigation — replacing keeps a phantom entry from sitting behind it,
+    // which would otherwise cost the user one dead Back press before they
+    // actually left.
+    const mode = historyPrimed.current ? 'push' : 'replace';
+    historyPrimed.current = true;
+
     if (route === 'reading' && activePaperId) {
-      writeHash({ route: 'reading', paperId: activePaperId });
+      writeHash({ route: 'reading', paperId: activePaperId }, mode);
     } else if (route === 'pdf-viewer' && viewingPdf) {
-      writeHash({ route: 'pdf-viewer', paperId: viewingPdf.id });
+      writeHash({ route: 'pdf-viewer', paperId: viewingPdf.id }, mode);
     } else if (route === 'desk') {
-      writeHash({ route: 'desk', scope: deskScope, page: deskPage });
+      writeHash({ route: 'desk', scope: deskScope, page: deskPage }, mode);
     } else if (route === 'library') {
-      writeHash({ route: 'library' });
+      writeHash({ route: 'library' }, mode);
     }
     // 'processing' intentionally leaves the existing hash alone so a refresh
     // mid-upload returns to the library, not a half-baked processing state.

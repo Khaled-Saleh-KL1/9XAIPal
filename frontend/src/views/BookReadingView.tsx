@@ -13,6 +13,7 @@ import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
+import { useConfirm } from '../components/ConfirmDialog';
 import { ChatPane } from './ChatPane';
 import {
   getNextChunk,
@@ -105,6 +106,7 @@ interface Props {
 }
 
 export function BookReadingView({ paper, paperId, onBack }: Props) {
+  const confirm = useConfirm();
   const [chunks, setChunks] = useState<ChunkData[]>([]);
   // Cursor for gap-tolerant paging: the highest sequence_order loaded so far.
   // We always ask the backend for "the next chunk after this", starting at 0.
@@ -664,11 +666,14 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
             <ExtractorPill
               extractor={meta.extractor}
               onReextract={async () => {
-                if (!confirm(
-                  'Re-extract this paper with MinerU?\n\n' +
-                  'This will wipe the cached chunks/embeddings and re-run MinerU ' +
-                  'from the original PDF. For a large book this can take a while.'
-                )) return;
+                if (!(await confirm({
+                  title: 'Re-extract this paper with MinerU?',
+                  body: 'This will wipe the cached chunks/embeddings and re-run '
+                      + 'MinerU from the original PDF. For a large book this can '
+                      + 'take a while.',
+                  confirmLabel: 'Re-extract',
+                  tone: 'danger',
+                }))) return;
                 try {
                   await reextractPaper(paperId);
                   alert('Re-extraction queued. Watch the status pill in the header.');
@@ -680,12 +685,14 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
                 }
               }}
               onRechunk={async () => {
-                if (!confirm(
-                  'Re-chunk this paper from the cached extraction?\n\n' +
-                  'Fast (seconds): re-runs only the chunker (gap-free sequencing, ' +
-                  'code/JSON blocks, inline math) on the already-extracted output. ' +
-                  'Embeddings regenerate in the background afterward.'
-                )) return;
+                if (!(await confirm({
+                  title: 'Re-chunk this paper from the cached extraction?',
+                  body: 'Fast (seconds): re-runs only the chunker (gap-free '
+                      + 'sequencing, code/JSON blocks, inline math) on the '
+                      + 'already-extracted output. Embeddings regenerate in the '
+                      + 'background afterward.',
+                  confirmLabel: 'Re-chunk',
+                }))) return;
                 try {
                   const r = await rechunkPaper(paperId);
                   alert(`Re-chunked: ${r.chunks_total} chunks. Reopen the paper to see the new reading flow.`);
