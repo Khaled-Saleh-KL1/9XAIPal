@@ -24,6 +24,7 @@ async def search_chunks(
     query: str,
     limit: int = 10,
     document_id: Optional[UUID] = None,
+    max_sequence_id: Optional[int] = None,
 ) -> list[dict]:
     """Hybrid retrieval: pgvector cosine search + Postgres full-text search,
     fused with reciprocal-rank fusion.
@@ -36,11 +37,13 @@ async def search_chunks(
     # Over-fetch each leg so fusion has real candidates to reorder.
     fetch_n = max(limit * 3, 15)
     vec_hits = await emb_repo.search_embeddings(
-        session, query_embedding, limit=fetch_n, document_id=document_id
+        session, query_embedding, limit=fetch_n, document_id=document_id,
+        max_sequence_id=max_sequence_id,
     )
     try:
         fts_hits = await search_chunks_fulltext(
-            session, query, limit=fetch_n, document_id=document_id
+            session, query, limit=fetch_n, document_id=document_id,
+            max_sequence_id=max_sequence_id,
         )
     except Exception:
         logger.exception("full-text search failed (non-fatal); using vector-only results")

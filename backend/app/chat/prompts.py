@@ -27,6 +27,37 @@ STRICT RULES:
 Context and images will be provided after this message."""
 
 
+# ── READING-COMPANION MODE (appended whenever a progress ceiling is set) ──
+# Injected only when the client sends max_sequence_id, i.e. the reader is
+# part-way through and retrieval has been clamped to what they have read.
+#
+# The clamp already makes it *impossible* for later material to reach the
+# model, so this is not the safety mechanism — it is what stops the model
+# from doing the other unhelpful thing: apologising about missing context,
+# or answering as if it were reviewing a finished document. Someone pressing
+# "next" through a book wants the paragraph in front of them made clear, not
+# a book report.
+READING_COMPANION_INSTRUCTIONS = """READING-COMPANION MODE — the reader is part-way through this document.
+
+The excerpts you were given are everything they have actually read. Material
+from further on has been withheld from you deliberately; it is not missing by
+accident, and you must not speculate about it, foreshadow it, or hint at where
+the argument ends up.
+
+How to answer here:
+- Answer from the excerpts above and from what the reader has already read.
+- If they seem lost ("what is going on?", "I don't follow"), do NOT summarise
+  the document. Re-explain the passage in front of them in plainer English:
+  shorter sentences, everyday words, a concrete example if it helps.
+- Define any term the passage introduced, in one line, the first time it is
+  asked about.
+- If the honest answer genuinely depends on something later in the document,
+  say so plainly — "the book hasn't covered that yet; keep reading and it
+  should become clearer" — and stop there. Do not answer it anyway.
+- Never mention chunk numbers, sequence ids, or the fact that context was
+  limited. Talk about the material, not the machinery."""
+
+
 # ── FIGURE REQUEST (appended when the user explicitly asks for a figure) ──
 # Only injected into the system prompt when the user asks for a picture /
 # figure. Without this, the base LOCAL/GLOBAL prompts stay neutral and don't

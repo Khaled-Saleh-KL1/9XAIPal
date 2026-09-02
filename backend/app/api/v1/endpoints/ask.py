@@ -36,6 +36,13 @@ class AskPayload(BaseModel):
     visible_sequence_orders: Optional[list[int]] = None   # e.g. [42, 43, 44, 45]
     focused_element: Optional[str] = None                 # "figure:7", "table:3", "architecture-diagram", etc.
 
+    # How far the reader has actually read, as a sequence_id. Retrieval is
+    # clamped to it, so nothing past this point can reach the model and the
+    # answer cannot spoil a book the reader is part-way through. Omitted (or
+    # null) means "no ceiling" — the existing whole-document behaviour, which
+    # is what a finished paper or an article wants.
+    max_sequence_id: Optional[int] = None
+
     # Optional image attachments uploaded with this question (e.g. user drops a
     # screenshot of a figure into the chat). Base64-encoded raw bytes, no
     # `data:image/...;base64,` prefix. Passed through to the multimodal Ollama
@@ -104,6 +111,7 @@ async def ask_paper(
         current_chunk_id=current_chunk_id,
         conversation_id=payload.conversation_id,
         visible_sequence_orders=payload.visible_sequence_orders,
+        max_sequence_id=payload.max_sequence_id,
         focused_element=payload.focused_element,
         user_images_b64=payload.images_b64,
         parent_turn_id=payload.parent_turn_id,
@@ -151,6 +159,7 @@ async def ask_paper_stream(
                     current_chunk_id=current_chunk_id,
                     conversation_id=payload.conversation_id,
                     visible_sequence_orders=payload.visible_sequence_orders,
+        max_sequence_id=payload.max_sequence_id,
                     focused_element=payload.focused_element,
                     user_images_b64=payload.images_b64,
                     parent_turn_id=payload.parent_turn_id,

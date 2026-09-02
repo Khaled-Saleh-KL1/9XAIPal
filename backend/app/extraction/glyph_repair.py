@@ -245,28 +245,94 @@ _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 # Below this length the evidence is too thin to act on: "of" -> "off" and
 # "if" -> "iff" are real words whose doubled form also exists, and a page
 # whose text layer happens to be missing would otherwise rewrite them.
-_MIN_F_WORD_LEN = 4
+# Both of those are two letters, so three is the real floor — and it has to
+# be three, because "fow" -> "flow" and "fat" -> "flat" are exactly the
+# shape the fl ligature produces. The guard that actually carries the
+# safety here is not the length but the `word in genuine` test above: a
+# word the PDF itself attests is never touched, so a genuine "fat" in the
+# text is left alone precisely because the PDF contains it.
+_MIN_F_WORD_LEN = 3
+
+
+# Expand exactly the Latin ligatures, and nothing else.
+#
+# This used to be a blanket NFKD, which was actively harmful: NFKD also
+# decomposes every accented letter into base + combining mark, and a
+# combining mark is not a word character, so the evidence base shattered
+# every non-English word it saw. "Hélène" became {"He", "le", "ne"},
+# "Díaz" became {"Di", "az"}, "très" became {"tre", "s"}. Two consequences,
+# both real:
+#
+#   - No accented word was ever attested, so every French/German/Spanish
+#     word in the book was treated as a repair candidate rather than as
+#     something the PDF had already confirmed.
+#   - The fragments themselves ("le", "ne", "re", "se", "az") entered the
+#     evidence base as if they were words, which is exactly what
+#     repair_merged_words consults when deciding a run-together word may be
+#     split in two.
+#
+# NFC keeps each accented word whole and in one canonical form, so a word
+# in the chunk text and the same word in the PDF compare equal.
+_LIGATURES = {
+    "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl", "\ufb03": "ffi",
+    "\ufb04": "ffl", "\ufb05": "st", "\ufb06": "st",
+}
+_LIGATURE_RE = re.compile("[" + "".join(_LIGATURES) + "]")
+
+
+def expand_ligatures(text: str) -> str:
+    """``diﬀerence`` -> ``difference``, leaving accented letters composed."""
+    if not text:
+        return text
+    text = _LIGATURE_RE.sub(lambda m: _LIGATURES[m.group(0)], text)
+    return unicodedata.normalize("NFC", text)
 
 
 def genuine_words(raw_pages: list[str]) -> set[str]:
     """Every word the PDF's own text layer contains, with ligatures expanded
-    (NFKD turns ``diﬀerence`` into ``difference``) so the book case and the
-    paper case produce the same evidence."""
-    text = unicodedata.normalize("NFKD", "\n".join(raw_pages))
-    return set(_WORD_RE.findall(text))
+    so the book case and the paper case produce the same evidence."""
+    return set(_WORD_RE.findall(expand_ligatures("\n".join(raw_pages))))
+
+
+# What a lost ligature actually costs the word.
+#
+# A PDF draws "ff", "fi", "fl", "ffi" and "ffl" as ONE glyph. When that
+# glyph has no usable ToUnicode mapping the extractor commonly emits just
+# "f" — so the characters that follow the f are the ones that vanish:
+#
+#     ff  -> f   "effort"     -> "efort"      (lost an f)
+#     fi  -> f   "specific"   -> "specifc"    (lost an i)
+#     fl  -> f   "conflict"   -> "confict"    (lost an l)
+#     ffi -> f   "difficult"  -> "dificult"   (lost an f and an i)
+#     ffl -> f   "shuffle"    -> "shufe"      (lost an f and an l)
+#
+# The original version of this only ever tried doubling the f, so it fixed
+# the first row and silently left the other four — "specifc", "frst",
+# "fow", "beneft" and "confict" all survived a repair pass that reported
+# success. Each candidate is still confirmed against the PDF's own text
+# and only accepted when EXACTLY ONE reading is attested, so widening the
+# set of insertions widens what can be fixed without widening what can be
+# guessed.
+_LIGATURE_TAILS = ("f", "i", "l", "fi", "fl")
 
 
 def _restore_f(word: str, genuine: set) -> Optional[str]:
-    """The doubled-f spelling of `word` if the PDF proves exactly one."""
+    """The ligature-restored spelling of `word` if the PDF proves exactly one."""
     if len(word) < _MIN_F_WORD_LEN or "f" not in word.lower() or word in genuine:
         return None
-    found = {
-        word[:i + 1] + word[i:]
-        for i, ch in enumerate(word)
-        if ch in "fF"
-        and word[i + 1:i + 2].lower() != "f"
-        and word[i - 1:i].lower() != "f"
-    } & genuine
+    found = set()
+    for i, ch in enumerate(word):
+        if ch not in "fF":
+            continue
+        for tail in _LIGATURE_TAILS:
+            # Doubling an f next to an existing f would "restore" a third
+            # one; the other insertions have no such neighbour problem.
+            if tail[0] == "f" and (
+                word[i + 1:i + 2].lower() == "f" or word[i - 1:i].lower() == "f"
+            ):
+                continue
+            found.add(word[:i + 1] + tail + word[i + 1:])
+    found &= genuine
     return found.pop() if len(found) == 1 else None
 
 
@@ -396,7 +462,7 @@ def repair_chunks(chunks: list[dict], pdf_path: Path) -> int:
         return 0
 
     genuine = genuine_words(raw_pages)
-    pdftext = unicodedata.normalize("NFKD", "\n".join(raw_pages))
+    pdftext = expand_ligatures("\n".join(raw_pages))
     f_fixed = 0
     merge_fixed = 0
     if genuine:

@@ -16,6 +16,7 @@ async def build_local_context(
     document_id: UUID,
     current_chunk_id: UUID,
     window_size: Optional[int] = None,
+    max_sequence_id: Optional[int] = None,
 ) -> dict:
     """Build context from the current chunk and nearby chunks.
     
@@ -30,7 +31,8 @@ async def build_local_context(
 
     # Get window of chunks
     chunks = await chunk_repo.get_chunk_window(
-        session, document_id, current["sequence_id"], window_size
+        session, document_id, current["sequence_id"], window_size,
+        max_sequence_id=max_sequence_id,
     )
 
     # Get assets for these chunks

@@ -201,6 +201,12 @@ async def rename_bookmark(
     if not existing or existing["document_id"] != paper_id:
         raise HTTPException(status_code=404, detail="Bookmark not found")
     row = await personal_repo.set_bookmark_label(db, bookmark_id, payload.label)
+    # The UPDATE can still match nothing: the existence check above and this
+    # write are two statements, and a concurrent DELETE between them leaves
+    # `row` None. Serializing that raises TypeError and answers 500 to what
+    # is really a 404 — the bookmark genuinely is gone by the time we wrote.
+    if not row:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
     await db.commit()
     return _bookmark(row)
 
@@ -274,6 +280,9 @@ async def update_personal_note(
     row = await personal_repo.update_personal_note(
         db, note_id, body=payload.body, margin_side=payload.margin_side
     )
+    # Same two-statement race as rename_bookmark above.
+    if not row:
+        raise HTTPException(status_code=404, detail="Note not found")
     await db.commit()
     return _personal_note(row)
 

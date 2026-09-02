@@ -23,9 +23,13 @@ async def search_embeddings(
     query_embedding: list[float],
     limit: int = 10,
     document_id: UUID | None = None,
+    max_sequence_id: int | None = None,
 ) -> list[dict]:
     """Search similar chunks via pgvector."""
-    return await search_similar_chunks(session, query_embedding, limit, document_id)
+    return await search_similar_chunks(
+        session, query_embedding, limit, document_id,
+        max_sequence_id=max_sequence_id,
+    )
 
 
 async def get_chunks_without_embeddings(

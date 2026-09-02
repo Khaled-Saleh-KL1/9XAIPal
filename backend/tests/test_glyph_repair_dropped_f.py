@@ -127,3 +127,112 @@ def test_short_parts_are_refused_even_with_perfect_evidence():
     posture as _restore_f refusing "of" -> "off"."""
     pdftext = "some text where of the phrase appears normally"
     assert _find_merge_split("ofthe", pdftext) is None
+
+
+# ── All five ligature classes, not just ff ───────────────────────────────
+#
+# The original repair only ever tried DOUBLING an f, which fixes the ff
+# ligature and silently misses the other four. A PDF draws ff, fi, fl, ffi
+# and ffl as one glyph; when that glyph has no usable ToUnicode mapping the
+# extractor emits a bare "f", so whatever followed the f is what disappears:
+# "specific" -> "specifc" loses an i, "conflict" -> "confict" loses an l.
+# Those went through a repair pass that reported success and left them
+# broken, which is what the reader kept seeing.
+
+from app.extraction.glyph_repair import (  # noqa: E402
+    _restore_f,
+    expand_ligatures,
+    genuine_words,
+)
+
+
+def _evidence(*words: str) -> set:
+    return genuine_words([" ".join(words)])
+
+
+def test_repairs_a_dropped_i_from_the_fi_ligature():
+    g = _evidence("specific", "first", "confirm", "benefit")
+    assert _restore_f("specifc", g) == "specific"
+    assert _restore_f("frst", g) == "first"
+    assert _restore_f("confrm", g) == "confirm"
+    assert _restore_f("beneft", g) == "benefit"
+
+
+def test_repairs_a_dropped_l_from_the_fl_ligature():
+    g = _evidence("flow", "conflict", "reflect")
+    assert _restore_f("fow", g) == "flow"
+    assert _restore_f("confict", g) == "conflict"
+    assert _restore_f("refect", g) == "reflect"
+
+
+def test_repairs_the_three_character_ffi_ligature():
+    g = _evidence("difficult", "efficient")
+    assert _restore_f("dificult", g) == "difficult"
+    assert _restore_f("eficient", g) == "efficient"
+
+
+def test_still_repairs_the_original_ff_case():
+    g = _evidence("effort", "effectiveness", "difference")
+    assert _restore_f("efort", g) == "effort"
+    assert _restore_f("efectiveness", g) == "effectiveness"
+    assert _restore_f("diference", g) == "difference"
+
+
+def test_a_word_the_pdf_attests_is_never_rewritten():
+    """The guard that carries the safety. "fat" and "flat" are both real; the
+    PDF containing "fat" is what proves this one is not a damaged "flat"."""
+    g = _evidence("the", "cat", "is", "fat", "and", "the", "flow", "is", "fast")
+    assert _restore_f("fat", g) is None
+    assert _restore_f("fast", g) is None
+
+
+def test_ambiguous_evidence_is_left_alone():
+    """Two attested readings prove nothing, so neither is applied."""
+    g = _evidence("flat", "fiat")
+    assert _restore_f("fat", g) is None
+
+
+# ── Accented words survive the evidence pass ─────────────────────────────
+#
+# genuine_words used a blanket NFKD, which decomposes every accented letter
+# into base + combining mark. A combining mark is not a word character, so
+# the evidence base shattered every non-English word it saw: "Hélène"
+# became {"He", "le", "ne"}. Two real consequences — no accented word was
+# ever attested (so French/German/Spanish words were treated as damaged
+# rather than confirmed), and the fragments themselves entered the evidence
+# base as if they were words, which is what the merged-word repair consults
+# when deciding a run-together word may be split in two.
+
+def test_accented_words_are_attested_whole():
+    g = _evidence("Hélène", "Díaz", "Müller", "très", "voilà", "sévère", "Citroën")
+    for word in ["Hélène", "Díaz", "Müller", "très", "voilà", "sévère", "Citroën"]:
+        assert word in g, f"{word} was not attested as a whole word"
+
+
+def test_accents_do_not_leak_fragments_into_the_evidence_base():
+    g = _evidence("Hélène", "Díaz", "très")
+    for fragment in ["He", "le", "ne", "Di", "az", "tre"]:
+        assert fragment not in g, f"{fragment!r} leaked in as if it were a word"
+
+
+def test_ligature_characters_are_still_expanded():
+    """The one thing the blanket NFKD was actually there for."""
+    assert expand_ligatures("diﬀerence") == "difference"
+    assert expand_ligatures("speciﬁc") == "specific"
+    assert expand_ligatures("conﬂict") == "conflict"
+    assert expand_ligatures("diﬃcult") == "difficult"
+    assert expand_ligatures("shuﬄe") == "shuffle"
+    assert "diﬀerence" not in expand_ligatures("a diﬀerence here")
+
+
+def test_expand_ligatures_leaves_accented_text_composed():
+    assert expand_ligatures("Hélène") == "Hélène"
+    assert len(expand_ligatures("Hélène")) == len("Hélène")
+
+
+def test_a_ligature_word_in_the_pdf_attests_its_expanded_form():
+    """The book case and the paper case must produce the same evidence: a PDF
+    that renders "diﬀerence" as one glyph still proves "difference"."""
+    g = genuine_words(["the diﬀerence between speciﬁc and general"])
+    assert "difference" in g
+    assert "specific" in g

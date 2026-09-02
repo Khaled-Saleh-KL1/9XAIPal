@@ -22,6 +22,7 @@ from app.chat.citations import citations_from_chunks, citations_from_web_results
 from app.services.retrieval import search_figure_chunks
 from app.chat.prompts import (
     LOCAL_SYSTEM_PROMPT,
+    READING_COMPANION_INSTRUCTIONS,
     GLOBAL_SYSTEM_PROMPT,
     EXTERNAL_SYSTEM_PROMPT,
     COMBINED_SYSTEM_PROMPT,
@@ -88,6 +89,9 @@ async def _prepare_ask(
     current_chunk_id: Optional[UUID] = None,
     conversation_id: Optional[UUID] = None,
     visible_sequence_orders: Optional[list[int]] = None,
+    # How far the reader has actually got. Retrieval is clamped to it so an
+    # answer can never contain material from further on than they have read.
+    max_sequence_id: Optional[int] = None,
     focused_element: Optional[str] = None,
     user_images_b64: Optional[list[str]] = None,
     parent_turn_id: Optional[UUID] = None,
@@ -160,6 +164,7 @@ async def _prepare_ask(
                 ctx = await build_local_context(
                     session, document_id=document_id, current_chunk_id=current_chunk_id,
                     # window_size now comes from settings.local_context_window by default
+                    max_sequence_id=max_sequence_id,
                 )
                 # Rich visible context is available for future deeper LOCAL handling
                 if visible_sequence_orders or focused_element:
@@ -180,6 +185,7 @@ async def _prepare_ask(
             elif decision.context_type == "GLOBAL" and document_id:
                 ctx = await build_global_context(
                     session, query=prompt, document_id=document_id, limit=3,
+                    max_sequence_id=max_sequence_id,
                 )
                 paper_block = format_global_context(ctx["chunks"], assets=ctx.get("assets"))
                 citations.extend(citations_from_chunks(ctx["chunks"]))
@@ -196,7 +202,9 @@ async def _prepare_ask(
             elif decision.context_type == "OVERVIEW" and document_id:
                 # High-quality path: use pre-computed hierarchical summaries.
                 # No vector search. Ordered by document structure.
-                ctx = await build_overview_context(session, document_id=document_id)
+                ctx = await build_overview_context(
+                    session, document_id=document_id, max_sequence_id=max_sequence_id,
+                )
                 paper_block = format_overview_context(ctx)
                 # Citations come from the source_chunk_ids stored on each summary
                 citations.extend(citations_from_overview(ctx))
@@ -363,6 +371,12 @@ async def _prepare_ask(
         system_prompt = GLOBAL_SYSTEM_PROMPT
     else:
         system_prompt = RESEARCH_AWARE_COMBINED_PROMPT if use_research_aware else COMBINED_SYSTEM_PROMPT
+
+    # A progress ceiling means the reader is mid-document: retrieval has
+    # already been clamped, and the model needs to behave like a companion
+    # rather than a reviewer. See READING_COMPANION_INSTRUCTIONS.
+    if max_sequence_id is not None and not is_sub_thread:
+        system_prompt = system_prompt + "\n\n" + READING_COMPANION_INSTRUCTIONS
 
     # Only inject figure-embedding instructions when the user explicitly asked
     # for a figure. Without this gate, the model force-embeds an image into
@@ -586,6 +600,9 @@ async def handle_ask(
     conversation_id: Optional[UUID] = None,
     # New rich visible context (for "let the model see what I'm looking at")
     visible_sequence_orders: Optional[list[int]] = None,
+    # How far the reader has actually got. Retrieval is clamped to it so an
+    # answer can never contain material from further on than they have read.
+    max_sequence_id: Optional[int] = None,
     focused_element: Optional[str] = None,
     # Raw image bytes the user attached to THIS message (base64-encoded, no
     # data: prefix). These go straight to the multimodal model alongside any
@@ -614,6 +631,7 @@ async def handle_ask(
         current_chunk_id=current_chunk_id,
         conversation_id=conversation_id,
         visible_sequence_orders=visible_sequence_orders,
+        max_sequence_id=max_sequence_id,
         focused_element=focused_element,
         user_images_b64=user_images_b64,
         parent_turn_id=parent_turn_id,
@@ -833,6 +851,9 @@ async def handle_ask_stream(
     current_chunk_id: Optional[UUID] = None,
     conversation_id: Optional[UUID] = None,
     visible_sequence_orders: Optional[list[int]] = None,
+    # How far the reader has actually got. Retrieval is clamped to it so an
+    # answer can never contain material from further on than they have read.
+    max_sequence_id: Optional[int] = None,
     focused_element: Optional[str] = None,
     user_images_b64: Optional[list[str]] = None,
     parent_turn_id: Optional[UUID] = None,
@@ -884,6 +905,7 @@ async def handle_ask_stream(
             current_chunk_id=current_chunk_id,
             conversation_id=conversation_id,
             visible_sequence_orders=visible_sequence_orders,
+        max_sequence_id=max_sequence_id,
             focused_element=focused_element,
             user_images_b64=user_images_b64,
             parent_turn_id=parent_turn_id,

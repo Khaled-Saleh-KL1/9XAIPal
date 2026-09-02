@@ -52,9 +52,15 @@ async def search_similar_chunks(
     limit: int = 10,
     document_id: Optional[UUID] = None,
     document_ids: Optional[list[UUID]] = None,
+    max_sequence_id: Optional[int] = None,
 ) -> list[dict]:
     """Find the most similar chunks by cosine distance, scoped to one document
     (``document_id``) or several (``document_ids``, which wins).
+
+    ``max_sequence_id`` is the reader's progress ceiling: chunks after it are
+    excluded entirely. A reader part-way through a book must not have the
+    ending retrieved and explained back to them, which is exactly what an
+    unbounded search over an already-ingested document does.
 
     ⚠ Neither given returns ``[]`` rather than scanning every document —
     there is currently no legitimate caller of a fully unscoped vector search
@@ -79,6 +85,10 @@ async def search_similar_chunks(
         filters = "AND c.document_id = :document_id"
         params["document_id"] = document_id
 
+    if max_sequence_id is not None:
+        filters += " AND c.sequence_id <= :max_sequence_id"
+        params["max_sequence_id"] = max_sequence_id
+
     result = await session.execute(
         text(f"""
             SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
@@ -102,8 +112,14 @@ async def search_chunks_fulltext(
     limit: int = 10,
     document_id: Optional[UUID] = None,
     document_ids: Optional[list[UUID]] = None,
+    max_sequence_id: Optional[int] = None,
 ) -> list[dict]:
     """Keyword search over chunks via Postgres full-text search.
+
+    ``max_sequence_id`` is the reader's progress ceiling: chunks after it are
+    excluded entirely. A reader part-way through a book must not have the
+    ending retrieved and explained back to them, which is exactly what an
+    unbounded search over an already-ingested document does.
 
     Scope is one document (``document_id``) or several (``document_ids``,
     which wins). Neither given returns ``[]`` — every real caller already has
@@ -132,6 +148,10 @@ async def search_chunks_fulltext(
     elif document_id:
         filters = "AND c.document_id = :document_id"
         params["document_id"] = document_id
+
+    if max_sequence_id is not None:
+        filters += " AND c.sequence_id <= :max_sequence_id"
+        params["max_sequence_id"] = max_sequence_id
 
     result = await session.execute(
         text(f"""
