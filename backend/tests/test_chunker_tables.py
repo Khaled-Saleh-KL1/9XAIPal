@@ -92,3 +92,67 @@ def test_table_with_no_header_row_still_parses():
     result = _parse_table_body_to_json(html)
     assert result["num_cols"] == 2
     assert result["rows"] == [["1", "2"], ["3", "4"]]
+
+
+# ── Structurally broken tables: fall back rather than show wrong numbers ───
+#
+# A colspan/rowspan error does not always raise: the HTML can parse cleanly
+# while the reconciled data is scrambled — a benchmark name absorbing several
+# rows' worth of labels, a value landing in the wrong column. There is no
+# exception to catch for that, so it has to be detected structurally: a
+# well-formed HTML table has the same total column count in every row once
+# spans are reconciled (a property of the format itself), and _SimpleTableParser
+# already reconciles them — see _table_rows_are_consistent.
+#
+# Reproduced against a real paper (DeepSeek-V4, Table 6): a 7-column header
+# collapsed onto benchmark-name cells that had absorbed several rows' worth
+# of labels, leaving reconciled body rows a mix of width 7 and 8.
+
+from app.extraction.chunker import _table_rows_are_consistent  # noqa: E402
+
+# Trimmed from the real DeepSeek-V4 Table 6 body: the header row correctly
+# reconciles to 7 columns, but partway down a row-group's rowspan swallowed a
+# label that should have started its own cell, so later rows in the group
+# come back one cell short.
+DEEPSEEK_V4_TABLE_6_SNIPPET = '<table><tr><td rowspan="2">Benchmark (Metric)</td><td colspan="3">Opus-4.6 GPT-5.4 Gemini-3.1-Pro</td><td rowspan="2">K2.6 Thinking</td><td colspan="2">GLM-5.1 DS-V4-Pro</td></tr><tr><td>Max</td><td>xHigh</td><td>High</td><td>Thinking</td><td>Max</td></tr><tr><td rowspan="5">MMLU-Pro (EM) Resong SimpleQA-Verified (Pass@1) Chinese-SimpleQA (Pass@1) GPQA Diamond (Pass@1) HLE (Pass@1) &amp; LiveCodeBench (Pass@1)</td><td rowspan="5">89.1 46.2 88.8</td><td>87.5</td><td>91.0 75.6</td><td>87.1 36.9 75.9</td><td>86.0 38.1</td><td>87.5 57.9</td></tr><tr><td>45.3 76.8</td><td>85.9 94.3 44.4</td><td></td><td></td><td></td></tr><tr><td>76.4 91.3 93.0</td><td></td><td></td><td>75.0 86.2</td><td>84.4</td></tr><tr><td>40.0 39.8</td><td></td><td>90.5 36.4</td><td>34.7</td><td>90.1 37.7</td></tr><tr><td></td><td>91.7</td><td>89.6</td><td>-</td><td>93.5</td></tr><tr><td rowspan="5">nodge Codeforces (Rating) HMMT 2026 Feb (Pass@1) IMOAnswerBench (Pass@1)</td><td>96.2</td><td>3168 97.7</td><td>3052 94.7</td><td>92.7</td><td></td><td>3206</td></tr><tr><td>75.3</td><td></td><td>81.0</td><td></td><td>89.4</td><td>95.2</td></tr><tr><td></td><td>91.4</td><td>60.9</td><td>86.0</td><td>83.8</td><td>89.8</td></tr><tr><td>34.5</td><td>54.1</td><td>89.1</td><td>24.0</td><td>11.5</td><td>38.3</td></tr><tr><td>85.9</td><td>78.1 –</td><td>76.3</td><td>75.5</td><td>72.4</td><td>90.2</td></tr><tr><td colspan="2">Long MRCR 1M (MMR) CorpusQA 1M (ACC) Terminal Bench 2.0 (Acc)</td><td>92.9 71.7</td><td>–</td><td>53.8</td><td>- -</td><td>- –</td><td>83.5 62.0</td></tr></table>'
+
+
+def test_a_broken_table_is_rejected_even_though_it_parses():
+    result = _parse_table_body_to_json(DEEPSEEK_V4_TABLE_6_SNIPPET)
+    assert result is None, (
+        "a table with mismatched reconciled row widths must not come back as "
+        "structured data — the numbers are in the wrong cells"
+    )
+
+
+def test_table_rows_are_consistent_true_for_uniform_widths():
+    assert _table_rows_are_consistent([["a", "b"], ["c", "d"]], [["H1", "H2"]])
+
+
+def test_table_rows_are_consistent_false_for_mismatched_widths():
+    assert not _table_rows_are_consistent([["a", "b"], ["c", "d", "e"]], [])
+
+
+def test_table_rows_are_consistent_ignores_genuinely_empty_rows():
+    """An empty row contributes no width signal either way, so it should not
+    itself trigger a false mismatch against real rows."""
+    assert _table_rows_are_consistent([["a", "b"], [], ["c", "d"]], [])
+
+
+def test_a_legitimately_sparse_table_is_not_penalized():
+    """A row-group label column plus several genuinely-empty data cells:
+    the real, common shape of an ablation table where a variant only
+    overrides one hyperparameter. Every row still reconciles to the same
+    3-column width — sparse CONTENT must not be confused with a structural
+    error, which is specifically about width DISAGREEMENT between rows."""
+    html = """
+    <table>
+      <tr><th>Row</th><th>N</th><th>params</th></tr>
+      <tr><td>base</td><td>6</td><td>65</td></tr>
+      <tr><td>big</td><td></td><td>213</td></tr>
+      <tr><td>(E)</td><td></td><td></td></tr>
+    </table>
+    """
+    result = _parse_table_body_to_json(html)
+    assert result is not None
+    assert result["num_cols"] == 3

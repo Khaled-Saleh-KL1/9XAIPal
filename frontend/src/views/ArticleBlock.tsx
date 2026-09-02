@@ -253,9 +253,29 @@ function ArticleBlockImpl({
           ))}
         </tbody>
       </table>
+    ) : block.image_url ? (
+      // No table_json for one of two reasons: MinerU genuinely couldn't find
+      // structure, or the backend deliberately withheld it because the
+      // reconciled rows disagreed in width — a scrambled-but-valid table
+      // that would otherwise show plausible, wrong numbers (see
+      // chunker.py's _table_rows_are_consistent). Either way, MinerU crops
+      // every table into an image regardless of whether the structural
+      // parse succeeds, and that crop is strictly more trustworthy than a
+      // guess at structure — same fallback-to-the-page-crop pattern
+      // MathBlock already uses for an equation KaTeX can't parse.
+      //
+      // Unlike MathBlock, there is nothing to detect client-side here: a
+      // scrambled table still parses as valid HTML (no exception, no
+      // .katex-error-style signal to catch), so the decision is made
+      // server-side and reaches this component as "no table_json."
+      <img
+        className="article-table-fallback-img"
+        src={block.image_url}
+        alt={block.plain_text || 'Table, shown as an image'}
+      />
     ) : (
-      // MinerU recovered no structure, so this is its raw <table> HTML or a
-      // markdown grid. Same scroller either way: the CSS targets the <table>.
+      // MinerU recovered no structure AND no crop is available. Same
+      // scroller either way: the CSS targets the <table>.
       <Md>{block.content_markdown}</Md>
     );
 

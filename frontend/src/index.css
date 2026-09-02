@@ -1321,6 +1321,17 @@ body {
 /* The ask affordance, matching the figure and equation ones: quiet until the
    pointer is on the thing it acts on. Sits outside the scroll box so panning
    the table never moves it out of reach. */
+.article-table-fallback-img {
+  /* Deliberately NOT max-width:100% / object-fit — a dense benchmark table
+     shrunk to fit a 720px column stops being legible before it stops being
+     scrollable. .article-table-scroll (the parent) already scrolls both
+     axes, so this renders at its natural crop size and the reader pans it,
+     same as a wide real <table> does today. */
+  display: block;
+  background: #fff;
+  border-radius: 4px;
+}
+
 .article-table-ask {
   position: absolute;
   right: 0;
