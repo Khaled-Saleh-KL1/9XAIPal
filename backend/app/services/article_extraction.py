@@ -54,6 +54,7 @@ from typing import Optional
 
 import httpx
 import trafilatura
+from lxml import html as lxml_html
 
 from app.core import circuit_breaker
 from app.core.logging import get_logger
@@ -412,6 +413,154 @@ def extract_article(url: str) -> ArticleExtraction:
     return extract_article_from_html(resource.text, resource.final_url)
 
 
+# Videos are the one piece of real article content trafilatura reliably
+# throws away. It is a text extractor working on a readability-style
+# heuristic, and a modern video block is a deeply nested custom-element
+# widget with almost no text of its own — indistinguishable, to that
+# heuristic, from the nav/share/carousel chrome it is supposed to discard.
+# Verified on a real page (blog.google's agentic-video post): three real
+# <video> elements, every one dropped, and swapping them for <img> first
+# doesn't help because the whole surrounding section goes with them.
+#
+# So videos are recovered in a second pass over the original HTML and
+# spliced back into the markdown. Position comes from the nearest heading
+# ABOVE each video that also survived into the extracted text: it is the
+# one anchor that exists on both sides, and it puts the video back in the
+# section it was actually written for. Videos whose section didn't survive
+# at all are appended at the end rather than dropped — a video the reader
+# can watch in roughly the right place beats one they never learn exists.
+_VIDEO_EXT_RE = re.compile(r"\.(mp4|webm|ogg|ogv|mov|m4v)(\?|#|$)", re.I)
+# A poster is only used when the URL actually looks like an image file.
+# Found on the real page: every <video> carried
+# `poster="<the article's own URL>"` — an originally-empty attribute that
+# the upstream scraper helpfully resolved against the page. Emitting that
+# would point the browser at an HTML document as if it were an image: one
+# guaranteed-failed request per video on every open, for a frame it can
+# never show. A missing poster costs nothing (the browser shows the first
+# frame or blank until play), so the conservative test is the right one.
+_IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif|bmp)(\?|#|$)", re.I)
+# Matches a markdown ATX heading, capturing its text, so a video's anchor
+# heading can be found in trafilatura's output.
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.M)
+
+
+def _video_source(video) -> Optional[str]:
+    """The best playable URL for one <video>: its own src, else the first
+    <source> that looks like a video file, else the first <source> at all."""
+    direct = (video.get("src") or "").strip()
+    if direct:
+        return direct
+    sources = [s.get("src", "").strip() for s in video.xpath(".//source[@src]")]
+    sources = [s for s in sources if s]
+    if not sources:
+        return None
+    for s in sources:
+        if _VIDEO_EXT_RE.search(s):
+            return s
+    return sources[0]
+
+
+def _extract_videos(html: str) -> list[dict]:
+    """Every <video> in `html`, in document order, with the heading it sits
+    under and whatever description the page gave it.
+
+    `aria-label` is the description of choice: a page that ships video
+    accessibly already wrote a real sentence about what is on screen (the
+    real page's read "video of side by side comparison of how Gemini 3.7
+    flash performs with and without agentic video understanding"), which is
+    exactly the caption a reader wants and is far better than any filename.
+    """
+    try:
+        tree = lxml_html.fromstring(html)
+    except Exception:
+        return []
+
+    nodes = list(tree.iter())
+    index = {id(n): i for i, n in enumerate(nodes)}
+    headings = [
+        (i, " ".join(n.itertext()).strip())
+        for i, n in enumerate(nodes)
+        if n.tag in ("h1", "h2", "h3", "h4", "h5", "h6")
+    ]
+
+    out: list[dict] = []
+    for video in tree.xpath("//video"):
+        src = _video_source(video)
+        if not src or not src.startswith(("http://", "https://")):
+            continue
+        pos = index.get(id(video), 0)
+        heading = ""
+        for i, text in headings:
+            if i < pos and text:
+                heading = text
+        caption = (video.get("aria-label") or video.get("title") or "").strip()
+        poster = (video.get("poster") or "").strip()
+        usable_poster = (
+            poster.startswith(("http://", "https://")) and bool(_IMAGE_EXT_RE.search(poster))
+        )
+        out.append({
+            "src": src,
+            "poster": poster if usable_poster else "",
+            "caption": caption,
+            "heading": heading,
+        })
+    return out
+
+
+def _video_markup(video: dict) -> str:
+    """One <video> block for the markdown, rendered by the frontend's
+    existing rehype-raw pipeline (the same path MinerU's tables already
+    take — see frontend/src/lib/markdown.ts).
+
+    `controls` and nothing else: no autoplay, and `preload="metadata"` so
+    opening an article never pulls whole video files down for something
+    that may never be watched.
+    """
+    poster = f' poster="{video["poster"]}"' if video["poster"] else ""
+    tag = (
+        f'<video controls preload="metadata"{poster} '
+        f'src="{video["src"]}"></video>'
+    )
+    caption = video["caption"]
+    return f"{tag}\n\n*{caption}*" if caption else tag
+
+
+def splice_videos_into_markdown(markdown: str, html: str) -> str:
+    """Put the page's videos back into `markdown`, under the heading each
+    one appeared beneath. See the note above for why they have to be
+    recovered separately at all."""
+    videos = _extract_videos(html)
+    if not videos:
+        return markdown
+
+    # Where each surviving heading ends, so a video can be appended to the
+    # bottom of its own section rather than jammed against the heading.
+    heading_spans = [(m.group(1).strip(), m.start()) for m in _MD_HEADING_RE.finditer(markdown)]
+
+    def section_end(heading: str) -> Optional[int]:
+        for i, (text, start) in enumerate(heading_spans):
+            if text == heading:
+                return heading_spans[i + 1][1] if i + 1 < len(heading_spans) else len(markdown)
+        return None
+
+    # Insert from the bottom up so earlier offsets stay valid.
+    planned: list[tuple[int, str]] = []
+    trailing: list[str] = []
+    for video in videos:
+        at = section_end(video["heading"]) if video["heading"] else None
+        if at is None:
+            trailing.append(_video_markup(video))
+        else:
+            planned.append((at, _video_markup(video)))
+
+    for at, markup in sorted(planned, key=lambda p: p[0], reverse=True):
+        markdown = markdown[:at].rstrip() + "\n\n" + markup + "\n\n" + markdown[at:].lstrip()
+
+    if trailing:
+        markdown = markdown.rstrip() + "\n\n" + "\n\n".join(trailing)
+    return markdown
+
+
 def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     """Extract readable content from already-fetched HTML."""
     markdown = trafilatura.extract(
@@ -462,6 +611,11 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     all_refs = _image_urls_in(markdown)
     markdown = _drop_image_refs(markdown, {u for u in all_refs if u not in kept})
     markdown = _clean_markdown(markdown)
+
+    # After the image pass, so a video block is never mistaken for an image
+    # reference and size-checked (a video legitimately weighs megabytes) or
+    # dropped by _drop_image_refs.
+    markdown = splice_videos_into_markdown(markdown, html)
 
     # Same key shape create_chunks_from_markdown's own _image_refs() derives
     # per chunk (the last path segment) — this is what lets the chunker's
