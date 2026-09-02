@@ -366,3 +366,36 @@ def test_sanitize_html_leaves_an_ordinary_image_alone():
     page = '<html><body><img src="https://cdn.example.com/plain.jpg" alt="x"></body></html>'
     out = sanitize_html(page, "https://example.com/x")
     assert "plain.jpg" in out
+
+
+def test_sanitize_html_drops_the_bogus_300x150_default_size():
+    """Reproduced on the real page: an 18px form-error icon carrying
+    width="300" height="150" — the CSS default for a replaced element with
+    no intrinsic size — was rendering 300px wide mid-article."""
+    page = (
+        '<html><body><img src="https://blog.example.com/alert_error_form.svg" '
+        'width="300" height="150"></body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert 'width="300"' not in out
+    assert 'height="150"' not in out
+    assert "alert_error_form.svg" in out
+
+
+def test_sanitize_html_keeps_genuine_image_dimensions():
+    """Only the exact 300x150 default pair is boilerplate. Real declared
+    dimensions carry aspect-ratio information worth keeping."""
+    page = (
+        '<html><body><img src="https://cdn.example.com/a.jpg" '
+        'width="640" height="360"></body></html>'
+    )
+    out = sanitize_html(page, "https://example.com/x")
+    assert 'width="640"' in out
+    assert 'height="360"' in out
+
+
+def test_sanitize_html_keeps_a_partial_300_width():
+    """300 wide but not 150 tall is a real size, not the default pair."""
+    page = '<html><body><img src="https://cdn.example.com/a.jpg" width="300" height="400"></body></html>'
+    out = sanitize_html(page, "https://example.com/x")
+    assert 'width="300"' in out
