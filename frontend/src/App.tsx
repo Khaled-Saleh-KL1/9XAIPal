@@ -137,6 +137,12 @@ export function App() {
    * other path into pdf-viewer (library, raw files panel, a deep link)
    * leaves this null and opens on page 1 as before. */
   const [pdfInitialPage, setPdfInitialPage] = useState<number | null>(null);
+  /** The passage the raw view should open at, and the one the reader should
+   * open at, for documents with no pages to sync by (an article). Held here
+   * alongside jumpTo for the same reason it is: consumed once by whichever
+   * view opens next. */
+  const [rawAnchors, setRawAnchors] = useState<string[]>([]);
+  const [readingAnchor, setReadingAnchor] = useState<string | null>(null);
 
   // Which scope the desk opens on: a study id, or 'library'.
   const [deskScope, setDeskScope] = useState<string>('library');
@@ -389,6 +395,7 @@ export function App() {
           setRoute('reading');
         } else if (initial.route === 'pdf-viewer') {
           setPdfInitialPage(null);
+          setRawAnchors([]);
           setViewingPdf(meta);
           setRoute('pdf-viewer');
         }
@@ -438,6 +445,7 @@ export function App() {
           try {
             const meta = await getPaper(next.paperId);
             setPdfInitialPage(null);
+            setRawAnchors([]);
             setViewingPdf(meta);
             setRoute('pdf-viewer');
           } catch {
@@ -509,8 +517,11 @@ export function App() {
           onJumped={() => setJumpTo(null)}
           onOpenDesk={openDesk}
           onBack={() => setRoute('library')}
-          onOpenRaw={(meta, page) => {
+          jumpToAnchor={readingAnchor}
+          onJumpedAnchor={() => setReadingAnchor(null)}
+          onOpenRaw={(meta, page, anchors) => {
             setPdfInitialPage(page);
+            setRawAnchors(anchors);
             setViewingPdf(meta);
             setRoute('pdf-viewer');
           }}
@@ -534,11 +545,13 @@ export function App() {
           // nothing heavy to defer loading of.
           <RawArticleViewer
             paper={viewingPdf}
+            anchors={rawAnchors}
             onBack={() => { setViewingPdf(null); setRoute('library'); }}
-            onReadStructured={(p) => {
+            onReadStructured={(p, anchor) => {
               setActivePaper(metaToPaper(p));
               setActivePaperId(p.id);
               setJumpTo(null);
+              setReadingAnchor(anchor || null);
               setViewingPdf(null);
               setRoute('reading');
             }}
@@ -608,6 +621,7 @@ export function App() {
         onOpenPdf={(p) => {
           setRawFilesOpen(false);
           setPdfInitialPage(null);
+          setRawAnchors([]);
           setViewingPdf(p);
           setRoute('pdf-viewer');
         }}

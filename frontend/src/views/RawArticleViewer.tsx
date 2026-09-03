@@ -1,13 +1,19 @@
+import { useEffect, useRef } from 'react';
 import type { PaperMeta } from '../api';
 import { getRawFileUrl } from '../api';
 import { IconBack } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
 import { displayTitle } from '../lib/titles';
+import { readRawFrameAnchor, scrollRawFrameToAnchor } from '../lib/rawFrameSync';
 
 interface Props {
   paper: PaperMeta;
   onBack: () => void;
-  onReadStructured: (paper: PaperMeta) => void;
+  /** Hands back the passage the reader is looking at, so the structured
+   * reader can open at the same place. */
+  onReadStructured: (paper: PaperMeta, anchor: string) => void;
+  /** Passages from the structured reader to open at, nearest first. */
+  anchors?: string[] | null;
 }
 
 /**
@@ -20,9 +26,33 @@ interface Props {
  * preserved as ordinary clickable links in the extracted article content
  * itself (see article_extraction.py's include_links=True) rather than
  * anything this viewer needs to handle.
+ *
+ * An article has no pages, so position is kept in step with the structured
+ * reader by text instead — see lib/rawFrameSync.ts for why reaching into
+ * the iframe's document is sound here.
  */
-export function RawArticleViewer({ paper, onBack, onReadStructured }: Props) {
+export function RawArticleViewer({ paper, onBack, onReadStructured, anchors }: Props) {
   const rawUrl = getRawFileUrl(paper.id);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+
+  // On load rather than on mount: the document has to exist before there is
+  // anything to scroll. Images inside it can still be loading, which moves
+  // the target — so re-run once more shortly after, when heights have
+  // settled, rather than leaving the reader near-but-not-at the passage.
+  useEffect(() => {
+    if (!anchors || !anchors.length) return;
+    const frame = frameRef.current;
+    if (!frame) return;
+    const settle = setTimeout(() => scrollRawFrameToAnchor(frame, anchors), 600);
+    const onLoad = () => scrollRawFrameToAnchor(frame, anchors);
+    frame.addEventListener('load', onLoad);
+    // Already loaded (a cached snapshot can beat this effect to it).
+    if (frame.contentDocument?.readyState === 'complete') onLoad();
+    return () => {
+      clearTimeout(settle);
+      frame.removeEventListener('load', onLoad);
+    };
+  }, [anchors, rawUrl]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
@@ -66,7 +96,7 @@ export function RawArticleViewer({ paper, onBack, onReadStructured }: Props) {
             <span>↗</span> Open in new tab
           </a>
           <button
-            onClick={() => onReadStructured(paper)}
+            onClick={() => onReadStructured(paper, readRawFrameAnchor(frameRef.current))}
             className="text-[12.5px] px-3.5 py-1.5 rounded-md flex items-center gap-1.5"
             style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
           >
@@ -79,6 +109,7 @@ export function RawArticleViewer({ paper, onBack, onReadStructured }: Props) {
 
       <div className="flex-1 overflow-hidden" style={{ background: '#f0ede8' }}>
         <iframe
+          ref={frameRef}
           src={rawUrl}
           title={`Raw snapshot: ${displayTitle(paper)}`}
           className="w-full h-full border-0"
@@ -87,6 +118,10 @@ export function RawArticleViewer({ paper, onBack, onReadStructured }: Props) {
           // script-src 'none' regardless (see _raw_html_headers). This just
           // matches that same intent at the embed boundary too, in case the
           // sanitizer or the CSP header were ever the only line of defense.
+          //
+          // ⚠ allow-same-origin is load-bearing beyond that: dropping it
+          // would give the snapshot an opaque origin and silently break the
+          // position sync above, which reads the frame's own document.
           sandbox="allow-same-origin"
         />
       </div>

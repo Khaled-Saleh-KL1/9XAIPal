@@ -655,6 +655,29 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     startReading(ch);
   }, [startReading]);
 
+  /**
+   * The PDF page to open the raw view at.
+   *
+   * ⚠ Not simply the current chunk's page_start: that field is null unless
+   * the document was extracted through content_list.json (see
+   * extraction/pipeline_sync.py), and passing the null straight through is
+   * what opened the raw file at page 1 from the middle of a book. Walk back
+   * to the nearest chunk that does carry a page; failing that, place the
+   * reader proportionally using the GLOBAL sequence (chunks here hold only
+   * the loaded window of one chapter, so their index means nothing
+   * document-wide, but sequence_order does).
+   */
+  const currentRawPage = useCallback((): number | null => {
+    for (let i = currentChunkIndex; i >= 0; i--) {
+      const page = chunks[i]?.page_start;
+      if (page != null) return page;
+    }
+    const seq = chunks[currentChunkIndex]?.sequence_order;
+    const pageCount = meta?.page_count ?? 0;
+    if (!seq || !totalChunks || pageCount <= 0) return null;
+    return Math.min(pageCount, Math.max(1, 1 + Math.floor((seq / totalChunks) * pageCount)));
+  }, [chunks, currentChunkIndex, meta?.page_count, totalChunks]);
+
   const handleBackToChapters = useCallback(() => {
     setActiveChapter(null);
     setChunks([]);
@@ -783,7 +806,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
           </div>
           {onOpenRaw && (
             <button
-              onClick={() => onOpenRaw(chunks[currentChunkIndex]?.page_start ?? null)}
+              onClick={() => onOpenRaw(currentRawPage())}
               className="shrink-0 text-[11.5px] px-3 py-1.5 rounded-md"
               style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
               title="Open the source PDF at this position"
