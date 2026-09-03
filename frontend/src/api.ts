@@ -596,6 +596,18 @@ export async function getChapters(
   };
 }
 
+/**
+ * The sequence_order to land on for a given raw-PDF page — lets the raw
+ * viewer and the structured reader jump to the same position in either
+ * direction. null only for a document with no paginated chunks at all.
+ */
+export async function pageToSequence(paperId: string, page: number): Promise<number | null> {
+  const res = await fetch(`${BASE}/papers/${paperId}/page-to-sequence?page=${page}`);
+  if (!res.ok) throw new Error(`Page lookup failed: ${res.status}`);
+  const data = await res.json();
+  return data.sequence_order ?? null;
+}
+
 /** Fetch the total chunk count for a paper (and an optional first page). */
 export async function getChunkCount(paperId: string): Promise<number> {
   const res = await fetch(`${BASE}/papers/${paperId}/chunks?limit=1`);

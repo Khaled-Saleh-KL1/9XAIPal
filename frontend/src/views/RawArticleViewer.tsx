@@ -7,6 +7,7 @@ import { displayTitle } from '../lib/titles';
 interface Props {
   paper: PaperMeta;
   onBack: () => void;
+  onReadStructured: (paper: PaperMeta) => void;
 }
 
 /**
@@ -20,7 +21,7 @@ interface Props {
  * itself (see article_extraction.py's include_links=True) rather than
  * anything this viewer needs to handle.
  */
-export function RawArticleViewer({ paper, onBack }: Props) {
+export function RawArticleViewer({ paper, onBack, onReadStructured }: Props) {
   const rawUrl = getRawFileUrl(paper.id);
 
   return (
@@ -64,6 +65,13 @@ export function RawArticleViewer({ paper, onBack }: Props) {
           >
             <span>↗</span> Open in new tab
           </a>
+          <button
+            onClick={() => onReadStructured(paper)}
+            className="text-[12.5px] px-3.5 py-1.5 rounded-md flex items-center gap-1.5"
+            style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
+          >
+            <span className="text-[11px]">☐</span> Read structured
+          </button>
           <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
           <UserMenuInline />
         </div>
