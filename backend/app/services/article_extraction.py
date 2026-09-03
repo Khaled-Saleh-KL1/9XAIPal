@@ -633,6 +633,17 @@ _IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif|bmp)(\?|#|$)", re.I)
 # heading can be found in trafilatura's output.
 _MD_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.M)
 
+# blog.google's own media-carousel component doesn't emit a <video> element
+# at all — it ships a custom <uni-media or-mp4-video-url="https://...mp4"
+# alt-text="..."> tag that only becomes a real <video> once the page's own
+# JavaScript upgrades it, which this static extractor never runs. Verified
+# on a real page (blog.google's "Introducing Gemini 3.8 Flash and 3.8 Flash
+# Cyber" post): 5 real videos, every one carrying a live .mp4 URL in this
+# attribute and none of them a <video> tag — invisible to a //video search,
+# and since these carousel slides carry no <img> fallback either, the slide
+# is simply blank in the reading view, not just missing a video.
+_VIDEO_URL_ATTR = "or-mp4-video-url"
+
 
 def _video_source(video) -> Optional[str]:
     """The best playable URL for one <video>: its own src, else the first
@@ -673,18 +684,29 @@ def _extract_videos(html: str) -> list[dict]:
         if n.tag in ("h1", "h2", "h3", "h4", "h5", "h6")
     ]
 
+    candidates = tree.xpath("//video") + tree.xpath(f"//*[@{_VIDEO_URL_ATTR}]")
+    candidates.sort(key=lambda n: index.get(id(n), 0))
+
     out: list[dict] = []
-    for video in tree.xpath("//video"):
-        src = _video_source(video)
+    for node in candidates:
+        if node.tag == "video":
+            src = _video_source(node)
+            caption = (node.get("aria-label") or node.get("title") or "").strip()
+            poster = (node.get("poster") or "").strip()
+        else:
+            src = (node.get(_VIDEO_URL_ATTR) or "").strip()
+            # alt-text is the real sentence a-la aria-label ("an MP4 showing
+            # how Gemini 3.8 Flash built a game"); video-title is a short
+            # fallback name ("Chronomancers blog") when alt-text is empty.
+            caption = (node.get("alt-text") or node.get("video-title") or "").strip()
+            poster = ""
         if not src or not src.startswith(("http://", "https://")):
             continue
-        pos = index.get(id(video), 0)
+        pos = index.get(id(node), 0)
         heading = ""
         for i, text in headings:
             if i < pos and text:
                 heading = text
-        caption = (video.get("aria-label") or video.get("title") or "").strip()
-        poster = (video.get("poster") or "").strip()
         usable_poster = (
             poster.startswith(("http://", "https://")) and bool(_IMAGE_EXT_RE.search(poster))
         )

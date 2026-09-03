@@ -258,6 +258,41 @@ def test_extract_videos_ignores_a_video_with_no_usable_source():
     assert _extract_videos(page) == []
 
 
+def test_extract_videos_finds_a_uni_media_video_with_no_video_tag():
+    """Real case (blog.google's "Introducing Gemini 3.8 Flash and 3.8 Flash
+    Cyber" post): the site's own media-carousel component ships a video as
+    <uni-media or-mp4-video-url="..."> with no <video>/<source> anywhere —
+    the real element only appears once the page's own JS upgrades the
+    custom tag, which this static extractor never runs."""
+    from app.services.article_extraction import _extract_videos
+
+    page = (
+        "<html><body><article>"
+        "<h2>Built with Gemini</h2>"
+        '<p>Prose long enough to survive extraction as a real heading '
+        "anchor for the video below it, repeated for length here.</p>"
+        '<uni-media or-mp4-video-url="https://cdn.example.com/demo.mp4" '
+        'alt-text="a demo of the feature" video-title="Demo"></uni-media>'
+        "</article></body></html>"
+    )
+    videos = _extract_videos(page)
+    assert len(videos) == 1
+    v = videos[0]
+    assert v["src"] == "https://cdn.example.com/demo.mp4"
+    assert v["heading"] == "Built with Gemini"
+    assert v["caption"] == "a demo of the feature"
+    assert v["poster"] == ""
+
+
+def test_extract_videos_ignores_a_uni_media_slide_with_no_video():
+    """The same component is reused for plain image slides, always carrying
+    the attribute but empty — must not be mistaken for a video."""
+    from app.services.article_extraction import _extract_videos
+
+    page = '<html><body><uni-media or-mp4-video-url=""></uni-media></body></html>'
+    assert _extract_videos(page) == []
+
+
 def test_splice_videos_puts_each_video_under_its_own_heading():
     from app.services.article_extraction import splice_videos_into_markdown
 
