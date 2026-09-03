@@ -48,6 +48,7 @@ and notes.py's _to_storage_path, which only ever resolves this app's own
 the AI to look closely at one specific photo isn't supported for articles.
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -171,6 +172,195 @@ def _drop_image_refs(markdown: str, drop: set) -> str:
     def repl(m: re.Match) -> str:
         return "" if m.group(1) in drop else m.group(0)
     return _MD_IMAGE_RE.sub(repl, markdown)
+
+
+# --- Responsive / lazy-loaded images -------------------------------------
+#
+# ⚠ On a modern page, an <img>'s `src` is routinely NOT the real image.
+#
+# Responsive and lazy-loading markup puts a placeholder in `src` and the
+# actual asset somewhere else, and trafilatura reads `src` and nothing else.
+# Verified on a real page (blog.google's Gemini 3.8 Flash post): 14 article
+# images, and 8 of them shipped a *100-pixel-wide* thumbnail as `src`, with
+# the full-size file only in `data-loading`. That broke the reader twice
+# over, which is why this pass exists rather than a bump to MIN_IMAGE_BYTES:
+#
+#   1. Those 8 weighed ~700-1600 bytes, so _is_worth_keeping dropped every
+#      one of them as an icon or tracking pixel. The reader saw 6 of 14.
+#   2. The 6 that did survive would still have been the placeholder, not the
+#      figure — and these are benchmark charts, the exact thing the reader
+#      opens the lightbox to read numbers off.
+#
+# So the fix is upstream of both: rewrite each <img>'s `src` to the largest
+# variant the page itself declares, BEFORE trafilatura sees the HTML. Then
+# the size filter judges the real image (which passes on its own merits) and
+# the reader gets the resolution the page actually shipped.
+_SRCSET_ATTRS = ("srcset", "data-srcset", "data-lazy-srcset")
+# A dedicated lazy-src attribute is, by the convention's own definition, the
+# real image — `src` is the stand-in shown until script swaps it in.
+_LAZY_SRC_ATTRS = (
+    "data-src", "data-original", "data-lazy-src", "data-full-src",
+    "data-hi-res-src", "data-image-src", "data-large-src",
+)
+# Descending preference among the keys of a JSON-valued data attribute
+# (blog.google's `data-loading` is {"mobile": ..., "desktop": ...}). Only
+# consulted to break a tie when no width hint can be read off the URLs.
+_JSON_SIZE_KEYS = ("desktop", "original", "full", "xlarge", "large", "mobile", "small")
+# Width declared inside the URL itself, which is how most image CDNs encode
+# a variant: `.width-1200.`, `?w=1200`, `/w_1200/`, `-1200x800.`, `/1200/`.
+# Only ever used to ORDER variants of the same image against each other, so
+# a false positive costs at worst a differently-sized crop of the right
+# picture, never a wrong picture.
+_URL_WIDTH_HINTS = (
+    re.compile(r"width[-_=](\d{2,5})", re.I),
+    re.compile(r"[?&]w=(\d{2,5})"),
+    re.compile(r"/w_(\d{2,5})", re.I),
+    re.compile(r"[-_/](\d{2,5})x\d{2,5}[-_./]", re.I),
+)
+_SRCSET_ENTRY_RE = re.compile(r"\s*(\S+)(?:\s+([\d.]+)([wx]))?\s*$")
+# A candidate has to actually look like a URL before it can become a `src`.
+# The data-* JSON scan below is deliberately broad (it has to be — the
+# attribute names are per-site inventions), so without this an unrelated
+# config blob like `data-opts='{"desktop": "wide"}'` would happily install
+# the string "wide" as an image source. An extension is not required: plenty
+# of image CDNs serve from extensionless paths.
+_URL_SHAPED_RE = re.compile(r"^(?:https?://|//|/[^/])")
+_IMAGE_URL_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif|bmp|svg)(\?|#|$)", re.I)
+
+
+def _looks_like_image_url(url: str) -> bool:
+    return bool(_URL_SHAPED_RE.match(url) or _IMAGE_URL_EXT_RE.search(url))
+
+
+def _url_width_hint(url: str) -> float:
+    for pattern in _URL_WIDTH_HINTS:
+        m = pattern.search(url)
+        if m:
+            return float(m.group(1))
+    return 0.0
+
+
+def _srcset_candidates(value: str) -> list[tuple[float, str]]:
+    """Every `url [descriptor]` pair in a srcset, scored by declared width.
+
+    A `2x` density descriptor is scored as 2000 so that it orders correctly
+    against its own siblings; `w` and `x` descriptors are not mixed within a
+    single srcset in practice, so the two scales never need to agree.
+    """
+    out: list[tuple[float, str]] = []
+    for part in value.split(","):
+        m = _SRCSET_ENTRY_RE.match(part)
+        if not m or not m.group(1):
+            continue
+        url = m.group(1)
+        if m.group(2) and m.group(3) == "w":
+            score = float(m.group(2))
+        elif m.group(2) and m.group(3) == "x":
+            score = float(m.group(2)) * 1000.0
+        else:
+            score = _url_width_hint(url)
+        out.append((score, url))
+    return out
+
+
+def _json_attr_candidates(value: str) -> list[tuple[float, str]]:
+    """Image URLs out of a JSON-valued data attribute, scored by URL width
+    hint, falling back to the attribute's own key order when the URLs carry
+    no hint at all."""
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    out: list[tuple[float, str]] = []
+    for key, url in parsed.items():
+        if not isinstance(url, str) or not url.strip():
+            continue
+        name = key.lower()
+        rank = _JSON_SIZE_KEYS.index(name) if name in _JSON_SIZE_KEYS else len(_JSON_SIZE_KEYS)
+        # Key order only breaks ties: a real width hint always wins.
+        score = _url_width_hint(url) or (len(_JSON_SIZE_KEYS) - rank)
+        out.append((score, url.strip()))
+    return out
+
+
+def _best_image_src(img) -> Optional[str]:
+    """The largest variant of `img` the page declares, or None to keep `src`."""
+    current = (img.get("src") or "").strip()
+    candidates: list[tuple[float, str]] = []
+
+    for attr in _SRCSET_ATTRS:
+        if img.get(attr):
+            candidates += _srcset_candidates(img.get(attr))
+    # <picture><source srcset=...><img src=...></picture>: the <source>s are
+    # the real art direction and the <img> is the legacy fallback.
+    #
+    # Found by test: lxml's HTML parser does NOT treat <source> as a void
+    # element, so it swallows the following <img> as its own child instead
+    # of leaving the two as siblings. Walking up to the nearest <picture>
+    # ancestor (rather than checking getparent() for it) is correct under
+    # both that parse and the spec-shaped one.
+    for picture in img.xpath("ancestor::picture[1]"):
+        for source in picture.xpath(".//source[@srcset]"):
+            candidates += _srcset_candidates(source.get("srcset"))
+    for attr in _LAZY_SRC_ATTRS:
+        value = (img.get(attr) or "").strip()
+        if value:
+            # A lazy-src beats `src` even with no width hint to prove it.
+            candidates.append((_url_width_hint(value) or 1.0, value))
+    for attr, value in img.attrib.items():
+        if attr.startswith("data-") and "{" in (value or ""):
+            candidates += _json_attr_candidates(value)
+
+    candidates = [
+        (score, url) for score, url in candidates
+        if url and not url.startswith("data:") and _looks_like_image_url(url)
+    ]
+    if not candidates:
+        return None
+    best_score, best_url = max(candidates, key=lambda c: c[0])
+    if best_url == current:
+        return None
+    # Only upgrade. If `src` already declares a bigger variant than anything
+    # else on the tag, it stays — this pass must never shrink an image.
+    if best_score <= _url_width_hint(current):
+        return None
+    return best_url
+
+
+def upgrade_responsive_images(html: str) -> str:
+    """Point every <img>'s `src` at the largest variant the page declares.
+
+    Returns `html` byte-identical when there is nothing to upgrade (the
+    common case), so an ordinary page never even pays for a parse/serialize
+    round trip, and a page this can't parse is passed through untouched
+    rather than lost.
+    """
+    if "<img" not in html.lower():
+        return html
+    try:
+        tree = lxml_html.fromstring(html)
+    except Exception:
+        return html
+
+    upgraded = 0
+    for img in tree.xpath("//img"):
+        best = _best_image_src(img)
+        if not best:
+            continue
+        img.set("src", best)
+        # Drop the now-stale responsive attributes: `src` is already the
+        # largest variant, and leaving a srcset that disagrees invites a
+        # future extractor to quietly undo this.
+        for attr in (*_SRCSET_ATTRS, "sizes", "data-sizes"):
+            img.attrib.pop(attr, None)
+        upgraded += 1
+
+    if not upgraded:
+        return html
+    logger.info("upgraded %d responsive image(s) to their full-size variant", upgraded)
+    return lxml_html.tostring(tree, encoding="unicode")
 
 
 def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
@@ -563,6 +753,11 @@ def splice_videos_into_markdown(markdown: str, html: str) -> str:
 
 def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     """Extract readable content from already-fetched HTML."""
+    # Before anything reads the HTML: point every <img> at the real image
+    # rather than its responsive placeholder (see upgrade_responsive_images).
+    # Done here, once, so the metadata read and the video splice below both
+    # work on the same tree trafilatura saw.
+    html = upgrade_responsive_images(html)
     markdown = trafilatura.extract(
         html,
         url=url,
