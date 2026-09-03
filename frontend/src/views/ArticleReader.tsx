@@ -210,6 +210,10 @@ interface Props {
   /** Leave for the desk: the cross-paper surface this reader's panel became. */
   onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
+  /** The reader's own "Raw file" button: opens the source PDF/HTML snapshot
+   * at the page the current block came from (null for an article — a web
+   * import has no pages to preserve). */
+  onOpenRaw?: (page: number | null) => void;
 }
 
 export function ArticleReader({
@@ -219,6 +223,7 @@ export function ArticleReader({
   onJumped,
   onOpenDesk,
   onBack,
+  onOpenRaw,
 }: Props) {
   const confirm = useConfirm();
   const [doc, setDoc] = useState<FullDocument | null>(null);
@@ -1878,6 +1883,16 @@ export function ArticleReader({
                 }
               }}
             />
+          )}
+
+          {onOpenRaw && (
+            <button
+              className="reader-chip"
+              onClick={() => onOpenRaw(doc?.blocks.find((b) => b.sequence_order === currentSeq)?.page_start ?? null)}
+              title={doc?.doc_kind === 'article' ? 'Open the raw HTML snapshot' : 'Open the source PDF at this position'}
+            >
+              Raw file
+            </button>
           )}
 
           <button

@@ -22,14 +22,21 @@ export function ReadingView({
   onJumped,
   onOpenDesk,
   onBack,
+  onOpenRaw,
 }: {
   paper: Paper;
   paperId: string;
-  /** A block to scroll to on open, handed over by the desk. */
+  /** A block to scroll to on open, handed over by the desk (or by the raw
+   * viewer's "Read structured" button, already resolved to a sequence). */
   jumpToSequence?: number | null;
   onJumped?: () => void;
   onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
+  /** The reader's own "Raw file" button: opens the source PDF/HTML snapshot
+   * at the given page (null when there's no page to preserve, e.g. an
+   * article has no pages at all). Needs `meta` (not just `paperId`), so it
+   * only fires once metadata has loaded. */
+  onOpenRaw?: (meta: PaperMeta, page: number | null) => void;
 }) {
   const [meta, setMeta] = useState<PaperMeta | null>(null);
   const [failed, setFailed] = useState(false);
@@ -53,7 +60,16 @@ export function ReadingView({
   }
 
   if (meta?.doc_kind === 'book') {
-    return <BookReadingView paper={paper} paperId={paperId} onBack={onBack} />;
+    return (
+      <BookReadingView
+        paper={paper}
+        paperId={paperId}
+        onBack={onBack}
+        jumpToSequence={jumpToSequence}
+        onJumped={onJumped}
+        onOpenRaw={meta ? (page) => onOpenRaw?.(meta, page) : undefined}
+      />
+    );
   }
 
   // A failed metadata fetch falls through to the article reader, which shows
@@ -66,6 +82,7 @@ export function ReadingView({
       onJumped={onJumped}
       onOpenDesk={onOpenDesk}
       onBack={onBack}
+      onOpenRaw={meta ? (page) => onOpenRaw?.(meta, page) : undefined}
     />
   );
 }

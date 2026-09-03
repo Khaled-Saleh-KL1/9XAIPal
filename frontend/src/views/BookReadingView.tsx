@@ -103,9 +103,17 @@ interface Props {
   paper: Paper;
   paperId: string;
   onBack: () => void;
+  /** A chunk sequence to jump to on open — the desk, or the raw PDF
+   * viewer's "Read structured" button (already resolved to a sequence via
+   * pageToSequence). */
+  jumpToSequence?: number | null;
+  onJumped?: () => void;
+  /** The reader's own "Raw file" button: opens the source PDF at the page
+   * the current chunk came from (null if the current chunk carries none). */
+  onOpenRaw?: (page: number | null) => void;
 }
 
-export function BookReadingView({ paper, paperId, onBack }: Props) {
+export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null, onJumped, onOpenRaw }: Props) {
   const confirm = useConfirm();
   const [chunks, setChunks] = useState<ChunkData[]>([]);
   // Cursor for gap-tolerant paging: the highest sequence_order loaded so far.
@@ -515,10 +523,14 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
   }, [meta, totalChunks, isBook, startReading]);
 
   // Books: load the chapter list, and auto-resume the last chapter you were in.
+  // Skipped when a jumpToSequence is already pending below — that jump picks
+  // its own chapter and starting position, and firing both would race two
+  // startReading calls against each other.
   useEffect(() => {
     if (!isBook) return;
     if (totalChunks === 0) return;
     if (chapters.length > 0) return;
+    if (jumpToSequence != null) return;
     getChapters(paperId)
       .then(({ chapters: chs }) => {
         setChapters(chs);
@@ -529,7 +541,37 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
         }
       })
       .catch(() => {});
-  }, [isBook, totalChunks, paperId, chapters.length, loadProgress, startReading]);
+  }, [isBook, totalChunks, paperId, chapters.length, jumpToSequence, loadProgress, startReading]);
+
+  // A sequence to jump to (the desk, or the raw PDF viewer's "Read
+  // structured" button) needs the chapter list first, same as auto-resume
+  // above — load it directly rather than waiting on that effect, since that
+  // one deliberately skips itself while this jump is pending.
+  //
+  // handledJumpRef, not just the jumpToSequence!=null check: this effect's
+  // own getChapters()/setChapters() call changes `chapters`, which is one of
+  // its own deps, so without the ref it would re-fire and double-call
+  // startReading for the same jump before onJumped ever clears the prop.
+  const handledJumpRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (jumpToSequence == null) { handledJumpRef.current = null; return; }
+    if (!isBook || handledJumpRef.current === jumpToSequence) return;
+    handledJumpRef.current = jumpToSequence;
+    let alive = true;
+    const chaptersPromise = chapters.length > 0
+      ? Promise.resolve(chapters)
+      : getChapters(paperId).then(({ chapters: chs }) => { if (alive) setChapters(chs); return chs; });
+    chaptersPromise
+      .then((chs) => {
+        if (!alive) return;
+        const target = chs.find((c) => jumpToSequence >= c.start_sequence && jumpToSequence <= c.end_sequence) ?? null;
+        saveProgress(target?.index ?? null, jumpToSequence);
+        return startReading(target);
+      })
+      .catch(() => {})
+      .then(() => { if (alive) onJumped?.(); });
+    return () => { alive = false; };
+  }, [isBook, jumpToSequence, chapters, paperId, saveProgress, startReading, onJumped]);
 
   // Legacy alias kept for minimal breakage
   const revealNext = revealNextUnit;
@@ -739,6 +781,16 @@ export function BookReadingView({ paper, paperId, onBack }: Props) {
               }}
             />
           </div>
+          {onOpenRaw && (
+            <button
+              onClick={() => onOpenRaw(chunks[currentChunkIndex]?.page_start ?? null)}
+              className="shrink-0 text-[11.5px] px-3 py-1.5 rounded-md"
+              style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
+              title="Open the source PDF at this position"
+            >
+              Raw file
+            </button>
+          )}
           <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
           <UserMenuInline />
         </div>

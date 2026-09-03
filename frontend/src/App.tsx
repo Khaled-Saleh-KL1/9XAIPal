@@ -17,7 +17,7 @@ const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
 import { RawArticleViewer } from './views/RawArticleViewer';
-import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, type PaperMeta, type DocKind } from './api';
+import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, pageToSequence, type PaperMeta, type DocKind } from './api';
 import { IconLink } from './components/Icons';
 import { displayTitle } from './lib/titles';
 import { stageProgress } from './lib/progress';
@@ -132,6 +132,11 @@ export function App() {
   const [rawPapers, setRawPapers] = useState<PaperMeta[]>([]);
   const [rawFilesOpen, setRawFilesOpen] = useState(false);
   const [viewingPdf, setViewingPdf] = useState<PaperMeta | null>(null);
+  /** Page the raw viewer should open on — set only by the structured
+   * reader's own "Raw file" button, so the two views land in step. Every
+   * other path into pdf-viewer (library, raw files panel, a deep link)
+   * leaves this null and opens on page 1 as before. */
+  const [pdfInitialPage, setPdfInitialPage] = useState<number | null>(null);
 
   // Which scope the desk opens on: a study id, or 'library'.
   const [deskScope, setDeskScope] = useState<string>('library');
@@ -383,6 +388,7 @@ export function App() {
           setActivePaperId(meta.id);
           setRoute('reading');
         } else if (initial.route === 'pdf-viewer') {
+          setPdfInitialPage(null);
           setViewingPdf(meta);
           setRoute('pdf-viewer');
         }
@@ -431,6 +437,7 @@ export function App() {
         void (async () => {
           try {
             const meta = await getPaper(next.paperId);
+            setPdfInitialPage(null);
             setViewingPdf(meta);
             setRoute('pdf-viewer');
           } catch {
@@ -502,6 +509,11 @@ export function App() {
           onJumped={() => setJumpTo(null)}
           onOpenDesk={openDesk}
           onBack={() => setRoute('library')}
+          onOpenRaw={(meta, page) => {
+            setPdfInitialPage(page);
+            setViewingPdf(meta);
+            setRoute('pdf-viewer');
+          }}
         />
       )}
 
@@ -523,6 +535,13 @@ export function App() {
           <RawArticleViewer
             paper={viewingPdf}
             onBack={() => { setViewingPdf(null); setRoute('library'); }}
+            onReadStructured={(p) => {
+              setActivePaper(metaToPaper(p));
+              setActivePaperId(p.id);
+              setJumpTo(null);
+              setViewingPdf(null);
+              setRoute('reading');
+            }}
           />
         ) : (
           <Suspense
@@ -534,12 +553,25 @@ export function App() {
           >
             <PdfViewer
               paper={viewingPdf}
+              initialPage={pdfInitialPage}
               onBack={() => { setViewingPdf(null); setRoute('library'); }}
-              onReadStructured={(p) => {
+              onReadStructured={(p, page) => {
                 setActivePaper(metaToPaper(p));
                 setActivePaperId(p.id);
+                // Cleared first, same as any other paper-open: a jump left
+                // over from earlier (never consumed because its reader
+                // unmounted first) must not fire here before the real one
+                // below resolves.
+                setJumpTo(null);
                 setViewingPdf(null);
                 setRoute('reading');
+                // Resolved against the target paper's own chunks, not the one
+                // we're leaving — fire-and-forget is fine here: the reader
+                // opens at the top and re-jumps the instant this resolves,
+                // same as any other jumpTo (desk, bookmarks).
+                pageToSequence(p.id, page)
+                  .then((seq) => setJumpTo(seq))
+                  .catch(() => {});
               }}
             />
           </Suspense>
@@ -575,6 +607,7 @@ export function App() {
         onClose={() => setRawFilesOpen(false)}
         onOpenPdf={(p) => {
           setRawFilesOpen(false);
+          setPdfInitialPage(null);
           setViewingPdf(p);
           setRoute('pdf-viewer');
         }}

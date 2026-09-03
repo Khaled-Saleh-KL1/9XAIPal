@@ -391,6 +391,37 @@ async def list_chapters(
             "source": source, "chapters": chapters}
 
 
+@router.get("/{paper_id}/page-to-sequence")
+async def page_to_sequence(
+    paper_id: UUID,
+    page: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """The sequence_order the reader should land on for a raw PDF page —
+    lets the raw viewer and the structured reader jump to the same position
+    in either direction. Same "first chunk on or after this page" rule
+    book_outline.outline_to_chapters uses to map a bookmark's page onto a
+    chunk; a page past the last chunk lands on the last chunk instead of
+    nothing, since the reader asked to go there, not to fail.
+
+    None only for a document with no paginated chunks at all (an article,
+    still mid-extraction) — the caller's own doc_kind check is expected to
+    avoid asking for those in the first place.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    page_starts = await chunk_repo.get_page_starts(db, paper_id)
+    if not page_starts:
+        return {"sequence_order": None}
+
+    ordered = sorted(page_starts, key=lambda sp: sp[0])
+    seq = next((s for s, p in ordered if p >= page), ordered[-1][0])
+    return {"sequence_order": seq}
+
+
 @router.get("/{paper_id}/figure-descriptions")
 async def get_figure_descriptions(
     paper_id: UUID,

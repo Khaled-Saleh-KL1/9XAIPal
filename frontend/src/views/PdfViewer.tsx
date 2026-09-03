@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -20,18 +20,32 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
 interface Props {
   paper: PaperMeta;
   onBack: () => void;
-  onReadStructured: (paper: PaperMeta) => void;
+  onReadStructured: (paper: PaperMeta, page: number) => void;
+  /** Land on this page instead of 1 — set when arriving from the structured
+   * reader's own "Raw file" button, so the two views stay in step. */
+  initialPage?: number | null;
 }
 
-export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
+export function PdfViewer({ paper, onBack, onReadStructured, initialPage }: Props) {
   const [numPages, setNumPages] = useState<number>(0);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(initialPage || 1);
   const [scale, setScale] = useState(1.0);
-  const [pageInputValue, setPageInputValue] = useState('1');
+  const [pageInputValue, setPageInputValue] = useState(String(initialPage || 1));
 
   const onDocumentLoadSuccess = useCallback(({ numPages: n }: { numPages: number }) => {
     setNumPages(n);
+    // Clamp once the real page count is known — an initialPage computed from
+    // stale metadata (or past the end) should still land somewhere real.
+    setCurrentPage((p) => Math.max(1, Math.min(p, n)));
   }, []);
+
+  // paper.id, not just initialPage: opening a second PDF while this one is
+  // still mounted (paper swapped under an unchanged route) must re-seek too.
+  useEffect(() => {
+    const p = Math.max(1, initialPage || 1);
+    setCurrentPage(p);
+    setPageInputValue(String(p));
+  }, [paper.id, initialPage]);
 
   const goToPage = (page: number) => {
     const p = Math.max(1, Math.min(page, numPages));
@@ -150,7 +164,7 @@ export function PdfViewer({ paper, onBack, onReadStructured }: Props) {
 
           {/* Read structured */}
           <button
-            onClick={() => onReadStructured(paper)}
+            onClick={() => onReadStructured(paper, currentPage)}
             className="text-[12.5px] px-3.5 py-1.5 rounded-md flex items-center gap-1.5"
             style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
           >
