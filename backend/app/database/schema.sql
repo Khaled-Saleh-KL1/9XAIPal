@@ -91,7 +91,17 @@ CREATE TABLE IF NOT EXISTS documents (
     -- or 'failed'. A failed/pending crawl never affects `status` above — the
     -- article itself can be fully read and chatted with regardless of
     -- whether its raw copy ever finishes.
-    raw_snapshot_status TEXT NOT NULL DEFAULT 'none'
+    raw_snapshot_status TEXT NOT NULL DEFAULT 'none',
+
+    -- Embedding of the title plus a short lead excerpt, for the library's
+    -- own semantic search (finding a document by what it's about, not just
+    -- a title/filename substring). Separate from chunk_embeddings, which is
+    -- per-chunk RAG retrieval inside an already-open document and is often
+    -- skipped entirely for a fast-ingested paper/article (see
+    -- extraction/pipeline_sync.py::_is_fast_ingest) — this one column
+    -- exists for every document kind and is computed lazily, on a document's
+    -- first appearance in a search, rather than at ingestion.
+    search_embedding vector(1024)
 );
 
 COMMENT ON COLUMN documents.reading_order IS 'Array of original chunk sequence_ids in LLM-corrected logical reading order. Used to fix two-column and complex layout extraction issues.';

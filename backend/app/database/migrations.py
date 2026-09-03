@@ -191,6 +191,12 @@ async def _ensure_recent_columns() -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""",
         "CREATE INDEX IF NOT EXISTS idx_raw_snapshot_pages_document ON raw_snapshot_pages(document_id, depth, created_at)",
+        # Library semantic search (title + lead excerpt), computed lazily per
+        # search rather than at ingestion — see the column's own comment in
+        # schema.sql. Not run through the same vector(\d+) regex as schema.sql
+        # (this file's statements are plain strings, not that one), so the
+        # dimension is substituted here directly.
+        f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_embedding vector({settings.vector_dimension})",
     ]
 
     async with engine.begin() as conn:

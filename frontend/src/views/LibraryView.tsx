@@ -11,7 +11,7 @@ import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
 import { stageProgress } from '../lib/progress';
-import { listPapers, deletePaper, renamePaper, type PaperMeta } from '../api';
+import { listPapers, deletePaper, renamePaper, searchPapersSemantic, type PaperMeta } from '../api';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -111,18 +111,37 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     return () => clearTimeout(t);
   }, [query]);
 
+  // Ids the semantic search found for the current debouncedQuery — unioned
+  // into the keyword filter below, not a replacement for it: an exact title
+  // hit must never disappear just because the semantic call is slow, failed,
+  // or (for a brand-new document) hasn't backfilled an embedding yet.
+  const [semanticIds, setSemanticIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const q = debouncedQuery.trim();
+    if (!q) { setSemanticIds(new Set()); return; }
+    let alive = true;
+    searchPapersSemantic(q)
+      .then((ids) => { if (alive) setSemanticIds(new Set(ids)); })
+      // Semantic search is a bonus on top of keyword matching, not a
+      // requirement — a failed call (offline embedding provider, etc.)
+      // should leave keyword search working, not show an error.
+      .catch(() => { if (alive) setSemanticIds(new Set()); });
+    return () => { alive = false; };
+  }, [debouncedQuery]);
+
   const filtered = useMemo(() => {
     const q = debouncedQuery.toLowerCase();
     let xs = papers.filter(
       (p) =>
         (p.title.toLowerCase().includes(q) ||
-          p.authors.toLowerCase().includes(q)) &&
+          p.authors.toLowerCase().includes(q) ||
+          semanticIds.has(p.id)) &&
         (kindFilters.size === 0 || kindFilters.has(p.docKind || 'paper')),
     );
     if (sort === 'title') xs = [...xs].sort((a, b) => a.title.localeCompare(b.title));
     if (sort === 'pages') xs = [...xs].sort((a, b) => b.pages - a.pages);
     return xs;
-  }, [debouncedQuery, sort, kindFilters, papers]);
+  }, [debouncedQuery, sort, kindFilters, papers, semanticIds]);
 
   const cycleSorts: SortKey[] = ['recent', 'title', 'pages'];
 
@@ -255,10 +274,10 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
 
       {/* ── Fixed chrome: hero + dropzone + controls ── */}
       <div className="shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="max-w-[1240px] mx-auto px-4 sm:px-8 pt-6 sm:pt-9 pb-5">
+        <div className="max-w-[1240px] mx-auto px-4 sm:px-8 pt-4 sm:pt-6 pb-3">
 
           {/* hero */}
-          <div className="flex items-baseline justify-between mb-5 sm:mb-7">
+          <div className="flex items-baseline justify-between mb-3 sm:mb-5">
             <div>
               <h1
                 className="font-serif text-[28px] sm:text-[38px] leading-[1.05] tracking-[-0.018em]"
@@ -282,7 +301,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             onDragLeave={() => setOver(false)}
             onDrop={onDrop}
             onClick={() => onUpload()}
-            className={`dropzone${over ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-4 sm:py-5 flex items-center gap-3 sm:gap-6`}
+            className={`dropzone${over ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
             style={{ background: over ? undefined : 'var(--bg-2)' }}
           >
             <div
@@ -314,7 +333,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           </div>
 
           {/* controls row */}
-          <div className="mt-4 flex items-center gap-3 flex-wrap">
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
             <div className="relative flex-1 min-w-[160px] max-w-[380px]">
               <IconSearch
                 className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5"
@@ -323,7 +342,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search title, author, tag…"
+                placeholder="Search by title, or what it's about…"
                 className="w-full pl-8 pr-3 py-2 rounded-md text-[12.5px]"
                 style={{
                   background: 'var(--bg-2)',

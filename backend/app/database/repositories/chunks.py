@@ -350,6 +350,29 @@ async def get_page_starts(session: AsyncSession, document_id: UUID) -> list[tupl
     return [(int(r["sequence_id"]), int(r["page_start"])) for r in result.mappings().all()]
 
 
+async def get_lead_text(session: AsyncSession, document_id: UUID, max_chunks: int = 3) -> str:
+    """The first few chunks of real prose, concatenated — a cheap stand-in for
+    an abstract/blurb when the document has no such field of its own.
+
+    ``chunk_type = 'text'`` only: a heading or a table's markdown is not the
+    kind of descriptive prose a title+excerpt embedding wants, and the very
+    first chunks of a scanned book are routinely a title page / copyright
+    notice with no bearing on what the book is about — the first real
+    paragraphs are a better bet than "whatever came first".
+    """
+    result = await session.execute(
+        text("""
+            SELECT plain_text FROM chunks
+            WHERE document_id = :document_id AND chunk_type = 'text'
+                  AND plain_text IS NOT NULL AND length(plain_text) > 40
+            ORDER BY sequence_id ASC
+            LIMIT :max_chunks
+        """),
+        {"document_id": document_id, "max_chunks": max_chunks},
+    )
+    return "\n\n".join(r["plain_text"] for r in result.mappings().all())
+
+
 async def get_sequence_bounds(session: AsyncSession, document_id: UUID) -> tuple[int, int]:
     """Return (min_sequence, max_sequence) for the document's chunks (0,0 if none)."""
     result = await session.execute(

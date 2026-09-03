@@ -174,6 +174,18 @@ export async function listPapers(): Promise<PaperMeta[]> {
   return data.documents;
 }
 
+/**
+ * Semantic search over the library (title + lead excerpt) — finds a
+ * document by what it's about, not just a title substring. Meant to be
+ * unioned with the library's own local keyword filter, not to replace it.
+ */
+export async function searchPapersSemantic(query: string, limit = 20): Promise<string[]> {
+  const res = await fetch(`${BASE}/papers/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`Semantic search failed: ${res.status}`);
+  const data = await res.json();
+  return (data.results as { id: string }[]).map((r) => r.id);
+}
+
 export type DocKind = 'book' | 'paper';
 
 export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<{ id: string; status: string }> {
