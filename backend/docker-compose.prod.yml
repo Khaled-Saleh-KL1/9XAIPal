@@ -226,10 +226,15 @@ services:
     # coming under memory pressure everywhere at once. Raise if extraction of
     # large books gets OOM-killed under real multi-user load; lower if other
     # services feel starved.
+    #
+    # 7G, not 6: raised after a 58-page paper (DeepSeek-V4) to give long-paper
+    # MinerU extraction headroom. Still leaves ~4G of the box's 11G for
+    # postgres/redis/api/autoheal/OS and whatever else shares it. Overridable
+    # per box with WORKER_MEM_LIMIT for anywhere with a different budget.
     deploy:
       resources:
         limits:
-          memory: ${WORKER_MEM_LIMIT:-6G}
+          memory: ${WORKER_MEM_LIMIT:-7G}
 
   # ------------------------------------------------------------------
   # API — FastAPI backend. Does NOT serve the SPA (SERVE_FRONTEND=false);
