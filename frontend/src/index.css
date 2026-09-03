@@ -401,6 +401,32 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+/* A fenced block is <pre><code>, so without these the rule above — written
+   for an INLINE code span — decorates it too. An inline element spanning
+   many lines gets its background, border and radius painted once per
+   visual line, which rendered a code listing as a staircase of little
+   rounded boxes, one per line, instead of one block. Reproduced on a real
+   paper (DeepSeek-V4's Table 4 tool-call schema). The block carries the
+   decoration; the code element inside it carries none. */
+.md-body pre {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 0.8em 0;
+  /* A code listing has meaningful line lengths — wrapping it would change
+     what it says. Scroll the block instead, the same choice .article-table
+     makes for a table too wide for the column. */
+  overflow-x: auto;
+}
+.md-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.85em;
+  white-space: pre;
+}
 .md-body ul, .md-body ol { padding-left: 1.4em; margin: 0.6em 0; }
 /* Videos an article actually contains, recovered by the extractor and
    emitted as raw <video> (see services/article_extraction.py). Sized like
@@ -1352,13 +1378,32 @@ body {
 .article-code .md-body { font-size: 14px; }
 .article-code-crop-img {
   display: block;
+  /* border-box, or the 1px border sits OUTSIDE max-width and the image
+     overflows its column by exactly 2px — enough to clip the right edge
+     of a full-width page crop, which is the whole point of showing it. */
+  box-sizing: border-box;
   max-width: 100%;
   height: auto;
   margin: 0 0 10px;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 6px;
+  /* The crop is rendered well above display resolution so it stays sharp
+     here and readable when opened full-size, which the image lightbox
+     already handles for any content image. */
+  cursor: zoom-in;
 }
+/* The extracted text, folded away under the crop: available to copy or
+   search, not competing with the faithful version above it. */
+.article-code-text { margin-top: 4px; }
+.article-code-text > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  padding: 2px 0;
+}
+.article-code-text > summary:hover { color: var(--fg); }
 .article-footnote {
   font-size: 14px;
   line-height: 1.6;

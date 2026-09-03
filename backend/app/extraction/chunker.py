@@ -1529,8 +1529,58 @@ _MINERU_BBOX_DPI = 110
 # Outward padding, in PDF points, applied after the DPI conversion. A little
 # extra margin costs nothing (more whitespace at the crop's edge); a bbox
 # that is a few points too tight clips the very content this exists to
-# preserve, which is the failure that actually matters here.
-_BBOX_PAD_PT = 8
+# preserve, which is the failure that actually matters here. 8pt was not
+# enough in practice — the real Table 4 crop still shaved the right-hand
+# border off the schema's box, visible once it was actually rendered.
+_BBOX_PAD_PT = 16
+
+
+def _snap_to_drawn_box(page, base):
+    """Grow ``base`` to cover the filled rectangle a code listing is drawn in.
+
+    MinerU's reported bbox is approximate in BOTH directions, and being
+    short is the expensive one. On the real Table 4 the box is drawn from
+    y=114pt to y=510pt, while the reported bbox stopped at y=396 — a
+    114pt shortfall that cut off the last four lines of the schema, which
+    padding alone was never going to reach (the first attempt at 8pt, then
+    16pt, only ever nibbled at the edge of a gap that large).
+
+    The PDF's own vector geometry is the authoritative answer: a styled
+    listing sits on a filled background rect that says exactly where the
+    block starts and ends. Same order-of-trust idea vlm_client's
+    _choose_crop_rect uses for figures — the PDF's geometry over a model's
+    guess — applied to a shape rather than an embedded image.
+
+    Returns the UNION of the base and any qualifying box, never a
+    replacement: the base often includes the caption sitting above the
+    drawn box, and dropping that would trade one kind of clipping for
+    another. A listing with no background fill at all (plain text on the
+    page) finds nothing here and keeps its original rect.
+    """
+    import fitz  # PyMuPDF
+
+    page_area = abs(page.rect.width * page.rect.height) or 1.0
+    grown = fitz.Rect(base)
+    for drawing in page.get_drawings():
+        r = drawing.get("rect")
+        if r is None or r.is_empty:
+            continue
+        # A page-wide background or a hairline rule is not the listing's box.
+        if abs(r.width * r.height) > 0.9 * page_area:
+            continue
+        if r.width < 40 or r.height < 20:
+            continue
+        overlap = r & base
+        if overlap.is_empty:
+            continue
+        # Require the overlap to be a real share of the smaller shape, so a
+        # rect that merely grazes the block's corner cannot drag the crop
+        # across the page.
+        smaller = min(abs(r.width * r.height), abs(base.width * base.height)) or 1.0
+        if abs(overlap.width * overlap.height) / smaller < 0.25:
+            continue
+        grown |= r
+    return grown
 
 
 def crop_code_blocks(chunks: list[dict], pdf_path: Path, images_dir: Path) -> int:
@@ -1594,7 +1644,7 @@ def crop_code_blocks(chunks: list[dict], pdf_path: Path, images_dir: Path) -> in
             try:
                 page = doc[page_idx]
                 x0, y0, x1, y1 = (v * to_pt for v in bbox)
-                rect = fitz.Rect(x0, y0, x1, y1)
+                rect = _snap_to_drawn_box(page, fitz.Rect(x0, y0, x1, y1))
                 rect = fitz.Rect(
                     rect.x0 - _BBOX_PAD_PT, rect.y0 - _BBOX_PAD_PT,
                     rect.x1 + _BBOX_PAD_PT, rect.y1 + _BBOX_PAD_PT,

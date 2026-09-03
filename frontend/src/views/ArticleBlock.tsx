@@ -307,22 +307,32 @@ function ArticleBlockImpl({
   if (block.structural_type === 'code') {
     const body = block.content_markdown || block.plain_text || '';
     const fenced = body.includes('```') ? body : `\`\`\`\n${body}\n\`\`\``;
-    return (
-      <section {...common}>
-        {ribbon}
-        {block.image_url && (
-          // A literal code/schema listing's exact indentation and layout is
-          // part of what it is showing, and OCR text — even transcribed
-          // perfectly, character for character — already lost that
-          // structure by the time it reaches the chunk (see chunker.py's
-          // crop_code_blocks). The page crop is the faithful copy; the text
-          // below stays for search and copy-paste, which the image can't do.
+    // With a page crop available, IT is the listing — a literal code/schema
+    // block's exact indentation is part of what it shows, and the OCR text
+    // lost that before it ever reached the chunk (see chunker.py's
+    // crop_code_blocks). Showing both side by side just prints the same
+    // thing twice, the second time worse. The text stays reachable, folded
+    // away, because an image cannot be copied or selected.
+    if (block.image_url) {
+      return (
+        <section {...common}>
+          {ribbon}
           <img
             className="article-code-crop-img"
             src={block.image_url}
             alt={block.plain_text || 'Code listing, shown as it appears on the page'}
           />
-        )}
+          <details className="article-code-text">
+            <summary>Extracted text</summary>
+            <div className="article-code"><Md>{fenced}</Md></div>
+          </details>
+        </section>
+      );
+    }
+
+    return (
+      <section {...common}>
+        {ribbon}
         <div className="article-code"><Md>{fenced}</Md></div>
       </section>
     );
