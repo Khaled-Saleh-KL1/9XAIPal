@@ -26,6 +26,7 @@ from app.schemas.documents import (
 )
 from app.services import covers as cover_service
 from app.services import documents as doc_service
+from app.services import library_search
 from app.services.ingestion import check_queue_capacity, create_ingestion_job, update_job_status as update_job_status_svc
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
 from app.workers.tasks import (
@@ -421,6 +422,22 @@ async def list_papers(
         documents=[DocumentResponse(**d) for d in docs],
         total=total,
     )
+
+
+@router.get("/search")
+async def search_papers(
+    q: str,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Semantic search over this user's own library (title + lead excerpt),
+    complementing the library UI's own keyword filter rather than replacing
+    it — see services/library_search.py. Registered before /{paper_id} so
+    "search" is never swallowed as a paper id.
+    """
+    results = await library_search.semantic_search_documents(db, current_user["id"], q, limit=limit)
+    return {"results": [{"id": str(r["id"]), "similarity": r["similarity"]} for r in results]}
 
 
 @router.get("/{paper_id}", response_model=DocumentResponse)

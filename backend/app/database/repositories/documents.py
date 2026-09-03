@@ -111,6 +111,25 @@ async def count_documents(session: AsyncSession, user_id: UUID) -> int:
     return int(row["n"]) if row else 0
 
 
+async def get_documents_missing_search_embedding(
+    session: AsyncSession, user_id: UUID,
+) -> list[dict]:
+    """``[{id, title, original_filename}]`` for this user's documents that
+    have never had a search_embedding computed — the lazy-backfill set for
+    services/library_search.py. No limit: a personal library's full backlog
+    (at most a few hundred rows of three short columns) costs nothing close
+    to what would justify paging it.
+    """
+    result = await session.execute(
+        text("""
+            SELECT id, title, original_filename FROM documents
+            WHERE user_id = :user_id AND search_embedding IS NULL
+        """),
+        {"user_id": user_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def update_document_status(
     session: AsyncSession,
     document_id: UUID,

@@ -174,6 +174,45 @@ async def search_chunks_fulltext(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Library-level document search (see services/library_search.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def set_document_search_embedding(
+    session: AsyncSession, document_id: UUID, embedding: list[float],
+) -> None:
+    """Store (or replace) a document's title+excerpt embedding."""
+    await session.execute(
+        text("UPDATE documents SET search_embedding = CAST(:embedding AS vector) WHERE id = :id"),
+        {"id": document_id, "embedding": _vector_literal(embedding)},
+    )
+
+
+async def search_documents_semantic(
+    session: AsyncSession,
+    user_id: UUID,
+    query_embedding: list[float],
+    limit: int = 20,
+) -> list[dict]:
+    """``[{id, similarity}]`` for this user's documents that already have a
+    search_embedding, ranked closest first. No index (an ordinary personal
+    library is at most hundreds of rows — a sequential scan over one small
+    vector column per row costs nothing close to what would justify an HNSW
+    index, unlike chunk_embeddings which can hold tens of thousands of rows).
+    """
+    result = await session.execute(
+        text("""
+            SELECT id, 1 - (search_embedding <=> CAST(:embedding AS vector)) AS similarity
+            FROM documents
+            WHERE user_id = :user_id AND search_embedding IS NOT NULL
+            ORDER BY search_embedding <=> CAST(:embedding AS vector)
+            LIMIT :limit
+        """),
+        {"user_id": user_id, "embedding": _vector_literal(query_embedding), "limit": limit},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Agent memory (see chat/memory.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
