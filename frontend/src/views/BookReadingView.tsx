@@ -1244,17 +1244,29 @@ function GranularUnit({
   }
 
   if (unit.kind === 'code') {
-    // Fenced code/JSON: render verbatim in a monospace block (remark-gfm).
-    return (
-      <div className={`${baseClass} ${lastClass} my-4 code-block`}>
-        {unit.imageUrl && (
+    // With a page crop, that IS the listing — see ArticleBlock.tsx's code
+    // branch for why showing both at once just prints it twice, the second
+    // time worse. Text folded away, still copyable and searchable.
+    if (unit.imageUrl) {
+      return (
+        <div className={`${baseClass} ${lastClass} my-4 code-block`}>
           <img
             src={unit.imageUrl}
             alt="Code listing, shown as it appears on the page"
-            className="w-full h-auto rounded-md border mb-2.5"
-            style={{ borderColor: 'var(--border)', background: '#fff' }}
+            className="w-full h-auto rounded-md border"
+            style={{ borderColor: 'var(--border)', background: '#fff', cursor: 'zoom-in' }}
           />
-        )}
+          <details className="article-code-text">
+            <summary>Extracted text</summary>
+            <Md>{unit.markdown}</Md>
+          </details>
+        </div>
+      );
+    }
+
+    // Fenced code/JSON: render verbatim in a monospace block (remark-gfm).
+    return (
+      <div className={`${baseClass} ${lastClass} my-4 code-block`}>
         <Md>{unit.markdown}</Md>
       </div>
     );

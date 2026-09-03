@@ -221,8 +221,10 @@ def test_sub_type_algorithm_alone_does_not_force_math_handling(tmp_path):
 import fitz  # noqa: E402
 
 from app.extraction.chunker import (  # noqa: E402
+    _BBOX_PAD_PT,
     _CODE_CROP_DPI,
     _MINERU_BBOX_DPI,
+    _snap_to_drawn_box,
     crop_code_blocks,
 )
 
@@ -279,9 +281,9 @@ def test_the_crop_captures_the_full_width_without_clipping(tmp_path):
 
     pix = fitz.Pixmap(str(images_dir / "code_crop_seq1.jpg"))
     # bbox spans ~475pt of a 595pt-wide page (60pt margin each side) plus
-    # 2*8pt padding, rendered at _CODE_CROP_DPI — expect roughly that width,
-    # not the un-clipped ~1653px a 595pt page would be at _CODE_CROP_DPI.
-    expected_width_pt = (595.276 - 60 - 60) + 2 * 8
+    # the outward padding on each side, rendered at _CODE_CROP_DPI — expect
+    # roughly that width, not the un-clipped ~1653px a 595pt page would be.
+    expected_width_pt = (595.276 - 60 - 60) + 2 * _BBOX_PAD_PT
     expected_px = expected_width_pt * _CODE_CROP_DPI / 72.0
     assert abs(pix.width - expected_px) < 15, (
         f"crop width {pix.width}px doesn't match the expected in-bounds "
@@ -373,3 +375,119 @@ def test_end_to_end_literal_code_chunk_gets_a_working_image_ref(tmp_path):
     n = crop_code_blocks(chunks, pdf_path, tmp_path / "images")
     assert n == 1
     assert chunks[0]["image_refs"] == ["code_crop_seq1.jpg"]
+
+
+# ── _snap_to_drawn_box: the PDF's own geometry beats MinerU's bbox ────────
+#
+# The second thing a real look at the output caught. MinerU's bbox is
+# approximate in BOTH directions, and being SHORT is the expensive one: on
+# the real Table 4 the schema's box is drawn from y=114pt to y=510pt while
+# the reported bbox stopped at 396 — a 114pt shortfall that cut the last
+# four lines off the crop. No amount of uniform padding reaches a gap that
+# large without swamping every other crop in whitespace, so the fix reads
+# the filled rectangle the listing is actually drawn in.
+
+
+def _pdf_with_a_drawn_box(tmp_path, box: "fitz.Rect"):
+    doc = fitz.open()
+    page = doc.new_page(width=595.276, height=841.89)
+    page.draw_rect(box, fill=(0.95, 0.95, 0.95), color=(0.25, 0.25, 0.25))
+    page.insert_text((box.x0 + 10, box.y0 + 20), "listing line", fontsize=9)
+    p = tmp_path / "boxed.pdf"
+    doc.save(p)
+    doc.close()
+    return p
+
+
+def test_snap_grows_a_short_bbox_down_to_the_drawn_box(tmp_path):
+    """The real failure, in miniature: the reported rect stops well above
+    where the box actually ends."""
+    box = fitz.Rect(70, 114, 524, 510)
+    pdf_path = _pdf_with_a_drawn_box(tmp_path, box)
+    doc = fitz.open(pdf_path)
+    try:
+        short = fitz.Rect(76, 88, 574, 396)          # ends 114pt too early
+        snapped = _snap_to_drawn_box(doc[0], short)
+        assert snapped.y1 >= box.y1 - 1, (
+            f"snap didn't reach the drawn box's bottom: {snapped.y1} < {box.y1}"
+        )
+        # The caption above the box (y0=88) must survive — union, not replace.
+        assert snapped.y0 <= 88 + 1
+    finally:
+        doc.close()
+
+
+def test_snap_is_a_union_so_it_never_shrinks_the_rect(tmp_path):
+    box = fitz.Rect(200, 200, 300, 300)
+    pdf_path = _pdf_with_a_drawn_box(tmp_path, box)
+    doc = fitz.open(pdf_path)
+    try:
+        base = fitz.Rect(150, 150, 400, 400)          # already larger
+        snapped = _snap_to_drawn_box(doc[0], base)
+        assert snapped.x0 <= base.x0 and snapped.y0 <= base.y0
+        assert snapped.x1 >= base.x1 and snapped.y1 >= base.y1
+    finally:
+        doc.close()
+
+
+def test_snap_leaves_an_unstyled_listing_alone(tmp_path):
+    """Plain text on the page with no background fill — nothing to snap to,
+    so the rect must come back untouched rather than collapsing."""
+    doc = fitz.open()
+    page = doc.new_page(width=595.276, height=841.89)
+    page.insert_text((80, 120), "plain listing, no box", fontsize=9)
+    p = tmp_path / "plain.pdf"
+    doc.save(p)
+    doc.close()
+
+    doc = fitz.open(p)
+    try:
+        base = fitz.Rect(76, 88, 574, 396)
+        assert _snap_to_drawn_box(doc[0], base) == base
+    finally:
+        doc.close()
+
+
+def test_snap_ignores_a_full_page_background(tmp_path):
+    """A page-wide fill is not the listing's box; snapping to it would crop
+    the whole page and lose the point of cropping at all."""
+    doc = fitz.open()
+    page = doc.new_page(width=595.276, height=841.89)
+    page.draw_rect(fitz.Rect(0, 0, 595.276, 841.89), fill=(0.99, 0.99, 0.99))
+    p = tmp_path / "fullbg.pdf"
+    doc.save(p)
+    doc.close()
+
+    doc = fitz.open(p)
+    try:
+        base = fitz.Rect(76, 88, 300, 200)
+        snapped = _snap_to_drawn_box(doc[0], base)
+        assert snapped.y1 < 800, "snapped to the full-page background"
+    finally:
+        doc.close()
+
+
+def test_the_crop_reaches_the_bottom_of_a_drawn_box(tmp_path):
+    """End to end: a chunk whose bbox is short still produces a crop tall
+    enough to contain the whole box — the exact regression a real look at
+    the rendered image caught."""
+    box = fitz.Rect(70, 114, 524, 510)
+    pdf_path = _pdf_with_a_drawn_box(tmp_path, box)
+    to_px = _MINERU_BBOX_DPI / 72.0
+    chunks = [{
+        "sequence_id": 9, "chunk_type": "code",
+        # Deliberately short, mirroring what MinerU actually reported.
+        "bbox_json": {"page_idx": 0,
+                      "bbox": [76 * to_px, 88 * to_px, 574 * to_px, 396 * to_px]},
+        "image_refs": [],
+    }]
+    images_dir = tmp_path / "images"
+    assert crop_code_blocks(chunks, pdf_path, images_dir) == 1
+
+    pix = fitz.Pixmap(str(images_dir / "code_crop_seq9.jpg"))
+    # Must span at least from the caption (y=88) to the box bottom (y=510).
+    min_height_px = (510 - 88) * _CODE_CROP_DPI / 72.0
+    assert pix.height >= min_height_px - 5, (
+        f"crop is {pix.height}px tall, too short to contain the drawn box "
+        f"(need ~{min_height_px:.0f}px) — the bottom would be clipped"
+    )
