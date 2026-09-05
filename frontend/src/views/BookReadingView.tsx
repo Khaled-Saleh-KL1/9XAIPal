@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
+import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { displayTitle as paperDisplayTitle } from '../lib/titles';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
@@ -1119,7 +1119,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
 function Md({ children }: { children: string }) {
   return (
     <div className="md-body">
-      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE}>
+      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MARKDOWN_COMPONENTS}>
         {children}
       </ReactMarkdown>
     </div>
@@ -1205,7 +1205,7 @@ function GranularUnit({
   if (unit.kind === 'paragraph') {
     return (
       <div className={`${baseClass} ${lastClass} md-body`}>
-        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE}>
+        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MARKDOWN_COMPONENTS}>
           {unit.text}
         </ReactMarkdown>
       </div>
@@ -1316,7 +1316,7 @@ function GranularUnit({
               <div className="uppercase tracking-[1px] text-[10px] mb-1.5" style={{ color: 'var(--muted)' }}>
                 AI Description (from paper diagram)
               </div>
-              <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE}>
+              <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MARKDOWN_COMPONENTS}>
                 {richDesc.description_markdown}
               </ReactMarkdown>
             </div>

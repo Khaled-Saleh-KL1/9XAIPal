@@ -25,6 +25,8 @@ import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import type { PluggableList } from 'unified';
 import type { Components } from 'react-markdown';
+import { MermaidDiagram } from '../components/MermaidDiagram';
+import { AnswerImage } from '../components/AnswerImage';
 
 const SANITIZE_SCHEMA: typeof defaultSchema = {
   ...defaultSchema,
@@ -85,4 +87,39 @@ export const MARKDOWN_REHYPE: PluggableList = [
 export const MARKDOWN_LINK_COMPONENT: Pick<Components, 'a'> = {
   a: ({ href, children, ...rest }) =>
     createElement('a', { href, target: '_blank', rel: 'noopener noreferrer', ...rest }, children),
+};
+
+/**
+ * A ```mermaid fenced block becomes a drawn diagram; every other code block
+ * renders as it always did.
+ *
+ * This lives in the shared pipeline rather than in one view because every AI
+ * surface in the app renders through here — a margin note, the desk, a book
+ * chat, the research answer — and a model that can draw in one of them should
+ * be able to draw in all of them. MermaidDiagram itself lazy-loads mermaid, so
+ * views that never see a diagram pay nothing for this.
+ */
+const MERMAID_COMPONENT: Pick<Components, 'code'> = {
+  code: ({ className, children, ...rest }) => {
+    const source = String(children ?? '');
+    // react-markdown marks a fenced block's language as `language-<lang>`.
+    // Inline code has no className at all, so it can never match.
+    if (/(^|\s)language-mermaid(\s|$)/.test(className || '')) {
+      return createElement(MermaidDiagram, { source: source.replace(/\n$/, '') });
+    }
+    return createElement('code', { className, ...rest }, children);
+  },
+};
+
+/**
+ * The full component set for rendering model output: links that open away from
+ * the SPA, and mermaid diagrams. Spread this into any ReactMarkdown showing
+ * something a model wrote.
+ */
+export const MARKDOWN_COMPONENTS: Components = {
+  ...MARKDOWN_LINK_COMPONENT,
+  ...MERMAID_COMPONENT,
+  // A picture the model pulled from a document or found on the web. See
+  // AnswerImage for why hotlink failure is the normal case, not the exception.
+  img: AnswerImage,
 };

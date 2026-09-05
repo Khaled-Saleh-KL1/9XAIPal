@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, type ImgHTMLAttributes, type AnchorHTMLAttributes } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, type AnchorHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
+import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
+import { type LightboxDetail } from '../components/AnswerImage';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import type { ChatMessage } from '../types';
 import { IconSend, IconSpinner } from '../components/Icons';
@@ -10,89 +11,11 @@ import {
 } from '../api';
 import { AgentTrail } from './AgentTrail';
 
-// Lightbox is opened by dispatching a CustomEvent, which keeps the markdown
-// renderer at module scope (no React state needed) while letting the
-// ChatPane (or any other component) listen and show the overlay.
-type LightboxDetail = { src: string; alt?: string };
-function openLightbox(detail: LightboxDetail) {
-  window.dispatchEvent(new CustomEvent<LightboxDetail>('pal:lightbox', { detail }));
-}
-
-// Custom renderers for markdown nodes that need styling in chat.
-// Image: render as a centered figure with a thin border + optional alt caption
-// underneath, and lazy-load. Click opens the full image in a centered lightbox
-// with a blurred backdrop (handled inside ChatPane).
-//
-// We use a small SafeWebImage wrapper so we can cleanly handle hotlink failures
-// (common with images returned by web search / web research). Instead of a
-// broken red X, we show a helpful fallback with a direct link to the source.
-const SafeWebImage: React.FC<ImgHTMLAttributes<HTMLImageElement>> = ({ src, alt, ...rest }) => {
-  const [failed, setFailed] = useState(false);
-
-  if (!src) return null;
-
-  if (failed) {
-    // Graceful fallback when the image host blocks hotlinking (very common).
-    return (
-      <div
-        className="my-3 rounded-md border px-3 py-2 text-[12px] font-mono"
-        style={{
-          borderColor: 'var(--border)',
-          background: 'var(--bg-2)',
-          color: 'var(--muted)',
-        }}
-      >
-        <div>Image blocked by source (hotlink protection)</div>
-        <a
-          href={src}
-          target="_blank"
-          rel="noreferrer"
-          className="underline"
-          style={{ color: 'var(--accent)' }}
-        >
-          Open original image in new tab →
-        </a>
-        {alt && <div className="mt-1 opacity-70">{alt}</div>}
-      </div>
-    );
-  }
-
-  return (
-    <span className="block my-3">
-      <img
-        src={src}
-        alt={alt || ''}
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onClick={() => openLightbox({ src, alt: alt || undefined })}
-        title="Click to enlarge"
-        onError={() => setFailed(true)}
-        style={{
-          maxWidth: '100%',
-          maxHeight: 360,
-          borderRadius: 6,
-          border: '1px solid var(--border)',
-          background: 'var(--bg-2)',
-          display: 'block',
-          margin: '0 auto',
-          cursor: 'zoom-in',
-        }}
-        {...rest}
-      />
-      {alt && (
-        <span
-          className="block text-center mt-1 text-[11px] font-mono"
-          style={{ color: 'var(--muted)' }}
-        >
-          {alt}
-        </span>
-      )}
-    </span>
-  );
-};
-
+// The shared set already supplies the image and diagram renderers; chat only
+// overrides the anchor, which it wants without the shared component's extra
+// props handling.
 const MD_COMPONENTS = {
-  img: SafeWebImage,
+  ...MARKDOWN_COMPONENTS,
   a: (props: AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a {...props} target="_blank" rel="noreferrer noopener" />
   ),
@@ -197,7 +120,11 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
   useEffect(() => {
     function onOpen(e: Event) {
       const ce = e as CustomEvent<LightboxDetail>;
-      if (ce.detail?.src) setLightbox(ce.detail);
+      if (!ce.detail?.src) return;
+      // Tells openLightbox an overlay took it, so it does not also open a
+      // new tab. See AnswerImage.openLightbox.
+      ce.preventDefault();
+      setLightbox(ce.detail);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {

@@ -23,11 +23,18 @@ async def search_embeddings(
     query_embedding: list[float],
     limit: int = 10,
     document_id: UUID | None = None,
+    document_ids: list[UUID] | None = None,
     max_sequence_id: int | None = None,
 ) -> list[dict]:
-    """Search similar chunks via pgvector."""
+    """Search similar chunks via pgvector, over one document or several.
+
+    ``document_ids`` wins over ``document_id`` when both are given — the
+    underlying search says the same. Neither means no search at all rather
+    than a search across every tenant; see search_similar_chunks.
+    """
     return await search_similar_chunks(
         session, query_embedding, limit, document_id,
+        document_ids=document_ids,
         max_sequence_id=max_sequence_id,
     )
 

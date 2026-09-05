@@ -24,7 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.database.pgvector import search_chunks_fulltext
+from app.services.retrieval import search_chunks
+from app.database.repositories import assets as asset_repo
 from app.database.repositories import chunks as chunk_repo
 from app.llm import client as llm_client
 from app.search import web as web_search
@@ -38,7 +39,13 @@ logger = get_logger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def format_block(chunk: dict, *, prefix: str = "") -> str:
-    """One chunk as a numbered block the model can cite by number."""
+    """One chunk as a numbered block the model can cite by number.
+
+    A block backed by a picture — a figure, a table image, a rendered equation
+    — carries the markdown to show it, ready to copy into an answer. The model
+    could always CITE such a block; it could not show it, because nothing ever
+    told it the URL. See attach_asset_urls, which is what puts it there.
+    """
     seq = chunk["sequence_id"]
     kind = chunk.get("chunk_type") or "text"
     body = (chunk.get("markdown") or chunk.get("plain_text") or "").strip()
@@ -48,11 +55,76 @@ def format_block(chunk: dict, *, prefix: str = "") -> str:
         head += f" ({kind})"
     if page is not None:
         head += f" (p{page})"
-    return f"{head}\n{body}"
+    out = f"{head}\n{body}"
+    url = chunk.get("image_url")
+    if url:
+        caption = " ".join((chunk.get("plain_text") or kind).split())[:80] or kind
+        out += f"\nshow with: ![{caption}]({url})"
+    return out
+
+
+async def attach_asset_urls(session: AsyncSession, chunks: Sequence[dict]) -> None:
+    """Set ``image_url`` on every chunk that has a picture behind it.
+
+    One query for the whole batch, not one per block. Mutates in place because
+    every caller here has just built the list and is about to format it.
+
+    Best-effort by design: a missing asset row, or an assets query that fails,
+    costs the answer a picture and nothing else, so it must never propagate
+    into the tool round and cost the reader the text as well.
+    """
+    ids = [c["id"] for c in chunks if c.get("id")]
+    if not ids:
+        return
+    try:
+        assets = await asset_repo.get_assets_for_chunks(session, ids)
+    except Exception:
+        logger.warning("could not load assets for blocks", exc_info=True)
+        return
+    first: dict = {}
+    for a in assets:
+        if a.get("asset_type") == "image" and a.get("file_path"):
+            first.setdefault(a["chunk_id"], a["file_path"])
+    for c in chunks:
+        path = first.get(c.get("id"))
+        if path:
+            c["image_url"] = asset_repo.resolve_asset_url(path)
 
 
 def format_blocks(chunks: Sequence[dict], *, prefix: str = "") -> str:
     return "\n\n".join(format_block(c, prefix=prefix) for c in chunks)
+
+
+def format_block_map(chunks: Sequence[dict], *, prefix: str = "", indent: str = "") -> str:
+    """Fallback index for a document MinerU found no headings in.
+
+    ⚠ Without this, a heading-less paper loses the index *and* the paper in one
+    move: nothing to browse and nothing in the prompt, leaving SEARCH as the
+    only way in and a wrong guess at the vocabulary as a dead end. Sampling
+    every Nth block gives a coarse map of the same shape — where in the
+    document each idea sits — at a fraction of the tokens.
+
+    Non-text blocks are kept wherever they fall rather than only on stride
+    boundaries: a figure, a table or an equation is a landmark, and the whole
+    value of a coarse map is knowing where the landmarks are.
+
+    Lives here, prefixed, because BOTH agents need it — the study agent's
+    index used to print only "(no headings detected)" for such a paper, which
+    told the model the paper existed and nothing whatever about what was in
+    it.
+    """
+    stride = max(1, settings.paper_agent_map_stride)
+    lines = []
+    for i, c in enumerate(chunks):
+        if i % stride and (c.get("chunk_type") or "text") == "text":
+            continue
+        body = " ".join((c.get("plain_text") or "").split())[:90]
+        if not body:
+            continue
+        kind = c.get("chunk_type") or "text"
+        label = f" ({kind})" if kind != "text" else ""
+        lines.append(f"{indent}[[{prefix}{c['sequence_id']}]]{label} {body}…")
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,9 +136,63 @@ TOOL_BLOCK_RE = re.compile(r"<tool>(.*?)(?:</tool>|$)", re.DOTALL | re.IGNORECAS
 # fetches it triggered. Not a tool: it executes nothing and costs no round.
 THINK_RE = re.compile(r"^\s*THINK:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 WEB_RE = re.compile(r"^\s*WEB:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+# A picture from the public web, for when neither the documents nor a drawing
+# can show what something looks like. Shared like WEB, and it leaves the
+# machine the same way.
+IMAGE_RE = re.compile(r"^\s*IMAGE:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 # A durable note about the READER, not the paper — see chat/memory.py. Shared
 # between both agents the same way WEB is: one line, one meaning, everywhere.
 REMEMBER_RE = re.compile(r"^\s*REMEMBER:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Showing things, not only describing them
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Written once here and used by both agents, for the same reason REMEMBER is:
+# an answer that can show a figure in the reading margin should be able to show
+# one on the desk too, in the same syntax, or the two drift.
+#
+# All three routes end up as ordinary markdown in the answer, which the shared
+# frontend pipeline already renders (see frontend/src/lib/markdown.ts): an
+# image becomes a click-to-enlarge figure, a ```mermaid block becomes a drawn
+# diagram. Nothing here needs the model to learn a bespoke marker.
+
+PICTURE_HELP = """
+- SHOW, don't only describe. Three ways, in order of preference:
+  1. A figure, table or diagram from the documents themselves. Any block you \
+fetch that has one comes back with a ready-made `show with: ![caption](url)` \
+line — paste that line into your answer to display it. This is always the \
+best option: it is the actual artefact the reader is asking about.
+  2. Draw it yourself, when the explanation is about structure, flow or \
+relationships and no figure exists. Emit a fenced ```mermaid block and it is \
+rendered as a real diagram — architectures, pipelines, state machines, \
+timelines, comparisons. Keep node labels short and quote any label containing \
+punctuation.
+  3. A picture from the web, for what a thing genuinely looks like when \
+neither of the above can show it.{image_bullet}
+- Restraint is part of this. A picture earns its place when it makes something \
+clearer than the sentence would — a structure, a shape, a comparison. Do not \
+decorate an answer that is already clear, and never show a figure you have not \
+actually fetched and read."""
+
+IMAGE_BULLET = """ Use IMAGE for that.
+- IMAGE searches the public web for pictures and hands back markdown you paste \
+verbatim. Only the query leaves this machine, but the picture is then loaded \
+by the reader's browser from wherever it lives, so prefer routes 1 and 2. Two IMAGE lines per block at most."""
+
+IMAGE_EXAMPLE = "\nIMAGE: transformer architecture diagram"
+
+MERMAID_EXAMPLE = """
+
+A drawn diagram looks like this in the answer (not in the tool block):
+
+```mermaid
+graph LR
+  A[Input] --> B[Encoder]
+  B --> C[Decoder]
+  C --> D[Output]
+```"""
 
 
 def strip_tool_block(reply: str) -> str:
@@ -167,6 +293,7 @@ async def read_range(
     rows = await chunk_repo.get_chunks_in_range(session, document_id, start, end, cap)
     if not rows:
         return f"{label} — no blocks in that range.", []
+    await attach_asset_urls(session, rows)
     truncated = f" (truncated to the first {cap} blocks)" if len(rows) >= cap else ""
     return (
         f"{label}{truncated}:\n" + format_blocks(rows, prefix=prefix),
@@ -186,7 +313,7 @@ async def run_search(
     limit: Optional[int] = None,
     max_sequence_id: Optional[int] = None,
 ) -> list[dict]:
-    """Full-text search plus a literal substring pass, de-duplicated.
+    """Hybrid semantic + full-text search, plus a literal substring pass.
 
     ``document_scope`` is one document id or a list of them.
 
@@ -195,15 +322,27 @@ async def run_search(
     the desk, where the whole point is that the assistant can reach across
     everything in the study, so it is deliberately never clamped.
 
+    The first leg is ``retrieval.search_chunks``: pgvector cosine fused with
+    full-text by reciprocal rank. Without it this tool could only find a
+    passage that shares literal words with the query, which is the wrong
+    instrument for the question a study actually gets asked — "where do these
+    papers disagree about evaluation" names no term any of them uses. It
+    degrades on its own: a document ingested with no chunk embeddings (the
+    fast profile skips them) simply contributes nothing to the vector half,
+    and fusion falls back to the full-text ranking it already had.
+
     ⚠ The substring leg is not redundant: ``to_tsvector`` drops single Greek
     letters, equation numbers, and symbol subscripts entirely, so a reader
     asking "why is τ so small here" gets zero full-text hits on the one term
-    that matters.
+    that matters — and an embedding blurs exactly those tokens too, so the
+    semantic leg does not rescue them either. It stays a pure recall leg,
+    appended after the ranked ones rather than fused with them, because its
+    own order (document, then sequence) carries no relevance signal to fuse.
 
-    ⚠ The two legs run **sequentially, not gathered**. An ``AsyncSession`` is a
+    ⚠ The legs run **sequentially, not gathered**. An ``AsyncSession`` is a
     single connection in a single greenlet context; concurrent statements on it
-    are unsupported and fail under the wrong interleaving. Both legs are
-    indexed lookups measured in single-digit milliseconds, so the concurrency
+    are unsupported and fail under the wrong interleaving. Each leg is an
+    indexed lookup measured in single-digit milliseconds, so the concurrency
     would buy nothing worth that failure mode.
     """
     limit = limit or settings.paper_agent_search_limit
@@ -212,12 +351,12 @@ async def run_search(
 
     if many:
         legs_to_run = (
-            lambda: search_chunks_fulltext(session, query, limit=limit, document_ids=ids),
+            lambda: search_chunks(session, query, limit=limit, document_ids=ids),
             lambda: chunk_repo.search_chunks_substring_multi(session, ids, query, limit),
         )
     else:
         legs_to_run = (
-            lambda: search_chunks_fulltext(
+            lambda: search_chunks(
                 session, query, limit=limit, document_id=ids[0],
                 max_sequence_id=max_sequence_id,
             ),
@@ -245,9 +384,10 @@ async def run_search(
                 continue
             seen.add(key)
             hits.append(row)
-    # ⚠ Truncate FIRST, group SECOND. Both legs arrive already ranked — the
-    # full-text one by ts_rank DESC, and it is listed first — so `hits` at this
-    # point is "best matches, best leg first". Sorting before the slice threw
+    # ⚠ Truncate FIRST, group SECOND. The ranked leg arrives already ordered —
+    # semantic and full-text fused by reciprocal rank — and it is listed first,
+    # so `hits` at this point is "best matches, best leg first". The substring
+    # leg follows as pure recall. Sorting before the slice threw
     # that away and picked the survivors by document UUID instead: with a
     # 24-paper study (study_max_papers) and a limit of 8
     # (paper_agent_search_limit), the papers whose ids happen to sort low took
@@ -263,6 +403,9 @@ async def run_search(
     # selection rather than instead of it.
     hits = hits[:limit]
     hits.sort(key=lambda r: (str(r.get("document_id") or ""), r.get("sequence_id") or 0))
+    # Only the survivors: a figure the model can see it found is one it can
+    # also show, and doing this after the slice keeps it to one small query.
+    await attach_asset_urls(session, hits)
     return hits
 
 
@@ -290,6 +433,45 @@ def format_search_results(
 # ─────────────────────────────────────────────────────────────────────────────
 # WEB
 # ─────────────────────────────────────────────────────────────────────────────
+
+async def run_image(query: str, *, limit: Optional[int] = None) -> tuple[str, list[dict]]:
+    """Search the web for a picture; return the observation and the sources.
+
+    For the case neither the documents nor a drawing covers: what a named
+    architecture, instrument, organism or place actually looks like. The
+    observation hands back ready-to-paste markdown, because the model's job
+    here is to choose one, not to reconstruct a URL from a description of it.
+
+    ⚠ Leaves the machine, exactly as WEB does and under the same cascade — the
+    query string goes out, nothing else. Beyond that, an image the model picks
+    is fetched a second time by the READER's browser, from whichever host
+    holds it. That is the same posture an imported article's own images
+    already have (hotlinked, not proxied — see article_extraction.py), and the
+    renderer sends no referrer; it is worth knowing rather than assuming.
+
+    Failures degrade to "nothing came back" rather than raising: a dead image
+    provider must cost the picture, not the answer.
+    """
+    limit = limit or settings.paper_agent_web_limit
+    try:
+        hits = await web_search.search_images(query, limit=limit)
+    except Exception as e:
+        logger.warning("agent IMAGE leg failed: %s", e)
+        hits = []
+    hits = [h for h in hits if h.get("img_url")]
+    if not hits:
+        return f'IMAGE "{query}" — no pictures came back (or the provider has no image search).', []
+    lines = [
+        f'IMAGE "{query}" — {len(hits)} picture(s). To show one, paste its '
+        f'markdown into the answer exactly as written:'
+    ]
+    sources = []
+    for h in hits:
+        title = " ".join((h.get("title") or query).split())[:80]
+        lines.append(f"  ![{title}]({h['img_url']})   (from {h.get('source_url') or 'unknown'})")
+        sources.append({"title": title, "url": h.get("source_url") or h.get("img_url") or ""})
+    return "\n".join(lines), sources
+
 
 async def run_web(query: str, *, limit: Optional[int] = None) -> tuple[str, list[dict]]:
     """Search the public web; return the observation text and the sources.

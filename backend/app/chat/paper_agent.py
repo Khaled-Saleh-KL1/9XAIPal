@@ -69,10 +69,17 @@ from app.chat.agent_tools import (
     WEB_RE,
     extract_remembers,
     format_block,
+    IMAGE_BULLET,
+    IMAGE_EXAMPLE,
+    IMAGE_RE,
+    MERMAID_EXAMPLE,
+    PICTURE_HELP,
+    format_block_map,
     format_blocks,
     format_search_results,
     read_range,
     run_search,
+    run_image,
     run_web,
     section_range,
     step_event,
@@ -215,7 +222,7 @@ block, no partial answer:
 THINK: the passage cites the training mixture but does not list it
 SECTION: 31
 SEARCH: sliding window attention
-READ: 40-52{web_example}{remember_example}
+READ: 40-52{web_example}{image_example}{remember_example}
 </tool>
 
 - THINK is one short line saying why you are fetching. The reader sees it, so \
@@ -229,7 +236,7 @@ containing it, so a SEARCH hit can be handed straight to SECTION.
 - SEARCH finds blocks containing terms anywhere in the paper. Use the paper's \
 own vocabulary.
 - READ returns a block range verbatim. Use it for ranges you got from SEARCH \
-hits, or to widen around a block you already have.{web_help}{remember_bullet}
+hits, or to widen around a block you already have.{web_help}{remember_bullet}{picture_help}{mermaid_example}
 - Up to three lines of each. Every line in one block runs before you are \
 called again.
 
@@ -258,7 +265,7 @@ block, no partial answer:
 THINK: checking how the reunion scene actually reads before describing it
 SECTION: 31
 SEARCH: the lighthouse
-READ: 40-52{web_example}{remember_example}
+READ: 40-52{web_example}{image_example}{remember_example}
 </tool>
 
 - THINK is one short line saying why you are fetching. The reader sees it, so \
@@ -272,7 +279,7 @@ section containing it, so a SEARCH hit can be handed straight to SECTION.
 - SEARCH finds blocks containing terms anywhere in the book — a name, a \
 place, a phrase. Use the book's own vocabulary.
 - READ returns a block range verbatim. Use it for ranges you got from SEARCH \
-hits, or to widen around a block you already have.{web_help}{remember_bullet}
+hits, or to widen around a block you already have.{web_help}{remember_bullet}{picture_help}{mermaid_example}
 - Up to three lines of each. Every line in one block runs before you are \
 called again.
 
@@ -302,7 +309,7 @@ block, no partial answer:
 THINK: checking the exact wording of the claim before characterizing it
 SECTION: 12
 SEARCH: the author's main argument
-READ: 8-14{web_example}{remember_example}
+READ: 8-14{web_example}{image_example}{remember_example}
 </tool>
 
 - THINK is one short line saying why you are fetching. The reader sees it, so \
@@ -316,7 +323,7 @@ containing it, so a SEARCH hit can be handed straight to SECTION.
 - SEARCH finds blocks containing terms anywhere in the article. Use the \
 article's own vocabulary.
 - READ returns a block range verbatim. Use it for ranges you got from SEARCH \
-hits, or to widen around a block you already have.{web_help}{remember_bullet}
+hits, or to widen around a block you already have.{web_help}{remember_bullet}{picture_help}{mermaid_example}
 - Up to three lines of each. Every line in one block runs before you are \
 called again.
 
@@ -442,29 +449,17 @@ def _format_contents(chunks: list[dict]) -> str:
 def _format_block_map(chunks: list[dict]) -> str:
     """Fallback index for a paper MinerU found no headings in.
 
-    ⚠ Without this, a heading-less paper loses the index *and* the paper in one
-    move: nothing to browse and nothing in the prompt, leaving SEARCH as the
-    only way in and a wrong guess at the vocabulary as a dead end. Sampling
-    every Nth block gives a coarse map of the same shape — where in the
-    document each idea sits — at a fraction of the tokens.
+    The sampling itself is shared with the study agent — see
+    agent_tools.format_block_map, which this wraps with the single-paper
+    framing.
     """
-    stride = max(1, settings.paper_agent_map_stride)
-    lines = []
-    for i, c in enumerate(chunks):
-        if i % stride and (c.get("chunk_type") or "text") == "text":
-            continue
-        text = " ".join((c.get("plain_text") or "").split())[:90]
-        if not text:
-            continue
-        kind = c.get("chunk_type") or "text"
-        label = f" ({kind})" if kind != "text" else ""
-        lines.append(f"[[{c['sequence_id']}]]{label} {text}…")
-    if not lines:
+    body = format_block_map(chunks)
+    if not body:
         return "(this paper has no readable text)"
     return (
         "(no headings were detected in this paper, so this is a sample of its "
         "blocks rather than a table of contents — SECTION will not work here, "
-        "use SEARCH and READ)\n" + "\n".join(lines)
+        "use SEARCH and READ)\n" + body
     )
 
 
@@ -593,7 +588,7 @@ def _parse_tool_calls(reply: str) -> dict:
     ``think`` carries no execution — it is the rationale line the reader sees.
     """
     empty = {
-        "think": None, "sections": [], "searches": [], "reads": [], "webs": [],
+        "think": None, "sections": [], "searches": [], "reads": [], "webs": [], "images": [],
         "remembers": [],
     }
     match = TOOL_BLOCK_RE.search(reply)
@@ -607,6 +602,8 @@ def _parse_tool_calls(reply: str) -> dict:
         "searches": [q.strip() for q in _SEARCH_RE.findall(body) if q.strip()][:3],
         "reads": [(int(a), int(b)) for a, b in _READ_RE.findall(body)][:3],
         "webs": [q.strip() for q in WEB_RE.findall(body) if q.strip()][:2],
+        # Two per round, matching WEB: both leave the machine.
+        "images": [q.strip() for q in IMAGE_RE.findall(body) if q.strip()][:2],
         # One per round, hard — most rounds should remember nothing at all.
         "remembers": [q.strip() for q in REMEMBER_RE.findall(body) if q.strip()][:1],
     }
@@ -616,6 +613,7 @@ def _has_calls(calls: dict) -> bool:
     """Whether anything in this block actually executes. THINK alone does not."""
     return bool(
         calls["sections"] or calls["searches"] or calls["reads"] or calls["webs"]
+        or calls["images"]
         or calls["remembers"]
     )
 
@@ -642,6 +640,8 @@ def _plan(calls: dict) -> list[dict]:
         plan.append({"tool": "SEARCH", "arg": query})
     for query in calls["webs"]:
         plan.append({"tool": "WEB", "arg": query})
+    for query in calls["images"]:
+        plan.append({"tool": "IMAGE", "arg": query})
     for body in calls["remembers"]:
         plan.append({"tool": "REMEMBER", "arg": body})
     return plan
@@ -744,6 +744,14 @@ async def _run_call(
         )
         out["label"] = "Remembered that for next time"
         out["result"] = "saved" if memory_id else "already knew that"
+        return out
+
+    if call["tool"] == "IMAGE":
+        text, sources = await run_image(call["arg"])
+        out["observation"] = text
+        out["label"] = f"Looked for a picture of “{call['arg']}”"
+        out["result"] = f"{len(sources)} picture(s)" if sources else "nothing came back"
+        out["sources"] = sources
         return out
 
     text, sources = await run_web(call["arg"])
@@ -923,6 +931,9 @@ async def answer_paper_question(
         web_example=_for_kind(_WEB_EXAMPLE_BY_KIND, doc_kind) if web_on else "",
         remember_bullet=_REMEMBER_BULLET.format(noun=noun),
         remember_example=_REMEMBER_EXAMPLE,
+        picture_help=PICTURE_HELP.format(image_bullet=IMAGE_BULLET if web_on else ""),
+        image_example=IMAGE_EXAMPLE if web_on else "",
+        mermaid_example=MERMAID_EXAMPLE,
     )
     base_parts = [
         anchor_block,

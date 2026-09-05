@@ -121,3 +121,28 @@ async def test_a_generous_limit_still_reaches_both_papers(study, db_session):
     made the bug hard to see: it only bites once the limit binds."""
     hits = await run_search(db_session, study, "transformer", limit=20)
     assert {h["document_id"] for h in hits} == {DOC_LOW, DOC_HIGH}
+
+
+@pytest.mark.asyncio
+async def test_search_survives_the_embedding_provider_being_down(study, db_session, monkeypatch):
+    """The semantic leg is now fused with full-text inside one call, so a
+    failure there must not take full-text down with it.
+
+    This is not hypothetical: `get_query_embedding` reaches Ollama or a cloud
+    provider over the network on every SEARCH. Before the guard, an unreachable
+    provider raised before the full-text query ever ran, the whole ranked leg
+    was lost, and every agent search in the app silently degraded to a
+    substring scan — with nothing in the answer to say retrieval had been
+    crippled.
+    """
+    import app.services.retrieval as retrieval
+
+    async def _boom(_query):
+        raise RuntimeError("Ollama unreachable")
+
+    monkeypatch.setattr(retrieval, "get_query_embedding", _boom)
+
+    hits = await run_search(db_session, study, "transformer", limit=4)
+    assert [h for h in hits if h["document_id"] == DOC_HIGH], (
+        "full-text results must survive an embedding outage"
+    )
