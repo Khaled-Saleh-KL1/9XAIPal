@@ -127,6 +127,14 @@ export function App() {
   // delete it on the backend (a ref, because Cancel may fire before the
   // uploadPaper promise resolves and state has been committed).
   const uploadIdRef = useRef<string | null>(null);
+  // Which navigation is the current one. Opening a document by id has to
+  // fetch its metadata first, and back/forward through the hash can start a
+  // second fetch before the first has answered — whereupon whichever
+  // response happens to land last wins, regardless of which the reader
+  // actually asked for last. The symptom is the hash reading #/paper/B while
+  // paper A is on screen. Every path that decides what is being viewed bumps
+  // this, and every path that awaits before committing re-checks it.
+  const navGenRef = useRef(0);
 
   // Raw files state
   const [rawPapers, setRawPapers] = useState<PaperMeta[]>([]);
@@ -313,6 +321,10 @@ export function App() {
   }, [handleFileUpload, pendingFile]);
 
   const openPaper = useCallback((p: Paper) => {
+    // Commits immediately, so it is the newest navigation by definition —
+    // and bumping here is what stops an already-in-flight openPaperById from
+    // landing on top of the paper just clicked.
+    navGenRef.current++;
     setActivePaper(p);
     setActivePaperId(p.id);
     setJumpTo(null);
@@ -321,8 +333,10 @@ export function App() {
 
   /** Open a paper the desk names, optionally at one of its blocks. */
   const openPaperById = useCallback(async (documentId: string, sequenceId?: number) => {
+    const gen = ++navGenRef.current;
     try {
       const meta = await getPaper(documentId);
+      if (gen !== navGenRef.current) return; // a newer navigation has since won
       setActivePaper(metaToPaper(meta));
       setActivePaperId(meta.id);
       setJumpTo(sequenceId ?? null);
@@ -387,8 +401,12 @@ export function App() {
     }
 
     (async () => {
+      // Guarded like the other two: this fetch runs on mount, and the reader
+      // can click through to something else before a slow one answers.
+      const gen = ++navGenRef.current;
       try {
         const meta = await getPaper(initial.paperId);
+        if (gen !== navGenRef.current) return;
         if (initial.route === 'reading') {
           setActivePaper(metaToPaper(meta));
           setActivePaperId(meta.id);
@@ -400,6 +418,7 @@ export function App() {
           setRoute('pdf-viewer');
         }
       } catch {
+        if (gen !== navGenRef.current) return;
         // Paper no longer exists, so fall back to the library and clear the
         // hash. A replace, not a push: a dead link should not become a step
         // the back button can return to.
@@ -442,13 +461,16 @@ export function App() {
         // showing; without this the hash says #/raw/<id> while the view
         // stays wherever it was.
         void (async () => {
+          const gen = ++navGenRef.current;
           try {
             const meta = await getPaper(next.paperId);
+            if (gen !== navGenRef.current) return; // a newer navigation has since won
             setPdfInitialPage(null);
             setRawAnchors([]);
             setViewingPdf(meta);
             setRoute('pdf-viewer');
           } catch {
+            if (gen !== navGenRef.current) return;
             setRoute('library');
           }
         })();
@@ -520,6 +542,7 @@ export function App() {
           jumpToAnchor={readingAnchor}
           onJumpedAnchor={() => setReadingAnchor(null)}
           onOpenRaw={(meta, page, anchors) => {
+            navGenRef.current++; // commits now; outranks any fetch still in flight
             setPdfInitialPage(page);
             setRawAnchors(anchors);
             setViewingPdf(meta);
@@ -619,6 +642,7 @@ export function App() {
         open={rawFilesOpen}
         onClose={() => setRawFilesOpen(false)}
         onOpenPdf={(p) => {
+          navGenRef.current++; // commits now; outranks any fetch still in flight
           setRawFilesOpen(false);
           setPdfInitialPage(null);
           setRawAnchors([]);
