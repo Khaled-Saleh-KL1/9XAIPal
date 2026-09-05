@@ -237,3 +237,29 @@ def test_headers_never_send_the_joined_key_string(monkeypatch):
     fallback = ollama_client._ollama_headers()
     assert fallback["Authorization"] == "Bearer k1"
     assert "," not in fallback["Authorization"]
+
+
+def test_the_resolver_probe_headers_never_send_the_joined_key_string(monkeypatch):
+    """The resolver has its OWN copy of the header builder, and it is the one
+    the reachability probe and the model catalog actually call.
+
+    It read `settings.ollama_api_key` raw, so a multi-key setup sent
+    `Bearer k1,k2,k3` — 401 — and `ollama_reachable()` concluded Ollama was
+    down while it was running fine, silently sending the whole chat and
+    embedding cascade to a cloud provider. The test above covered only
+    ollama_client's copy, which is why this went unnoticed.
+    """
+    from app.llm import resolver
+
+    monkeypatch.setattr(settings, "ollama_api_key", "k1,k2,k3")
+
+    headers = resolver._ollama_headers()
+    assert headers["Authorization"] == "Bearer k1"
+    assert "," not in headers["Authorization"]
+
+
+def test_the_resolver_probe_sends_no_auth_header_when_no_key_is_set(monkeypatch):
+    from app.llm import resolver
+
+    monkeypatch.setattr(settings, "ollama_api_key", "")
+    assert resolver._ollama_headers() == {}

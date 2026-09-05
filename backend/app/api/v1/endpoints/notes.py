@@ -242,9 +242,18 @@ async def create_note_stream(
     # request. A thread that switched models halfway would silently invalidate
     # the comparison the picker exists to support: you would no longer know
     # which model said what. The client cannot override this.
+    #
+    # ⚠ The parent must belong to THIS paper. get_note looks a note up by id
+    # alone, so without this check any note id the client sends is accepted —
+    # and the whole parent thread is read below and handed to the model as
+    # context (see `thread` and answer_paper_question). That is someone
+    # else's questions and answers, about someone else's document, inside
+    # this answer. Same 404 shape as delete_note, which already checks it.
     parent: Optional[dict] = None
     if payload.parent_note_id:
         parent = await note_repo.get_note(db, payload.parent_note_id)
+        if not parent or parent["document_id"] != paper_id:
+            raise HTTPException(status_code=404, detail="Note not found")
 
     # ⚠ Scope is derived from the anchor kind, never sent as its own field.
     # A request carrying kind='document' with scope='anchor' (or the reverse)

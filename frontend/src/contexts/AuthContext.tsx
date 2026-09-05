@@ -17,8 +17,8 @@ interface AuthContextValue {
   signup: (email: string, password: string, displayName?: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Re-check admission — WaitingRoomView polls this until `admitted` flips
-   * true. Login/signup themselves already run one successful request before
-   * this ever gets called, so no separate initial fetch is needed there. */
+   * true. Login and signup ask the same question once on the way in, so the
+   * waiting room is reached without a poll having to run first. */
   refreshAdmission: () => Promise<void>;
 }
 
@@ -71,24 +71,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('pageshow', onPageShow);
   }, [applyMe]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const u = await apiLogin(email, password);
-    // login/signup succeeding means the backend already admitted this
-    // session (or it wouldn't have been able to touch the DB user row at
-    // all) — a fresh /me isn't needed to know that.
-    setUser(u);
-    setAdmitted(true);
-    setQueuePosition(null);
-  }, []);
+  // ⚠ Admission has to be ASKED FOR, not assumed from a successful login.
+  // POST /auth/login and /auth/signup mint a session; neither one calls
+  // capacity.touch_and_check_admission (only GET /auth/me and the
+  // get_current_user dependency do). So when the site is at
+  // MAX_ACTIVE_USERS, logging in still returns 200 with a valid user — and
+  // taking that as "admitted" rendered the whole app for someone with no
+  // slot, whose every subsequent request then came back 423. The waiting
+  // room, which exists for exactly this, never got shown. One GET /auth/me
+  // settles it, and it is the same call WaitingRoomView already polls.
+  //
+  // Nothing is set until that answer is in, so a queued user goes straight
+  // from the sign-in form to the waiting room rather than through a frame of
+  // the full app. The form stays in its submitting state across the extra
+  // round trip, exactly as it already does across the login request itself.
+  const admitAfter = useCallback(
+    async (u: User) => {
+      // ⚠ Only the admission half of the answer is taken from /me. getMe
+      // swallows a non-ok response and reports `user: null` rather than
+      // throwing, and applying that verbatim would put the sign-in form back
+      // up as though the login had failed — when in fact it succeeded and
+      // the cookie is set. The user we just authenticated is the truth here;
+      // /me is only being asked whether there is a slot.
+      let admission = { admitted: true, queuePosition: null as number | null };
+      try {
+        const me = await getMe();
+        if (me.user) admission = { admitted: me.admitted, queuePosition: me.queuePosition };
+      } catch {
+        // Network blip on the capacity check — let them in rather than
+        // stranding a real session behind it.
+      }
+      setUser(u);
+      setAdmitted(admission.admitted);
+      setQueuePosition(admission.queuePosition);
+    },
+    [],
+  );
+
+  const login = useCallback(
+    async (email: string, password: string) => {
+      await admitAfter(await apiLogin(email, password));
+    },
+    [admitAfter],
+  );
 
   const signup = useCallback(
     async (email: string, password: string, displayName?: string) => {
-      const u = await apiSignup(email, password, displayName);
-      setUser(u);
-      setAdmitted(true);
-      setQueuePosition(null);
+      await admitAfter(await apiSignup(email, password, displayName));
     },
-    [],
+    [admitAfter],
   );
 
   const logout = useCallback(async () => {

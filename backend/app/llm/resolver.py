@@ -129,10 +129,20 @@ def _probe_store(url: str, up: bool) -> None:
 
 
 def _ollama_headers() -> dict:
-    """Headers for native Ollama endpoints; adds Bearer auth when a key is set."""
+    """Headers for the reachability probe; adds Bearer auth when a key is set.
+
+    ⚠ The FIRST key, never the raw setting. OLLAMA_API_KEY may hold a
+    COMMA-SEPARATED LIST (see settings.ollama_api_keys), and sending the
+    joined string as one Bearer token 401s every time — so the probe below
+    concludes Ollama is down while it is running fine, and the whole chat and
+    embedding cascade falls through to a cloud provider. The probe only needs
+    to prove the host is up, and any one valid key does that. This is the
+    same rule, and the same reason, as ollama_client._ollama_headers.
+    """
     headers = {}
-    if settings.ollama_api_key:
-        headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
+    keys = settings.ollama_api_keys
+    if keys:
+        headers["Authorization"] = f"Bearer {keys[0]}"
     return headers
 
 

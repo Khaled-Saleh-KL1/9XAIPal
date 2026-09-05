@@ -610,44 +610,53 @@ async def delete_paper(
     await db.commit()
 
     # ── Physical cleanup ──────────────────────────────────────────────
-    # 1. Raw upload under documents/<filename>
-    raw_upload = documents_dir() / deleted["filename"]
-    try:
-        os.remove(raw_upload)
-    except FileNotFoundError:
-        pass
-    except OSError as e:  # permission errors, etc. — log and continue
-        logger.warning(f"could not remove {raw_upload}: {e}")
+    # ⚠ Off the event loop, for the same reason render_cover is (see its
+    # comment above). A book's extraction directory holds one image per
+    # figure plus a full-page snapshot per page — thousands of files — and
+    # unlinking them one at a time is a syscall each. Inline, deleting a big
+    # paper freezes every other request in the process for the duration,
+    # including other people's reading.
+    def _remove_artefacts() -> None:
+        # 1. Raw upload under documents/<filename>
+        raw_upload = documents_dir() / deleted["filename"]
+        try:
+            os.remove(raw_upload)
+        except FileNotFoundError:
+            pass
+        except OSError as e:  # permission errors, etc. — log and continue
+            logger.warning(f"could not remove {raw_upload}: {e}")
 
-    # 2. Raw asset copy under assets/<paper_id>.pdf
-    raw_asset = assets_dir() / f"{paper_id}.pdf"
-    try:
-        os.remove(raw_asset)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        logger.warning(f"could not remove {raw_asset}: {e}")
+        # 2. Raw asset copy under assets/<paper_id>.pdf
+        raw_asset = assets_dir() / f"{paper_id}.pdf"
+        try:
+            os.remove(raw_asset)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning(f"could not remove {raw_asset}: {e}")
 
-    # 3. MinerU extraction directory: extracted/<paper_id>/
-    extract_path = extracted_dir() / str(paper_id)
-    try:
-        shutil.rmtree(extract_path)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        logger.warning(f"could not rmtree {extract_path}: {e}")
+        # 3. MinerU extraction directory: extracted/<paper_id>/
+        extract_path = extracted_dir() / str(paper_id)
+        try:
+            shutil.rmtree(extract_path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning(f"could not rmtree {extract_path}: {e}")
 
-    # 4. Image asset directory: images/<paper_id>/
-    image_path = images_dir() / str(paper_id)
-    try:
-        shutil.rmtree(image_path)
-    except FileNotFoundError:
-        pass
-    except OSError as e:
-        logger.warning(f"could not rmtree {image_path}: {e}")
+        # 4. Image asset directory: images/<paper_id>/
+        image_path = images_dir() / str(paper_id)
+        try:
+            shutil.rmtree(image_path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning(f"could not rmtree {image_path}: {e}")
 
-    # 5. Cached first-page cover: covers/<paper_id>.jpg
-    cover_service.delete_cover(paper_id)
+        # 5. Cached first-page cover: covers/<paper_id>.jpg
+        cover_service.delete_cover(paper_id)
+
+    await run_in_threadpool(_remove_artefacts)
 
 
 @router.post("/{paper_id}/rechunk", status_code=200)
@@ -689,50 +698,68 @@ async def rechunk_paper(
             ),
         )
 
-    # Prefer content_list.json (typed + page-indexed); fall back to markdown.
-    content_list = find_content_list(extract_path)
-    if content_list is not None:
-        chunks = create_chunks_from_content_list(content_list)
-        source = "content_list.json"
-    else:
-        md_file = find_markdown_output(extract_path)
-        if not md_file:
-            raise HTTPException(
-                status_code=409,
-                detail="Cached extraction has no markdown — delete and re-upload.",
-            )
-        chunks = create_chunks_from_markdown(md_file.read_text(encoding="utf-8"))
-        source = "markdown"
-
-    if not chunks:
-        raise HTTPException(status_code=500, detail="Re-chunking produced zero chunks.")
-
-    # Repair the inline math variables MinerU turned into U+FFFD. Runs here too
-    # (not only in the pipeline) so a paper already on disk can be fixed with a
-    # re-chunk instead of a full re-extraction.
     from app.extraction.chunker import crop_code_blocks
     from app.extraction.glyph_repair import repair_chunks
-    glyphs_repaired = 0
-    code_blocks_cropped = 0
-    source_pdf = documents_dir() / (doc.get("filename") or "")
-    if source_pdf.exists():
-        try:
-            glyphs_repaired = repair_chunks(chunks, source_pdf)
-        except Exception:
-            logger.exception("[glyph-repair] failed during rechunk (non-fatal)")
-        # Only meaningful for the content_list.json path — MinerU never
-        # crops literal code/schema listings itself, so bbox_json is what
-        # crop_code_blocks needs, and only create_chunks_from_content_list
-        # (not the markdown fallback) stashes it (see chunker.py).
+
+    # ⚠ All of it off the event loop, for the same reason render_cover is
+    # (see its comment above) — and far more so. This walks the extraction
+    # directory, parses a content_list.json that runs to megabytes on a book,
+    # puts every one of its thousands of blocks through the chunker, then
+    # reopens the PDF twice to extract the text of every page (glyph repair)
+    # and rasterise crops (code blocks). That is seconds of solid CPU and
+    # disk inside native extensions, none of it yielding. Inline it froze the
+    # entire process for the whole re-chunk: every other request, everyone
+    # else's reading, the library's own polling.
+    def _rebuild_chunks() -> tuple[list[dict], str, int, int]:
+        # Prefer content_list.json (typed + page-indexed); fall back to markdown.
+        content_list = find_content_list(extract_path)
         if content_list is not None:
-            try:
-                code_blocks_cropped = crop_code_blocks(
-                    chunks, source_pdf, content_list.parent / "images"
+            chunks = create_chunks_from_content_list(content_list)
+            source = "content_list.json"
+        else:
+            md_file = find_markdown_output(extract_path)
+            if not md_file:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Cached extraction has no markdown — delete and re-upload.",
                 )
+            chunks = create_chunks_from_markdown(md_file.read_text(encoding="utf-8"))
+            source = "markdown"
+
+        if not chunks:
+            raise HTTPException(status_code=500, detail="Re-chunking produced zero chunks.")
+
+        # Repair the inline math variables MinerU turned into U+FFFD. Runs here
+        # too (not only in the pipeline) so a paper already on disk can be fixed
+        # with a re-chunk instead of a full re-extraction.
+        glyphs_repaired = 0
+        code_blocks_cropped = 0
+        source_pdf = documents_dir() / (doc.get("filename") or "")
+        if source_pdf.exists():
+            try:
+                glyphs_repaired = repair_chunks(chunks, source_pdf)
             except Exception:
-                logger.exception("[code-crop] failed during rechunk (non-fatal)")
-    else:
-        logger.warning("[glyph-repair] source PDF missing for %s — skipping", paper_id)
+                logger.exception("[glyph-repair] failed during rechunk (non-fatal)")
+            # Only meaningful for the content_list.json path — MinerU never
+            # crops literal code/schema listings itself, so bbox_json is what
+            # crop_code_blocks needs, and only create_chunks_from_content_list
+            # (not the markdown fallback) stashes it (see chunker.py).
+            if content_list is not None:
+                try:
+                    code_blocks_cropped = crop_code_blocks(
+                        chunks, source_pdf, content_list.parent / "images"
+                    )
+                except Exception:
+                    logger.exception("[code-crop] failed during rechunk (non-fatal)")
+        else:
+            logger.warning("[glyph-repair] source PDF missing for %s — skipping", paper_id)
+
+        return chunks, source, glyphs_repaired, code_blocks_cropped
+
+    # An HTTPException raised in the worker thread propagates out of the await
+    # unchanged, so the 409/500 branches above still reach the client as
+    # themselves rather than as a 500.
+    chunks, source, glyphs_repaired, code_blocks_cropped = await run_in_threadpool(_rebuild_chunks)
 
     # Wipe and rebuild chunks / embeddings / assets atomically.
     await db.execute(text("""
@@ -760,13 +787,22 @@ async def rechunk_paper(
     # may still be referenced by figure_descriptions rows, and a few stale
     # images cost less than a broken figure.
     from app.extraction.mineru_client import find_images
-    asset_map: dict[str, str] = {}
-    for img_path in find_images(extract_path):
-        try:
-            meta = move_asset_to_storage(img_path, document_id=str(paper_id))
-            asset_map[meta["original_name"]] = meta["file_path"]
-        except Exception:
-            logger.exception("re-register image failed for %s", img_path)
+
+    # Off the event loop as well: find_images rglobs the whole extraction
+    # directory and move_asset_to_storage copies each file it finds. On a book
+    # that is one figure per illustration plus a full-page snapshot per page,
+    # so the loop is thousands of stat-and-copy pairs with nothing to yield on.
+    def _reregister_images() -> dict[str, str]:
+        asset_map: dict[str, str] = {}
+        for img_path in find_images(extract_path):
+            try:
+                meta = move_asset_to_storage(img_path, document_id=str(paper_id))
+                asset_map[meta["original_name"]] = meta["file_path"]
+            except Exception:
+                logger.exception("re-register image failed for %s", img_path)
+        return asset_map
+
+    asset_map = await run_in_threadpool(_reregister_images)
 
     # Use raw SQL with explicit ::uuid / ::jsonb / ::text[] casts. The shared
     # `chunks_table` is declared with String columns (sized for the sync path);
@@ -934,6 +970,27 @@ async def reextract_paper(
         process_ingestion.delay(str(paper_id), str(job["id"]), doc["filename"])  # type: ignore[attr-defined]
     except Exception as e:
         logger.exception("Failed to dispatch reextract")
+        # Mark both rows failed before raising — same as the two upload paths
+        # above. Without it the 500 leaves the document at 'processing' and
+        # the job at 'queued' with no worker that will ever pick it up: the
+        # chunks were already deleted, so the paper reads as empty and the UI
+        # shows a spinner that never resolves, with no way back except
+        # re-running the reextract that just failed.
+        try:
+            await update_doc_status_repo(
+                db,
+                paper_id,
+                "failed",
+                error_message=(
+                    "Failed to queue re-extraction (Celery broker / Redis unreachable). "
+                    "Start Redis and the Celery worker, then re-run Re-extract. "
+                    f"Original error: {e}"
+                ),
+            )
+            await update_job_status_svc(db, job["id"], "failed", error_message=f"Dispatch failed: {e}")
+            await db.commit()
+        except Exception as mark_exc:
+            logger.error(f"Failed to record reextract dispatch failure for doc {paper_id}: {mark_exc}")
         raise HTTPException(status_code=500, detail=f"Failed to dispatch reextract: {e}")
 
     return {

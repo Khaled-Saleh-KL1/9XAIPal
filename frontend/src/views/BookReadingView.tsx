@@ -595,27 +595,51 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     };
   }, [revealNext]);
 
+  // ⚠ Both timers are held in a ref so they can be stopped, because neither
+  // is owned by the render that started them. Reconstruction takes up to two
+  // minutes and the reader is free to close the book or open another one
+  // while it runs — the poll then went on firing getPaper every 3s at a view
+  // that no longer exists, for the rest of the safety window. Re-triggering
+  // stacked another poll on top of the first, since nothing cancelled the
+  // old one.
+  const orderPollRef = useRef<{
+    interval: ReturnType<typeof setInterval>;
+    safety: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
+  const stopOrderPoll = useCallback(() => {
+    if (!orderPollRef.current) return;
+    clearInterval(orderPollRef.current.interval);
+    clearTimeout(orderPollRef.current.safety);
+    orderPollRef.current = null;
+  }, []);
+
+  // Unmount, and switching to another book, both stop it.
+  useEffect(() => stopOrderPoll, [paperId, stopOrderPoll]);
+
   const handleReconstructOrder = useCallback(async () => {
     setReconstructionStatus('running');
     try {
       await triggerReadingOrderReconstruction(paperId);
+      stopOrderPoll(); // never run two polls at once
       // Poll a bit until it appears on the document
-      const poll = setInterval(async () => {
+      const interval = setInterval(async () => {
         try {
           const m = await getPaper(paperId);
           if (m.reading_order && Array.isArray(m.reading_order)) {
             setReadingOrder(m.reading_order);
             setReconstructionStatus('done');
-            clearInterval(poll);
+            stopOrderPoll();
           }
         } catch {}
       }, 3000);
-      setTimeout(() => clearInterval(poll), 120000); // safety
+      const safety = setTimeout(stopOrderPoll, 120000);
+      orderPollRef.current = { interval, safety };
     } catch (e) {
       setReconstructionStatus('error');
       console.error(e);
     }
-  }, [paperId]);
+  }, [paperId, stopOrderPoll]);
 
   const displayTitle = meta ? paperDisplayTitle(meta) : paper.title;
 
