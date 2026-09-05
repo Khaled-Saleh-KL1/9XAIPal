@@ -1122,9 +1122,13 @@ const MessageBubble = memo(function MessageBubble({
 
       {m.refs && (
         <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-          {m.refs.map((r) => (
+          {/* Keyed by position as well as text: an answer that cites the
+              same passage in two sentences yields the same string twice
+              (citationsToRefs doesn't dedupe), and duplicate keys make React
+              reconcile the list wrongly on the next render. */}
+          {m.refs.map((r, i) => (
             <button
-              key={r}
+              key={`${r}-${i}`}
               className="text-[11px] font-mono px-1.5 py-0.5 rounded"
               style={{
                 color: 'var(--fg-2)',

@@ -501,10 +501,8 @@ def find_images(output_dir: Path) -> list[Path]:
 def get_page_count(pdf_path: Path) -> Optional[int]:
     """Get page count using PyMuPDF (cheap, doesn't need MinerU)."""
     try:
-        doc = fitz.open(str(pdf_path))
-        count = len(doc)
-        doc.close()
-        return count
+        with fitz.open(str(pdf_path)) as doc:
+            return len(doc)
     except Exception:
         return None
 
@@ -536,27 +534,32 @@ def _extract_with_pymupdf(pdf_path: Path, output_dir: Path) -> Path:
     except Exception as e:
         raise MinerUError(f"Cannot open PDF: {e}")
 
-    total_pages = len(doc)
-    if total_pages == 0:
+    # try/finally, not a close() at the end: a damaged page that makes any of
+    # the per-page calls below raise would otherwise skip the close entirely,
+    # and the handle stays open for as long as the traceback holding this
+    # frame is alive. The worker logs that traceback, so it does.
+    try:
+        total_pages = len(doc)
+        if total_pages == 0:
+            raise MinerUError("PDF has no pages")
+
+        # First pass: collect every line + every embedded image, with their bboxes,
+        # so we can sort by vertical position and interleave them. Computing the
+        # body font size from ALL pages avoids per-page miscalibration on short
+        # pages (references, appendices) that have very few body lines.
+        body_size_global = _global_body_size(doc)
+
+        parts: list[str] = []
+        for page_num in range(total_pages):
+            page = doc[page_num]
+            page_md = _pymupdf_page_markdown(page, page_num, images_dir, body_size_global)
+            page_snapshot = _render_page_snapshot(page, page_num, images_dir)
+            if page_md:
+                parts.append(page_md)
+            if page_snapshot:
+                parts.append(f"![Page {page_num + 1}]({page_snapshot})")
+    finally:
         doc.close()
-        raise MinerUError("PDF has no pages")
-
-    # First pass: collect every line + every embedded image, with their bboxes,
-    # so we can sort by vertical position and interleave them. Computing the
-    # body font size from ALL pages avoids per-page miscalibration on short
-    # pages (references, appendices) that have very few body lines.
-    body_size_global = _global_body_size(doc)
-
-    parts: list[str] = []
-    for page_num in range(total_pages):
-        page = doc[page_num]
-        page_md = _pymupdf_page_markdown(page, page_num, images_dir, body_size_global)
-        page_snapshot = _render_page_snapshot(page, page_num, images_dir)
-        if page_md:
-            parts.append(page_md)
-        if page_snapshot:
-            parts.append(f"![Page {page_num + 1}]({page_snapshot})")
-    doc.close()
 
     md_path = output_dir / f"{pdf_path.stem}.md"
     md_path.write_text("\n\n".join(parts), encoding="utf-8")

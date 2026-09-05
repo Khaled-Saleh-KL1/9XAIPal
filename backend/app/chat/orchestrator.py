@@ -3,6 +3,7 @@
 import asyncio
 import re
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from uuid import UUID, uuid4
 from typing import Any, AsyncIterator, Optional
@@ -1051,10 +1052,13 @@ async def maybe_compact_conversation(
         history = await conv_repo.get_thread_subtree(session, user_id, thread_root_turn_id)
         # Count user turns in *this subtree only* since the last compaction
         # that also belongs to the same subtree.
+        # Hoisted out of the comprehension: it rescans `history` for
+        # compaction turns on every element otherwise, and the answer cannot
+        # change mid-scan.
+        since = _last_compaction_time_in_thread(history)
         user_turns_since = sum(
             1 for t in history
-            if t["role"] == "user"
-            and t["created_at"] > _last_compaction_time_in_thread(history)
+            if t["role"] == "user" and t["created_at"] > since
         )
     else:
         # Main linear chat compaction (original behaviour, only NULL parent)
@@ -1145,13 +1149,21 @@ async def maybe_compact_conversation(
     )
 
 
-def _last_compaction_time_in_thread(thread_turns: list[dict]) -> str:
-    """Helper: find the latest compaction turn inside an already-loaded subtree."""
+def _last_compaction_time_in_thread(thread_turns: list[dict]) -> datetime:
+    """Helper: find the latest compaction turn inside an already-loaded subtree.
+
+    ⚠ Returns a datetime, not its isoformat string. The one caller compares
+    it against `turn["created_at"]`, which asyncpg hands back as a datetime,
+    and `datetime > str` is a TypeError rather than a wrong answer — raised
+    inside the compaction task, whose caller logs and swallows it. The
+    symptom was therefore not an error anyone saw but sub-thread compaction
+    that silently never ran: every sub-thread kept replaying its full history
+    to the model, getting slower and more expensive with each turn.
+    """
     compactions = [t for t in thread_turns if t.get("role") == "compaction"]
     if not compactions:
-        return "1970-01-01T00:00:00+00:00"
-    latest = max(compactions, key=lambda t: t["created_at"])
-    return latest["created_at"].isoformat() if hasattr(latest["created_at"], "isoformat") else str(latest["created_at"])
+        return datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return max(c["created_at"] for c in compactions)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

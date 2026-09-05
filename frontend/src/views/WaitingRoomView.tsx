@@ -19,7 +19,11 @@ export function WaitingRoomView() {
 
   useEffect(() => {
     pollRef.current = setInterval(() => {
-      refreshAdmission();
+      // Swallowed on purpose: this polls every 6s forever, so a transient
+      // network blip is expected rather than exceptional, and letting the
+      // rejection escape only fills the console with noise the next tick
+      // recovers from anyway.
+      refreshAdmission().catch(() => {});
     }, 6000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);

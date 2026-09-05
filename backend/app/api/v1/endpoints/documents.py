@@ -934,6 +934,27 @@ async def reextract_paper(
         process_ingestion.delay(str(paper_id), str(job["id"]), doc["filename"])  # type: ignore[attr-defined]
     except Exception as e:
         logger.exception("Failed to dispatch reextract")
+        # Mark both rows failed before raising — same as the two upload paths
+        # above. Without it the 500 leaves the document at 'processing' and
+        # the job at 'queued' with no worker that will ever pick it up: the
+        # chunks were already deleted, so the paper reads as empty and the UI
+        # shows a spinner that never resolves, with no way back except
+        # re-running the reextract that just failed.
+        try:
+            await update_doc_status_repo(
+                db,
+                paper_id,
+                "failed",
+                error_message=(
+                    "Failed to queue re-extraction (Celery broker / Redis unreachable). "
+                    "Start Redis and the Celery worker, then re-run Re-extract. "
+                    f"Original error: {e}"
+                ),
+            )
+            await update_job_status_svc(db, job["id"], "failed", error_message=f"Dispatch failed: {e}")
+            await db.commit()
+        except Exception as mark_exc:
+            logger.error(f"Failed to record reextract dispatch failure for doc {paper_id}: {mark_exc}")
         raise HTTPException(status_code=500, detail=f"Failed to dispatch reextract: {e}")
 
     return {
