@@ -133,8 +133,9 @@ each hit came from. Use it when you do not know which paper holds something.
 - NOTE pins a short note to this chat's board, where the reader will see it \
 beside the conversation. NOTE ALL pins it to the universal board instead, for \
 something that outlives this chat.{remember_bullet}
-- Up to three lines of each. Every line in one block runs before you are \
-called again.
+- Up to three SECTION, three SEARCH and three READ lines per block, and at \
+most two NOTE and two NOTE ALL. Every line in one block runs before you are \
+called again; anything past those limits is dropped.
 
 You get up to {max_steps} rounds of tools. When you have what you need — or \
 when you are told you have no rounds left — write the answer instead of a tool \
@@ -146,7 +147,8 @@ _WEB_HELP = """
 - WEB searches the public internet. Use it ONLY for what the study cannot \
 answer by construction: what a work none of these papers include actually did, \
 what a term means in the wider field, whether a result has been superseded. \
-Never use it for something a paper in the study states.
+Never use it for something a paper in the study states. Two WEB lines per \
+block at most.
 - Attribute a web-sourced claim IN THE SENTENCE — "reported elsewhere as…". \
 The [[P<n>:<block>]] markers are for papers in this study and nothing else: \
 never write [[WEB]] or a marker round anything that is not a paper block."""
@@ -161,7 +163,8 @@ _REMEMBER_BULLET = """
 conversations — a stated preference, their expertise level, a recurring \
 interest. Use it when they tell you something about themselves or how they \
 want to be helped, never for facts about the papers themselves. Sparingly: \
-most questions produce nothing worth remembering."""
+most questions produce nothing worth remembering — one line per block is all \
+that is kept."""
 _REMEMBER_EXAMPLE = "\nREMEMBER: reader prefers short, plain-language answers"
 
 

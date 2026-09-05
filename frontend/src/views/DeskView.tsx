@@ -186,6 +186,16 @@ export function DeskView({
 
   useEffect(() => { void refreshWall(); }, [refreshWall]);
 
+  // ⚠ Which study is on screen right now, readable from inside a stream that
+  // started under a different one. An answer takes tens of seconds and the
+  // reader is free to switch studies while it runs; `ask` closes over the
+  // scope it began with, so its final `setTurns(await getStudyChat(scope))`
+  // would drop the OLD study's whole conversation into the study now being
+  // displayed. The scope-switch effect below already guards its own fetches
+  // with `alive` — this is the same guard for the one that outlives it.
+  const scopeRef = useRef(scope);
+  useEffect(() => { scopeRef.current = scope; }, [scope]);
+
   // ── Asking ───────────────────────────────────────────────────────────────
   const ask = useCallback(
     async (question: string) => {
@@ -231,19 +241,25 @@ export function DeskView({
           model,
         );
         await pacer.finish();
+        if (scopeRef.current !== scope) return; // reader moved on; this is another study's chat now
         // Refetch rather than splicing: the server owns the turn's final shape
         // (citations resolved against the study's current membership).
         setTurns(await getStudyChat(scope));
         setPending(null);
       } catch (e) {
         pacer.cancel();
+        if (scopeRef.current !== scope) return;
         patch((p) => ({ ...p, error: (e as Error).message || 'Could not answer that.' }));
       } finally {
         // The agent may have pinned something. One answer can reach both
         // boards, so both are refreshed, and only when it actually wrote,
         // because a refresh per question would fight an open editor.
         if (wrote) {
-          void refreshChatNotes();
+          // refreshChatNotes is bound to the scope this ask started in, so it
+          // is skipped once the reader has moved on — it would otherwise put
+          // the old study's chat board beside the new study. The wall is
+          // scope-free ('universal'), so it always refreshes.
+          if (scopeRef.current === scope) void refreshChatNotes();
           void refreshWall();
         }
       }
