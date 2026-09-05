@@ -350,6 +350,21 @@ async def get_page_starts(session: AsyncSession, document_id: UUID) -> list[tupl
     return [(int(r["sequence_id"]), int(r["page_start"])) for r in result.mappings().all()]
 
 
+async def get_sequence_ids(session: AsyncSession, document_id: UUID) -> list[int]:
+    """Every chunk's sequence_id, in order.
+
+    Used to land a position on a sequence that actually EXISTS: sequencing
+    is gap-tolerant (see getNextChunk's "after" paging), so an id computed
+    arithmetically can easily fall in a hole, and the reader's jump — which
+    looks the block up by exact id — would silently do nothing.
+    """
+    result = await session.execute(
+        text("SELECT sequence_id FROM chunks WHERE document_id = :document_id ORDER BY sequence_id ASC"),
+        {"document_id": document_id},
+    )
+    return [int(r["sequence_id"]) for r in result.mappings().all()]
+
+
 async def get_lead_text(session: AsyncSession, document_id: UUID, max_chunks: int = 3) -> str:
     """The first few chunks of real prose, concatenated — a cheap stand-in for
     an abstract/blurb when the document has no such field of its own.

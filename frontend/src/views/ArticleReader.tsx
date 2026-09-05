@@ -4,6 +4,7 @@ import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
+import { bestMatchIndex, makeAnchor } from '../lib/textAnchor';
 import { ArticleBlock } from './ArticleBlock';
 import { ExtractorPill } from './BookReadingView';
 import { AskComposer, type ComposerTarget } from './AskComposer';
@@ -210,10 +211,15 @@ interface Props {
   /** Leave for the desk: the cross-paper surface this reader's panel became. */
   onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
-  /** The reader's own "Raw file" button: opens the source PDF/HTML snapshot
-   * at the page the current block came from (null for an article — a web
-   * import has no pages to preserve). */
-  onOpenRaw?: (page: number | null) => void;
+  /** The reader's own "Raw file" button, handed where the reader is: a page
+   * for a PDF-backed document, and always a text anchor, which is the only
+   * thing an article (no pages at all) can be positioned by. */
+  onOpenRaw?: (page: number | null, anchors: string[]) => void;
+  /** A passage the raw view was sitting on, to open at. Resolved against
+   * the block text here rather than upstream, since this is where the
+   * blocks are. Consumed once, like jumpToSequence. */
+  jumpToAnchor?: string | null;
+  onJumpedAnchor?: () => void;
 }
 
 export function ArticleReader({
@@ -224,6 +230,8 @@ export function ArticleReader({
   onOpenDesk,
   onBack,
   onOpenRaw,
+  jumpToAnchor = null,
+  onJumpedAnchor,
 }: Props) {
   const confirm = useConfirm();
   const [doc, setDoc] = useState<FullDocument | null>(null);
@@ -489,6 +497,22 @@ export function ArticleReader({
     }, 120);
     return () => clearTimeout(t);
   }, [jumpToSequence, doc, onJumped]);
+
+  /**
+   * Same, for a passage rather than a block id: what the raw view hands
+   * back, since an article has no page or sequence to hand over — only the
+   * text the reader was looking at. Matched against block text here (see
+   * lib/textAnchor.ts), because this is where the blocks are.
+   */
+  useEffect(() => {
+    if (!jumpToAnchor || !doc) return;
+    const t = setTimeout(() => {
+      const i = bestMatchIndex(jumpToAnchor, doc.blocks.map((b) => b.plain_text || ''));
+      if (i >= 0) jumpToRef.current(doc.blocks[i].sequence_order);
+      onJumpedAnchor?.();
+    }, 120);
+    return () => clearTimeout(t);
+  }, [jumpToAnchor, doc, onJumpedAnchor]);
 
   // ── Notes grouped into threads: a root plus its follow-ups ──────────────
   //
@@ -1770,6 +1794,61 @@ export function ArticleReader({
 
   const bookmarkedHere = currentSeq != null && bookmarkedSeqs.has(currentSeq);
 
+  /**
+   * Where the reader is, in the two currencies the raw view might accept.
+   *
+   * ⚠ The page is NOT simply the current block's page_start. That field is
+   * null far more often than it looks: only content_list.json extraction
+   * carries page numbers, so a PDF that fell back to markdown chunking has
+   * none at all, and an article never has any (see
+   * extraction/pipeline_sync.py). Reading it off the exact current block
+   * and passing the null straight through is what made "Raw file" open at
+   * page 1 from the middle of a document. So: walk BACK to the nearest
+   * block that does carry a page, and if the document has none anywhere,
+   * fall back to where we are proportionally through it — an approximate
+   * page beats page 1 every time, and the anchor below is the exact answer
+   * for the views that can use it.
+   */
+  const rawPosition = (): { page: number | null; anchors: string[] } => {
+    const blocks = doc?.blocks ?? [];
+    if (!blocks.length) return { page: null, anchors: [] };
+
+    const at = Math.max(0, blocks.findIndex((b) => b.sequence_order === currentSeq));
+
+    let page: number | null = null;
+    for (let i = at; i >= 0; i--) {
+      if (blocks[i].page_start != null) { page = blocks[i].page_start; break; }
+    }
+    if (page == null && doc?.page_count) {
+      // The page whose START is at or before this block — the same
+      // convention the backend's own fallback inverts (a page maps to its
+      // first chunk, see chunks.py::_sequence_for_page). Matching it keeps
+      // the round trip tight, and floor() means the reader lands at or just
+      // BEFORE where they were rather than past it: re-reading a line beats
+      // skipping one.
+      page = Math.min(doc.page_count, Math.max(1, 1 + Math.floor((at / blocks.length) * doc.page_count)));
+    }
+
+    // Several anchors, nearest first: the block at the top of the viewport
+    // can be a figure or an equation with no text of its own, and even a
+    // text one may not exist in the raw file at all (a video caption is
+    // synthesised here from the player's alt-text, not present in the HTML
+    // — see article_extraction.py's video splice). The raw side tries them
+    // in order, so a passage it can't find falls through to the next.
+    //
+    // Five, measured rather than guessed: those synthesised captions come
+    // in RUNS (one per video in a carousel), and a shorter list starting
+    // inside such a run is entirely captions and finds nothing. Against the
+    // real snapshot this feature was built on, a window of 3 placed 51 of
+    // 55 blocks and 5 placed all 55.
+    const anchors: string[] = [];
+    for (let i = at; i < blocks.length && anchors.length < 5; i++) {
+      const candidate = makeAnchor(blocks[i].plain_text || '');
+      if (candidate.length >= 24) anchors.push(candidate);
+    }
+    return { page, anchors };
+  };
+
   return (
     <div className={`reader-root${dragging ? ' is-dragging-card' : ''}`}>
       <header className="reader-bar">
@@ -1888,8 +1967,8 @@ export function ArticleReader({
           {onOpenRaw && (
             <button
               className="reader-chip"
-              onClick={() => onOpenRaw(doc?.blocks.find((b) => b.sequence_order === currentSeq)?.page_start ?? null)}
-              title={doc?.doc_kind === 'article' ? 'Open the raw HTML snapshot' : 'Open the source PDF at this position'}
+              onClick={() => { const at = rawPosition(); onOpenRaw(at.page, at.anchors); }}
+              title={doc?.doc_kind === 'article' ? 'Open the raw snapshot here' : 'Open the source PDF here'}
             >
               Raw file
             </button>

@@ -23,6 +23,8 @@ export function ReadingView({
   onOpenDesk,
   onBack,
   onOpenRaw,
+  jumpToAnchor = null,
+  onJumpedAnchor,
 }: {
   paper: Paper;
   paperId: string;
@@ -33,10 +35,13 @@ export function ReadingView({
   onOpenDesk?: (scope?: string) => void;
   onBack: () => void;
   /** The reader's own "Raw file" button: opens the source PDF/HTML snapshot
-   * at the given page (null when there's no page to preserve, e.g. an
-   * article has no pages at all). Needs `meta` (not just `paperId`), so it
+   * where the reader is — by page for a PDF, by text anchor for an article
+   * (which has no pages at all). Needs `meta` (not just `paperId`), so it
    * only fires once metadata has loaded. */
-  onOpenRaw?: (meta: PaperMeta, page: number | null) => void;
+  onOpenRaw?: (meta: PaperMeta, page: number | null, anchors: string[]) => void;
+  /** A passage handed back by the raw view, to open at. */
+  jumpToAnchor?: string | null;
+  onJumpedAnchor?: () => void;
 }) {
   const [meta, setMeta] = useState<PaperMeta | null>(null);
   const [failed, setFailed] = useState(false);
@@ -67,7 +72,7 @@ export function ReadingView({
         onBack={onBack}
         jumpToSequence={jumpToSequence}
         onJumped={onJumped}
-        onOpenRaw={meta ? (page) => onOpenRaw?.(meta, page) : undefined}
+        onOpenRaw={meta ? (page) => onOpenRaw?.(meta, page, []) : undefined}
       />
     );
   }
@@ -82,7 +87,9 @@ export function ReadingView({
       onJumped={onJumped}
       onOpenDesk={onOpenDesk}
       onBack={onBack}
-      onOpenRaw={meta ? (page) => onOpenRaw?.(meta, page) : undefined}
+      onOpenRaw={meta ? (page, anchors) => onOpenRaw?.(meta, page, anchors) : undefined}
+      jumpToAnchor={jumpToAnchor}
+      onJumpedAnchor={onJumpedAnchor}
     />
   );
 }

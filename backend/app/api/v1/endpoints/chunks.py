@@ -391,6 +391,45 @@ async def list_chapters(
             "source": source, "chapters": chapters}
 
 
+def _sequence_for_page(
+    page_starts: list[tuple[int, int]],
+    sequence_ids: list[int],
+    page_count: int,
+    page: int,
+) -> int | None:
+    """Pure decision behind GET /{paper_id}/page-to-sequence, pulled out of
+    the endpoint so it's unit-testable without a DB or the FastAPI/ASGI
+    stack — same reasoning as _raw_response_kind (documents.py).
+
+    Preferred: the first chunk on or after `page`, the same rule
+    book_outline.outline_to_chapters uses to place a bookmark. A page past
+    the last chunk lands on the last chunk rather than nowhere — the reader
+    asked to go there, not to fail.
+
+    ⚠ Fallback matters as much as the main path: per-chunk page numbers come
+    ONLY from content_list.json extraction, so a PDF that fell back to
+    markdown chunking carries none at all (see extraction/pipeline_sync.py).
+    Returning None there made the whole position sync silently do nothing on
+    exactly the documents whose extraction had already degraded once. So
+    without page numbers, place the page proportionally through the chunk
+    list — chunks are in reading order, so it lands in the right region.
+
+    Indexes into the real sequence id list rather than computing an id:
+    sequencing is gap-tolerant, and an id that falls in a hole matches no
+    block, which is the same silent no-op by another route.
+    """
+    if page_starts:
+        ordered = sorted(page_starts, key=lambda sp: sp[0])
+        return next((s for s, p in ordered if p >= page), ordered[-1][0])
+
+    if not sequence_ids or page_count <= 0:
+        return None
+
+    # (page - 1) so page 1 maps to the very start rather than one page in.
+    fraction = min(1.0, max(0.0, (page - 1) / page_count))
+    return sequence_ids[round(fraction * (len(sequence_ids) - 1))]
+
+
 @router.get("/{paper_id}/page-to-sequence")
 async def page_to_sequence(
     paper_id: UUID,
@@ -405,21 +444,31 @@ async def page_to_sequence(
     chunk; a page past the last chunk lands on the last chunk instead of
     nothing, since the reader asked to go there, not to fail.
 
-    None only for a document with no paginated chunks at all (an article,
-    still mid-extraction) — the caller's own doc_kind check is expected to
-    avoid asking for those in the first place.
+    ⚠ Per-chunk page numbers are far from guaranteed: ONLY content_list.json
+    extraction records them, so a PDF that fell back to markdown chunking
+    has none at all (see extraction/pipeline_sync.py). That case used to
+    return null here, which the reader turned into "don't jump anywhere" —
+    the sync silently doing nothing on exactly the documents whose
+    extraction already degraded once. So when there are no page numbers,
+    fall back to how far through the document the page is proportionally:
+    approximate, but chunks are in reading order, so it lands in the right
+    region instead of at the top.
+
+    Null now only for a document with no chunks at all (still extracting).
     """
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
     page_starts = await chunk_repo.get_page_starts(db, paper_id)
-    if not page_starts:
-        return {"sequence_order": None}
-
-    ordered = sorted(page_starts, key=lambda sp: sp[0])
-    seq = next((s for s, p in ordered if p >= page), ordered[-1][0])
-    return {"sequence_order": seq}
+    # Only paid for when there are no page numbers to use — see
+    # _sequence_for_page, which owns the decision.
+    sequence_ids = [] if page_starts else await chunk_repo.get_sequence_ids(db, paper_id)
+    return {
+        "sequence_order": _sequence_for_page(
+            page_starts, sequence_ids, doc.get("page_count") or 0, page,
+        )
+    }
 
 
 @router.get("/{paper_id}/figure-descriptions")
