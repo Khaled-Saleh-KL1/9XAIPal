@@ -80,19 +80,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // slot, whose every subsequent request then came back 423. The waiting
   // room, which exists for exactly this, never got shown. One GET /auth/me
   // settles it, and it is the same call WaitingRoomView already polls.
+  //
+  // Nothing is set until that answer is in, so a queued user goes straight
+  // from the sign-in form to the waiting room rather than through a frame of
+  // the full app. The form stays in its submitting state across the extra
+  // round trip, exactly as it already does across the login request itself.
   const admitAfter = useCallback(
     async (u: User) => {
-      setUser(u);
+      // ⚠ Only the admission half of the answer is taken from /me. getMe
+      // swallows a non-ok response and reports `user: null` rather than
+      // throwing, and applying that verbatim would put the sign-in form back
+      // up as though the login had failed — when in fact it succeeded and
+      // the cookie is set. The user we just authenticated is the truth here;
+      // /me is only being asked whether there is a slot.
+      let admission = { admitted: true, queuePosition: null as number | null };
       try {
-        applyMe(await getMe());
+        const me = await getMe();
+        if (me.user) admission = { admitted: me.admitted, queuePosition: me.queuePosition };
       } catch {
-        // The session is real either way — fall back to letting them in
-        // rather than stranding them behind a failed capacity check.
-        setAdmitted(true);
-        setQueuePosition(null);
+        // Network blip on the capacity check — let them in rather than
+        // stranding a real session behind it.
       }
+      setUser(u);
+      setAdmitted(admission.admitted);
+      setQueuePosition(admission.queuePosition);
     },
-    [applyMe],
+    [],
   );
 
   const login = useCallback(
