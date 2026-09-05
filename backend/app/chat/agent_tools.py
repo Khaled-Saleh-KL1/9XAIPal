@@ -245,8 +245,25 @@ async def run_search(
                 continue
             seen.add(key)
             hits.append(row)
+    # ⚠ Truncate FIRST, group SECOND. Both legs arrive already ranked — the
+    # full-text one by ts_rank DESC, and it is listed first — so `hits` at this
+    # point is "best matches, best leg first". Sorting before the slice threw
+    # that away and picked the survivors by document UUID instead: with a
+    # 24-paper study (study_max_papers) and a limit of 8
+    # (paper_agent_search_limit), the papers whose ids happen to sort low took
+    # every slot, and the top-ranked full-text hits were dropped entirely in
+    # favour of arbitrary substring matches from those papers. Which papers won
+    # was decided by uuid4(), so the same query over the same study returned
+    # different evidence depending on nothing at all.
+    #
+    # The grouping itself is deliberate and kept — see
+    # search_chunks_substring_multi's docstring: hits from one paper reading
+    # together beats a rank-interleaved list that looks like one document
+    # changing subject every line. It is presentation, so it belongs after the
+    # selection rather than instead of it.
+    hits = hits[:limit]
     hits.sort(key=lambda r: (str(r.get("document_id") or ""), r.get("sequence_id") or 0))
-    return hits[:limit]
+    return hits
 
 
 def format_search_results(
