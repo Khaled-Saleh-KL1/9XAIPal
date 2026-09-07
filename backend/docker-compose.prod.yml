@@ -149,6 +149,22 @@ services:
        # still puts Ollama first — it's the only one configured today —
        # but now a real Ollama failure falls through instead of 503ing.
       LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+       # Cloud LLM cascade backstops, tried in CLOUD_PROVIDER_ORDER only
+       # after Ollama itself has failed (see app/llm/resolver.py). Every one
+       # is optional and empty by default — but it has to be listed HERE to
+       # exist inside the container at all. A key set in .env and not named
+       # in this block is silently invisible to the app: that is exactly how
+       # three working NVIDIA keys sat in .env doing nothing, leaving the
+       # cascade with no backstop the moment Ollama went down.
+       #
+       # NVIDIA_API_KEY is comma-separated like OLLAMA_API_KEY — each key is
+       # its own 40 RPM budget, throttled per key in resolver.py.
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_CHAT_MODEL: ${NVIDIA_CHAT_MODEL:-meta/muse-glimmer-30b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
        # Embeddings: this Ollama Cloud key has chat+vision only, so pin
        # embeddings to the Ollama installed directly on this host.
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-custom}
@@ -272,6 +288,22 @@ services:
        # still puts Ollama first — it's the only one configured today —
        # but now a real Ollama failure falls through instead of 503ing.
       LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+       # Cloud LLM cascade backstops, tried in CLOUD_PROVIDER_ORDER only
+       # after Ollama itself has failed (see app/llm/resolver.py). Every one
+       # is optional and empty by default — but it has to be listed HERE to
+       # exist inside the container at all. A key set in .env and not named
+       # in this block is silently invisible to the app: that is exactly how
+       # three working NVIDIA keys sat in .env doing nothing, leaving the
+       # cascade with no backstop the moment Ollama went down.
+       #
+       # NVIDIA_API_KEY is comma-separated like OLLAMA_API_KEY — each key is
+       # its own 40 RPM budget, throttled per key in resolver.py.
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_CHAT_MODEL: ${NVIDIA_CHAT_MODEL:-meta/muse-glimmer-30b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
        # Embeddings: this Ollama Cloud key has chat+vision only, so pin
        # embeddings to the Ollama installed directly on this host.
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-custom}
