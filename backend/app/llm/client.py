@@ -98,6 +98,37 @@ def _is_reasoning_model(model: str) -> bool:
     return len(base) >= 2 and base[0] == "o" and base[1].isdigit()
 
 
+# ⚠ A model that thinks before it answers spends its max_tokens budget on
+# hidden reasoning FIRST, and only starts the visible answer once that is
+# done. Callers size num_predict for the ANSWER ("one word", "a short JSON
+# object"), so on such a model a small cap is consumed entirely by thinking
+# and the reply comes back finish_reason="length" with content="".
+#
+# Measured on meta/muse-glimmer-30b with this app's own prompts: the
+# guardrail's one-word ALLOWED/BLOCKED verdict took up to 576 completion
+# tokens, the router's short JSON ~204. Against their caps of 8 and 64 both
+# returned an empty string — and an empty verdict reads as "not ALLOWED", so
+# every question would have been blocked the moment NVIDIA served a request.
+#
+# Raising the floor is free: max_tokens is only an upper bound, so a model
+# that does NOT hide reasoning still stops at its own stop token and spends
+# nothing extra. And it costs no additional requests, which is the budget
+# that actually matters here (see resolver's NVIDIA rate limit).
+_HIDDEN_REASONING_HEADROOM = 1024
+
+
+def _effective_max_tokens(target: LLMTarget, cap: Optional[int]) -> Optional[int]:
+    """Raise a small cap to leave room for hidden reasoning tokens.
+
+    Ollama is excluded: num_predict there is a local generation limit on
+    models that don't hide reasoning, and the callers' small caps do what
+    they say.
+    """
+    if cap is None or target.provider == "ollama":
+        return cap
+    return max(cap, _HIDDEN_REASONING_HEADROOM)
+
+
 def _reasoning_effort_for(target: LLMTarget, resolved_model: str) -> Optional[str]:
     """Return a ``reasoning_effort`` value when cloud thinking mode is
     enabled and the resolved model looks like an OpenAI reasoning model."""
@@ -159,7 +190,8 @@ async def _chat_once(
 
     cap = num_predict if num_predict is not None else (settings.chat_num_predict or None)
     payload = _openai_payload(
-        messages, model=resolved, temperature=temperature, max_tokens=cap, stream=False,
+        messages, model=resolved, temperature=temperature,
+        max_tokens=_effective_max_tokens(target, cap), stream=False,
         reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
@@ -183,6 +215,10 @@ async def _chat_once(
         "model": data.get("model") or resolved,
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
+        # "length" means the model was cut off, not that it answered. Callers
+        # that parse a short verdict MUST distinguish the two: an empty string
+        # is not a "no" (see chat/guardrail.py).
+        "finish_reason": choice.get("finish_reason"),
     }
 
 
@@ -246,7 +282,8 @@ async def _stream_once(
 
     cap = num_predict if num_predict is not None else (settings.chat_num_predict or None)
     payload = _openai_payload(
-        messages, model=resolved, temperature=temperature, max_tokens=cap, stream=True,
+        messages, model=resolved, temperature=temperature,
+        max_tokens=_effective_max_tokens(target, cap), stream=True,
         reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
@@ -254,6 +291,7 @@ async def _stream_once(
         await resolver.throttle_nvidia_key(target.key_index)
     content_parts: list[str] = []
     final_model = resolved
+    finish_reason: Optional[str] = None
     async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
         try:
             async with client.stream("POST", url, json=payload, headers=_headers(target)) as response:
@@ -272,7 +310,11 @@ async def _stream_once(
                     except ValueError:
                         continue
                     final_model = data.get("model") or final_model
-                    delta = ((data.get("choices") or [{}])[0].get("delta")) or {}
+                    choice = (data.get("choices") or [{}])[0]
+                    # Arrives on the last chunk only, and is the one signal
+                    # that the answer was cut off rather than finished.
+                    finish_reason = choice.get("finish_reason") or finish_reason
+                    delta = choice.get("delta") or {}
                     token = delta.get("content") or ""
                     if token:
                         content_parts.append(token)
@@ -286,6 +328,7 @@ async def _stream_once(
         "model": final_model,
         "prompt_tokens": None,
         "completion_tokens": None,
+        "finish_reason": finish_reason,
     }
 
 
@@ -403,6 +446,10 @@ def _chat_sync_once(
         "model": data.get("model") or resolved,
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
+        # "length" means the model was cut off, not that it answered. Callers
+        # that parse a short verdict MUST distinguish the two: an empty string
+        # is not a "no" (see chat/guardrail.py).
+        "finish_reason": choice.get("finish_reason"),
     }
 
 

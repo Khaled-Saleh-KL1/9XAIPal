@@ -31,8 +31,8 @@ library isn't comparable against).
 
 from __future__ import annotations
 
-import asyncio
-import threading
+import itertools
+import random
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -40,7 +40,7 @@ from typing import Optional
 import httpx
 
 from app.api.errors import ModelUnavailable, NoLLMConfigured
-from app.core import circuit_breaker
+from app.core import circuit_breaker, rate_limit
 from app.core.config import settings
 from app.core.logging import get_logger
 
@@ -246,13 +246,34 @@ def _nvidia_target(api_key: str, key_index: int = 0) -> LLMTarget:
     )
 
 
-def _nvidia_targets() -> list[LLMTarget]:
-    """One target per configured NVIDIA key, in order (mirrors _ollama_targets).
+# Where the next call starts in the key list. Seeded at a random offset so
+# that separate processes (uvicorn --workers 2, plus the Celery worker) do not
+# all march through the keys in lockstep, and stepped once per call so that
+# within a process the spread is exact rather than merely probable.
+_nvidia_rotation = itertools.count(random.randrange(1024))
 
-    Each key has its own 40 RPM budget (client.py throttles per key_index),
-    so more keys means more effective throughput, not a shared ceiling.
+
+def _nvidia_targets() -> list[LLMTarget]:
+    """One target per configured NVIDIA key, starting from a rotating offset.
+
+    ⚠ The rotation is what makes multiple keys mean more throughput.
+
+    The cascade tries targets in order and returns on the FIRST success (see
+    client.chat), so a fixed order would send every single request to key 0
+    and only ever touch keys 1 and 2 after key 0 had actually failed — three
+    keys would buy failover spares, not 3x the budget, and key 0 would sit
+    permanently against its own 40 RPM ceiling while the others idled.
+
+    Rotating the starting point spreads calls evenly across the keys while
+    keeping every key in the list, so a saturated or dead key still falls
+    through to the next one exactly as before.
     """
-    return [_nvidia_target(key, i) for i, key in enumerate(settings.nvidia_api_keys)]
+    keys = settings.nvidia_api_keys
+    if not keys:
+        return []
+    targets = [_nvidia_target(key, i) for i, key in enumerate(keys)]
+    offset = next(_nvidia_rotation) % len(targets)
+    return targets[offset:] + targets[:offset]
 
 
 def _cloud_llm_target(provider: str) -> LLMTarget:
@@ -445,64 +466,31 @@ async def targets_for(model: Optional[str], ollama_up: Optional[bool] = None) ->
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NVIDIA per-key rate limit: free tier caps each key at 40 requests/minute.
-# A minimum-interval gate, same shape as the Ollama probe cache above — one
-# dict entry per key_index, holding the lock across the sleep so concurrent
-# calls on the SAME key queue up serially instead of racing past the check.
-# Different keys have independent budgets and never block each other.
+# NVIDIA per-key rate limit: the free tier caps each key at 40 requests/minute,
+# counted at NVIDIA across every process holding that key. So the gate has to
+# be SHARED, not per-process — see app/core/rate_limit.py for why a
+# per-process one silently multiplied the real rate by the number of workers.
+# Each key is its own budget and its own Redis entry; keys never block each
+# other.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_NVIDIA_MIN_INTERVAL_SECONDS = 60.0 / 40
-
-_nvidia_last_call_async: dict[int, float] = {}
-_nvidia_async_locks: dict[int, asyncio.Lock] = {}
-
-_nvidia_last_call_sync: dict[int, float] = {}
-_nvidia_sync_locks: dict[int, threading.Lock] = {}
-_nvidia_sync_locks_guard = threading.Lock()
+NVIDIA_REQUESTS_PER_MINUTE = 40
+_NVIDIA_MIN_INTERVAL_SECONDS = 60.0 / NVIDIA_REQUESTS_PER_MINUTE
 
 
-def _nvidia_async_lock(key_index: int) -> asyncio.Lock:
-    # Safe without a guard lock: asyncio is cooperative and nothing here
-    # awaits between the get and the set, so no other coroutine can
-    # interleave and create a second Lock for the same key.
-    lock = _nvidia_async_locks.get(key_index)
-    if lock is None:
-        lock = asyncio.Lock()
-        _nvidia_async_locks[key_index] = lock
-    return lock
-
-
-def _nvidia_sync_lock(key_index: int) -> threading.Lock:
-    with _nvidia_sync_locks_guard:
-        lock = _nvidia_sync_locks.get(key_index)
-        if lock is None:
-            lock = threading.Lock()
-            _nvidia_sync_locks[key_index] = lock
-        return lock
+def _nvidia_budget_name(key_index: int) -> str:
+    return f"nvidia#{key_index}"
 
 
 async def throttle_nvidia_key(key_index: int) -> None:
-    """Block until >=1/40th of a minute has passed since this key's last
-    call. Call immediately before every NVIDIA HTTP request."""
-    async with _nvidia_async_lock(key_index):
-        last = _nvidia_last_call_async.get(key_index)
-        if last is not None:
-            wait = _NVIDIA_MIN_INTERVAL_SECONDS - (time.monotonic() - last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-        _nvidia_last_call_async[key_index] = time.monotonic()
+    """Block until this key may be used again. Call immediately before every
+    NVIDIA HTTP request."""
+    await rate_limit.acquire(_nvidia_budget_name(key_index), _NVIDIA_MIN_INTERVAL_SECONDS)
 
 
 def throttle_nvidia_key_sync(key_index: int) -> None:
-    """Sync variant (Celery workers) — same rule, a plain threading.Lock."""
-    with _nvidia_sync_lock(key_index):
-        last = _nvidia_last_call_sync.get(key_index)
-        if last is not None:
-            wait = _NVIDIA_MIN_INTERVAL_SECONDS - (time.monotonic() - last)
-            if wait > 0:
-                time.sleep(wait)
-        _nvidia_last_call_sync[key_index] = time.monotonic()
+    """Sync variant (Celery workers) — the same shared budget."""
+    rate_limit.acquire_sync(_nvidia_budget_name(key_index), _NVIDIA_MIN_INTERVAL_SECONDS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -595,7 +583,4 @@ def reset_resolution_cache() -> None:
     _probe_cache.clear()
     _pinned_embedding = None
     _last_logged_llm = None
-    _nvidia_last_call_async.clear()
-    _nvidia_async_locks.clear()
-    _nvidia_last_call_sync.clear()
-    _nvidia_sync_locks.clear()
+    rate_limit.reset()

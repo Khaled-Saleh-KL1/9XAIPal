@@ -158,6 +158,16 @@ async def route_prompt(
             num_predict=64,
         )
         raw = (result["content"] or "").strip()
+        if not raw or result.get("finish_reason") == "length":
+            # Same truncation trap as the guardrail (see its note), with a
+            # gentler failure: GLOBAL is a safe default, so routing still
+            # works — but silently degrading every query to GLOBAL because
+            # the model never got to answer is worth saying out loud.
+            logger.warning(
+                "router returned no usable content (finish_reason=%s); defaulting to GLOBAL",
+                result.get("finish_reason"),
+            )
+            return RouterDecision(context_type="GLOBAL", reason="router returned no content")
 
         # New ROUTING_PROMPT outputs JSON: {"context_type":..., "reason":..., "confidence":...}
         # Fall back to first-token parsing if JSON is malformed.
