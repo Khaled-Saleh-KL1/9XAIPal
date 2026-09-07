@@ -247,7 +247,7 @@ async def test_stream_raises_when_every_target_fails_before_any_token(monkeypatc
 
 def test_chat_sync_falls_through_on_failure(monkeypatch):
     targets = [_target("openai"), _target("anthropic")]
-    monkeypatch.setattr(resolver, "llm_cascade_sync", lambda: targets)
+    monkeypatch.setattr(resolver, "targets_for_sync", lambda model, ollama_up=None: targets)
 
     def fake_chat_sync_once(target, messages, **kwargs):
         if target.provider == "openai":
@@ -262,7 +262,7 @@ def test_chat_sync_falls_through_on_failure(monkeypatch):
 
 def test_chat_sync_raises_after_every_target_fails(monkeypatch):
     targets = [_target("openai")]
-    monkeypatch.setattr(resolver, "llm_cascade_sync", lambda: targets)
+    monkeypatch.setattr(resolver, "targets_for_sync", lambda model, ollama_up=None: targets)
     monkeypatch.setattr(client, "_chat_sync_once", lambda t, m, **k: (_ for _ in ()).throw(ModelUnavailable("openai (500)")))
 
     with pytest.raises(ModelUnavailable):

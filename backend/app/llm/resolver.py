@@ -31,6 +31,8 @@ library isn't comparable against).
 
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -52,17 +54,37 @@ PROVIDER_BASE_URLS = {
     "anthropic": "https://api.anthropic.com/v1",
     "xai": "https://api.x.ai/v1",
     "deepseek": "https://api.deepseek.com/v1",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
 }
 
 # Auto-detection order for chat. For embeddings only OpenAI applies.
-CLOUD_PROVIDER_ORDER = ["openai", "anthropic", "xai", "deepseek"]
+#
+# NVIDIA sits last: it's the "everything else has failed" backstop, not a
+# preferred paid provider. It is ALSO special-cased in llm_cascade_sync
+# below (multi-key rotation, like Ollama) rather than going through
+# _cloud_llm_target's single-key path every other entry here uses.
+CLOUD_PROVIDER_ORDER = ["openai", "anthropic", "xai", "deepseek", "nvidia"]
 EMBEDDING_CLOUD_ORDER = ["openai"]
+
+# A model name that only one provider can possibly serve, so trying it
+# against the rest of the cascade first is pure waste — and worse than
+# waste: llm_cascade's per-target retry sends the SAME model string to
+# every target in turn (see chat()'s `resolved = model or ...`), so an
+# Ollama-reachable-but-wrong-model attempt records a real circuit-breaker
+# failure for Ollama over a mismatch that has nothing to do with whether
+# Ollama is actually up — and does the same to openai/anthropic/xai/
+# deepseek in turn before ever reaching the one that works. targets_for()
+# below checks this FIRST and, on a hit, skips straight to that provider's
+# own targets, bypassing the probe and the rest of the cascade entirely.
+MODEL_PROVIDER_PINS: dict[str, str] = {
+    "meta/muse-glimmer-30b": "nvidia",
+}
 
 NO_LLM_MESSAGE = (
     "No AI backend is configured. Put your API key or your Ollama connection in "
     "backend/.env: either start Ollama (OLLAMA_BASE_URL is {ollama_url}) or set "
     "one of OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, "
-    "DEEPSEEK_API_KEY, then restart the backend."
+    "DEEPSEEK_API_KEY, NVIDIA_API_KEY, then restart the backend."
 )
 
 NO_EMBEDDING_MESSAGE = (
@@ -212,7 +234,38 @@ def _ollama_targets() -> list[LLMTarget]:
     return [_ollama_target(key, i) for i, key in enumerate(keys)]
 
 
+def _nvidia_target(api_key: str, key_index: int = 0) -> LLMTarget:
+    return LLMTarget(
+        provider="nvidia",
+        api_key=api_key,
+        base_url=PROVIDER_BASE_URLS["nvidia"],
+        chat_model=settings.nvidia_chat_model,
+        classifier_model=settings.nvidia_chat_model,
+        vlm_model=settings.nvidia_chat_model,
+        key_index=key_index,
+    )
+
+
+def _nvidia_targets() -> list[LLMTarget]:
+    """One target per configured NVIDIA key, in order (mirrors _ollama_targets).
+
+    Each key has its own 40 RPM budget (client.py throttles per key_index),
+    so more keys means more effective throughput, not a shared ceiling.
+    """
+    return [_nvidia_target(key, i) for i, key in enumerate(settings.nvidia_api_keys)]
+
+
 def _cloud_llm_target(provider: str) -> LLMTarget:
+    if provider == "nvidia":
+        # Comma-separated multi-key, like Ollama — never the generic
+        # single-key path below, which would send the whole raw
+        # "key1,key2,key3" string as one Bearer token.
+        targets = _nvidia_targets()
+        if not targets:
+            raise ModelUnavailable(
+                "LLM_PROVIDER is 'nvidia' but NVIDIA_API_KEY is not set in backend/.env"
+            )
+        return targets[0]
     if settings.llm_base_url:
         base_url = settings.llm_base_url.rstrip("/")
     else:
@@ -331,7 +384,10 @@ def llm_cascade_sync(ollama_up: Optional[bool] = None) -> list[LLMTarget]:
         # same retry loop that handles falling through to a cloud provider.
         targets.extend(_ollama_targets())
     for provider in CLOUD_PROVIDER_ORDER:
-        if cloud_api_key(provider):
+        if provider == "nvidia":
+            # One entry per configured NVIDIA key, same reasoning as Ollama.
+            targets.extend(_nvidia_targets())
+        elif cloud_api_key(provider):
             targets.append(_cloud_llm_target(provider))
     if not targets:
         raise NoLLMConfigured(NO_LLM_MESSAGE.format(ollama_url=settings.ollama_base_url))
@@ -350,6 +406,103 @@ async def llm_cascade(ollama_up: Optional[bool] = None) -> list[LLMTarget]:
     if explicit is not None or ollama_up is not None:
         return llm_cascade_sync(ollama_up=ollama_up)
     return llm_cascade_sync(ollama_up=await ollama_reachable())
+
+
+def _pinned_model_targets(provider: str) -> list[LLMTarget]:
+    if provider == "nvidia":
+        targets = _nvidia_targets()
+    else:
+        targets = [_cloud_llm_target(provider)]
+    if not targets:
+        raise NoLLMConfigured(
+            f"'{provider.upper()}_API_KEY' is not set in backend/.env, but a model "
+            f"pinned to it was requested"
+        )
+    live = set(circuit_breaker.filter_open([t.breaker_id for t in targets]))
+    return [t for t in targets if t.breaker_id in live]
+
+
+def targets_for_sync(model: Optional[str], ollama_up: Optional[bool] = None) -> list[LLMTarget]:
+    """Like llm_cascade_sync, but checks MODEL_PROVIDER_PINS first.
+
+    A pinned model name (e.g. meta/muse-glimmer-30b → nvidia) skips straight
+    to its provider's own targets — no Ollama probe, no trying every other
+    cloud provider first, no polluting their circuit breakers with a request
+    for a model they were never going to be able to serve anyway.
+    """
+    provider = MODEL_PROVIDER_PINS.get(model or "")
+    if provider:
+        return _pinned_model_targets(provider)
+    return llm_cascade_sync(ollama_up=ollama_up)
+
+
+async def targets_for(model: Optional[str], ollama_up: Optional[bool] = None) -> list[LLMTarget]:
+    """Async variant of targets_for_sync."""
+    provider = MODEL_PROVIDER_PINS.get(model or "")
+    if provider:
+        return _pinned_model_targets(provider)
+    return await llm_cascade(ollama_up=ollama_up)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NVIDIA per-key rate limit: free tier caps each key at 40 requests/minute.
+# A minimum-interval gate, same shape as the Ollama probe cache above — one
+# dict entry per key_index, holding the lock across the sleep so concurrent
+# calls on the SAME key queue up serially instead of racing past the check.
+# Different keys have independent budgets and never block each other.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NVIDIA_MIN_INTERVAL_SECONDS = 60.0 / 40
+
+_nvidia_last_call_async: dict[int, float] = {}
+_nvidia_async_locks: dict[int, asyncio.Lock] = {}
+
+_nvidia_last_call_sync: dict[int, float] = {}
+_nvidia_sync_locks: dict[int, threading.Lock] = {}
+_nvidia_sync_locks_guard = threading.Lock()
+
+
+def _nvidia_async_lock(key_index: int) -> asyncio.Lock:
+    # Safe without a guard lock: asyncio is cooperative and nothing here
+    # awaits between the get and the set, so no other coroutine can
+    # interleave and create a second Lock for the same key.
+    lock = _nvidia_async_locks.get(key_index)
+    if lock is None:
+        lock = asyncio.Lock()
+        _nvidia_async_locks[key_index] = lock
+    return lock
+
+
+def _nvidia_sync_lock(key_index: int) -> threading.Lock:
+    with _nvidia_sync_locks_guard:
+        lock = _nvidia_sync_locks.get(key_index)
+        if lock is None:
+            lock = threading.Lock()
+            _nvidia_sync_locks[key_index] = lock
+        return lock
+
+
+async def throttle_nvidia_key(key_index: int) -> None:
+    """Block until >=1/40th of a minute has passed since this key's last
+    call. Call immediately before every NVIDIA HTTP request."""
+    async with _nvidia_async_lock(key_index):
+        last = _nvidia_last_call_async.get(key_index)
+        if last is not None:
+            wait = _NVIDIA_MIN_INTERVAL_SECONDS - (time.monotonic() - last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+        _nvidia_last_call_async[key_index] = time.monotonic()
+
+
+def throttle_nvidia_key_sync(key_index: int) -> None:
+    """Sync variant (Celery workers) — same rule, a plain threading.Lock."""
+    with _nvidia_sync_lock(key_index):
+        last = _nvidia_last_call_sync.get(key_index)
+        if last is not None:
+            wait = _NVIDIA_MIN_INTERVAL_SECONDS - (time.monotonic() - last)
+            if wait > 0:
+                time.sleep(wait)
+        _nvidia_last_call_sync[key_index] = time.monotonic()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,3 +595,7 @@ def reset_resolution_cache() -> None:
     _probe_cache.clear()
     _pinned_embedding = None
     _last_logged_llm = None
+    _nvidia_last_call_async.clear()
+    _nvidia_async_locks.clear()
+    _nvidia_last_call_sync.clear()
+    _nvidia_sync_locks.clear()
