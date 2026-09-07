@@ -163,6 +163,8 @@ async def _chat_once(
         reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
+    if target.provider == "nvidia":
+        await resolver.throttle_nvidia_key(target.key_index)
     async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
         try:
             response = await client.post(url, json=payload, headers=_headers(target))
@@ -201,7 +203,7 @@ async def chat(
     stream_chat), so a failure at any point is a clean, invisible-to-the-
     caller fall-through to the next provider.
     """
-    targets = await resolver.llm_cascade()
+    targets = await resolver.targets_for(model)
     last_error: Optional[ModelUnavailable] = None
     for target in targets:
         resolved = model or target.model_for_role(role)
@@ -248,6 +250,8 @@ async def _stream_once(
         reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
+    if target.provider == "nvidia":
+        await resolver.throttle_nvidia_key(target.key_index)
     content_parts: list[str] = []
     final_model = resolved
     async with httpx.AsyncClient(timeout=_CLOUD_TIMEOUT) as client:
@@ -307,7 +311,7 @@ async def stream_chat(
     (possibly a different model, different voice, duplicated content) is a
     worse experience than a clean error the caller can show and retry.
     """
-    targets = await resolver.llm_cascade()
+    targets = await resolver.targets_for(model)
     last_error: Optional[ModelUnavailable] = None
     for target in targets:
         resolved = model or target.model_for_role(role)
@@ -379,6 +383,8 @@ def _chat_sync_once(
         reasoning_effort=_reasoning_effort_for(target, resolved),
     )
     url = f"{target.base_url}/chat/completions"
+    if target.provider == "nvidia":
+        resolver.throttle_nvidia_key_sync(target.key_index)
     with httpx.Client(timeout=300.0) as client:
         try:
             response = client.post(url, json=payload, headers=_headers(target))
@@ -414,7 +420,7 @@ def chat_sync(
     messages until one succeeds. No streaming here, so no partial-output
     caveat — every failure is a clean fall-through.
     """
-    targets = resolver.llm_cascade_sync()
+    targets = resolver.targets_for_sync(model)
     last_error: Optional[ModelUnavailable] = None
     for target in targets:
         resolved = model or target.model_for_role(role)

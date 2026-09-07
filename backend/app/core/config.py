@@ -85,6 +85,15 @@ class Settings(BaseSettings):
     # Not active by default — set this and DEEPSEEK_CHAT_MODEL, then pin
     # LLM_PROVIDER=deepseek, when ready to switch to it.
     deepseek_api_key: str = ""
+    # NVIDIA's OpenAI-compatible NIM endpoint (integrate.api.nvidia.com) —
+    # last resort in the cloud cascade, reached only once Ollama and every
+    # other configured cloud provider have failed. Comma-separated like
+    # OLLAMA_API_KEY: NVIDIA's free tier caps each key at 40 requests/minute
+    # (see resolver.py's throttle_nvidia_key), so multiple keys are separate
+    # 40 RPM budgets, not a shared one. Also reached DIRECTLY, bypassing the
+    # rest of the cascade entirely, whenever NVIDIA_CHAT_MODEL itself is
+    # explicitly requested — see resolver.MODEL_PROVIDER_PINS.
+    nvidia_api_key: str = ""
 
     # Chat model used when each cloud provider is active. CHAT_MODEL /
     # VLM_MODEL / CLASSIFIER_MODEL stay reserved for Ollama (and "custom"),
@@ -95,6 +104,15 @@ class Settings(BaseSettings):
     # Note: DeepSeek models have no vision support — figure images can't be
     # described when DeepSeek is the active provider (captions still work).
     deepseek_chat_model: str = "deepseek-chat"
+    # A NIM-hosted reasoning model — confirmed present on this account via a
+    # live GET /v1/models call (2026-09-08), owned_by "meta" despite living
+    # alongside NVIDIA's DeepSeek/Kimi/MiniMax/Yi entries. Burns real
+    # completion tokens on hidden chain-of-thought before answering (~270
+    # tokens of reasoning for a one-sentence reply, observed directly), so a
+    # small CHAT_NUM_PREDICT override would truncate before real content
+    # appears — the default (unset, no cap) is what was actually verified
+    # against this model.
+    nvidia_chat_model: str = "meta/muse-glimmer-30b"
 
     # ── Cloud thinking / reasoning mode ─────────────────────────────────────
     # When True, sends ``reasoning_effort: "medium"`` to OpenAI-compatible
@@ -201,6 +219,11 @@ class Settings(BaseSettings):
     def ollama_api_keys(self) -> list[str]:
         """Every configured Ollama key, in cascade order. May be empty."""
         return self._split_keys(self.ollama_api_key)
+
+    @property
+    def nvidia_api_keys(self) -> list[str]:
+        """Every configured NVIDIA key, in rotation order. May be empty."""
+        return self._split_keys(self.nvidia_api_key)
 
     @property
     def tavily_api_keys(self) -> list[str]:

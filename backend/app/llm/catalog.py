@@ -82,6 +82,14 @@ async def list_chat_models() -> dict:
         # No Ollama — the active cloud provider's model is the only option.
         models.append({"name": default, "is_cloud": True, "size_bytes": 0})
 
+    # A model pinned to its own provider (see resolver.MODEL_PROVIDER_PINS,
+    # e.g. meta/muse-glimmer-30b -> nvidia) is selectable directly regardless
+    # of whether Ollama is reachable — picking it bypasses the cascade
+    # entirely, so it doesn't need to "win" the cascade to show up here.
+    for pinned_model, provider in resolver.MODEL_PROVIDER_PINS.items():
+        if resolver.cloud_api_key(provider) and not any(m["name"] == pinned_model for m in models):
+            models.append({"name": pinned_model, "is_cloud": True, "size_bytes": 0})
+
     # Local first, then cloud; alphabetical within each group.
     models.sort(key=lambda m: (m["is_cloud"], m["name"].lower()))
 
