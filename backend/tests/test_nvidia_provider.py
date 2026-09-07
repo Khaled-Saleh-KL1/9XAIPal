@@ -39,10 +39,17 @@ def test_each_nvidia_key_becomes_its_own_target(monkeypatch):
     monkeypatch.setattr(settings, "nvidia_api_key", "n1,n2,n3")
     targets = resolver._nvidia_targets()
 
+    # Order rotates per call so the keys are three budgets rather than one
+    # plus two spares (see _nvidia_targets), so assert the SET — what matters
+    # is that every key is present, each with its own breaker.
     assert [t.provider for t in targets] == ["nvidia", "nvidia", "nvidia"]
-    assert [t.api_key for t in targets] == ["n1", "n2", "n3"]
-    assert [t.breaker_id for t in targets] == ["nvidia#0", "nvidia#1", "nvidia#2"]
+    assert sorted(t.api_key for t in targets) == ["n1", "n2", "n3"]
+    assert sorted(t.breaker_id for t in targets) == ["nvidia#0", "nvidia#1", "nvidia#2"]
     assert all(t.chat_model == settings.nvidia_chat_model for t in targets)
+    # A key keeps its own index whichever position it rotates into.
+    assert {t.api_key: t.breaker_id for t in targets} == {
+        "n1": "nvidia#0", "n2": "nvidia#1", "n3": "nvidia#2",
+    }
 
 
 def test_no_nvidia_key_yields_no_targets(monkeypatch):
@@ -59,7 +66,10 @@ def test_nvidia_is_the_cascade_backstop_after_ollama_and_other_cloud(monkeypatch
 
     targets = resolver.llm_cascade_sync(ollama_up=True)
 
-    assert [t.breaker_id for t in targets] == ["ollama#0", "openai#0", "nvidia#0", "nvidia#1"]
+    # NVIDIA sits behind both, and which of its keys leads rotates per call.
+    assert [t.provider for t in targets] == ["ollama", "openai", "nvidia", "nvidia"]
+    assert sorted(t.breaker_id for t in targets[2:]) == ["nvidia#0", "nvidia#1"]
+    assert [t.breaker_id for t in targets[:2]] == ["ollama#0", "openai#0"]
 
 
 def test_nvidia_only_appears_when_a_key_is_configured(monkeypatch):
@@ -84,7 +94,7 @@ def test_pinned_model_skips_straight_to_nvidia(monkeypatch):
     targets = resolver.targets_for_sync("meta/muse-glimmer-30b", ollama_up=True)
 
     assert [t.provider for t in targets] == ["nvidia", "nvidia"]
-    assert [t.api_key for t in targets] == ["n1", "n2"]
+    assert sorted(t.api_key for t in targets) == ["n1", "n2"]
 
 
 async def test_pinned_model_skips_straight_to_nvidia_async(monkeypatch):

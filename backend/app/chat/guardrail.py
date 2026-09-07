@@ -50,9 +50,28 @@ async def is_topic_allowed(prompt: str, *, in_paper_context: bool = False) -> bo
         logger.exception("guardrail LLM call failed; failing open (allow)")
         return True
 
-    # New prompt outputs ALLOWED / BLOCKED. Anything that isn't a clear ALLOWED
-    # (including legacy OUT_OF_SCOPE) is treated as blocked.
+    # ⚠ A cut-off reply is NOT a verdict.
+    #
+    # "Anything that isn't a clear ALLOWED is blocked" is the right rule for
+    # something the model actually said — but an empty string is what comes
+    # back when the model never got to speak, and treating that as BLOCKED
+    # rejects the user's question for a reason that has nothing to do with
+    # the question. A reasoning model makes this the DEFAULT outcome: it
+    # spends the whole cap thinking, so content is "" and finish_reason is
+    # "length" (this is exactly what meta/muse-glimmer-30b did against the
+    # old num_predict=8 — every question would have been blocked).
+    #
+    # So a non-answer fails OPEN, matching what the `except` above already
+    # does for a call that raised: an over-permissive guardrail is a bad day,
+    # a guardrail that blocks everything is a broken app.
     verdict = (result.get("content") or "").strip().upper()
+    if not verdict or result.get("finish_reason") == "length":
+        logger.warning(
+            "guardrail returned no verdict (finish_reason=%s, content=%r); failing open",
+            result.get("finish_reason"), (result.get("content") or "")[:40],
+        )
+        return True
+
     allowed = verdict.startswith("ALLOWED")
     logger.info(
         "guardrail verdict=%s allowed=%s in_paper=%s",
