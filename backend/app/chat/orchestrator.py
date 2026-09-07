@@ -13,8 +13,9 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.chat.router import route_prompt
+from app.chat.router import route_prompt, RouterDecision
 from app.chat.guardrail import is_topic_allowed
+from app.chat.agent_tools import wants_outside_context
 from app.chat.local_context import build_local_context
 from app.chat.global_context import build_global_context
 from app.chat.external_context import build_external_context
@@ -149,6 +150,40 @@ async def _prepare_ask(
         return prep
     logger.info("ASK[step1] route decision=%s reason=%r", decision.context_type, decision.reason)
 
+    # Fetched here (once) rather than in step2b as before: strict-scope needs
+    # it BEFORE step2's retrieval dispatch runs, not after.
+    doc: Optional[dict] = None
+    if document_id:
+        try:
+            doc = document or await get_document(session, document_id, user_id)
+        except Exception:
+            logger.exception("ASK[step1b] failed to fetch document (non-fatal)")
+
+    # ⚠ Strict document scope (documents.strict_scope, default TRUE — see its
+    # column comment in schema.sql). Downgrading HERE, before step2's
+    # dispatch runs, is what makes it real — the EXTERNAL branch below skips
+    # paper retrieval entirely, so downgrading only the system prompt
+    # afterward would leave paper_block empty regardless of the label. See
+    # _resolve_strict_scope_decision for the actual policy.
+    cross_field_explicit = _user_explicitly_mentioned_other_field(prompt)
+    strict_scope = bool((doc or {}).get("strict_scope", True)) if document_id else False
+    outside_intent = cross_field_explicit or wants_outside_context(prompt)
+    new_decision = _resolve_strict_scope_decision(
+        decision,
+        is_sub_thread=is_sub_thread,
+        has_document_id=bool(document_id),
+        strict_scope=strict_scope,
+        outside_intent=outside_intent,
+        has_current_chunk=bool(current_chunk_id),
+    )
+    if new_decision is not decision:
+        logger.info(
+            "ASK[strict-scope] downgrading EXTERNAL -> %s (no explicit outside-intent signal)",
+            new_decision.context_type,
+        )
+        decision = new_decision
+        prep.decision = decision
+
     # Step 2: Context Retrieval — paper context per route + web prefetch (conditional)
     t_retrieval = time.time()
     citations = prep.citations
@@ -270,35 +305,30 @@ async def _prepare_ask(
     # - EXTERNAL or weak/short paper context → offer research capability (research-aware
     #   prompt) + lightweight prefetch. Protects paper quality while supporting the hybrid
     #   "model decides + iterative research + second synthesis pass" requirement.
+    #
+    # `doc` was already fetched above (before step2's dispatch, for the
+    # strict-scope check) — not re-fetched here.
     paper_title: Optional[str] = None
-    if document_id:
-        try:
-            doc = document or await get_document(session, document_id, user_id)
-            if doc:
-                paper_title = doc.get("original_filename") or doc.get("filename")
-        except Exception:
-            logger.exception("ASK[step2b] failed to fetch document for query bias (non-fatal)")
+    if doc:
+        paper_title = doc.get("original_filename") or doc.get("filename")
     prep.paper_title = paper_title
 
     # Default = CS/ML technical interpretation only. We only enrich with web
     # context when (a) the router explicitly chose EXTERNAL, or (b) the user
     # explicitly invokes another field (e.g. "in biology"), or (c) there's no
-    # paper context to lean on. Otherwise the paper + the model's own CS/ML
-    # knowledge wins — no off-topic web noise, no biology drift.
-    cross_field_explicit = _user_explicitly_mentioned_other_field(prompt)
+    # paper context to lean on — and, under strict document scope, (c) alone
+    # no longer qualifies (see _outside_context_allowed). `strict_scope` and
+    # `outside_intent` were already computed above, for the EXTERNAL
+    # downgrade — this reuses them rather than recomputing.
     has_paper_context = bool(paper_block)
 
-    will_offer_research = (
-        decision.context_type == "EXTERNAL"
-        or cross_field_explicit
-        or not has_paper_context
+    will_offer_research = _outside_context_allowed(
+        context_type=decision.context_type,
+        outside_intent=outside_intent,
+        has_paper_context=has_paper_context,
+        strict_scope=strict_scope,
     )
-
-    do_web_prefetch = (
-        decision.context_type == "EXTERNAL"
-        or cross_field_explicit
-        or not has_paper_context
-    )
+    do_web_prefetch = will_offer_research  # always identical; see _outside_context_allowed
 
     if do_web_prefetch:
         try:
@@ -1219,6 +1249,75 @@ def _user_explicitly_mentioned_other_field(prompt: str) -> bool:
     if any(t in lowered for t in _CROSS_FIELD_TRIGGERS):
         return True
     return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Strict document scope — pure decision functions
+#
+# Extracted so the actual policy (when EXTERNAL/research/web-prefetch is
+# allowed under documents.strict_scope) can be unit-tested without a
+# database or an LLM call, same convention as _sequence_for_page in
+# endpoints/chunks.py.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _resolve_strict_scope_decision(
+    decision: RouterDecision,
+    *,
+    is_sub_thread: bool,
+    has_document_id: bool,
+    strict_scope: bool,
+    outside_intent: bool,
+    has_current_chunk: bool,
+) -> RouterDecision:
+    """Downgrade an EXTERNAL routing decision under strict document scope.
+
+    The router's EXTERNAL classification can come from an explicit phrase in
+    the prompt (router.py's own keyword tier) or from its LLM classifier
+    guessing on an ambiguous one; only the reader's own words — captured in
+    ``outside_intent`` — are a genuine ask to leave the document. Sub-thread
+    (tangent) chat and a request with no document at all are untouched:
+    there is no document to stay scoped to.
+
+    Downgrades to LOCAL when a current chunk is in view (matching what step2
+    would have done for a LOCAL decision), GLOBAL otherwise. Never returns
+    OVERVIEW — that path is reached only via its own keyword tier, never as
+    a downgrade target.
+    """
+    if (
+        not is_sub_thread
+        and has_document_id
+        and decision.context_type == "EXTERNAL"
+        and strict_scope
+        and not outside_intent
+    ):
+        return RouterDecision(
+            context_type="LOCAL" if has_current_chunk else "GLOBAL",
+            reason=decision.reason + " — downgraded: strict document scope, no explicit ask",
+            confidence=decision.confidence,
+        )
+    return decision
+
+
+def _outside_context_allowed(
+    *,
+    context_type: str,
+    outside_intent: bool,
+    has_paper_context: bool,
+    strict_scope: bool,
+) -> bool:
+    """Whether this turn may reach outside the document — the research
+    escalation offer AND the live web-prefetch, which have always shared one
+    policy (see the two call sites in _prepare_ask).
+
+    Three ways in, same as before strict scope existed: the router already
+    said EXTERNAL, the reader's own words asked for it, or retrieval simply
+    came up empty. Strict mode only narrows the THIRD one — empty retrieval
+    alone no longer drifts outside the document unless the reader asked for
+    that too; the other two are unchanged; a non-strict document keeps the
+    original, fully open behavior on all three.
+    """
+    empty_retrieval_drift = (not has_paper_context) and (outside_intent or not strict_scope)
+    return context_type == "EXTERNAL" or outside_intent or empty_retrieval_drift
 
 
 # ─────────────────────────────────────────────────────────────────────────────

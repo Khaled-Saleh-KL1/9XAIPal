@@ -185,6 +185,29 @@ async def set_document_title(
     return (result.rowcount or 0) > 0
 
 
+async def set_document_strict_scope(
+    session: AsyncSession, document_id: UUID, user_id: UUID, strict_scope: bool
+) -> bool:
+    """Set whether this document's own reading chat may reach outside it.
+
+    See the column's own comment in schema.sql for what the flag governs.
+    Returns False when no such document exists (or it belongs to someone
+    else), same convention as set_document_title.
+    """
+    result = cast(
+        CursorResult[tuple[()]],
+        await session.execute(
+            text("""
+                UPDATE documents
+                SET strict_scope = :strict_scope, updated_at = NOW()
+                WHERE id = :id AND user_id = :user_id
+            """),
+            {"id": document_id, "user_id": user_id, "strict_scope": strict_scope},
+        ),
+    )
+    return (result.rowcount or 0) > 0
+
+
 async def filter_owned_document_ids(
     session: AsyncSession, document_ids: list[UUID], user_id: UUID
 ) -> list[UUID]:

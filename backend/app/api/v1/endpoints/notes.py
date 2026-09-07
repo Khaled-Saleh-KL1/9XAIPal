@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_ask_semaphore, get_current_user
 from app.api.errors import DocumentNotFound, ModelUnavailable, NoLLMConfigured
+from app.chat.agent_tools import wants_outside_context
 from app.chat.paper_agent import answer_paper_question
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -113,6 +114,20 @@ def _to_storage_path(image_url: Optional[str]) -> Optional[str]:
     if not image_url or not image_url.startswith(_IMAGE_URL_PREFIX):
         return None
     return image_url[len(_IMAGE_URL_PREFIX):]
+
+
+def _allow_web_for_note(doc: dict, question: str) -> bool:
+    """Whether the WEB tool is offered to the model for this question.
+
+    Pure — a document dict and the question text, nothing else — so the
+    policy is testable without a running stream. See documents.strict_scope's
+    column comment in schema.sql: TRUE (the default) means the model must not
+    reach for the WEB tool on its own initiative; a comparison, or an
+    explicit "search the web", still unlocks it because that is the reader
+    asking, not the model deciding. A document that has opted out
+    (strict_scope=False) keeps the old, always-offered behavior.
+    """
+    return not doc.get("strict_scope", True) or wants_outside_context(question)
 
 
 def _serialize_note(n: dict) -> dict:
@@ -335,6 +350,13 @@ async def create_note_stream(
                             if scope == "document"
                             else None
                         ),
+                        # ⚠ Decided here, not left to the model's own
+                        # restraint (see _allow_web_for_note). A follow-up is
+                        # gated on ITS OWN question, not the thread's earlier
+                        # one — an explicit ask two turns ago does not quietly
+                        # keep the tool unlocked for a follow-up that never
+                        # asked for it itself.
+                        allow_web=_allow_web_for_note(doc, payload.question),
                     ):
                         if event["type"] == "done":
                             answer = event.get("answer") or ""

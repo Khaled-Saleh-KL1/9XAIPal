@@ -13,6 +13,7 @@ import { loadReadingProgress, saveReadingPosition } from '../lib/readingPosition
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
+import { StrictScopeToggle } from '../components/StrictScopeToggle';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { ChatPane } from './ChatPane';
@@ -848,6 +849,13 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
             >
               Raw file
             </button>
+          )}
+          {meta && (
+            <StrictScopeToggle
+              paperId={paperId}
+              strictScope={meta.strict_scope ?? true}
+              onChange={(next) => setMeta((m) => (m ? { ...m, strict_scope: next } : m))}
+            />
           )}
           <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
           <UserMenuInline />

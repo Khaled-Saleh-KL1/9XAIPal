@@ -35,6 +35,11 @@ class DocumentResponse(BaseModel):
     # services/article_crawl.py). 'none' for anything that isn't an article.
     raw_snapshot_status: Optional[str] = None
     raw_page_count: Optional[int] = None
+    # Whether this document's own reading chat may answer from outside what
+    # it itself says (see the column's own comment in schema.sql). Defaults
+    # True; irrelevant to the Desk, which spans every paper in a study by
+    # design.
+    strict_scope: bool = True
 
 
 class DocumentListResponse(BaseModel):
@@ -45,6 +50,10 @@ class DocumentListResponse(BaseModel):
 class RenameDocumentRequest(BaseModel):
     # None or blank clears the override and restores the filename.
     title: Optional[str] = None
+
+
+class SetStrictScopeRequest(BaseModel):
+    strict_scope: bool
 
 
 class ImportArticleRequest(BaseModel):

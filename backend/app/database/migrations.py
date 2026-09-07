@@ -197,6 +197,8 @@ async def _ensure_recent_columns() -> None:
         # (this file's statements are plain strings, not that one), so the
         # dimension is substituted here directly.
         f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_embedding vector({settings.vector_dimension})",
+        # See the column's own comment in schema.sql for what this gates.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS strict_scope BOOLEAN NOT NULL DEFAULT TRUE",
     ]
 
     async with engine.begin() as conn:
