@@ -9,6 +9,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { displayTitle as paperDisplayTitle } from '../lib/titles';
+import { loadReadingProgress, saveReadingPosition } from '../lib/readingPosition';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
@@ -354,26 +355,35 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
   // ── Reading-progress persistence (survives page refresh) ────────────────────
   // Stored per paper, per chapter ("-1" for a linear paper), so reopening or
   // refreshing restores exactly where you left off instead of resetting to the
-  // first chunk.
-  const progressKey = `pal:progress:${paperId}`;
-  const loadProgress = useCallback((): { lastChapter: number | null; seqByChapter: Record<string, number> } => {
-    try {
-      const raw = localStorage.getItem(progressKey);
-      if (raw) {
-        const p = JSON.parse(raw);
-        return { lastChapter: p.lastChapter ?? null, seqByChapter: p.seqByChapter || {} };
-      }
-    } catch { /* localStorage blocked / bad JSON */ }
-    return { lastChapter: null, seqByChapter: {} };
-  }, [progressKey]);
-  const saveProgress = useCallback((chapterIndex: number | null, seq: number) => {
-    try {
-      const p = loadProgress();
-      p.seqByChapter[String(chapterIndex ?? -1)] = seq;
-      p.lastChapter = chapterIndex;
-      localStorage.setItem(progressKey, JSON.stringify(p));
-    } catch { /* no-op */ }
-  }, [progressKey, loadProgress]);
+  // first chunk. The store itself is shared with the article reader — see
+  // lib/readingPosition.ts, which is this component's original key and shape
+  // moved out so both readers write the same slot.
+  const loadProgress = useCallback(() => loadReadingProgress(paperId), [paperId]);
+  const saveProgress = useCallback(
+    (chapterIndex: number | null, seq: number) => saveReadingPosition(paperId, chapterIndex, seq),
+    [paperId],
+  );
+
+  // Set when a restore has just loaded content up to a saved position, and
+  // consumed by the layout effect below once that content has painted.
+  // Restoring used to rebuild the reader's content and then leave them at the
+  // TOP of it, so "where you left off" was somewhere down an already-revealed
+  // chapter that they had to scroll to find by hand.
+  const restoredRef = useRef(false);
+
+  // Land the reader where they stopped, once the restored content exists.
+  //
+  // The restore loads chunks up to the saved position and no further, so the
+  // LAST revealed unit is that position — which makes scrolling to the bottom
+  // both the correct answer and the same thing this reader already does every
+  // time it reveals more (see fetchAndAppend). useLayoutEffect so it happens
+  // before paint: the reader never sees the top of the chapter flash past.
+  useLayoutEffect(() => {
+    if (!restoredRef.current || !revealedUnits.length) return;
+    restoredRef.current = false;
+    if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight;
+  }, [revealedUnits]);
+
 
   // ── Loader: start (or restore) reading a chapter (null = whole paper). ──────
   const startReading = useCallback(async (chapter: Chapter | null) => {
@@ -430,6 +440,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     setAtEnd(reachedEnd);
     if (chapter) setActiveChapter(chapter);
     saveProgress(chapter?.index ?? null, cursor);
+    restoredRef.current = restoring;
     setLoading(false);
   }, [paperId, chunkToUnits, loadProgress, saveProgress]);
 
