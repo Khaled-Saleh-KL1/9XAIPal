@@ -5,6 +5,7 @@ import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
 import { bestMatchIndex, makeAnchor } from '../lib/textAnchor';
+import { lastReadSequence, saveReadingPosition, shouldRestorePosition } from '../lib/readingPosition';
 import { ArticleBlock } from './ArticleBlock';
 import { ExtractorPill } from './BookReadingView';
 import { AskComposer, type ComposerTarget } from './AskComposer';
@@ -929,6 +930,69 @@ export function ArticleReader({
   useLayoutEffect(() => {
     setCurrentSeq(topmostBlock()?.seq ?? null);
   }, [doc, topmostBlock]);
+
+  // ── Where you left off ──────────────────────────────────────────────────
+  //
+  // ⚠ Restore reads the stored position, then saving is unblocked — never the
+  // other way round. `currentSeq` is set the moment the document paints, and
+  // it is the block at the TOP, so an unguarded save effect fires with block 1
+  // before the restore has read anything and overwrites the very position it
+  // was about to return to. The feature then looks like it simply does not
+  // work: every paper reopens at the top, exactly as before, with a stored
+  // position that is always the first block.
+  //
+  // `resumedRef` is that interlock. It is keyed by paper id rather than a
+  // bare boolean so switching documents inside the same mounted reader
+  // re-arms it.
+  const resumedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!doc || resumedRef.current === paperId) return;
+
+    // Every path below has to end with the id recorded, or saving stays
+    // blocked for the life of this document.
+    const finish = () => { resumedRef.current = paperId; };
+
+    // Sent here to look at something specific — a block from the desk, or the
+    // passage the raw view handed back. That is a destination the reader just
+    // chose; yanking them to last week's scroll position instead would be
+    // actively wrong. Both of those effects fire on this same `doc` load.
+    if (jumpToSequence != null || jumpToAnchor) return finish();
+
+    // Papers and books only, never an article — see shouldRestorePosition.
+    if (!shouldRestorePosition(doc.doc_kind)) return finish();
+
+    const seq = lastReadSequence(paperId, null);
+    if (seq == null) return finish();
+
+    // Instant rather than smooth: a smooth scroll from the top of a forty-page
+    // paper is a long, disorienting ride to somewhere the reader did not watch
+    // themselves travel to. The flash is what says "this is where you were".
+    const t = setTimeout(() => {
+      const el = blockRefs.current.get(seq);
+      // Missing means the paper was re-chunked since, so that block number no
+      // longer names anything — stay at the top rather than guessing.
+      if (el) {
+        el.scrollIntoView({ behavior: 'auto', block: 'start' });
+        el.classList.add('is-flash');
+        setTimeout(() => el.classList.remove('is-flash'), 1200);
+      }
+      finish();
+    }, 120);
+    return () => clearTimeout(t);
+  }, [doc, paperId, jumpToSequence, jumpToAnchor]);
+
+  // Remember the block at the top of the viewport. `currentSeq` only changes
+  // when that block changes, so this writes once per boundary crossed rather
+  // than once per scroll event.
+  //
+  // Saving for an article too would be harmless, but not saving is what makes
+  // it impossible for a later change to start restoring one by accident.
+  useEffect(() => {
+    if (resumedRef.current !== paperId) return; // see the interlock above
+    if (currentSeq == null || !doc || !shouldRestorePosition(doc.doc_kind)) return;
+    saveReadingPosition(paperId, null, currentSeq);
+  }, [paperId, currentSeq, doc]);
 
   // ── Bookmarks ───────────────────────────────────────────────────────────
   // Build the human-readable preview shown in the panel and the Resume chip. A
