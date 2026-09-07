@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Same mark as components/LogoMark.tsx: a rounded square in the app's fg
+       token, a serif "9" in its bg token. Colors are those light-theme
+       tokens' values baked to their rendered sRGB (getComputedStyle resolves
+       oklch() back to itself rather than rgb(), so these were read off an
+       actual painted canvas pixel instead of guessed) — a favicon has no CSS
+       variables to read at browser-chrome render time, so it can't follow
+       the in-app theme toggle the way the header mark does.
+
+       ⚠ width/height, not just viewBox. Confirmed directly (loaded this
+       exact file as a plain <img> in real Firefox and read back
+       naturalWidth/Height): without them, Firefox falls back to CSS's
+       replaced-element default of 300×300 instead of scaling from the
+       viewBox the way Chromium does. Firefox's favicon service DOES still
+       fetch and store a viewBox-only SVG (confirmed by querying its own
+       favicons.sqlite after a real visit — it stores scalable SVGs under a
+       0xFFFF/"any size" sentinel), so this was never a hard failure, but
+       there is no reason to lean on an inference Chromium makes and Firefox
+       doesn't when stating the size directly costs nothing. -->
+  <rect width="64" height="64" rx="16" fill="#1a1510"/>
+  <text
+    x="32" y="32"
+    text-anchor="middle" dominant-baseline="central"
+    font-family="Georgia, Cambria, 'Times New Roman', Times, serif"
+    font-size="35" font-weight="500"
+    fill="#fcfaf6"
+  >9</text>
+</svg>
