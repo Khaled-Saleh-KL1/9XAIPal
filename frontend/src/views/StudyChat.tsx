@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
+import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import { AgentTrail } from './AgentTrail';
@@ -65,6 +65,9 @@ function Answer({
       remarkPlugins={MARKDOWN_REMARK}
       rehypePlugins={MARKDOWN_REHYPE}
       components={{
+        // Shared first: images and diagrams. The citation anchor below is the
+        // desk's own and must win, so it is spread after.
+        ...MARKDOWN_COMPONENTS,
         a({ href, children, ...rest }) {
           const m = /^#cite-(\d+)-(\d+)$/.exec(href || '');
           if (!m) return <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;

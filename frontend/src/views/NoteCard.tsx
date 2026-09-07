@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { MARKDOWN_REMARK, MARKDOWN_REHYPE } from '../lib/markdown';
+import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import {
@@ -79,7 +79,7 @@ function ModelTag({ name }: { name: string | null }) {
 function Answer({ text }: { text: string }) {
   return (
     <div className="note-answer">
-      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE}>
+      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MARKDOWN_COMPONENTS}>
         {text}
       </ReactMarkdown>
     </div>

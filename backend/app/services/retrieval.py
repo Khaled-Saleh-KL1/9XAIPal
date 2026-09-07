@@ -24,6 +24,7 @@ async def search_chunks(
     query: str,
     limit: int = 10,
     document_id: Optional[UUID] = None,
+    document_ids: Optional[list[UUID]] = None,
     max_sequence_id: Optional[int] = None,
 ) -> list[dict]:
     """Hybrid retrieval: pgvector cosine search + Postgres full-text search,
@@ -32,18 +33,41 @@ async def search_chunks(
     Vector search captures paraphrases and semantics; full-text captures exact
     terms embeddings blur (equation numbers, acronyms, author/dataset names).
     A chunk found by both legs ranks above a chunk found by only one.
+
+    Scope is one document (``document_id``) or several (``document_ids``) —
+    the latter is the desk, where a question is asked of a whole study at
+    once. Both legs already accepted a list underneath; only this entry point
+    did not, which is why the desk's agent had no semantic search at all.
     """
-    query_embedding = await get_query_embedding(query)
-    # Over-fetch each leg so fusion has real candidates to reorder.
+    # Over-fetch each leg so fusion has real candidates to reorder. Across a
+    # study this matters more, not less: one paper can otherwise fill the
+    # candidate list before fusion has seen the others.
     fetch_n = max(limit * 3, 15)
-    vec_hits = await emb_repo.search_embeddings(
-        session, query_embedding, limit=fetch_n, document_id=document_id,
-        max_sequence_id=max_sequence_id,
-    )
+
+    # ⚠ Both legs are individually optional, and the vector one has TWO ways
+    # to be unavailable that are entirely normal rather than exceptional:
+    # the embedding provider can be unreachable (Ollama down, no cloud key),
+    # and a document ingested on the fast profile has no chunk embeddings at
+    # all. Neither may take full-text down with it — this function is what
+    # the agents' SEARCH tool runs, so an Ollama hiccup would otherwise
+    # silently reduce every agent search in the app to a substring scan,
+    # with nothing in the answer to say retrieval had been crippled.
+    vec_hits: list[dict] = []
+    try:
+        query_embedding = await get_query_embedding(query)
+        vec_hits = await emb_repo.search_embeddings(
+            session, query_embedding, limit=fetch_n, document_id=document_id,
+            document_ids=document_ids, max_sequence_id=max_sequence_id,
+        )
+    except Exception:
+        logger.warning(
+            "vector search unavailable (non-fatal); using full-text only", exc_info=True
+        )
+
     try:
         fts_hits = await search_chunks_fulltext(
             session, query, limit=fetch_n, document_id=document_id,
-            max_sequence_id=max_sequence_id,
+            document_ids=document_ids, max_sequence_id=max_sequence_id,
         )
     except Exception:
         logger.exception("full-text search failed (non-fatal); using vector-only results")
@@ -51,6 +75,8 @@ async def search_chunks(
 
     if not fts_hits:
         return vec_hits[:limit]
+    if not vec_hits:
+        return fts_hits[:limit]
 
     scores: dict = {}
     by_id: dict = {}

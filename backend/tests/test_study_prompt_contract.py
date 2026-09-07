@@ -21,6 +21,7 @@ import re
 
 import pytest
 
+from app.chat.agent_tools import IMAGE_BULLET
 from app.chat.study_agent import _AGENT_SYSTEM, _REMEMBER_BULLET, _WEB_HELP, parse_tool_calls
 
 # tool name -> how many the parser keeps
@@ -29,6 +30,7 @@ CAPS = {
     "searches": 3,
     "reads": 3,
     "webs": 2,
+    "images": 2,
     "notes": 2,
     "notes_all": 2,
     "remembers": 1,
@@ -43,6 +45,7 @@ THINK: checking every paper
     f"SEARCH: query number {i}\n"
     f"READ: P1:{100 + i}-{110 + i}\n"
     f"WEB: web query {i}\n"
+    f"IMAGE: image query {i}\n"
     f"NOTE: note number {i}\n"
     f"NOTE ALL: universal note {i}\n"
     f"REMEMBER: reader fact {i}"
@@ -71,13 +74,14 @@ def test_the_conditional_bullets_carry_their_own_limits():
     ships in its own bullet — so each has to state its own cap where it
     lives, or the number disappears whenever that bullet does."""
     assert "Two WEB lines per block" in _WEB_HELP
+    assert "Two IMAGE lines per block" in IMAGE_BULLET
     assert "one line per block" in _REMEMBER_BULLET
 
 
 def test_every_cap_the_parser_enforces_is_stated_somewhere_in_the_prompt():
     """The catch-all: a new tool with a silent cap and no prompt sentence is
     the exact shape of the bug this file exists for."""
-    full_prompt = _AGENT_SYSTEM + _WEB_HELP + _REMEMBER_BULLET
+    full_prompt = _AGENT_SYSTEM + _WEB_HELP + _REMEMBER_BULLET + IMAGE_BULLET
     spelled = {1: "one", 2: "two", 3: "three"}
     for key, cap in CAPS.items():
         word = spelled[cap]

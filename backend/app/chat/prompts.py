@@ -72,7 +72,31 @@ FIGURE_INSTRUCTIONS = """INLINE FIGURES (user explicitly asked for a figure):
 - Place the image directly after the paragraph where it is first discussed.
 - Then continue with your textual explanation of what the figure shows.
 - You CAN write markdown image tags — the user's browser renders them.
-- Do NOT use ASCII art or Mermaid diagrams — real images are available."""
+- Prefer the real figure to a drawing of your own here: the paper's own figure
+  is the artefact being asked about. Never use ASCII art. (A mermaid diagram is
+  rendered too — see DIAGRAM_INSTRUCTIONS — but it is the second choice when a
+  real figure exists.)"""
+
+
+# ── Drawing, for when no picture exists ─────────────────────────────────────
+# ⚠ Mermaid is genuinely rendered — the shared frontend markdown pipeline turns
+# a ```mermaid block into an SVG diagram (frontend/src/lib/markdown.ts and
+# components/MermaidDiagram.tsx). Before that existed the prompts told the
+# model the opposite, so this instruction and that renderer have to move
+# together: promising a diagram the reader would see as a code block is worse
+# than not offering one.
+DIAGRAM_INSTRUCTIONS = """DIAGRAMS:
+- You can DRAW. A fenced ```mermaid block is rendered as a real diagram in the
+  reader's view, so use one when the thing being explained is a structure, a
+  flow, a pipeline, a state machine, a hierarchy, or a comparison — anything
+  where the shape is the point and prose has to describe it one edge at a time.
+- Keep it small and legible: short node labels, quotes around any label with
+  punctuation in it, and a direction (`graph LR` / `graph TD`) that suits the
+  shape. A diagram of six boxes that is instantly readable beats one of twenty
+  that is not.
+- Draw when it helps and not otherwise. An answer that is already clear in two
+  sentences does not need a picture, and a diagram that only restates the
+  sentence above it is noise."""
 
 
 # ── GLOBAL (vector search results) ──────────────────────────────────────────

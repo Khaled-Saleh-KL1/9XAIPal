@@ -29,6 +29,7 @@ from app.chat.prompts import (
     COMBINED_SYSTEM_PROMPT,
     RESEARCH_AWARE_COMBINED_PROMPT,
     SUB_THREAD_SYSTEM_PROMPT,
+    DIAGRAM_INSTRUCTIONS,
     FIGURE_INSTRUCTIONS,
     format_local_context,
     format_global_context,
@@ -384,6 +385,14 @@ async def _prepare_ask(
     # EVERY in-chat reply, which regressed the normal conversation experience.
     if (not is_sub_thread) and _user_wants_figure(prompt):
         system_prompt = system_prompt + "\n\n" + FIGURE_INSTRUCTIONS
+
+    # Drawing, unlike figure-embedding, is NOT gated on the reader asking for a
+    # picture — the whole point is that the model reaches for a diagram when the
+    # explanation is structural, which is a judgement about the answer rather
+    # than a request. The instruction is explicit that a clear two-sentence
+    # answer needs no picture, which is what keeps this from regressing normal
+    # conversation the way an ungated FIGURE_INSTRUCTIONS did.
+    system_prompt = system_prompt + "\n\n" + DIAGRAM_INSTRUCTIONS
 
     # Step 3a: construct the multimodal messages for the answer model
     try:

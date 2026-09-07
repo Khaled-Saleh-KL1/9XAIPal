@@ -10,6 +10,7 @@ question turns on before it can read anything.
     SEARCH: <terms>           full-text + substring across every paper in scope
     READ: P1:40-52            a block range, verbatim
     WEB: <terms>              the public internet
+    IMAGE: <terms>            a picture from the public web
     NOTE: <text>              pin a note to this chat's board
     NOTE ALL: <text>          pin a note to the universal board
 
@@ -52,13 +53,20 @@ from app.chat.agent_tools import (
     REMEMBER_RE,
     THINK_RE,
     TOOL_BLOCK_RE,
+    IMAGE_BULLET,
+    IMAGE_EXAMPLE,
+    IMAGE_RE,
     WEB_RE,
     extract_notes,
     extract_remembers,
+    MERMAID_EXAMPLE,
+    PICTURE_HELP,
+    format_block_map,
     format_blocks,
     format_search_results,
     read_range,
     run_search,
+    run_image,
     run_web,
     section_range,
     step_event,
@@ -69,6 +77,7 @@ from app.chat.memory import format_memories, recall_memories, write_memory, writ
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.repositories import chunks as chunk_repo
+from app.database.repositories import section_summaries as summary_repo
 # ⚠ create_sticky and update_sticky only. delete_sticky is deliberately not
 # imported: removing a note is the reader's call, and the absence of the
 # import is the enforcement.
@@ -117,7 +126,7 @@ block, no partial answer:
 THINK: the comparison lives in P2's results table, and P1 defines the metric
 SECTION: P2:31
 SEARCH: sliding window attention
-READ: P1:40-52{web_example}{remember_example}
+READ: P1:40-52{web_example}{image_example}{remember_example}
 </tool>
 
 - THINK is one short line saying why you are fetching. The reader sees it, so \
@@ -132,7 +141,7 @@ each hit came from. Use it when you do not know which paper holds something.
 - READ returns a block range from one paper, verbatim.{web_help}
 - NOTE pins a short note to this chat's board, where the reader will see it \
 beside the conversation. NOTE ALL pins it to the universal board instead, for \
-something that outlives this chat.{remember_bullet}
+something that outlives this chat.{remember_bullet}{picture_help}
 - Up to three SECTION, three SEARCH and three READ lines per block, and at \
 most two NOTE and two NOTE ALL. Every line in one block runs before you are \
 called again; anything past those limits is dropped.
@@ -140,7 +149,7 @@ called again; anything past those limits is dropped.
 You get up to {max_steps} rounds of tools. When you have what you need — or \
 when you are told you have no rounds left — write the answer instead of a tool \
 block. Do not mention the tools, the index, the rounds, or this process: the \
-reader can already see what you fetched."""
+reader can already see what you fetched.{mermaid_example}"""
 
 
 _WEB_HELP = """
@@ -224,17 +233,44 @@ def _paper_label(doc: dict) -> str:
     ).rsplit(".", 1)[0] or "Untitled"
 
 
-def _format_index(papers: list[dict], chunks_by_doc: dict) -> str:
+# A gist beside a heading is there to help the model CHOOSE what to fetch, so
+# it needs to be a clause, not a summary. Long enough to distinguish two
+# sections of the same paper, short enough that adding one to every heading of
+# every paper does not undo the reason the index is headings-only.
+_GIST_CHARS = 160
+
+
+def _gist(text_: Optional[str], limit: int = _GIST_CHARS) -> str:
+    """First sentence of a summary, collapsed and capped."""
+    flat = " ".join((text_ or "").split())
+    if not flat:
+        return ""
+    head = flat.split(". ")[0].rstrip(".")
+    return head[:limit] + ("…" if len(head) > limit else "")
+
+
+def _format_index(papers: list[dict], chunks_by_doc: dict, gists: Optional[dict] = None) -> str:
     """Every paper in the study, numbered, with its heading spine.
 
     ⚠ Headings only. A study of ten papers is easily a million tokens of body
     text; the spine of all ten is a few thousand. This is the entire reason a
     cross-paper agent is affordable at all.
 
-    ⚠ A paper MinerU found no headings in still gets an entry — with a note
-    saying SECTION will not work on it. Silently omitting it would leave the
-    model believing the study is smaller than it is.
+    Each entry carries its pre-computed one-line gist where one exists (see
+    section_summaries, written at ingestion on the full profile). Without them
+    the model chose what to fetch from section TITLES alone — and across a
+    dozen papers half the titles are "Method", "Results", "Discussion", which
+    say nothing about which paper's method is the one being asked about. The
+    summaries were already being computed and stored; nothing on this path had
+    ever read them.
+
+    ⚠ A paper MinerU found no headings in gets a sampled block map rather than
+    only a note saying SECTION will not work on it — the same fallback the
+    single-paper agent has always had. Printing just the warning told the model
+    the paper existed and nothing whatever about what was in it, which is worse
+    than omitting it: it could not even guess a search term.
     """
+    gists = gists or {}
     out: list[str] = []
     for i, doc in enumerate(papers, start=1):
         chunks = chunks_by_doc.get(doc["id"], [])
@@ -243,12 +279,22 @@ def _format_index(papers: list[dict], chunks_by_doc: dict) -> str:
         if pages:
             head += f" ({pages} pages)"
         out.append(head)
+        # The whole-paper overview, where one exists: which paper to look in is
+        # the first thing a study question has to decide.
+        overview = _gist(gists.get((doc["id"], None)))
+        if overview:
+            out.append(f"   — {overview}")
         headings = [c for c in chunks if c.get("chunk_type") == "heading"]
         if not headings:
+            body = format_block_map(chunks, prefix=f"P{i}:", indent="   ")
             out.append(
                 f"   (no headings detected in this paper — SECTION will not work "
-                f"on P{i}, use SEARCH and READ)"
+                f"on P{i}, use SEARCH and READ. A sample of its blocks:)"
+                if body
+                else f"   (no headings and no readable text in this paper)"
             )
+            if body:
+                out.append(body)
             continue
         for c in headings:
             title = (c.get("plain_text") or "").strip()
@@ -257,7 +303,11 @@ def _format_index(papers: list[dict], chunks_by_doc: dict) -> str:
             # Same reason as the paper agent: the numbering is the only
             # reliable statement of depth this data carries.
             pad = indent_for(title, len(c.get("heading_path") or []))
-            out.append(f"   {pad}[[P{i}:{c['sequence_id']}]] {title}")
+            line = f"   {pad}[[P{i}:{c['sequence_id']}]] {title}"
+            gist = _gist(gists.get((doc["id"], c["sequence_id"])))
+            if gist:
+                line += f" — {gist}"
+            out.append(line)
     return "\n".join(out)
 
 
@@ -333,7 +383,7 @@ def parse_tool_calls(reply: str) -> dict:
     explaining something in prose must not accidentally trigger a round trip.
     """
     empty = {
-        "think": None, "sections": [], "searches": [], "reads": [], "webs": [],
+        "think": None, "sections": [], "searches": [], "reads": [], "webs": [], "images": [],
         "notes": [], "notes_all": [], "remembers": [],
     }
     match = TOOL_BLOCK_RE.search(reply)
@@ -347,6 +397,10 @@ def parse_tool_calls(reply: str) -> dict:
         "searches": [q.strip() for q in _SEARCH_RE.findall(body) if q.strip()][:3],
         "reads": [(int(p), int(a), int(b)) for p, a, b in _READ_RE.findall(body)][:3],
         "webs": [q.strip() for q in WEB_RE.findall(body) if q.strip()][:2],
+        # Two pictures per round, matching WEB: both leave the machine, and an
+        # answer wanting more than two images per round is decorating rather
+        # than explaining.
+        "images": [q.strip() for q in IMAGE_RE.findall(body) if q.strip()][:2],
         # Two notes per round, hard. A model that decides note-writing is the
         # helpful thing to do will otherwise bury the board in one answer.
         "notes": [n.strip() for n in _NOTE_RE.findall(body) if n.strip()][:2],
@@ -360,6 +414,7 @@ def has_calls(calls: dict) -> bool:
     """Whether anything in this block actually executes. THINK alone does not."""
     return bool(
         calls["sections"] or calls["searches"] or calls["reads"] or calls["webs"]
+        or calls["images"]
         or calls["notes"] or calls["notes_all"] or calls["remembers"]
     )
 
@@ -393,6 +448,8 @@ def _plan(calls: dict, paper_count: int) -> list[dict]:
         plan.append({"tool": "SEARCH", "arg": query})
     for query in calls["webs"]:
         plan.append({"tool": "WEB", "arg": query})
+    for query in calls["images"]:
+        plan.append({"tool": "IMAGE", "arg": query})
     # Notes and REMEMBER last, and not because they are slow — they are
     # writes, and running them after the reads keeps the trail reading as
     # "looked, then wrote".
@@ -412,6 +469,8 @@ def _pending_label(call: dict, papers: list[dict], chunks_by_doc: dict) -> str:
         return f"Searching all papers for “{call['arg']}”"
     if tool == "WEB":
         return f"Searching the web for “{call['arg']}”"
+    if tool == "IMAGE":
+        return f"Looking for a picture of “{call['arg']}”"
     if tool == "NOTE":
         where = "the universal board" if call.get("board") == "universal" else "this chat"
         return f"Pinning a note to {where}"
@@ -545,6 +604,14 @@ async def _run_call(
         )
         out["label"] = "Remembered that for next time"
         out["result"] = "saved" if memory_id else "already knew that"
+        return out
+
+    if tool == "IMAGE":
+        text, sources = await run_image(call["arg"])
+        out["observation"] = text
+        out["label"] = f"Looked for a picture of “{call['arg']}”"
+        out["result"] = f"{len(sources)} picture(s)" if sources else "nothing came back"
+        out["sources"] = sources
         return out
 
     text, sources = await run_web(call["arg"])
@@ -713,9 +780,16 @@ async def answer_study_question(
     # One query for every paper in the study, headings and all — not one
     # round trip per paper. The bodies are needed for section_range to
     # resolve a heading to its range without a second trip.
-    chunks_by_doc = await chunk_repo.get_all_chunks_for_documents(
-        session, [doc["id"] for doc in papers]
-    )
+    doc_ids = [doc["id"] for doc in papers]
+    chunks_by_doc = await chunk_repo.get_all_chunks_for_documents(session, doc_ids)
+    # The pre-computed section gists, in one query. Best-effort: a library
+    # ingested on the fast profile has none, and the index simply reads the
+    # way it always did.
+    try:
+        gists = await summary_repo.get_gists_for_documents(session, doc_ids)
+    except Exception:
+        logger.warning("study index: section gists unavailable", exc_info=True)
+        gists = {}
 
     rounds = max_steps or settings.study_agent_max_steps
     web_on = allow_web and web_search.is_configured()
@@ -723,11 +797,14 @@ async def answer_study_question(
         max_steps=rounds,
         web_help=_WEB_HELP if web_on else "",
         web_example=_WEB_EXAMPLE if web_on else "",
+        picture_help=PICTURE_HELP.format(image_bullet=IMAGE_BULLET if web_on else ""),
+        image_example=IMAGE_EXAMPLE if web_on else "",
+        mermaid_example=MERMAID_EXAMPLE,
         remember_bullet=_REMEMBER_BULLET,
         remember_example=_REMEMBER_EXAMPLE,
     ) + _NOTE_HELP
 
-    base_parts = ["STUDY INDEX:\n" + _format_index(papers, chunks_by_doc)]
+    base_parts = ["STUDY INDEX:\n" + _format_index(papers, chunks_by_doc, gists)]
     boards_block = _format_boards(chat_notes or [], universal_notes or [])
     if boards_block:
         base_parts.append(boards_block)
