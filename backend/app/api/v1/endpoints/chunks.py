@@ -157,6 +157,10 @@ async def get_full_document(
         # doc_kind='paper' row imported from a PDF link, which does have
         # one — see pipeline_sync._adopt_pdf_from_url.
         "source_url": doc.get("source_url"),
+        # See its column comment in schema.sql. Read here (not re-fetched
+        # separately) so the reader's own strict-scope toggle has a value
+        # without a second round trip.
+        "strict_scope": doc.get("strict_scope", True),
         "blocks": blocks,
         "outline": outline,
         "total": len(blocks),

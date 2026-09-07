@@ -195,6 +195,62 @@ graph LR
 ```"""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Strict document scope
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A document defaults to documents.strict_scope = TRUE (see its column
+# comment in schema.sql): the assistant answers from what THIS document
+# itself says, and does not drift outside it on its own initiative just
+# because retrieval came up thin. It still can when the READER's own words
+# ask for that — an explicit "search the web", or a comparison against
+# something outside the document — because that is the reader asking, not
+# the model wandering. `wants_outside_context` is the one check for "did the
+# reader's own words ask for that", shared by both single-document chat
+# systems (paper_agent.py's tool-gated WEB, orchestrator.py's router/
+# research escalation) so the two cannot drift into different definitions of
+# "explicit" the way two independently-tuned keyword lists eventually would.
+#
+# Deliberately NOT used by study_agent.py — the Desk spans every paper in a
+# study by design; there is no "outside the document" to guard there.
+
+_COMPARISON_PHRASES = (
+    "compare", "comparison", "compared to", "comparing",
+    " vs ", " vs. ", "versus",
+    "difference between", "differs from", "how does this differ",
+    "how does it differ", "how do they differ",
+    "similar to", "in contrast to", "relative to",
+)
+
+# Deliberately narrower than router.py's own EXTERNAL-routing keyword list
+# (which also matches broad temporal words like "recent" that show up in
+# ordinary paper-grounded questions, e.g. "recent layers"). This list exists
+# for a stricter purpose — unlocking a tool/escalation the reader has to have
+# actually asked for — so it only matches phrasing that names the act of
+# going outside the document.
+_EXPLICIT_WEB_PHRASES = (
+    "search the web", "search online", "look it up online", "look up online",
+    "find online", "on the web", "on wikipedia", "wikipedia",
+    "google it", "google this",
+)
+
+
+def wants_outside_context(prompt: str) -> bool:
+    """True when the reader's own words ask this question to reach past the
+    document — a comparison, or an explicit request to search/look up.
+
+    Pure and cheap (no LLM call): both callers need an answer before they can
+    decide whether to even offer the WEB tool or the research escalation, so
+    this has to run ahead of, not alongside, the model.
+    """
+    if not prompt:
+        return False
+    lowered = prompt.lower()
+    return any(p in lowered for p in _COMPARISON_PHRASES) or any(
+        p in lowered for p in _EXPLICIT_WEB_PHRASES
+    )
+
+
 def strip_tool_block(reply: str) -> str:
     """Remove a trailing tool block from text being used as a final answer."""
     return TOOL_BLOCK_RE.sub("", reply).strip()

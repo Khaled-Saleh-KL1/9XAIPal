@@ -56,6 +56,13 @@ export interface PaperMeta {
   // ProgressResponse above for the same fields' meaning.
   raw_snapshot_status?: string | null;
   raw_page_count?: number | null;
+  /** Whether this document's own reading chat may answer from outside what
+   * it itself says. true (the default) keeps it scoped to this document; a
+   * comparison or an explicit "search the web" in the question still gets
+   * through either way. Irrelevant to the Desk, which is cross-paper by
+   * design. Defaults true client-side too, matching the column's own
+   * default, for a row read before this field existed. */
+  strict_scope?: boolean;
 }
 
 export interface ChunkData {
@@ -313,6 +320,8 @@ export interface FullDocument {
   extractor: string | null;
   /** The page a doc_kind='article' row was imported from. null otherwise. */
   source_url: string | null;
+  /** See PaperMeta.strict_scope. */
+  strict_scope?: boolean;
   blocks: DocBlock[];
   outline: OutlineEntry[];
   total: number;
@@ -650,6 +659,20 @@ export async function renamePaper(paperId: string, title: string): Promise<Paper
     body: JSON.stringify({ title: title.trim() || null }),
   });
   if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Set whether this document's own reading chat may answer from outside what
+ * it itself says. See PaperMeta.strict_scope.
+ */
+export async function setStrictScope(paperId: string, strictScope: boolean): Promise<PaperMeta> {
+  const res = await fetch(`${BASE}/papers/${paperId}/strict-scope`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ strict_scope: strictScope }),
+  });
+  if (!res.ok) throw new Error(`Setting scope failed: ${res.status}`);
   return res.json();
 }
 

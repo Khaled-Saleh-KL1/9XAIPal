@@ -23,6 +23,7 @@ from app.schemas.documents import (
     DocumentUploadResponse,
     ImportArticleRequest,
     RenameDocumentRequest,
+    SetStrictScopeRequest,
 )
 from app.services import covers as cover_service
 from app.services import documents as doc_service
@@ -550,6 +551,31 @@ async def rename_paper(
     ``original_filename``, which stays the as-uploaded name.
     """
     doc = await doc_service.rename_document(db, paper_id, current_user["id"], payload.title)
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+    await db.commit()
+    return DocumentResponse(**doc)
+
+
+@router.patch("/{paper_id}/strict-scope", response_model=DocumentResponse)
+async def set_strict_scope(
+    paper_id: UUID,
+    payload: SetStrictScopeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Set whether this document's own reading chat may answer from outside
+    what it itself says.
+
+    True (the default) is the reader asking the assistant to stay on this
+    paper or book; a comparison or an explicit web request still gets
+    through even then — see wants_outside_context in chat/agent_tools.py.
+    False restores the old, fully open behavior permanently for this one
+    document. Never affects the Desk, which is intentionally cross-paper.
+    """
+    doc = await doc_service.set_document_strict_scope(
+        db, paper_id, current_user["id"], payload.strict_scope
+    )
     if not doc:
         raise DocumentNotFound(str(paper_id))
     await db.commit()

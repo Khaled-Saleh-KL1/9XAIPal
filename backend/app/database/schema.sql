@@ -67,6 +67,23 @@ CREATE TABLE IF NOT EXISTS documents (
     -- everything else.
     source_url TEXT,
 
+    -- Whether this document's own reading chat (chat/paper_agent.py for a
+    -- paper/article, chat/orchestrator.py for a book) may answer from outside
+    -- what this document itself says. TRUE (default) means the assistant
+    -- stays scoped to this one document — it will not silently reach for
+    -- general knowledge or a live web search just because retrieval came up
+    -- empty. It still can when the READER's own question calls for it — an
+    -- explicit "search the web for…", or a comparison against something
+    -- outside the document ("how does this compare to…") — because that is
+    -- the user asking, not the model wandering on its own. Set FALSE to
+    -- restore the old, fully open behavior for one document permanently,
+    -- rather than relying on catching that phrasing every time.
+    --
+    -- Deliberately per-document, not per-user or global: the Desk
+    -- (chat/study_agent.py) is unaffected either way — reaching across every
+    -- paper in a study is its entire purpose, not a leak to plug.
+    strict_scope BOOLEAN NOT NULL DEFAULT TRUE,
+
     -- A reader-chosen display name, set from the library's rename control.
     -- NULL means no override: the UI falls back to original_filename, which is
     -- often an arXiv id rather than anything readable. Deliberately separate

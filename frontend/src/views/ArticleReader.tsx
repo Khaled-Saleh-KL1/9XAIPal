@@ -8,6 +8,7 @@ import { bestMatchIndex, makeAnchor } from '../lib/textAnchor';
 import { lastReadSequence, saveReadingPosition, shouldRestorePosition } from '../lib/readingPosition';
 import { ArticleBlock } from './ArticleBlock';
 import { ExtractorPill } from './BookReadingView';
+import { StrictScopeToggle } from '../components/StrictScopeToggle';
 import { AskComposer, type ComposerTarget } from './AskComposer';
 import { NoteCardView, PendingNoteCard, type NoteGroup, type PendingNote } from './NoteCard';
 import {
@@ -2036,6 +2037,14 @@ export function ArticleReader({
             >
               Raw file
             </button>
+          )}
+
+          {doc && (
+            <StrictScopeToggle
+              paperId={paperId}
+              strictScope={doc.strict_scope ?? true}
+              onChange={(next) => setDoc((d) => (d ? { ...d, strict_scope: next } : d))}
+            />
           )}
 
           <button
