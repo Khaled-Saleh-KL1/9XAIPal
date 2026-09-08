@@ -570,6 +570,27 @@ def format_overview_context(overview_ctx: dict) -> str:
             hp = s.get("heading_path") or []
             title = " > ".join(hp) if hp else "Section"
             parts.append(f"\n#### {title}\n")
+            # ⚠ A section the reader has STARTED but not finished. These
+            # summaries are pre-computed over the whole section, so handing one
+            # over describes an ending the reader has not reached — on the one
+            # route whose own docstring calls it "the single worst spoiler in
+            # the app". overview_context has flagged this case since it was
+            # written, on the stated understanding that "the formatter can say
+            # so"; nothing ever read the flag, so the full summary went to the
+            # model unmarked. Measured on a 3663-block book with a ceiling of
+            # 20: a section spanning ¶18-2343 handed over its entire summary.
+            #
+            # Withheld rather than merely labelled, because a label does not
+            # unsay the ending. The heading stays, so the model still knows the
+            # section exists and that the reader is inside it, and everything
+            # they HAVE read is reachable through the other context routes.
+            if s.get("partially_read"):
+                parts.append(
+                    "_(The reader is part-way through this section. Its summary "
+                    "covers material they have not reached yet, so it is "
+                    "withheld. Do not speculate about what the rest contains.)_"
+                )
+                continue
             parts.append(s.get("summary_markdown") or s.get("summary_plain", ""))
 
     if not parts:

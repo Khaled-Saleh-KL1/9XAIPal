@@ -28,11 +28,18 @@ fetches the paper's metadata and mounts one of:
 
 | `doc_kind` | Component | Experience |
 | --- | --- | --- |
-| `paper` | [`ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) | The whole document at once, as continuous prose, with margin notes. |
+| `paper` | [`ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) | The whole document at once, as continuous prose, with margin notes. Optionally stepped one block at a time (see below). |
 | `book` | [`BookReadingView.tsx`](../../frontend/src/views/BookReadingView.tsx) | The original chapter-by-chapter reveal reader, with `<ChatPane>`. Preserved verbatim. |
 
 ⚠ It holds the frame for one round-trip rather than flashing the wrong reader and swapping it out.
 Nothing on the paper path mounts `ChatPane`.
+
+⚠ **`doc_kind='article'` falls through to `ArticleReader` too** — the table above lists the two
+deliberate choices, but the article path is the `ArticleReader` default rather than a third
+component. Anything added to that file therefore lands on articles as well as papers unless it is
+gated, which is why stepped reading checks `doc_kind === 'paper'` explicitly. The three kinds are
+separate pipelines end to end (extraction, chat, reader), so a change to one is not a change to
+the others: check all three.
 
 ## Top-level state ([App.tsx](../../frontend/src/App.tsx))
 
@@ -184,9 +191,66 @@ one the user picked. **[untested]**: no test covers the upload entry path.
 
 ## ArticleReader ([views/ArticleReader.tsx](../../frontend/src/views/ArticleReader.tsx))
 
-Reading is scrolling. One `getFullDocument()` call returns every block; nothing is revealed,
-gated, or paced. Asking is anchoring: highlight something and the answer arrives as a card beside
-it.
+Reading is scrolling. One `getFullDocument()` call returns every block; by default nothing is
+revealed, gated, or paced. Asking is anchoring: highlight something and the answer arrives as a
+card beside it.
+
+### Stepped reading (optional)
+
+Reader feedback split on the pacing: some want a paper segmented the way a book is, for the same
+cognitive-load reason the book reader exists; others want it whole and find a keypress per
+paragraph intolerable. So it is a toggle, `RevealModeToggle` in the header, and the whole-article
+default is unchanged. Papers only — a book already reads this way, and an article is a web
+snapshot.
+
+The state is one cursor: `revealCursor`, the last block shown. `visibleBlocks` slices `doc.blocks`
+at it and everything else measures against the whole list, because a reader four blocks into a
+paper is not 100% through it. Both the preference and the per-paper cursor live in `localStorage`
+([lib/revealMode.ts](../../frontend/src/lib/revealMode.ts)), not on the document row: it is a
+reading style, not a property of the paper.
+
+⚠ **The cursor is stored, not recomputed.** Deriving it from scroll position each time the mode
+came on was unreliable in the way a reader immediately notices: scroll to the end to look at a
+figure, toggle on, and the whole paper counts as read. Reading position follows the viewport; the
+cursor is a record of what has been *handed over*, so it changes only when the reader presses Next
+or jumps, survives a reload and a round trip through Whole mode, and never moves backward.
+
+Seeding therefore happens once, for a paper that has never been stepped, and it uses evidence
+rather than scroll alone: the furthest of any note anchor, any bookmark, the saved reading
+position, and the current viewport. A note or a bookmark is a deliberate act at a specific passage
+and so is the strongest proof that the passage was read — put one in the middle of a paper and
+stepping starts from there. ⚠ "Furthest" is resolved against the block list, not by numeric id:
+sequence ids have gaps, so a larger id is not necessarily a later block, and a stale mark left by a
+re-chunk is discarded rather than trusted as a huge number.
+
+⚠ Three things break if the cursor is treated as a simple filter, and each is handled where it
+happens:
+
+- **`topmostBlock` must search `visibleBlocks`, not `doc.blocks`.** It is a binary search over
+  element positions, so probing the middle of a paper whose second half is unrendered finds
+  nothing and bails at index 0 — pinning "where am I" to the first block, which silently wrecks
+  the saved position, the resume chip, `bookmark here`, and asking about the passage in view.
+- **`jumpTo` reveals before scrolling.** Citation chips, bookmarks, contents entries and the
+  resume pointer all route through it, and scrolling to a block that is not in the DOM does
+  nothing at all. Asking to go somewhere is consent to see it, so the cursor moves forward to
+  meet the request and never backward.
+- **Margin cards whose anchor is unrevealed are not rendered.** The layout pass skips a card with
+  no anchor element (`if (!el || !block) continue`), leaving it at whatever transform it last had
+  — a note from page nine stacked at the top of the gutter. The Contents panel is deliberately
+  *not* filtered: it is an index of everything written, and clicking an entry reveals its way
+  there.
+
+**Retrieval is clamped to the cursor.** Stepped mode is not a display preference with the same
+backend behind it; it is the second of two modes, and asking a question in it means "answer from
+what I have read". Every question sent while it is on carries `max_sequence_id` — the cursor — and
+the paper agent then filters the chunk list it derives everything from: the CONTENTS index it is
+shown, what SECTION and READ resolve to, what SEARCH can match, and the anchor window. The same
+flag appends `READING_COMPANION_INSTRUCTIONS`, so the model neither reads ahead nor apologises for
+material it was never given. Whole mode sends nothing and is answered from the entire paper,
+exactly as before.
+
+This is the same ceiling the book reader has always sent, and it now goes through the same,
+now-airtight, path — see [chat-and-ask.md](chat-and-ask.md#the-progress-ceiling).
 
 ### Layout: three columns, always
 
@@ -690,6 +754,9 @@ figures in LOCAL and GLOBAL responses.
 - [`views/PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx): a paper's first page, with the
   placeholder that must survive a 204.
 - [`lib/titles.ts`](../../frontend/src/lib/titles.ts): the one resolver for a paper's display name.
+- [`lib/revealMode.ts`](../../frontend/src/lib/revealMode.ts): the stepped-reading preference and
+  its cursor arithmetic. `nextRevealCursor` walks the block list rather than incrementing, because
+  sequence ids have gaps and an arithmetic next stalls the button mid-paper.
 - [`lib/pageMap.ts`](../../frontend/src/lib/pageMap.ts): block → printed page, for every chip that
   cites one. Exact pages only, and it collapses chips sharing a page; `ArticleReader`'s
   `rawPosition()` is the separate, deliberately approximate resolver, and the two must not be

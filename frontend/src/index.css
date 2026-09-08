@@ -1418,6 +1418,33 @@ body {
   font-size: 13px;
 }
 
+/* The Next control in stepped reading mode. Sits where the closing diamond
+   would be, with the same generous gap above it, so the eye lands in the same
+   place whether the paper has ended or merely paused. */
+.reveal-next-wrap {
+  margin: 44px 0 0;
+  display: flex;
+  justify-content: center;
+}
+.reveal-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.reveal-next:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
 /* ── Anchor highlights (CSS Custom Highlight API) ────────────── */
 /* Two tones, because "I asked about this" and "I wrote something here" are
    different memories and the page should not make you open a card to tell

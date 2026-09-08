@@ -331,6 +331,21 @@ export interface FullDocument {
  * Fetch the entire paper in one request. The article reader renders all of it;
  * there is no paging, so there is no reason to make N round-trips for it.
  */
+/**
+ * `[sequence_id, page]` for every block of this document that has a printed
+ * page. Empty for a document that has none (an imported article, or a PDF that
+ * fell back to markdown chunking) — which is an answer, not a failure.
+ *
+ * The article reader does not need this: `getFullDocument` already gives it
+ * every block, pages included. The book reader does, because it holds only one
+ * chapter's window and the agent cites outside it.
+ */
+export async function getPageIndex(paperId: string): Promise<[number, number][]> {
+  const res = await fetch(`${BASE}/papers/${paperId}/pages`);
+  if (!res.ok) throw new Error(`Page index fetch failed: ${res.status}`);
+  return (await res.json()).pages || [];
+}
+
 export async function getFullDocument(paperId: string): Promise<FullDocument> {
   const res = await fetch(`${BASE}/papers/${paperId}/document`);
   if (!res.ok) throw new Error(`Document fetch failed: ${res.status}`);
@@ -503,6 +518,13 @@ export async function askNoteStream(
   marginSide?: MarginSide | null,
   /** Omit for the configured default. Ignored by the server on follow-ups. */
   model?: string | null,
+  /**
+   * The last block the reader has been shown, when the paper is being read in
+   * stepped mode. Clamps everything the agent may reach to what they have
+   * actually seen. Omit — as every other caller does — to answer from the
+   * whole document, which is the long-standing behaviour for a paper.
+   */
+  maxSequenceId?: number | null,
 ): Promise<NoteResult> {
   const res = await fetch(`${BASE}/papers/${paperId}/notes/stream`, {
     method: 'POST',
@@ -514,6 +536,7 @@ export async function askNoteStream(
       parent_note_id: parentNoteId,
       margin_side: marginSide ?? null,
       model: model ?? null,
+      max_sequence_id: maxSequenceId ?? null,
     }),
   });
   if (!res.ok || !res.body) {

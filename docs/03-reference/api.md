@@ -45,6 +45,7 @@ GET    /papers/{paper_id}/chunks
 GET    /papers/{paper_id}/chunks/{sequence_order}
 GET    /papers/{paper_id}/chunks/after/{sequence_order}
 GET    /papers/{paper_id}/chapters
+GET    /papers/{paper_id}/pages
 GET    /papers/{paper_id}/figure-descriptions
 GET    /papers/{paper_id}/notes
 POST   /papers/{paper_id}/notes/stream
@@ -454,6 +455,31 @@ frontend uses as the "end of paper" signal.
 
 ---
 
+## Pages
+
+### `GET /papers/{paper_id}/pages`
+
+`[sequence_id, page]` for every block that carries a printed page — the inverse of
+`page-to-sequence`, and where a citation chip's page comes from.
+
+```json
+{ "pages": [[1, 1], [2, 1], [3, 2], ...] }
+```
+
+Pairs rather than an object keyed by sequence id: a 600-page book is ~3.7k blocks, and object keys
+would roughly double the bytes for the same data.
+
+⚠ **An empty list is an answer, not a failure.** Blocks with no page are omitted, so `[]` means the
+document has none at all — an imported article, or a PDF that fell back to markdown chunking (see
+[database-schema.md](database-schema.md)). Callers fall back to the block number and must never
+substitute page 1.
+
+Used by the book reader, which holds one chapter's window at a time and cannot derive the map from
+what it has loaded. The article reader does not need it: `GET /papers/{paper_id}/document` already
+returns `page_start` on every block.
+
+---
+
 ## Figure Descriptions
 
 ### `GET /papers/{paper_id}/figure-descriptions`
@@ -533,9 +559,17 @@ Create a note and stream its answer as Server-Sent Events.
   },
   "parent_note_id": "<uuid>|null",
   "margin_side": "left" | "right" | null,
-  "model": "<model name>|null"
+  "model": "<model name>|null",
+  "max_sequence_id": <int>|null
 }
 ```
+
+`max_sequence_id` is the reader's progress ceiling: the last block they have actually been shown.
+Sent only by a paper being read in stepped mode; `null` (the default, and every other client) means
+the whole document, which is how a paper has always been answered. It clamps everything the agent
+can reach and switches the model into reading-companion mode — see
+[chat-and-ask.md](../02-architecture/chat-and-ask.md#the-progress-ceiling), including why it is a
+reading aid rather than an access control.
 
 Event types, one JSON object per `data:` line:
 

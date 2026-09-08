@@ -87,6 +87,7 @@ from app.chat.agent_tools import (
     strip_tool_block,
 )
 from app.chat.memory import format_memories, recall_memories, write_memory, write_remembered
+from app.chat.prompts import READING_COMPANION_INSTRUCTIONS
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.repositories import chunks as chunk_repo
@@ -410,6 +411,26 @@ _WEB_HELP_BY_KIND = {"paper": _WEB_HELP_PAPER, "book": _WEB_HELP_BOOK, "article"
 _WEB_EXAMPLE_BY_KIND = {"paper": _WEB_EXAMPLE_PAPER, "book": _WEB_EXAMPLE_BOOK, "article": _WEB_EXAMPLE_ARTICLE}
 
 
+def _under_ceiling(system: str, max_sequence_id: Optional[int]) -> str:
+    """Append the reading-companion instructions when a progress ceiling is set.
+
+    ⚠ The clamp on `chunks` is what makes later material unreachable; this is
+    what stops the model doing the *other* unhelpful thing — apologising for
+    context it was never going to get, or writing as though it had reviewed a
+    finished document. See prompts.READING_COMPANION_INSTRUCTIONS.
+
+    Applied at all three prompt sites, because a ceilinged question can end up
+    at any of them: the whole-document pass when what the reader has seen so
+    far happens to fit, the tool loop, or the final answer after the rounds run
+    out. `orchestrator.py` does the same for the routes it owns; a book comes
+    in here directly and never reaches those, and a paper in stepped mode is
+    the same shape.
+    """
+    if max_sequence_id is None:
+        return system
+    return system + "\n\n" + READING_COMPANION_INSTRUCTIONS
+
+
 def _for_kind(by_kind: dict, doc_kind: str) -> str:
     return by_kind.get(doc_kind, by_kind["paper"])
 
@@ -702,6 +723,11 @@ async def _run_call(
         text, seqs = await read_range(
             session, document_id, start, end,
             f'SECTION {call["seq"]} — "{title}" ({start}-{end})',
+            # Belt and braces: `resolved` already came from the caller's
+            # filtered chunk list, so `end` is within the ceiling. Passed
+            # anyway so both range tools are clamped at the same place and
+            # neither can drift out of it later.
+            max_sequence_id=max_sequence_id,
         )
         out["observation"] = text
         out["label"] = f"Read “{title}”"
@@ -711,8 +737,11 @@ async def _run_call(
 
     if tool == "READ":
         start, end = call["start"], call["end"]
+        # ⚠ The one tool whose range the MODEL chose, so nothing upstream has
+        # bounded it — see read_range's own note for the measurement.
         text, seqs = await read_range(
-            session, document_id, start, end, f"READ {start}-{end}"
+            session, document_id, start, end, f"READ {start}-{end}",
+            max_sequence_id=max_sequence_id,
         )
         out["observation"] = text
         out["label"] = f"Read blocks {start}–{end}"
@@ -908,7 +937,9 @@ async def answer_paper_question(
         parts.append(f"THE COMPLETE {noun.upper()}:\n" + format_blocks(chunks))
         messages = build_multimodal_messages(
             question,
-            system=_for_kind(_WHOLE_SYSTEM_BY_KIND, doc_kind),
+            system=_under_ceiling(
+                _for_kind(_WHOLE_SYSTEM_BY_KIND, doc_kind), max_sequence_id,
+            ),
             context_text="\n\n---\n\n".join(parts),
             image_paths=image_paths or None,
         )
@@ -925,6 +956,10 @@ async def answer_paper_question(
         "message": f"Reading the {noun}…" if anchor_kind == "document" else "Reading the passage…",
     }
     rounds = max_steps or settings.paper_agent_max_steps
+    # ⚠ _under_ceiling is applied AFTER .format(), not before. The companion
+    # instructions are prose the agent template has no placeholders for, and
+    # folding them in first would put every brace they ever grow through
+    # str.format — a KeyError at request time, on the reading path only.
     system = _for_kind(_AGENT_SYSTEM_BY_KIND, doc_kind).format(
         max_steps=rounds,
         web_help=_for_kind(_WEB_HELP_BY_KIND, doc_kind) if web_on else "",
@@ -935,6 +970,7 @@ async def answer_paper_question(
         image_example=IMAGE_EXAMPLE if web_on else "",
         mermaid_example=MERMAID_EXAMPLE,
     )
+    system = _under_ceiling(system, max_sequence_id)
     base_parts = [
         anchor_block,
         f"{noun.upper()} CONTENTS (SECTION takes any of these block numbers):\n"
@@ -1042,7 +1078,9 @@ async def answer_paper_question(
     messages = build_multimodal_messages(
         question,
         # no tool instructions — nothing left to call
-        system=_for_kind(_ANSWER_SYSTEM_BY_KIND, doc_kind),
+        system=_under_ceiling(
+            _for_kind(_ANSWER_SYSTEM_BY_KIND, doc_kind), max_sequence_id,
+        ),
         context_text="\n\n---\n\n".join(parts),
         image_paths=image_paths or None,
     )

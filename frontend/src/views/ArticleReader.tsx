@@ -40,6 +40,15 @@ import {
 } from '../lib/personalNotes';
 import { loadPersonalState } from '../lib/personalState';
 import { PageMapProvider, useBuiltPageMap } from '../lib/pageMap';
+import { RevealModeToggle } from '../components/RevealModeToggle';
+import {
+  initialRevealCursor,
+  loadRevealCursor,
+  loadRevealMode,
+  nextRevealCursor,
+  saveRevealCursor,
+  saveRevealMode,
+} from '../lib/revealMode';
 import { formatRelativeTime } from '../lib/time';
 import { createPacer } from '../lib/pacer';
 import {
@@ -853,6 +862,104 @@ export function ArticleReader({
     decks,
   ]);
 
+  // ── Reveal mode ────────────────────────────────────────────────────────────
+  //
+  // Off by default and off for everything that is not a paper; see
+  // lib/revealMode.ts for why this is a per-device preference rather than a
+  // column on the document.
+  const [revealOn, setRevealOn] = useState(loadRevealMode);
+  // The last block shown. null while the document is still loading, or
+  // whenever the mode is off — in which case nothing below reads it.
+  const [revealCursor, setRevealCursor] = useState<number | null>(null);
+  const revealable = doc?.doc_kind === 'paper';
+  const stepping = revealOn && revealable;
+
+  /**
+   * Reveal at least as far as `seq`.
+   *
+   * ⚠ Every jump goes through here: a citation chip, a bookmark, a contents
+   * entry, the resume pointer. Scrolling to a block that stepped mode has not
+   * rendered does nothing at all and looks like a dead button — the exact
+   * failure that would make this mode feel broken rather than slow. Asking to
+   * go somewhere is consent to see it, so the cursor moves forward to meet the
+   * request; it never moves back, because that would hide what is already read.
+   */
+  const revealThrough = useCallback((seq: number) => {
+    setRevealCursor((prev) => (prev == null || seq > prev ? seq : prev));
+  }, []);
+
+  const blocksRef = useRef<DocBlock[]>([]);
+  useEffect(() => { blocksRef.current = doc?.blocks ?? []; }, [doc]);
+
+  /**
+   * The ceiling to send with a question: the last block the reader has been
+   * shown, or null when the whole paper is on screen.
+   *
+   * ⚠ Through a ref, deliberately. `runNote` is memoised on `[paperId]` and is
+   * re-entered by the retry path long after the question was composed; making
+   * it depend on the cursor would rebuild it on every reveal. Read at call
+   * time it is also the more correct value — the ceiling that applies is the
+   * one in force when the reader actually asks.
+   */
+  const askCeilingRef = useRef<number | null>(null);
+  useEffect(() => {
+    askCeilingRef.current = stepping ? revealCursor : null;
+  }, [stepping, revealCursor]);
+
+  /**
+   * The blocks actually rendered.
+   *
+   * ⚠ `doc.blocks` stays whole underneath this. The progress rail, the
+   * contents panel, the bookmark ticks and rawPosition() all measure position
+   * against the entire paper, and filtering the source list would make a
+   * reader four blocks in read as 100% through the document.
+   */
+  const visibleBlocks = useMemo(() => {
+    const blocks = doc?.blocks ?? [];
+    if (!stepping || revealCursor == null) return blocks;
+    const end = blocks.findIndex((b) => b.sequence_order === revealCursor);
+    return end < 0 ? blocks : blocks.slice(0, end + 1);
+  }, [doc, stepping, revealCursor]);
+
+  const revealedSeqs = useMemo(
+    () => (stepping ? new Set(visibleBlocks.map((b) => b.sequence_order)) : null),
+    [stepping, visibleBlocks],
+  );
+
+  /**
+   * Whether a margin card may be rendered at all.
+   *
+   * A card whose anchor block is not on the page has nothing to align to: the
+   * layout pass skips it (`if (!el || !block) continue`) and it keeps whatever
+   * transform it last had, so a note from page nine would sit stacked at the
+   * top of the gutter beside an unrelated paragraph. Filtering here keeps it
+   * out of the DOM instead. The Contents panel is deliberately NOT filtered —
+   * it is an index of everything you have written, and clicking an entry
+   * reveals its way there.
+   */
+  const cardVisible = useCallback(
+    (seq: number) => revealedSeqs == null || revealedSeqs.has(seq),
+    [revealedSeqs],
+  );
+
+  /**
+   * How far into the paper the reader actually is, 0..1.
+   *
+   * ⚠ Scroll position is the wrong measure in stepped mode. The scroller only
+   * contains what has been revealed, so reaching the bottom of the first five
+   * blocks of a two-hundred-block paper is a full scroll and would read as
+   * 100% — in the header, along the rail, and baked into any bookmark made
+   * there. Stepped mode measures by the cursor instead, which is the only
+   * number that means the same thing in both modes.
+   */
+  const readProgress = useMemo(() => {
+    if (!stepping) return progress;
+    const blocks = doc?.blocks ?? [];
+    if (blocks.length < 2 || revealCursor == null) return 0;
+    const i = blocks.findIndex((b) => b.sequence_order === revealCursor);
+    return i < 0 ? 0 : i / (blocks.length - 1);
+  }, [stepping, progress, doc, revealCursor]);
+
   // ── Where am I? ─────────────────────────────────────────────────────────
   /**
    * The block nearest the top of the viewport.
@@ -867,8 +974,14 @@ export function ArticleReader({
   const topmostBlock = useCallback(
     (offset = 8): { seq: number; block: DocBlock } | null => {
       const scroller = scrollRef.current;
-      const blocks = doc?.blocks;
-      if (!scroller || !blocks?.length) return null;
+      // ⚠ The RENDERED blocks, not doc.blocks. In stepped mode everything past
+      // the cursor has no element, so a binary search over the whole paper
+      // starts by probing the middle, finds nothing, and bails at index 0 —
+      // pinning "where am I" to the first block for the rest of the session.
+      // That silently wrecks the saved reading position, the resume chip,
+      // "bookmark here" and asking about the passage in view.
+      const blocks = visibleBlocks;
+      if (!scroller || !blocks.length) return null;
       const targetY = scroller.getBoundingClientRect().top + offset;
 
       const topAt = (i: number): number | null => {
@@ -905,7 +1018,7 @@ export function ArticleReader({
           : best;
       return { seq: blocks[i].sequence_order, block: blocks[i] };
     },
-    [doc],
+    [visibleBlocks],
   );
 
   const [currentSeq, setCurrentSeq] = useState<number | null>(null);
@@ -1055,7 +1168,7 @@ export function ArticleReader({
       const draft: PersonalBookmark = {
         id: `local-${makeId()}`,
         sequenceId: seq,
-        progress,
+        progress: readProgress,
         updatedAt: Date.now(),
         snippet: block ? snippetForBlock(block, seq) : `¶${seq}`,
         kind: block ? kindForBlock(block) : 'block',
@@ -1079,7 +1192,7 @@ export function ArticleReader({
           setBookmarks((prev) => prev.filter((b) => b.id !== draft.id));
         });
     },
-    [bookmarks, doc, paperId, progress, removeBookmark],
+    [bookmarks, doc, paperId, readProgress, removeBookmark],
   );
 
   const bookmarkHere = useCallback(() => {
@@ -1397,6 +1510,9 @@ export function ArticleReader({
           // Only meaningful for a new note. The server ignores this on
           // follow-ups and uses the parent's model instead.
           draft.model,
+          // Stepped mode only: the model may not read past what the reader
+          // has. null in whole-paper mode, which is every other case.
+          askCeilingRef.current,
         );
         // Let the pacer finish painting before the card is swapped for the
         // saved one: otherwise the last few words would be skipped over.
@@ -1600,12 +1716,25 @@ export function ArticleReader({
   );
 
   const jumpTo = useCallback((seq: number) => {
+    // Reveal first: in stepped mode the target may not be rendered yet, and
+    // scrolling to a block that is not in the DOM does nothing.
+    revealThrough(seq);
     const el = blockRefs.current.get(seq);
-    if (!el) return;
+    if (!el) {
+      // Just revealed, so it paints on the next frame rather than this one.
+      requestAnimationFrame(() => {
+        const late = blockRefs.current.get(seq);
+        if (!late) return;
+        late.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        late.classList.add('is-flash');
+        setTimeout(() => late.classList.remove('is-flash'), 1200);
+      });
+      return;
+    }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.classList.add('is-flash');
     setTimeout(() => el.classList.remove('is-flash'), 1200);
-  }, []);
+  }, [revealThrough]);
 
   useEffect(() => {
     jumpToRef.current = jumpTo;
@@ -1722,7 +1851,10 @@ export function ArticleReader({
   const cardsFor = (side: MarginSide) => (
     <>
       {groups
-        .filter((g) => !deckMemberIds.has(g.root.id) && sideOf(g.root.margin_side) === side)
+        .filter((g) =>
+          !deckMemberIds.has(g.root.id) &&
+          sideOf(g.root.margin_side) === side &&
+          cardVisible(g.root.anchor_sequence_id))
         .map((group) => (
           <div
             key={group.root.id}
@@ -1734,7 +1866,7 @@ export function ArticleReader({
         ))}
 
       {marginPending
-        .filter((p) => sideOf(p.marginSide) === side)
+        .filter((p) => sideOf(p.marginSide) === side && cardVisible(p.anchorSequenceId))
         .map((p) => (
           <div
             key={p.clientId}
@@ -1785,7 +1917,10 @@ export function ArticleReader({
       )}
 
       {personalNotes
-        .filter((pn) => !deckMemberIds.has(pn.id) && sideOf(pn.marginSide) === side)
+        .filter((pn) =>
+          !deckMemberIds.has(pn.id) &&
+          sideOf(pn.marginSide) === side &&
+          cardVisible(pn.anchorSequenceId))
         .map((pn) => (
           <div
             key={pn.id}
@@ -1797,7 +1932,9 @@ export function ArticleReader({
         ))}
 
       {decks
-        .filter((d) => sideOf(d.marginSide) === side)
+        // A deck sits beside the earliest passage it holds, so that is the
+        // block whose reveal brings it back.
+        .filter((d) => sideOf(d.marginSide) === side && cardVisible(deckSeq(d)))
         .map((deck) => (
           <div
             key={deck.id}
@@ -1918,6 +2055,74 @@ export function ArticleReader({
   // Exact block→page lookup for every card that cites a passage. Distinct
   // from rawPosition() above, which is allowed to approximate; see pageMap.ts.
   const pageMap = useBuiltPageMap(doc?.blocks);
+
+  const moreToReveal =
+    stepping && nextRevealCursor(doc?.blocks ?? [], revealCursor) != null;
+
+  const revealNext = useCallback(() => {
+    const next = nextRevealCursor(blocksRef.current, revealCursor);
+    if (next == null) return;
+    setRevealCursor(next);
+    // Bring the new block into view rather than leaving it below the fold —
+    // otherwise pressing Next appears to do nothing on a tall viewport.
+    requestAnimationFrame(() => {
+      blockRefs.current.get(next)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, [revealCursor]);
+
+  /**
+   * Restore this paper's cursor, or seed one the first time it is stepped.
+   *
+   * ⚠ The stored cursor wins outright. It is the record of what has actually
+   * been handed over, so a reader who steps to block 40, switches to Whole to
+   * scan the figures, and switches back must land on 40 again — not on
+   * whatever the viewport happened to be showing. Seeding only ever runs for a
+   * paper that has never been stepped, and then it uses evidence (notes,
+   * bookmarks, saved position) rather than scroll alone; see revealMode.ts.
+   */
+  useEffect(() => {
+    if (!stepping) { setRevealCursor(null); return; }
+    setRevealCursor((prev) => {
+      if (prev != null) return prev;
+      const stored = loadRevealCursor(paperId);
+      const blocks = doc?.blocks ?? [];
+      if (stored != null && blocks.some((b) => b.sequence_order === stored)) return stored;
+      return initialRevealCursor(blocks, {
+        currentSeq,
+        resumeSeq: resume?.sequenceId ?? null,
+        marks: [
+          ...notes.map((n) => n.anchor_sequence_id),
+          ...personalNotes.map((n) => n.anchorSequenceId),
+          ...bookmarks.map((b) => b.sequenceId),
+        ],
+      });
+    });
+    // currentSeq and the marks are deliberately omitted: this decides a
+    // STARTING point once, and re-running it as the reader scrolls or writes
+    // would drag the cursor along behind them and reveal the paper.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepping, doc, resume, paperId]);
+
+  // Remember it, so the next visit resumes rather than re-deriving. Only while
+  // stepping: leaving Whole mode must not erase where stepping had got to.
+  useEffect(() => {
+    if (stepping && revealCursor != null) saveRevealCursor(paperId, revealCursor);
+  }, [stepping, revealCursor, paperId]);
+
+  // → reveals the next block. Not ArrowDown or Space, which both scroll: a
+  // reader holding one to move down the page would tear through the paper.
+  useEffect(() => {
+    if (!stepping) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowRight' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      revealNext();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [stepping, revealNext]);
 
   return (
     <PageMapProvider value={pageMap}>
@@ -2053,6 +2258,15 @@ export function ArticleReader({
             />
           )}
 
+          {/* Papers only — see RevealModeToggle's own note for why not books
+              (they already read this way) or articles (a web snapshot). */}
+          {revealable && (
+            <RevealModeToggle
+              on={revealOn}
+              onChange={(next) => { setRevealOn(next); saveRevealMode(next); }}
+            />
+          )}
+
           <button
             className={`reader-chip${panel ? ' is-on' : ''}`}
             onClick={() => setPanel((p) => (p ? null : 'contents'))}
@@ -2064,7 +2278,7 @@ export function ArticleReader({
             )}
           </button>
 
-          <span className="reader-meta">{Math.round(progress * 100)}%</span>
+          <span className="reader-meta">{Math.round(readProgress * 100)}%</span>
           <span className="reader-sep" />
           <UserMenuInline />
         </div>
@@ -2073,7 +2287,7 @@ export function ArticleReader({
             sits in the paper. Reaching a bookmark you forgot about is the
             common failure of a single "resume" pointer. */}
         <div className="reader-rail">
-          <div className="reader-progress" style={{ width: `${progress * 100}%` }} />
+          <div className="reader-progress" style={{ width: `${readProgress * 100}%` }} />
           {bookmarkTicks.map(({ bookmark, at }) => (
             <button
               key={bookmark.id}
@@ -2151,7 +2365,7 @@ export function ArticleReader({
                 )}
               </div>
             )}
-            {doc?.blocks.map((block) => (
+            {visibleBlocks.map((block) => (
               <ArticleBlock
                 key={block.id}
                 block={block}
@@ -2175,7 +2389,18 @@ export function ArticleReader({
                 registerRef={registerBlockRef}
               />
             ))}
-            {doc && doc.blocks.length > 0 && <div className="article-end">◆</div>}
+            {/* In stepped mode the paper does not end here yet — offering the
+                closing diamond mid-document would read as "that's all there
+                is". The Next control takes its place until the last block. */}
+            {moreToReveal ? (
+              <div className="reveal-next-wrap">
+                <button type="button" className="reveal-next" onClick={revealNext}>
+                  Next block <span aria-hidden="true">→</span>
+                </button>
+              </div>
+            ) : (
+              doc && doc.blocks.length > 0 && <div className="article-end">◆</div>
+            )}
           </article>
 
           <aside className="reader-gutter gutter-right">
