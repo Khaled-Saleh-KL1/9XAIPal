@@ -17,6 +17,7 @@ import { StrictScopeToggle } from '../components/StrictScopeToggle';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { ChatPane } from './ChatPane';
+import { PageMapProvider, useFetchedPageMap } from '../lib/pageMap';
 import {
   getNextChunk,
   getChunksRange,
@@ -117,6 +118,9 @@ interface Props {
 
 export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null, onJumped, onOpenRaw }: Props) {
   const confirm = useConfirm();
+  // Fetched rather than derived from `chunks`: those hold one chapter's window,
+  // and the agent cites blocks from chapters it never loaded. See pageMap.ts.
+  const pageMap = useFetchedPageMap(paperId);
   const [chunks, setChunks] = useState<ChunkData[]>([]);
   // Cursor for gap-tolerant paging: the highest sequence_order loaded so far.
   // We always ask the backend for "the next chunk after this", starting at 0.
@@ -782,6 +786,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
   }, []);
 
   return (
+    <PageMapProvider value={pageMap}>
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
 
       {/* ── Top bar ── */}
@@ -1198,6 +1203,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
         </button>
       )}
     </div>
+    </PageMapProvider>
   );
 }
 

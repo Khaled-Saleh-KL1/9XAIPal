@@ -475,6 +475,35 @@ async def page_to_sequence(
     }
 
 
+@router.get("/{paper_id}/pages")
+async def page_index(
+    paper_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """`(sequence_id, page)` for every block that has a printed page.
+
+    The inverse of `page-to-sequence`, and the source for the page a citation
+    chip shows. The article reader does not need it — it already holds the
+    whole document — but the book reader loads one chapter's window at a time,
+    and the agent it talks to routinely cites a block from a chapter that
+    window does not contain. Without this the reader could only label the
+    handful of citations that happened to be on screen.
+
+    ⚠ Sent as pairs rather than an object keyed by sequence id: a 600-page book
+    is ~3.7k blocks, and JSON object keys would cost roughly twice the bytes
+    for the same data. Blocks with no page are omitted entirely, so an empty
+    list means "this document has no pages" — which is a real answer (an
+    imported article, or a PDF that fell back to markdown chunking), not an
+    error, and the reader falls back to block numbers.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    return {"pages": [list(pair) for pair in await chunk_repo.get_page_starts(db, paper_id)]}
+
+
 @router.get("/{paper_id}/figure-descriptions")
 async def get_figure_descriptions(
     paper_id: UUID,

@@ -45,6 +45,7 @@ GET    /papers/{paper_id}/chunks
 GET    /papers/{paper_id}/chunks/{sequence_order}
 GET    /papers/{paper_id}/chunks/after/{sequence_order}
 GET    /papers/{paper_id}/chapters
+GET    /papers/{paper_id}/pages
 GET    /papers/{paper_id}/figure-descriptions
 GET    /papers/{paper_id}/notes
 POST   /papers/{paper_id}/notes/stream
@@ -451,6 +452,31 @@ this chunk with `asset_type='image'`.
 
 `404 ChunkNotFound` when there's no chunk at that sequence, which the
 frontend uses as the "end of paper" signal.
+
+---
+
+## Pages
+
+### `GET /papers/{paper_id}/pages`
+
+`[sequence_id, page]` for every block that carries a printed page — the inverse of
+`page-to-sequence`, and where a citation chip's page comes from.
+
+```json
+{ "pages": [[1, 1], [2, 1], [3, 2], ...] }
+```
+
+Pairs rather than an object keyed by sequence id: a 600-page book is ~3.7k blocks, and object keys
+would roughly double the bytes for the same data.
+
+⚠ **An empty list is an answer, not a failure.** Blocks with no page are omitted, so `[]` means the
+document has none at all — an imported article, or a PDF that fell back to markdown chunking (see
+[database-schema.md](database-schema.md)). Callers fall back to the block number and must never
+substitute page 1.
+
+Used by the book reader, which holds one chapter's window at a time and cannot derive the map from
+what it has loaded. The article reader does not need it: `GET /papers/{paper_id}/document` already
+returns `page_start` on every block.
 
 ---
 

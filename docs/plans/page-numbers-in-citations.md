@@ -71,10 +71,25 @@ exact. The two resolvers live side by side on purpose, with the reason written a
 | Card eyebrow (`NoteChrome`) | `¶41` | `p. 7` | same context; this one is the note's own anchor rather than a citation |
 | Desk citations (`CitationRef`) | `P2:41` | `P2 · p. 7` | new: `cited_refs_with_pages` |
 | Book chat (`ChatPane`) | the quoted text | `p. 7` | `Citation.page`, already on the wire |
+| Book agent trail | `¶41` | `p. 7` | new: `GET /papers/{id}/pages` |
 
 `PageMapContext` is a context rather than a prop because the cards that cite a block sit four or
 five components below the reader that owns them (a note, inside a deck, inside the marginalia
 panel) and nothing in between has any other reason to know about pages.
+
+**Two readers, two ways of filling that context.** `ReadingView` sends `doc_kind='book'` to
+`BookReadingView` and everything else to `ArticleReader`, and they hold their documents
+differently:
+
+- `ArticleReader` fetches the whole document in one request, so its map is built from blocks it
+  already has (`useBuiltPageMap`) and costs nothing.
+- `BookReadingView` holds one chapter's window at a time, and the agent it talks to routinely
+  cites a block from a chapter that window never loaded. A map derived from memory would label
+  the handful of citations that happened to be on screen and silently fall back to `¶N` for the
+  rest — worse than either extreme, because the reader cannot tell which they are looking at. So
+  it fetches the whole index once from `GET /papers/{id}/pages` (`useFetchedPageMap`), which
+  returns `(sequence_id, page)` pairs for every block that has a page: 3663 pairs for the 584-page
+  book in the corpus. A failed fetch degrades to block numbers rather than surfacing an error.
 
 The desk keeps its paper number in the label: a desk answer spans several papers at once, so a
 bare "p. 7" would be ambiguous in exactly the case the desk exists for. Its pages come from

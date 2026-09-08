@@ -331,6 +331,21 @@ export interface FullDocument {
  * Fetch the entire paper in one request. The article reader renders all of it;
  * there is no paging, so there is no reason to make N round-trips for it.
  */
+/**
+ * `[sequence_id, page]` for every block of this document that has a printed
+ * page. Empty for a document that has none (an imported article, or a PDF that
+ * fell back to markdown chunking) — which is an answer, not a failure.
+ *
+ * The article reader does not need this: `getFullDocument` already gives it
+ * every block, pages included. The book reader does, because it holds only one
+ * chapter's window and the agent cites outside it.
+ */
+export async function getPageIndex(paperId: string): Promise<[number, number][]> {
+  const res = await fetch(`${BASE}/papers/${paperId}/pages`);
+  if (!res.ok) throw new Error(`Page index fetch failed: ${res.status}`);
+  return (await res.json()).pages || [];
+}
+
 export async function getFullDocument(paperId: string): Promise<FullDocument> {
   const res = await fetch(`${BASE}/papers/${paperId}/document`);
   if (!res.ok) throw new Error(`Document fetch failed: ${res.status}`);

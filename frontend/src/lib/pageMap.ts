@@ -1,5 +1,5 @@
-import { createContext, useContext, useMemo } from 'react';
-import type { DocBlock } from '../api';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { getPageIndex, type DocBlock } from '../api';
 
 /**
  * Which printed page a block came from, for everything that cites one.
@@ -28,6 +28,23 @@ export interface PageMap {
 }
 
 export const EMPTY_PAGE_MAP: PageMap = { pageFor: () => null, hasPages: false };
+
+/**
+ * A page map from `(sequence_id, page)` pairs — what `GET /papers/{id}/pages`
+ * returns.
+ *
+ * The article reader builds its map from the blocks it already holds; the book
+ * reader has only one chapter's window in memory at a time and needs the whole
+ * index, since the agent cites blocks from chapters that window never loaded.
+ */
+export function buildPageMapFromPairs(pairs: [number, number][] | undefined | null): PageMap {
+  if (!pairs?.length) return EMPTY_PAGE_MAP;
+  const pages = new Map<number, number>(pairs);
+  return {
+    pageFor: (seq) => (seq == null ? null : pages.get(seq) ?? null),
+    hasPages: true,
+  };
+}
 
 export function buildPageMap(blocks: DocBlock[] | undefined | null): PageMap {
   if (!blocks?.length) return EMPTY_PAGE_MAP;
@@ -63,6 +80,30 @@ export function usePageMap(): PageMap {
 /** Memoized `buildPageMap`, for the reader that provides the context. */
 export function useBuiltPageMap(blocks: DocBlock[] | undefined | null): PageMap {
   return useMemo(() => buildPageMap(blocks), [blocks]);
+}
+
+/**
+ * The page index for one document, fetched once.
+ *
+ * For the book reader, which cannot build a map from what it has in memory.
+ * A failed fetch is not an error worth surfacing: the map falls back to empty
+ * and every chip shows its block number, exactly as it did before pages
+ * existed.
+ */
+export function useFetchedPageMap(paperId: string | null | undefined): PageMap {
+  const [pairs, setPairs] = useState<[number, number][] | null>(null);
+
+  useEffect(() => {
+    if (!paperId) { setPairs(null); return; }
+    let alive = true;
+    setPairs(null);
+    getPageIndex(paperId)
+      .then((p) => { if (alive) setPairs(p); })
+      .catch(() => { if (alive) setPairs([]); });
+    return () => { alive = false; };
+  }, [paperId]);
+
+  return useMemo(() => buildPageMapFromPairs(pairs), [pairs]);
 }
 
 /**
