@@ -47,8 +47,18 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Data & schema
 
-- **`chunks.page_start` / `page_end` are nullable and never populated**: MinerU page metadata is
-  not wired through. Page-based citation is therefore impossible today.
+- ~~**`chunks.page_start` / `page_end` are nullable and never populated**~~: **wrong when
+  written, corrected 2026-09-08.** The `content_list.json` chunker has always converted MinerU's
+  0-based `page_idx` to a 1-based page (`extraction/chunker.py`), and `pipeline_sync.py` writes
+  both columns. Measured on the live database: **6132 of 6521 chunks carry a page**, and the 389
+  that do not are whole documents rather than gaps — every `doc_kind='article'` row, which is an
+  imported web page with no pages to have. What was actually missing was the *surface*: nothing
+  displayed the column, so a quoted passage could not say where it came from. Shipped 2026-09-08,
+  see [plans/page-numbers-in-citations.md](plans/page-numbers-in-citations.md).
+- **A PDF that falls back to markdown chunking still has no pages.** Only the `content_list.json`
+  path carries `page_idx`; the PyMuPDF fallback produces none, so those documents cite by
+  paragraph. Not a regression, and the UI degrades to `¶N` on its own, but it is the remaining
+  half of "every citation has a page".
 - **`chunk_assets.caption`, `.width`, `.height` are reserved fields**, always null.
 - **`ask_traces.retrieved_chunk_ids` is always null**, reserved.
 - ⚠ **Migrations are best-effort by design.** [`migrations.py`](../backend/app/database/migrations.py)

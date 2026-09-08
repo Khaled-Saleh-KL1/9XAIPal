@@ -654,9 +654,42 @@ def cited_refs(answer: str, papers: list[dict]) -> list[dict]:
                     "document_id": str(papers[p - 1]["id"]),
                     "label": _paper_label(papers[p - 1]),
                     "sequence_id": s,
+                    # Filled in by cited_refs_with_pages; None when the block
+                    # has no page, which is a whole document at a time (only
+                    # content_list.json extraction carries pages).
+                    "page": None,
                 }
             )
     return out
+
+
+async def cited_refs_with_pages(
+    session: AsyncSession,
+    answer: str,
+    papers: list[dict],
+) -> list[dict]:
+    """``cited_refs`` with each citation's printed page attached.
+
+    The desk labels a citation with the block it came from, which is precise
+    but is not a coordinate that exists outside this app: a reader checking a
+    claim against the PDF on their desk, or writing the citation into a paper
+    of their own, needs the page. The block number stays underneath it, because
+    it is the thing the chip actually navigates to.
+
+    Kept separate from ``cited_refs`` so the parsing stays sync and testable
+    without a database; this only decorates what that returned.
+    """
+    refs = cited_refs(answer, papers)
+    if not refs:
+        return refs
+
+    pages = await chunk_repo.get_pages_for_refs(
+        session,
+        [(UUID(r["document_id"]), r["sequence_id"]) for r in refs],
+    )
+    for r in refs:
+        r["page"] = pages.get((r["document_id"], r["sequence_id"]))
+    return refs
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -891,7 +924,7 @@ async def answer_study_question(
                     "type": "done",
                     "answer": answer,
                     "model": result.get("model", ""),
-                    "cited": cited_refs(answer, papers),
+                    "cited": await cited_refs_with_pages(session, answer, papers),
                     "steps": trail,
                 }
                 return
@@ -998,6 +1031,6 @@ async def answer_study_question(
         "type": "done",
         "answer": answer,
         "model": answered_by or (model or ""),
-        "cited": cited_refs(answer, papers),
+        "cited": await cited_refs_with_pages(session, answer, papers),
         "steps": trail,
     }

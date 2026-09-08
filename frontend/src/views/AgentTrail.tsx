@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { citeChips, usePageMap } from '../lib/pageMap';
 import type { AgentStep } from '../api';
 
 /**
@@ -43,6 +44,8 @@ function StepRow({
   onJump?: (seq: number) => void;
 }) {
   const running = step.state === 'running';
+  const { pageFor } = usePageMap();
+  const chips = citeChips(step.seqs, pageFor);
   return (
     <li className={`trail-step tool-${step.tool.toLowerCase()}${running ? ' is-running' : ''}`}>
       {step.think && <div className="trail-think">{step.think}</div>}
@@ -57,16 +60,27 @@ function StepRow({
       </div>
 
       {/* Blocks the call pulled in. Capped: a SECTION over a long chapter
-          returns forty, and forty chips are a wall, not a navigation aid. */}
+          returns forty, and forty chips are a wall, not a navigation aid.
+          ⚠ Collapsed by page BEFORE the cap, not after: forty blocks over
+          three pages is three chips, and the cap then hides nothing. Outside
+          the reader (the desk, the book chat) there is no page map and these
+          stay paragraph numbers, which is right — those surfaces span several
+          documents, so a bare page number would not say which one. */}
       {!running && step.seqs.length > 0 && onJump && (
         <div className="trail-seqs">
-          {step.seqs.slice(0, 6).map((seq) => (
-            <button key={seq} type="button" className="trail-seq" onClick={() => onJump(seq)}>
-              ¶{seq}
+          {chips.slice(0, 6).map((chip) => (
+            <button
+              key={chip.seq}
+              type="button"
+              className="trail-seq"
+              onClick={() => onJump(chip.seq)}
+              title={chip.title}
+            >
+              {chip.label}
             </button>
           ))}
-          {step.seqs.length > 6 && (
-            <span className="trail-more">+{step.seqs.length - 6}</span>
+          {chips.length > 6 && (
+            <span className="trail-more">+{chips.length - 6}</span>
           )}
         </div>
       )}

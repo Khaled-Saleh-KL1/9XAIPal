@@ -6,6 +6,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from 'react';
+import { usePageMap } from '../lib/pageMap';
 import type { DeckMemberKind } from '../lib/personalNotes';
 
 /**
@@ -198,22 +199,30 @@ export function CardEyebrow({
   /** Override the default word for this tone (decks say "Deck", etc.). */
   word?: string;
 }) {
+  const { pageFor } = usePageMap();
   return (
     <header className={`card-eyebrow tone-${tone}`}>
       {grip ?? <span className="card-grip is-inert" aria-hidden="true" />}
       <span className="card-dot" aria-hidden="true" />
       <span className="card-tone-word">{word ?? TONE_WORD[tone]}</span>
-      {seq != null && (
-        <button
-          type="button"
-          className="card-anchor-ref"
-          onClick={() => onJump?.(seq)}
-          disabled={!onJump}
-          title={onJump ? `Scroll to paragraph ${seq}` : `Paragraph ${seq}`}
-        >
-          ¶{seq}
-        </button>
-      )}
+      {seq != null && (() => {
+        // The page when the document has one, the paragraph otherwise. The
+        // tooltip always names both: the page is what a reader quotes, the
+        // paragraph is what this button actually scrolls to.
+        const page = pageFor(seq);
+        const where = page == null ? `paragraph ${seq}` : `page ${page}, paragraph ${seq}`;
+        return (
+          <button
+            type="button"
+            className="card-anchor-ref"
+            onClick={() => onJump?.(seq)}
+            disabled={!onJump}
+            title={onJump ? `Scroll to ${where}` : where[0].toUpperCase() + where.slice(1)}
+          >
+            {page == null ? `¶${seq}` : `p. ${page}`}
+          </button>
+        );
+      })()}
       {right && <span className="card-eyebrow-right">{right}</span>}
     </header>
   );

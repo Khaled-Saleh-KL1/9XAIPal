@@ -39,6 +39,7 @@ import {
   type PersonalNote,
 } from '../lib/personalNotes';
 import { loadPersonalState } from '../lib/personalState';
+import { PageMapProvider, useBuiltPageMap } from '../lib/pageMap';
 import { formatRelativeTime } from '../lib/time';
 import { createPacer } from '../lib/pacer';
 import {
@@ -1914,7 +1915,12 @@ export function ArticleReader({
     return { page, anchors };
   };
 
+  // Exact block→page lookup for every card that cites a passage. Distinct
+  // from rawPosition() above, which is allowed to approximate; see pageMap.ts.
+  const pageMap = useBuiltPageMap(doc?.blocks);
+
   return (
+    <PageMapProvider value={pageMap}>
     <div className={`reader-root${dragging ? ' is-dragging-card' : ''}`}>
       <header className="reader-bar">
         <button onClick={onBack} className="reader-back">
@@ -2220,5 +2226,6 @@ export function ArticleReader({
         </div>
       )}
     </div>
+    </PageMapProvider>
   );
 }

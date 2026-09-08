@@ -181,8 +181,8 @@ One row per structural unit (heading, paragraph, math, table, figure).
 | `heading_path`       | `TEXT[]`   | Breadcrumb from H1 to current heading.      |
 | `markdown`           | `TEXT`     | Normalized markdown body.                   |
 | `plain_text`         | `TEXT`     | What we embed.                              |
-| `page_start`         | `INTEGER`  | Currently nullable.                         |
-| `page_end`           | `INTEGER`  | Currently nullable.                         |
+| `page_start`         | `INTEGER`  | 1-based printed page. Nullable: see ⚠ below. |
+| `page_end`           | `INTEGER`  | Same page as `page_start` today — the chunker emits one entry per `content_list.json` block, and no block spans a page break. |
 | `bbox_json`          | `JSONB`    | Reserved for bounding boxes.                |
 | `token_count`        | `INTEGER`  | `≈ len(plain_text) / 4`.                    |
 | `table_json`         | `JSONB`    | Structured table data for `chunk_type='table'`. |
@@ -190,6 +190,14 @@ One row per structural unit (heading, paragraph, math, table, figure).
 
 Unique constraint: `(document_id, sequence_id)`.
 Index: `idx_chunks_document_sequence(document_id, sequence_id)`.
+
+⚠ **`page_start` is null for a whole document at a time, not block by block.** Only the
+`content_list.json` extraction path carries MinerU's `page_idx` (converted from 0-based to 1-based
+in [`extraction/chunker.py`](../../backend/app/extraction/chunker.py)); a PDF that fell back to
+markdown chunking has none, and a `doc_kind='article'` row is an imported web page that never had
+any. Anything reading these columns should therefore treat "no page" as a property of the document
+and fall back to `sequence_id`, which always exists — never substitute page 1. The UI's shared
+resolver is [`frontend/src/lib/pageMap.ts`](../../frontend/src/lib/pageMap.ts).
 
 ### `chunk_embeddings`
 

@@ -1161,6 +1161,15 @@ export interface StudyCitation {
   document_id: string;
   label: string;
   sequence_id: number;
+  /**
+   * The printed page the cited block sits on.
+   *
+   * Optional, and null far more often than it is wrong: a document extracted
+   * without `content_list.json` carries no pages at all, and a turn stored
+   * before this field existed has none either. Absent means "show the block
+   * number", never "page 1".
+   */
+  page?: number | null;
 }
 
 export interface StudyTurn {
