@@ -43,8 +43,10 @@ import { PageMapProvider, useBuiltPageMap } from '../lib/pageMap';
 import { RevealModeToggle } from '../components/RevealModeToggle';
 import {
   initialRevealCursor,
+  loadRevealCursor,
   loadRevealMode,
   nextRevealCursor,
+  saveRevealCursor,
   saveRevealMode,
 } from '../lib/revealMode';
 import { formatRelativeTime } from '../lib/time';
@@ -2069,24 +2071,43 @@ export function ArticleReader({
   }, [revealCursor]);
 
   /**
-   * Open the cursor where the reader already is, never at the top.
+   * Restore this paper's cursor, or seed one the first time it is stepped.
    *
-   * Runs when the mode is switched on and when a paper finishes loading with
-   * it already on. `currentSeq` is where they are looking; `resume` is where
-   * they left off on a paper that has only just painted.
+   * ⚠ The stored cursor wins outright. It is the record of what has actually
+   * been handed over, so a reader who steps to block 40, switches to Whole to
+   * scan the figures, and switches back must land on 40 again — not on
+   * whatever the viewport happened to be showing. Seeding only ever runs for a
+   * paper that has never been stepped, and then it uses evidence (notes,
+   * bookmarks, saved position) rather than scroll alone; see revealMode.ts.
    */
   useEffect(() => {
     if (!stepping) { setRevealCursor(null); return; }
-    setRevealCursor((prev) =>
-      prev != null
-        ? prev
-        : initialRevealCursor(doc?.blocks ?? [], currentSeq, resume?.sequenceId ?? null),
-    );
-    // currentSeq deliberately omitted: this sets a starting point once, and
-    // re-running it on every scroll would drag the cursor along with the
-    // viewport and reveal the whole paper.
+    setRevealCursor((prev) => {
+      if (prev != null) return prev;
+      const stored = loadRevealCursor(paperId);
+      const blocks = doc?.blocks ?? [];
+      if (stored != null && blocks.some((b) => b.sequence_order === stored)) return stored;
+      return initialRevealCursor(blocks, {
+        currentSeq,
+        resumeSeq: resume?.sequenceId ?? null,
+        marks: [
+          ...notes.map((n) => n.anchor_sequence_id),
+          ...personalNotes.map((n) => n.anchorSequenceId),
+          ...bookmarks.map((b) => b.sequenceId),
+        ],
+      });
+    });
+    // currentSeq and the marks are deliberately omitted: this decides a
+    // STARTING point once, and re-running it as the reader scrolls or writes
+    // would drag the cursor along behind them and reveal the paper.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepping, doc, resume]);
+  }, [stepping, doc, resume, paperId]);
+
+  // Remember it, so the next visit resumes rather than re-deriving. Only while
+  // stepping: leaving Whole mode must not erase where stepping had got to.
+  useEffect(() => {
+    if (stepping && revealCursor != null) saveRevealCursor(paperId, revealCursor);
+  }, [stepping, revealCursor, paperId]);
 
   // → reveals the next block. Not ArrowDown or Space, which both scroll: a
   // reader holding one to move down the page would tear through the paper.

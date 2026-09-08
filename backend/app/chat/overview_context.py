@@ -14,6 +14,8 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
+from app.database.repositories import chunks as chunk_repo
+
 
 async def get_section_summaries(
     session: AsyncSession,
@@ -87,7 +89,23 @@ async def build_overview_context(
     paper_overview = next((s for s in summaries if s.get("level") == 0), None)
     if paper_overview is not None and max_sequence_id is not None:
         end = paper_overview.get("sequence_end")
-        if end is not None and end > max_sequence_id:
+        if end is None:
+            # ⚠ And it always IS None. A level-0 row summarises the whole
+            # document, so the summariser never gives it bounds — every
+            # level-0 row in the corpus has NULL sequence_start/sequence_end.
+            # The old test was `end is not None and end > ceiling`, which with
+            # a NULL end is simply never true: the whole-document overview was
+            # handed to every part-way reader, unconditionally, on the one
+            # route this module's own docstring calls the worst spoiler in the
+            # app. Measured: a reader 20 blocks into a 3663-block book got
+            # "Paper Overview: The Culture Map" in full.
+            #
+            # With no bounds on the row, the document's own last block is what
+            # says whether the reader has finished.
+            _, last_seq = await chunk_repo.get_sequence_bounds(session, document_id)
+            if last_seq and max_sequence_id < last_seq:
+                paper_overview = None
+        elif end > max_sequence_id:
             paper_overview = None
     section_summaries = [s for s in summaries if s.get("level") in (1, 2)]
 

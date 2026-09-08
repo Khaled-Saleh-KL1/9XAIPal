@@ -52,10 +52,19 @@ def citations_from_overview(overview_ctx: dict) -> list[Citation]:
 
     for s in overview_ctx.get("section_summaries") or []:
         src_ids = s.get("source_chunk_ids") or []
+        # ⚠ Same withholding as format_overview_context. The snippet is shown
+        # to the reader on the citation chip, so quoting the summary of a
+        # section they are only part-way through spoils it in the UI even
+        # though the prompt no longer carries it. The citation itself stays:
+        # it points at a real section they can go and read.
         citations.append(Citation(
             chunk_id=src_ids[0] if src_ids else None,
             sequence_id=s.get("sequence_start"),
-            text_snippet=(s.get("summary_plain") or "")[:220],
+            text_snippet=(
+                "(summary withheld — you are part-way through this section)"
+                if s.get("partially_read")
+                else (s.get("summary_plain") or "")[:220]
+            ),
             source="section_summary",
         ))
 

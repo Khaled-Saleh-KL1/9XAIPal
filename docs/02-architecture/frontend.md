@@ -205,9 +205,23 @@ snapshot.
 
 The state is one cursor: `revealCursor`, the last block shown. `visibleBlocks` slices `doc.blocks`
 at it and everything else measures against the whole list, because a reader four blocks into a
-paper is not 100% through it. The preference itself lives in `localStorage`
+paper is not 100% through it. Both the preference and the per-paper cursor live in `localStorage`
 ([lib/revealMode.ts](../../frontend/src/lib/revealMode.ts)), not on the document row: it is a
 reading style, not a property of the paper.
+
+⚠ **The cursor is stored, not recomputed.** Deriving it from scroll position each time the mode
+came on was unreliable in the way a reader immediately notices: scroll to the end to look at a
+figure, toggle on, and the whole paper counts as read. Reading position follows the viewport; the
+cursor is a record of what has been *handed over*, so it changes only when the reader presses Next
+or jumps, survives a reload and a round trip through Whole mode, and never moves backward.
+
+Seeding therefore happens once, for a paper that has never been stepped, and it uses evidence
+rather than scroll alone: the furthest of any note anchor, any bookmark, the saved reading
+position, and the current viewport. A note or a bookmark is a deliberate act at a specific passage
+and so is the strongest proof that the passage was read — put one in the middle of a paper and
+stepping starts from there. ⚠ "Furthest" is resolved against the block list, not by numeric id:
+sequence ids have gaps, so a larger id is not necessarily a later block, and a stale mark left by a
+re-chunk is discarded rather than trusted as a huge number.
 
 ⚠ Three things break if the cursor is treated as a simple filter, and each is handled where it
 happens:

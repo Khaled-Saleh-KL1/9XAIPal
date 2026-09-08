@@ -84,6 +84,12 @@ The application code is more mature than the tooling around it. These are the ch
   earnestly not mentioning it. A spoiler bug, not a security one (see the ⚠ in
   [chat-and-ask.md](../02-architecture/chat-and-ask.md#the-progress-ceiling)), but it silently
   defeated the feature it belonged to.
+- ~~**OVERVIEW handed part-way readers the whole document's summary**~~: **fixed 2026-09-08.**
+  Two separate holes on the route [`overview_context`](../backend/app/chat/overview_context.py)
+  itself calls "the single worst spoiler in the app when it is ignored": the level-0
+  whole-document overview was never withheld (its guard tested `sequence_end`, which is always
+  NULL on a level-0 row), and a part-read section's `partially_read` flag was set but never read
+  by any formatter. Both measured on a live 3663-block book at a ceiling of 20.
 - **Default Postgres password** ships in `.env.example`. Startup warns, but nothing enforces.
 - **90 `except Exception` blocks** across the backend. Zero bare `except:`, which is good
   discipline, but that density means genuine failures can be logged and swallowed.
