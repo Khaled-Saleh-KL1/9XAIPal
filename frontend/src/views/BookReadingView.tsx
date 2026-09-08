@@ -5,11 +5,11 @@
  * article with margin notes (see ArticleReader.tsx); ReadingView.tsx picks
  * between the two. Nothing here is on the paper path.
  */
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { displayTitle as paperDisplayTitle } from '../lib/titles';
-import { loadReadingProgress, saveReadingPosition } from '../lib/readingPosition';
+import { loadReadingProgress, markChapterFinished, saveReadingPosition } from '../lib/readingPosition';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
@@ -372,6 +372,13 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
   // chapter that they had to scroll to find by hand.
   const restoredRef = useRef(false);
 
+  // Set when a chapter is opened fresh (not restored), so the reader starts at
+  // its first line. Going BACK to the picker empties the reader and lets the
+  // browser clamp the scroll to 0 on its own; "Next chapter" never empties it,
+  // so without this the new chapter opens at whatever offset the end of the
+  // previous one left behind — i.e. already scrolled past its beginning.
+  const scrollToTopRef = useRef(false);
+
   // Land the reader where they stopped, once the restored content exists.
   //
   // The restore loads chunks up to the saved position and no further, so the
@@ -380,9 +387,16 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
   // time it reveals more (see fetchAndAppend). useLayoutEffect so it happens
   // before paint: the reader never sees the top of the chapter flash past.
   useLayoutEffect(() => {
-    if (!restoredRef.current || !revealedUnits.length) return;
-    restoredRef.current = false;
-    if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight;
+    if (!revealedUnits.length) return;
+    if (restoredRef.current) {
+      restoredRef.current = false;
+      if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight;
+      return;
+    }
+    if (scrollToTopRef.current) {
+      scrollToTopRef.current = false;
+      if (readerRef.current) readerRef.current.scrollTop = 0;
+    }
   }, [revealedUnits]);
 
 
@@ -402,6 +416,9 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     const units: RevealedUnit[] = [];
     let cursor = startCursor;
     let reachedEnd = false;
+    // Distinct from reachedEnd, which is also set when the content simply ran
+    // out below a stale saved position.
+    let finishedChapter = false;
     try {
       if (restoring) {
         // Fast-forward to the saved position in one bulk request instead of
@@ -410,7 +427,9 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
         const cap = chapter ? chapter.end_sequence : savedSeq;
         const range = await getChunksRange(paperId, startCursor, Math.max(1, cap - startCursor + 1));
         for (const c of range) {
-          if (chapter && c.sequence_order > chapter.end_sequence) { reachedEnd = true; break; }
+          if (chapter && c.sequence_order > chapter.end_sequence) {
+            reachedEnd = true; finishedChapter = true; break;
+          }
           loaded.push(c);
           units.push(...chunkToUnits(c));
           cursor = c.sequence_order;
@@ -423,8 +442,10 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
         let guard = 0;
         while (guard++ < 8000) {
           const c = await getNextChunk(paperId, cursor);
-          if (!c) { reachedEnd = true; break; }
-          if (chapter && c.sequence_order > chapter.end_sequence) { reachedEnd = true; break; }
+          if (!c) { reachedEnd = true; finishedChapter = true; break; }
+          if (chapter && c.sequence_order > chapter.end_sequence) {
+            reachedEnd = true; finishedChapter = true; break;
+          }
           loaded.push(c);
           units.push(...chunkToUnits(c));
           cursor = c.sequence_order;
@@ -439,9 +460,14 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     setParagraphIndexInCurrent(0);
     setLastSeq(cursor);
     setAtEnd(reachedEnd);
+    // Only when the chapter genuinely ran out, not when it merely came up
+    // short of a stale saved position (a re-chunk can leave `savedSeq` past
+    // the last chunk that now exists — that reader never saw an ending).
+    if (chapter && finishedChapter) markChapterFinished(paperId, chapter.index);
     if (chapter) setActiveChapter(chapter);
     saveProgress(chapter?.index ?? null, cursor);
     restoredRef.current = restoring;
+    scrollToTopRef.current = !restoring;
     setLoading(false);
   }, [paperId, chunkToUnits, loadProgress, saveProgress]);
 
@@ -457,6 +483,13 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
       // Stop at end-of-document, or at the end of the active chapter (book mode).
       if (!chunk || (activeChapter && chunk.sequence_order > activeChapter.end_sequence)) {
         setAtEnd(true);
+        // Reaching this line IS finishing the chapter, and it is the only
+        // place that knows so — see readingPosition's note on why the saved
+        // sequence number can never be compared against end_sequence to work
+        // it out afterwards. Deliberately not marked in the catch below: a
+        // network error also sets atEnd, and "the request failed" is not
+        // "you finished the chapter".
+        if (activeChapter) markChapterFinished(paperId, activeChapter.index);
         return;
       }
 
@@ -714,6 +747,31 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     return Math.min(pageCount, Math.max(1, 1 + Math.floor((seq / totalChunks) * pageCount)));
   }, [chunks, currentChunkIndex, meta?.page_count, totalChunks]);
 
+  /**
+   * The chapter after the one being read, by list position rather than by
+   * `index + 1`: the picker's own order is what the reader sees, and it
+   * includes synthesized entries (front matter, grouped apparatus) whose
+   * indices are not guaranteed to be contiguous with the outline's.
+   */
+  const nextChapter = useMemo(() => {
+    if (!activeChapter || chapters.length === 0) return null;
+    const at = chapters.findIndex((c) => c.index === activeChapter.index);
+    return at >= 0 && at + 1 < chapters.length ? chapters[at + 1] : null;
+  }, [chapters, activeChapter]);
+
+  /**
+   * Carry straight on into the next chapter.
+   *
+   * Finishing a chapter used to offer only "Choose another chapter", which
+   * sends the reader back to a list to find the entry directly below the one
+   * they just finished — the one place they were always going to go. Reading
+   * a book front to back was a detour through the table of contents at every
+   * chapter boundary.
+   */
+  const handleNextChapter = useCallback(() => {
+    if (nextChapter) void startReading(nextChapter);
+  }, [nextChapter, startReading]);
+
   const handleBackToChapters = useCallback(() => {
     setActiveChapter(null);
     setChunks([]);
@@ -969,8 +1027,22 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
               {!showChapterPicker && canRead && atEnd && (
                 <div className="mt-12 text-[12px] font-mono" style={{ color: 'var(--muted)' }}>
                   {isBook && activeChapter ? (
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <span>– end of “{activeChapter.title}” –</span>
+                      {/* Continuing is the common case, so it leads and is the
+                          accented control; the picker stays for jumping
+                          somewhere else. Nothing follows the last chapter, so
+                          there the picker is all that is offered. */}
+                      {nextChapter && (
+                        <button
+                          onClick={handleNextChapter}
+                          className="px-2.5 py-1 rounded-md max-w-[22rem] truncate"
+                          title={`Continue into “${nextChapter.title}”`}
+                          style={{ color: 'var(--bg)', border: '1px solid var(--accent)', background: 'var(--accent)' }}
+                        >
+                          Next: {nextChapter.title}
+                        </button>
+                      )}
                       <button
                         onClick={handleBackToChapters}
                         className="px-2.5 py-1 rounded-md"
@@ -978,6 +1050,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
                       >
                         Choose another chapter
                       </button>
+                      {!nextChapter && <span>– end of the book –</span>}
                     </div>
                   ) : (
                     <span>– end of indexed chunks –</span>
@@ -1434,7 +1507,11 @@ function ChapterPicker({
 }: {
   chapters: Chapter[];
   onSelect: (ch: Chapter) => void;
-  progress: { lastChapter: number | null; seqByChapter: Record<string, number> };
+  progress: {
+    lastChapter: number | null;
+    seqByChapter: Record<string, number>;
+    finishedChapters: Record<string, true>;
+  };
 }) {
   if (chapters.length === 0) {
     return (
@@ -1451,7 +1528,12 @@ function ChapterPicker({
       <div className="space-y-2">
         {chapters.map((ch) => {
           const saved = progress.seqByChapter[String(ch.index)];
-          const started = typeof saved === 'number' && saved >= ch.start_sequence;
+          // "finished" is recorded by the reader when it actually runs out of
+          // chapter, never inferred from `saved` — see readingPosition. It
+          // outranks "resume": a chapter you read to the end is done, even
+          // though a position is still stored for it.
+          const finished = progress.finishedChapters[String(ch.index)] === true;
+          const started = !finished && typeof saved === 'number' && saved >= ch.start_sequence;
           return (
             <button
               key={ch.index}
@@ -1476,6 +1558,14 @@ function ChapterPicker({
               >
                 {ch.title}
               </span>
+              {finished && (
+                <span
+                  className="text-[10.5px] font-mono px-1.5 py-0.5 rounded"
+                  style={{ color: 'var(--ok)', border: '1px solid var(--border)' }}
+                >
+                  finished
+                </span>
+              )}
               {started && (
                 <span className="text-[10.5px] font-mono px-1.5 py-0.5 rounded" style={{ color: 'var(--accent)', border: '1px solid var(--border)' }}>
                   resume
