@@ -337,6 +337,39 @@ The stored `cited_sequence_ids` are unchanged — the block is still what the ch
 the page is only what it says. See
 [plans/page-numbers-in-citations.md](../plans/page-numbers-in-citations.md).
 
+## The progress ceiling
+
+`max_sequence_id` is the last block the reader has actually been shown. Two clients send it, for
+the same reason: a **book**, which is read one revealed unit at a time, and a **paper in stepped
+mode** (the article reader's Whole/Stepped toggle, see
+[frontend.md](frontend.md#stepped-reading-optional)). Everything else omits it and is answered from
+the whole document.
+
+It is applied once, at the source: `answer_paper_question` filters the chunk list before anything
+else runs, and every reachable thing is derived from that list — the CONTENTS index the model is
+shown, what `SECTION` resolves to, the anchor window, and whether the document fits in one pass.
+`SEARCH` takes it separately because that leg queries the database rather than the list.
+
+⚠ **`READ` is the exception, and it leaked.** Its range comes from numbers the *model* wrote, so
+nothing upstream had constrained it: measured on a 3663-block book with a ceiling of 20,
+`READ 1-400` returned 40 blocks, 20 of them past the ceiling. A model could therefore ask for the
+rest of the book in one call, and the reading-companion prompt would then earnestly not mention
+that it had read ahead. Fixed 2026-09-08 by passing the ceiling into
+[`read_range`](../../backend/app/chat/agent_tools.py), which clamps `end` before the query so the
+`PAPER_AGENT_READ_MAX_CHUNKS` cap still measures the range the reader is allowed to see.
+
+The flag also appends
+[`READING_COMPANION_INSTRUCTIONS`](../../backend/app/chat/prompts.py) at all three of the paper
+agent's prompt sites. The clamp is what makes later material unreachable; the prompt is what stops
+the model doing the other unhelpful thing — apologising for context it was never going to get, or
+writing as though it had reviewed a finished document. `orchestrator.py` does the same for the
+routes it owns, which a book never reaches.
+
+⚠ **It is a reading aid, not access control.** The value is trusted from the client, because the
+client is what knows what it has painted, and every block it could name is one the same
+authenticated user can read in full by turning the mode off. Do not mistake it for a
+permission boundary.
+
 ## Model selection
 
 A note records both `requested_model` (what the reader picked) and `model` (what the provider

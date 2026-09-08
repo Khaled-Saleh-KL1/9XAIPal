@@ -559,9 +559,17 @@ Create a note and stream its answer as Server-Sent Events.
   },
   "parent_note_id": "<uuid>|null",
   "margin_side": "left" | "right" | null,
-  "model": "<model name>|null"
+  "model": "<model name>|null",
+  "max_sequence_id": <int>|null
 }
 ```
+
+`max_sequence_id` is the reader's progress ceiling: the last block they have actually been shown.
+Sent only by a paper being read in stepped mode; `null` (the default, and every other client) means
+the whole document, which is how a paper has always been answered. It clamps everything the agent
+can reach and switches the model into reading-companion mode — see
+[chat-and-ask.md](../02-architecture/chat-and-ask.md#the-progress-ceiling), including why it is a
+reading aid rather than an access control.
 
 Event types, one JSON object per `data:` line:
 

@@ -226,10 +226,17 @@ happens:
   *not* filtered: it is an index of everything written, and clicking an entry reveals its way
   there.
 
-Retrieval is **not** clamped to the cursor, unlike the book reader's `maxSequenceId`. A book is
-gated so the model cannot spoil a chapter ahead; stepped mode here is about pacing your own
-reading, and quietly narrowing what the model may read would change the answers as a side effect
-of a display preference.
+**Retrieval is clamped to the cursor.** Stepped mode is not a display preference with the same
+backend behind it; it is the second of two modes, and asking a question in it means "answer from
+what I have read". Every question sent while it is on carries `max_sequence_id` — the cursor — and
+the paper agent then filters the chunk list it derives everything from: the CONTENTS index it is
+shown, what SECTION and READ resolve to, what SEARCH can match, and the anchor window. The same
+flag appends `READING_COMPANION_INSTRUCTIONS`, so the model neither reads ahead nor apologises for
+material it was never given. Whole mode sends nothing and is answered from the entire paper,
+exactly as before.
+
+This is the same ceiling the book reader has always sent, and it now goes through the same,
+now-airtight, path — see [chat-and-ask.md](chat-and-ask.md#the-progress-ceiling).
 
 ### Layout: three columns, always
 

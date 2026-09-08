@@ -890,6 +890,21 @@ export function ArticleReader({
   useEffect(() => { blocksRef.current = doc?.blocks ?? []; }, [doc]);
 
   /**
+   * The ceiling to send with a question: the last block the reader has been
+   * shown, or null when the whole paper is on screen.
+   *
+   * ⚠ Through a ref, deliberately. `runNote` is memoised on `[paperId]` and is
+   * re-entered by the retry path long after the question was composed; making
+   * it depend on the cursor would rebuild it on every reveal. Read at call
+   * time it is also the more correct value — the ceiling that applies is the
+   * one in force when the reader actually asks.
+   */
+  const askCeilingRef = useRef<number | null>(null);
+  useEffect(() => {
+    askCeilingRef.current = stepping ? revealCursor : null;
+  }, [stepping, revealCursor]);
+
+  /**
    * The blocks actually rendered.
    *
    * ⚠ `doc.blocks` stays whole underneath this. The progress rail, the
@@ -1493,6 +1508,9 @@ export function ArticleReader({
           // Only meaningful for a new note. The server ignores this on
           // follow-ups and uses the parent's model instead.
           draft.model,
+          // Stepped mode only: the model may not read past what the reader
+          // has. null in whole-paper mode, which is every other case.
+          askCeilingRef.current,
         );
         // Let the pacer finish painting before the card is swapped for the
         // saved one: otherwise the last few words would be skipped over.

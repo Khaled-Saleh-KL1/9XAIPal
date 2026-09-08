@@ -343,9 +343,28 @@ async def read_range(
     label: str,
     *,
     prefix: str = "",
+    max_sequence_id: Optional[int] = None,
 ) -> tuple[str, list[int]]:
-    """Fetch a block range and format it as one observation."""
+    """Fetch a block range and format it as one observation.
+
+    ⚠ ``max_sequence_id`` is the reader's progress ceiling, and this is the one
+    tool that needs it passed in explicitly. Every other route into the paper
+    agent is derived from a chunk list the caller has already filtered, but the
+    range here comes from numbers the *model* wrote, so nothing upstream has
+    constrained them. Measured before this argument existed: with a ceiling of
+    20 on a 3663-block book, ``READ 1-400`` returned 40 blocks, 20 of them past
+    the ceiling — the model could ask for the rest of the book in one call and
+    the reading-companion prompt would then dutifully not mention that it had
+    read ahead. SECTION and SEARCH were clamped; this was not.
+
+    The ceiling is applied to ``end`` before the query rather than to the rows
+    after it, so the ``paper_agent_read_max_chunks`` cap still measures the
+    range the reader is actually allowed to see. A ``start`` already past the
+    ceiling returns the ordinary "no blocks in that range", which is true.
+    """
     cap = settings.paper_agent_read_max_chunks
+    if max_sequence_id is not None:
+        end = min(end, max_sequence_id)
     rows = await chunk_repo.get_chunks_in_range(session, document_id, start, end, cap)
     if not rows:
         return f"{label} — no blocks in that range.", []

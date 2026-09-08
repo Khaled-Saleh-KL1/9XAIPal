@@ -58,6 +58,19 @@ class NoteRequest(BaseModel):
     # Which model to ask. None uses the configured default.
     # ⚠ Ignored for follow-ups — see the note in create_note_stream.
     model: Optional[str] = None
+    # The reader's progress ceiling: the last block they have actually been
+    # shown. Sent only by a paper being read in stepped mode (the article
+    # reader's Whole/Stepped toggle) and by nothing else, so None — the
+    # default, and every other client — means "the whole document", which is
+    # how a paper has always been answered.
+    #
+    # ⚠ Trusted from the client on purpose. It is the client that knows what it
+    # has painted, and the ceiling protects the reader from a spoiler rather
+    # than the data from the reader: every block it could name is one this same
+    # user is already authorised to read in full by simply turning the mode
+    # off. It is a reading aid, not an access control, and must never be
+    # mistaken for one.
+    max_sequence_id: Optional[int] = None
 
 
 class MoveNoteRequest(BaseModel):
@@ -357,6 +370,12 @@ async def create_note_stream(
                         # keep the tool unlocked for a follow-up that never
                         # asked for it itself.
                         allow_web=_allow_web_for_note(doc, payload.question),
+                        # Clamps everything the agent can reach — the CONTENTS
+                        # index, SECTION, READ, SEARCH and the anchor window —
+                        # and appends READING_COMPANION_INSTRUCTIONS so the
+                        # answer neither reads ahead nor apologises for the
+                        # material it was not given.
+                        max_sequence_id=payload.max_sequence_id,
                     ):
                         if event["type"] == "done":
                             answer = event.get("answer") or ""

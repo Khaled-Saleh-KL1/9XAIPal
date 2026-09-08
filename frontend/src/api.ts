@@ -518,6 +518,13 @@ export async function askNoteStream(
   marginSide?: MarginSide | null,
   /** Omit for the configured default. Ignored by the server on follow-ups. */
   model?: string | null,
+  /**
+   * The last block the reader has been shown, when the paper is being read in
+   * stepped mode. Clamps everything the agent may reach to what they have
+   * actually seen. Omit — as every other caller does — to answer from the
+   * whole document, which is the long-standing behaviour for a paper.
+   */
+  maxSequenceId?: number | null,
 ): Promise<NoteResult> {
   const res = await fetch(`${BASE}/papers/${paperId}/notes/stream`, {
     method: 'POST',
@@ -529,6 +536,7 @@ export async function askNoteStream(
       parent_note_id: parentNoteId,
       margin_side: marginSide ?? null,
       model: model ?? null,
+      max_sequence_id: maxSequenceId ?? null,
     }),
   });
   if (!res.ok || !res.body) {

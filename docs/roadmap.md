@@ -76,6 +76,14 @@ The application code is more mature than the tooling around it. These are the ch
   per-user isolated (see [auth.md](../02-architecture/auth.md)), but a caller who already knows or
   guesses a file path reads it with no login and no ownership check. Paths are UUID-derived, not
   sequential, so this is not trivially enumerable, but it is not access-controlled either.
+- ~~**`READ` escaped the reader's progress ceiling**~~: **fixed 2026-09-08.** `SECTION` and
+  `SEARCH` were clamped by `max_sequence_id`; `READ` took its range from the model's own numbers
+  and queried the database directly. Measured on a 3663-block book with a ceiling of 20,
+  `READ 1-400` returned 40 blocks, 20 past the ceiling — so a book being read one unit at a time
+  could have the rest of it fetched in a single call, with the reading-companion prompt then
+  earnestly not mentioning it. A spoiler bug, not a security one (see the ⚠ in
+  [chat-and-ask.md](../02-architecture/chat-and-ask.md#the-progress-ceiling)), but it silently
+  defeated the feature it belonged to.
 - **Default Postgres password** ships in `.env.example`. Startup warns, but nothing enforces.
 - **90 `except Exception` blocks** across the backend. Zero bare `except:`, which is good
   discipline, but that density means genuine failures can be logged and swallowed.
