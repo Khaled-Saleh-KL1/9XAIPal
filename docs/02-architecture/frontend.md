@@ -690,6 +690,10 @@ figures in LOCAL and GLOBAL responses.
 - [`views/PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx): a paper's first page, with the
   placeholder that must survive a 204.
 - [`lib/titles.ts`](../../frontend/src/lib/titles.ts): the one resolver for a paper's display name.
+- [`lib/pageMap.ts`](../../frontend/src/lib/pageMap.ts): block → printed page, for every chip that
+  cites one. Exact pages only, and it collapses chips sharing a page; `ArticleReader`'s
+  `rawPosition()` is the separate, deliberately approximate resolver, and the two must not be
+  merged (see [plans/page-numbers-in-citations.md](../plans/page-numbers-in-citations.md) §2).
 - [`components/Icons.tsx`](../../frontend/src/components/Icons.tsx): inline SVG icons.
 - [`components/LogoMark.tsx`](../../frontend/src/components/LogoMark.tsx): the 9XAIPal wordmark.
 

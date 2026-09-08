@@ -330,6 +330,13 @@ parsed into `cited_sequence_ids` and rendered as chips that scroll the article.
 as `[[16], [42]]` or `[[16, 42]]`; a strict `\[\[(\d+)\]\]` silently returns nothing for those,
 and the note renders with no chips, making a well-grounded answer look ungrounded.
 
+**A chip is labelled with the printed page**, `p. 7`, resolved client-side from the blocks the
+reader already has ([`lib/pageMap.ts`](../../frontend/src/lib/pageMap.ts)), and falls back to
+`¶<block>` for a document that carries no pages. Blocks sharing a page collapse into one chip.
+The stored `cited_sequence_ids` are unchanged — the block is still what the chip navigates to,
+the page is only what it says. See
+[plans/page-numbers-in-citations.md](../plans/page-numbers-in-citations.md).
+
 ## Model selection
 
 A note records both `requested_model` (what the reader picked) and `model` (what the provider
@@ -668,6 +675,10 @@ Two builders:
 - `citations_from_web_results` → `url`, `text_snippet`, `source=<engine>`.
 
 Persisted as JSON on the assistant's `conversation_turns` row.
+
+`page` is `chunks.page_start`, and is null for a whole document at a time rather than block by
+block (see [database-schema.md](../03-reference/database-schema.md)). The book chat labels its
+chips with it, falling back to `§<block>`; a web citation has neither and names its engine.
 
 ## Conversation continuity
 

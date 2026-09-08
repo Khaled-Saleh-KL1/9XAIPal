@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { type LightboxDetail } from '../components/AnswerImage';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, ChatRef } from '../types';
 import { IconSend, IconSpinner } from '../components/Icons';
 import {
   askPaperStream, getPaperChat, listPaperConversations,
@@ -67,13 +67,32 @@ function normalizeMath(text: string): string {
   return out;
 }
 
-function citationsToRefs(citations: Citation[] | null | undefined): string[] {
+/**
+ * Citation chips for an assistant turn.
+ *
+ * ⚠ The page comes first when the cited block has one. `Citation.page` has
+ * been populated by the backend all along (`chat/citations.py` reads
+ * `chunks.page_start`); this function used to drop it on the floor and label
+ * the chip with the quoted text instead, so the one surface that quotes a book
+ * back at you could not say which page the quote was on. The snippet is not
+ * lost, it moved to the tooltip, which is a better home for two hundred
+ * characters than an 11px chip was.
+ *
+ * A web citation has no page and no block, so it keeps naming its engine.
+ */
+function citationsToRefs(citations: Citation[] | null | undefined): ChatRef[] {
   if (!citations) return [];
   return citations
-    .map((c) =>
-      c.text_snippet || c.source || (c.sequence_id ? `§${c.sequence_id}` : '') || ''
-    )
-    .filter(Boolean);
+    .map((c) => {
+      const label =
+        c.page != null
+          ? `p. ${c.page}`
+          : c.sequence_id != null
+            ? `§${c.sequence_id}`
+            : c.source || c.text_snippet || '';
+      return { label, title: c.text_snippet || undefined };
+    })
+    .filter((r) => r.label);
 }
 
 function previewLabel(c: ConversationSummary): string {
@@ -1055,15 +1074,16 @@ const MessageBubble = memo(function MessageBubble({
               reconcile the list wrongly on the next render. */}
           {m.refs.map((r, i) => (
             <button
-              key={`${r}-${i}`}
+              key={`${r.label}-${i}`}
               className="text-[11px] font-mono px-1.5 py-0.5 rounded"
               style={{
                 color: 'var(--fg-2)',
                 border: '1px solid var(--border)',
                 background: 'var(--bg)',
               }}
+              title={r.title}
             >
-              {r}
+              {r.label}
             </button>
           ))}
         </div>

@@ -11,6 +11,7 @@ import {
   type CardDrag,
 } from './NoteChrome';
 import { AgentTrail } from './AgentTrail';
+import { citeChips, usePageMap } from '../lib/pageMap';
 import type { AgentStep, PaperNote } from '../api';
 
 /**
@@ -119,12 +120,19 @@ function CitationChips({
   cited: number[];
   onJump: (seq: number) => void;
 }) {
+  const { pageFor } = usePageMap();
   if (!cited.length) return null;
   return (
     <div className="note-cites">
-      {cited.map((seq) => (
-        <button key={seq} type="button" onClick={() => onJump(seq)} className="note-cite">
-          ¶{seq}
+      {citeChips(cited, pageFor).map((chip) => (
+        <button
+          key={chip.seq}
+          type="button"
+          onClick={() => onJump(chip.seq)}
+          className="note-cite"
+          title={chip.title}
+        >
+          {chip.label}
         </button>
       ))}
     </div>

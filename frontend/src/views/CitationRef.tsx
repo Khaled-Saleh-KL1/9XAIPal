@@ -53,14 +53,29 @@ export function CitationRef({
         type="button"
         className={`cite-chip${open ? ' is-open' : ''}`}
         onClick={toggle}
-        title={`${cite.label}, block ${cite.sequence_id}`}
+        title={
+          cite.page == null
+            ? `${cite.label}, block ${cite.sequence_id}`
+            : `${cite.label}, page ${cite.page}, block ${cite.sequence_id}`
+        }
       >
-        P{cite.paper}:{cite.sequence_id}
+        {/* ⚠ The paper number stays in the label even when a page is known.
+            A desk answer draws on several papers at once, so a bare "p. 7"
+            would be ambiguous in exactly the situation the desk exists for;
+            "P2 · p. 7" says which paper and where in it. The block number
+            moves to the tooltip, since it is a coordinate in this app rather
+            than in the document the reader is going to check. */}
+        P{cite.paper}
+        {cite.page == null ? `:${cite.sequence_id}` : ` · p. ${cite.page}`}
       </button>
       {open && (
         <span className="cite-peek">
           <span className="cite-peek-head">
             <span className="cite-peek-src">{cite.label}</span>
+            {/* Outside cite-peek-src, not inside it: that span ellipsizes a
+                long paper title, and a page number nested in it would be the
+                first thing truncated away. */}
+            {cite.page != null && <span className="cite-peek-page">p. {cite.page}</span>}
             {onOpenPaper && (
               <button
                 type="button"

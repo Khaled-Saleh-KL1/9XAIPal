@@ -64,6 +64,19 @@ export type ContextType =
   | 'OUT_OF_SCOPE'
   | 'RESEARCH';     // Model performed live iterative research (visible in history)
 
+/**
+ * One citation chip under an assistant turn.
+ *
+ * `label` is what the chip says — the page when the cited block has one, so a
+ * reader can find the passage in the physical document, and the block number
+ * otherwise. `title` carries the quoted text itself, which is far too long to
+ * be a label but is exactly what you want on hover before deciding to go look.
+ */
+export interface ChatRef {
+  label: string;
+  title?: string;
+}
+
 export interface ChatMessage {
   /** The agent's tool trail, when an agent answered (books). */
   agentSteps?: import('./api').AgentStep[];
@@ -71,7 +84,7 @@ export interface ChatMessage {
   // is auto-summarized to keep context focused.
   role: 'user' | 'assistant' | 'compaction';
   text: string;
-  refs?: string[];
+  refs?: ChatRef[];
   // When the assistant turn involved live research (new capability)
   researchPerformed?: boolean;
   researchSummary?: string;

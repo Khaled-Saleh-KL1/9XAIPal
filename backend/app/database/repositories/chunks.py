@@ -350,6 +350,48 @@ async def get_page_starts(session: AsyncSession, document_id: UUID) -> list[tupl
     return [(int(r["sequence_id"]), int(r["page_start"])) for r in result.mappings().all()]
 
 
+async def get_pages_for_refs(
+    session: AsyncSession,
+    refs: list[tuple[UUID, int]],
+) -> dict[tuple[str, int], int]:
+    """``{(document_id, sequence_id): page_start}`` for the blocks an answer cited.
+
+    One query for the whole citation list rather than one per chip: a desk
+    answer routinely cites a dozen blocks across four papers, and a page number
+    is not worth a dozen round trips.
+
+    Blocks with no page are simply absent from the result, because the caller's
+    fallback for "no page" and for "no such block" is the same: show the block
+    number instead. Keys are stringified UUIDs so a caller holding an id from
+    JSON can look one up without re-parsing it.
+    """
+    if not refs:
+        return {}
+
+    # Tuple-IN keeps this to one indexed scan and one bind per pair. The pairs
+    # come from a regex over model output (see chat/study_agent.cited_refs),
+    # so they are parameterised, never interpolated.
+    clauses = []
+    params: dict = {}
+    for i, (doc_id, seq) in enumerate(refs):
+        clauses.append(f"(:d{i}, :s{i})")
+        params[f"d{i}"] = doc_id
+        params[f"s{i}"] = seq
+
+    result = await session.execute(
+        text(f"""
+            SELECT document_id, sequence_id, page_start FROM chunks
+            WHERE (document_id, sequence_id) IN ({", ".join(clauses)})
+              AND page_start IS NOT NULL
+        """),
+        params,
+    )
+    return {
+        (str(r["document_id"]), int(r["sequence_id"])): int(r["page_start"])
+        for r in result.mappings().all()
+    }
+
+
 async def get_sequence_ids(session: AsyncSession, document_id: UUID) -> list[int]:
     """Every chunk's sequence_id, in order.
 

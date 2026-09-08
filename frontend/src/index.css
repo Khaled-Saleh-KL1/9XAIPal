@@ -2836,6 +2836,19 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The page, set apart from the paper's title beside it: the title can be long
+   enough to ellipsize, and a page number swallowed by that truncation is worse
+   than no page at all. */
+.cite-peek-page {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+  color: var(--fg-2);
+  white-space: nowrap;
+  flex: none;
+}
 .cite-peek-open { margin-left: auto; font-size: 10.5px; color: var(--accent); white-space: nowrap; }
 .cite-peek-body { display: block; }
 .cite-peek-body p { margin: 0; }
