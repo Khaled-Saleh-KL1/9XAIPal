@@ -35,14 +35,23 @@ The application code is more mature than the tooling around it. These are the ch
   is untested.
 - **The two largest and most complex modules have no direct tests**:
   `chat/orchestrator.py` (1061 lines) and `extraction/chunker.py` (1141 lines).
-- ⚠ **`conftest.py` `TRUNCATE`s a real database.** Tests cannot run without live Postgres, and
-  pointing them at a dev DB destroys it. There is no isolation and no throwaway-DB guard.
-- ⚠ **`test_chunk_sequence.py::test_embedding_batching_resumption_and_casting` fails**:
+- ~~⚠ **`conftest.py` `TRUNCATE`s a real database.** Tests cannot run without live Postgres, and
+  pointing them at a dev DB destroys it. There is no isolation and no throwaway-DB guard.~~
+  **wrong since 2026-08-26** (`502272b`, three weeks after this was written, went uncorrected
+  here): `_guard_destructive_db()` refuses to run unless `POSTGRES_DB` names a test database or
+  `ALLOW_DESTRUCTIVE_TESTS=1` is set. Verified 2026-09-09 running the full suite against a
+  throwaway Postgres/Redis stack — the live library (11 documents) was untouched.
+- ~~⚠ **`test_chunk_sequence.py::test_embedding_batching_resumption_and_casting` fails**:
   `psycopg2.errors.DataException: expected 1024 dimensions, not 4096`. The test mocks
   `get_embeddings_batch_sync` with hardcoded 4096-dim vectors, bypassing the MRL truncation that
   normally coerces them to `VECTOR_DIMENSION`. Pre-existing (verified by stashing unrelated
   changes); it was simply invisible until `backend/pytest.ini` made the suite runnable. Fix by
-  mocking at the layer above the truncation, or by deriving the mock width from settings.
+  mocking at the layer above the truncation, or by deriving the mock width from settings.~~
+  **fixed 2026-09-09** (#119) by the second option: the mock width now reads
+  `settings.vector_dimension` instead of a literal `4096`. ⚠ That leaves the first option's gap
+  open — `get_embeddings_batch_sync` *is* the function that calls `shape_embedding`
+  (`embeddings/model.py`), so a mock at this layer still means `shape_embedding`'s truncate+renorm
+  (or zero-pad) path is never exercised. Nothing in the suite tests it directly today.
 - No frontend tests of any kind.
 
 ## Data & schema
