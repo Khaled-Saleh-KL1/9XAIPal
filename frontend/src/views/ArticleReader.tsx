@@ -40,6 +40,7 @@ import {
 } from '../lib/personalNotes';
 import { loadPersonalState } from '../lib/personalState';
 import { PageMapProvider, useBuiltPageMap } from '../lib/pageMap';
+import { useReferences } from '../lib/references';
 import { RevealModeToggle } from '../components/RevealModeToggle';
 import {
   initialRevealCursor,
@@ -232,6 +233,10 @@ interface Props {
    * blocks are. Consumed once, like jumpToSequence. */
   jumpToAnchor?: string | null;
   onJumpedAnchor?: () => void;
+  /** Switch the reader to a different paper — how a "[12]" citation, once
+   * added to the library, gets opened without leaving this reader through
+   * the desk. Undefined only if the shell hasn't wired it in. */
+  onOpenPaper?: (documentId: string) => void;
 }
 
 export function ArticleReader({
@@ -244,6 +249,7 @@ export function ArticleReader({
   onOpenRaw,
   jumpToAnchor = null,
   onJumpedAnchor,
+  onOpenPaper,
 }: Props) {
   const confirm = useConfirm();
   const [doc, setDoc] = useState<FullDocument | null>(null);
@@ -873,6 +879,12 @@ export function ArticleReader({
   const [revealCursor, setRevealCursor] = useState<number | null>(null);
   const revealable = doc?.doc_kind === 'paper';
   const stepping = revealOn && revealable;
+
+  // Clickable "[12]" bibliography citations — papers only, same gate as
+  // stepped reading just above. Empty index (nothing fetched, or the fetch
+  // hasn't landed yet) makes the remark plugin in ArticleBlock's Md a no-op,
+  // so a book or article's own "[12]"-shaped text is never touched.
+  const citationRefs = useReferences(paperId, revealable);
 
   /**
    * Reveal at least as far as `seq`.
@@ -2387,6 +2399,9 @@ export function ArticleReader({
                 onAsk={openComposerForBlock}
                 onClearBookmark={clearBookmarkAt}
                 registerRef={registerBlockRef}
+                paperId={revealable ? paperId : undefined}
+                citationRefs={citationRefs}
+                onOpenPaper={onOpenPaper}
               />
             ))}
             {/* In stepped mode the paper does not end here yet — offering the

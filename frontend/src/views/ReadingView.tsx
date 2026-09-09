@@ -25,6 +25,7 @@ export function ReadingView({
   onOpenRaw,
   jumpToAnchor = null,
   onJumpedAnchor,
+  onOpenPaper,
 }: {
   paper: Paper;
   paperId: string;
@@ -42,6 +43,10 @@ export function ReadingView({
   /** A passage handed back by the raw view, to open at. */
   jumpToAnchor?: string | null;
   onJumpedAnchor?: () => void;
+  /** Switch to a different paper — forwarded to the article reader for its
+   * bibliography citations (a book has no equivalent; BookReadingView
+   * doesn't take this prop). */
+  onOpenPaper?: (documentId: string) => void;
 }) {
   const [meta, setMeta] = useState<PaperMeta | null>(null);
   const [failed, setFailed] = useState(false);
@@ -90,6 +95,7 @@ export function ReadingView({
       onOpenRaw={meta ? (page, anchors) => onOpenRaw?.(meta, page, anchors) : undefined}
       jumpToAnchor={jumpToAnchor}
       onJumpedAnchor={onJumpedAnchor}
+      onOpenPaper={onOpenPaper}
     />
   );
 }

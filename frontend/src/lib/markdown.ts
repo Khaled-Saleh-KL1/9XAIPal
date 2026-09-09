@@ -54,7 +54,14 @@ const SANITIZE_SCHEMA: typeof defaultSchema = {
     ],
     span: [
       ...(defaultSchema.attributes?.span ?? []),
-      ['className', 'math', 'math-inline'],
+      // 'citation-ref': lib/references.ts's remarkCitationRefs marks a "[12]"
+      // bracket this way; the span override just below reads data-numbers
+      // back off it to render <BibCitationRef>. Without both entries here
+      // the marker span (or its data attribute) would be silently stripped
+      // by this same rehype-sanitize pass, same reason `video` needed adding
+      // above.
+      ['className', 'math', 'math-inline', 'citation-ref'],
+      'data-numbers',
     ],
     div: [
       ...(defaultSchema.attributes?.div ?? []),

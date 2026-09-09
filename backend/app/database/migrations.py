@@ -199,6 +199,28 @@ async def _ensure_recent_columns() -> None:
         f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_embedding vector({settings.vector_dimension})",
         # See the column's own comment in schema.sql for what this gates.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS strict_scope BOOLEAN NOT NULL DEFAULT TRUE",
+        # A paper's own bibliography, parsed once from its References section
+        # (see services/references.py) and resolved lazily per entry against
+        # Semantic Scholar (search/semantic_scholar_client.py) — the backing
+        # store for clickable in-body citations like "[12]". One row per
+        # citation number per paper; UNIQUE lets the /references endpoint
+        # insert on first parse and be a no-op on every read after.
+        """CREATE TABLE IF NOT EXISTS paper_references (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            ref_number INT NOT NULL,
+            raw_text TEXT NOT NULL,
+            resolved_title TEXT,
+            resolved_authors TEXT,
+            resolved_year INT,
+            resolved_pdf_url TEXT,
+            external_ids JSONB,
+            resolve_status TEXT NOT NULL DEFAULT 'pending',
+            added_document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (document_id, ref_number)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_paper_references_document ON paper_references(document_id, ref_number)",
     ]
 
     async with engine.begin() as conn:

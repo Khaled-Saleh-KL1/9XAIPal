@@ -73,6 +73,9 @@ documents (1) ─────< (N) note_decks
             note_decks ─────< (N) note_deck_members
                               note_deck_members ── ai_note_id       → paper_notes.id    ┐ exactly
                               note_deck_members ── personal_note_id → personal_notes.id ┘ one set
+
+documents (1) ─────< (N) paper_references           (document_id: the paper citing)
+            paper_references ── added_document_id → documents.id (SET NULL, the paper cited, once added)
 ```
 
 What the deck edges rule out: a member row pointing at nothing, and a member row pointing at both.
@@ -329,6 +332,30 @@ Pre-computed hierarchical overviews used by the OVERVIEW chat route.
 | `created_at`          | `TIMESTAMPTZ` |                                                    |
 
 `UNIQUE(document_id, section_id, model)`.
+
+### `paper_references`
+
+A paper's own bibliography — one row per citation number, parsed from its References section
+(see [services/references.py](../../backend/app/services/references.py)) and resolved lazily
+against Semantic Scholar. Backs clickable in-body citations ("[12]"); papers only, see
+[clickable-citations.md](../plans/clickable-citations.md).
+
+| Column               | Type          | Notes                                                       |
+| -------------------- | ------------- | ------------------------------------------------------------ |
+| `id`                 | `UUID`        | PK.                                                           |
+| `document_id`        | `UUID`        | FK → `documents.id` cascade. The paper this reference is IN. |
+| `ref_number`         | `INTEGER`     | The `[N]` in the paper's own text.                            |
+| `raw_text`           | `TEXT`        | The bibliography entry's own text, as extracted.              |
+| `resolved_title`     | `TEXT`        | NULL until resolved.                                          |
+| `resolved_authors`   | `TEXT`        | Joined for display, not a list.                                |
+| `resolved_year`      | `INTEGER`     |                                                                |
+| `resolved_pdf_url`   | `TEXT`        | What `/add` ingests — re-validated server-side, never client-trusted. |
+| `external_ids`       | `JSONB`       | `{"arxiv": ..., "doi": ...}`.                                  |
+| `resolve_status`     | `TEXT`        | `pending` (default) → `resolved` / `no_match` (final) or `unavailable` (retryable — no key, rate-limited, or a network error). |
+| `added_document_id`  | `UUID`        | FK → `documents.id` SET NULL. The referenced paper, once added — NOT the same document as `document_id`. |
+| `created_at`         | `TIMESTAMPTZ` |                                                                |
+
+`UNIQUE(document_id, ref_number)`.
 
 ### `figure_descriptions`
 

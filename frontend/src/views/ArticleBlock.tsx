@@ -1,6 +1,7 @@
-import { memo, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_LINK_COMPONENT } from '../lib/markdown';
+import { remarkCitationRefs, makeCitationSpanComponent, EMPTY_REFERENCE_INDEX, type ReferenceIndex } from '../lib/references';
 import type { DocBlock } from '../api';
 
 /**
@@ -11,13 +12,38 @@ import type { DocBlock } from '../api';
  * should sit beside. Do not remove them.
  */
 
-function Md({ children, className = '' }: { children: string; className?: string }) {
+/**
+ * `citations` is only ever non-empty on a paper's ordinary prose blocks (see
+ * its one call site below) — the table/code/footnote branches in this file
+ * render plain `<Md>`, so a "[12]" inside a table cell or a footnote is left
+ * as text. Papers only ever reach here with a real index in the first
+ * place: ArticleReader only fetches one when doc_kind === 'paper'.
+ */
+function Md({
+  children, className = '', citations,
+}: {
+  children: string;
+  className?: string;
+  citations?: { paperId: string; refIndex: ReferenceIndex; onOpenPaper?: (documentId: string) => void };
+}) {
+  const remarkPlugins = useMemo(
+    () => (citations && citations.refIndex.numbers.size > 0
+      ? [...MARKDOWN_REMARK, remarkCitationRefs(citations.refIndex.numbers)]
+      : MARKDOWN_REMARK),
+    [citations],
+  );
+  const components = useMemo(
+    () => (citations && citations.refIndex.numbers.size > 0
+      ? { ...MARKDOWN_LINK_COMPONENT, ...makeCitationSpanComponent(citations.paperId, citations.refIndex, citations.onOpenPaper) }
+      : MARKDOWN_LINK_COMPONENT),
+    [citations],
+  );
   return (
     <div className={`md-body ${className}`}>
       <ReactMarkdown
-        remarkPlugins={MARKDOWN_REMARK}
+        remarkPlugins={remarkPlugins}
         rehypePlugins={MARKDOWN_REHYPE}
-        components={MARKDOWN_LINK_COMPONENT}
+        components={components}
       >
         {children}
       </ReactMarkdown>
@@ -93,6 +119,13 @@ interface Props {
   /** Clicking the ribbon lifts the bookmark off this block. */
   onClearBookmark: (seq: number) => void;
   registerRef: (seq: number, el: HTMLElement | null) => void;
+  /** This paper's own bibliography ("[12]" -> clickable), and where to send
+   * a reader who opens one they've added. Omitted (defaults to empty) for
+   * anything that isn't doc_kind === 'paper' — see ArticleReader, the one
+   * place this is fetched. */
+  paperId?: string;
+  citationRefs?: ReferenceIndex;
+  onOpenPaper?: (documentId: string) => void;
 }
 
 function ArticleBlockImpl({
@@ -103,6 +136,9 @@ function ArticleBlockImpl({
   onAsk,
   onClearBookmark,
   registerRef,
+  paperId,
+  citationRefs = EMPTY_REFERENCE_INDEX,
+  onOpenPaper,
 }: Props) {
   const seq = block.sequence_order;
   const isBookmarked = bookmarkTitle !== null;
@@ -352,7 +388,9 @@ function ArticleBlockImpl({
   return (
     <section {...common}>
       {ribbon}
-      <Md>{block.content_markdown || block.plain_text}</Md>
+      <Md citations={paperId ? { paperId, refIndex: citationRefs, onOpenPaper } : undefined}>
+        {block.content_markdown || block.plain_text}
+      </Md>
     </section>
   );
 }

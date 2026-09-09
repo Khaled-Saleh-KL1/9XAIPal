@@ -352,6 +352,58 @@ export async function getFullDocument(paperId: string): Promise<FullDocument> {
   return res.json();
 }
 
+// ── Bibliography citations (clickable "[12]" markers, papers only) ──────────
+
+export interface ReferenceEntry {
+  number: number;
+  raw_text: string;
+  resolve_status: 'pending' | 'resolved' | 'no_match' | 'unavailable';
+  resolved_title?: string | null;
+  resolved_authors?: string | null;
+  resolved_year?: number | null;
+  resolved_pdf_url?: string | null;
+  already_in_library: boolean;
+  existing_document_id?: string | null;
+}
+
+export interface AddReferenceResult {
+  id: string;
+  filename: string;
+  status: string;
+  message: string;
+  already_existed: boolean;
+}
+
+/** A paper's own bibliography, parsed and cached server-side on first call.
+ * Cheap — no external lookup happens here, see resolveReference. */
+export async function getReferences(paperId: string): Promise<ReferenceEntry[]> {
+  const res = await fetch(`${BASE}/papers/${paperId}/references`);
+  if (!res.ok) throw new Error(`References fetch failed: ${res.status}`);
+  return (await res.json()).references || [];
+}
+
+/** Resolve one bibliography entry against Semantic Scholar — the call that
+ * leaves the box. Lazy: call this only when a citation chip is actually
+ * opened, not for every entry up front. */
+export async function resolveReference(paperId: string, number: number): Promise<ReferenceEntry> {
+  const res = await fetch(`${BASE}/papers/${paperId}/references/${number}/resolve`);
+  if (!res.ok) throw new Error(`Reference resolve failed: ${res.status}`);
+  return res.json();
+}
+
+/** Queue a resolved reference for ingestion. Returns immediately (the same
+ * shape importArticleUrl's response has) — poll getPaperProgress(id) for
+ * status, same as any other import. */
+export async function addReferenceToLibrary(paperId: string, number: number): Promise<AddReferenceResult> {
+  const res = await fetch(`${BASE}/papers/${paperId}/references/${number}/add`, { method: 'POST' });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { detail = (await res.json()).detail || detail; } catch { /* keep the status */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 // ── Notes (anchored margin annotations) ──────────────────────────────────────
 
 /**

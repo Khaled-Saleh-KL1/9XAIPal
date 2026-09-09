@@ -1,22 +1,32 @@
 """Chunk endpoints: sequential reading by sequence_order."""
 
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
+from app.core.logging import get_logger
 from app.core.paths import documents_dir
 from app.api.errors import ChunkNotFound, DocumentNotFound
 from app.schemas.chunks import ChunkResponse, ChunkListResponse
+from app.schemas.references import ReferenceEntry, ReferenceListResponse, AddReferenceResponse
 from app.services import chunks as chunk_service
 from app.services import documents as doc_service
 from app.services.outline import heading_level
 from app.services import book_outline
+from app.services.references import parse_references
+from app.services.ingestion import check_queue_capacity, create_ingestion_job
+from app.search.semantic_scholar_client import match_reference, Unresolved
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import figure_descriptions as fig_desc_repo
+from app.database.repositories import paper_references as ref_repo
+from app.database.repositories.documents import get_document_by_source_url
+from app.workers.tasks import process_article_ingestion
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -519,3 +529,184 @@ async def get_figure_descriptions(
 
     descriptions = await fig_desc_repo.get_figure_descriptions_for_document(db, paper_id)
     return {"descriptions": descriptions}
+
+
+def _entry_out(row: dict) -> ReferenceEntry:
+    return ReferenceEntry(
+        number=row["ref_number"],
+        raw_text=row["raw_text"],
+        resolve_status=row["resolve_status"],
+        resolved_title=row.get("resolved_title"),
+        resolved_authors=row.get("resolved_authors"),
+        resolved_year=row.get("resolved_year"),
+        resolved_pdf_url=row.get("resolved_pdf_url"),
+        already_in_library=row.get("added_document_id") is not None,
+        existing_document_id=row.get("added_document_id"),
+    )
+
+
+@router.get("/{paper_id}/references", response_model=ReferenceListResponse)
+async def get_references(
+    paper_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """A paper's own bibliography, parsed from its References section on
+    first call and cached from then on (see services/references.py — pure
+    parsing, no external call). This is what the reader fetches once per
+    paper to know which `[N]` markers in the body text are real citations;
+    an empty list is a real, common answer (no References heading, or an
+    author-year paper with no numbered bracket citations at all — not every
+    paper cites this way) rather than a failure.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    existing = await ref_repo.get_references(db, paper_id)
+    if not existing:
+        chunks = await chunk_repo.get_all_document_chunks(db, paper_id)
+        parsed = parse_references(chunks)
+        if parsed:
+            await ref_repo.bulk_insert_pending(db, paper_id, parsed)
+            await db.commit()
+            existing = await ref_repo.get_references(db, paper_id)
+
+    return ReferenceListResponse(
+        references=[_entry_out(r) for r in existing],
+        document_id=paper_id,
+    )
+
+
+@router.get("/{paper_id}/references/{ref_number}/resolve", response_model=ReferenceEntry)
+async def resolve_reference(
+    paper_id: UUID,
+    ref_number: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Resolve one bibliography entry to an actual paper via Semantic Scholar
+    — the lazy, per-hover/click call (`/references` above is the cheap list;
+    this is the one that leaves the box).
+
+    Cached after 'resolved' or 'no_match' — both are genuine answers from a
+    completed lookup, and a paper this app couldn't find isn't going to be
+    found by asking again with the same query. 'unavailable' (no key
+    configured, rate-limited, or a network error) is deliberately NOT cached
+    as final: it's retried on the next call, since fixing the key or waiting
+    out the rate limit is exactly what should turn it into a real answer.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    row = await ref_repo.get_reference(db, paper_id, ref_number)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
+
+    if row["resolve_status"] in ("resolved", "no_match"):
+        return _entry_out(row)
+
+    result = await match_reference(row["raw_text"])
+    if isinstance(result, Unresolved):
+        updated = await ref_repo.save_resolution(db, paper_id, ref_number, status=result.value)
+        await db.commit()
+        return _entry_out(updated)
+    match = result
+
+    updated = await ref_repo.save_resolution(
+        db, paper_id, ref_number,
+        status="resolved",
+        title=match.title or None,
+        authors=match.authors or None,
+        year=match.year,
+        pdf_url=match.pdf_url,
+        external_ids={"arxiv": match.arxiv_id, "doi": match.doi},
+    )
+    await db.commit()
+    return _entry_out(updated)
+
+
+@router.post("/{paper_id}/references/{ref_number}/add", response_model=AddReferenceResponse, status_code=201)
+async def add_reference_to_library(
+    paper_id: UUID,
+    ref_number: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Add a resolved reference to the library — one click from the citation
+    chip, no separate confirmation step (matches how the existing "paste a
+    URL" import already works: it starts ingesting immediately).
+
+    Reuses `import_article`'s exact path (documents.py) rather than a new
+    ingestion route: created as doc_kind='article' with kind='paper' as a
+    hint, same reasoning as there — Semantic Scholar's own "open access PDF"
+    link isn't always actually a raw PDF, so what it turns out to be is only
+    known once the ingestion task fetches it, same as any other pasted URL.
+
+    The PDF URL is read from this row, never trusted from the client — a
+    client could otherwise point ingestion at an arbitrary URL through this
+    endpoint regardless of what was actually resolved.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    row = await ref_repo.get_reference(db, paper_id, ref_number)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
+    if row["resolve_status"] != "resolved" or not row.get("resolved_pdf_url"):
+        raise HTTPException(
+            status_code=422,
+            detail="This reference has no resolved, fetchable PDF to add yet.",
+        )
+
+    if row.get("added_document_id"):
+        existing = await doc_service.get_document(db, row["added_document_id"], current_user["id"])
+        if existing:
+            return AddReferenceResponse(
+                id=existing["id"], filename=existing["filename"],
+                status=existing["status"], message="Already in your library.",
+                already_existed=True,
+            )
+
+    url = row["resolved_pdf_url"]
+    dedupe = await get_document_by_source_url(db, url, current_user["id"])
+    if dedupe:
+        await ref_repo.mark_added(db, paper_id, ref_number, dedupe["id"])
+        await db.commit()
+        return AddReferenceResponse(
+            id=dedupe["id"], filename=dedupe["filename"],
+            status=dedupe["status"], message="Already in your library.",
+            already_existed=True,
+        )
+
+    await check_queue_capacity(db)
+
+    new_doc = await doc_service.create_document(
+        db,
+        user_id=current_user["id"],
+        filename=f"{uuid4().hex}.html",
+        original_filename=url,
+        doc_kind="article",
+        source_url=url,
+    )
+    await ref_repo.mark_added(db, paper_id, ref_number, new_doc["id"])
+    await db.commit()
+
+    job = await create_ingestion_job(db, new_doc["id"])
+    await db.commit()
+
+    try:
+        process_article_ingestion.delay(str(new_doc["id"]), str(job["id"]), url, "paper")  # type: ignore[attr-defined]
+    except Exception as dispatch_exc:
+        logger.exception(f"Failed to dispatch process_article_ingestion for {new_doc['id']} (reference [{ref_number}] of {paper_id})")
+        return AddReferenceResponse(
+            id=new_doc["id"], filename=new_doc["filename"], status="failed",
+            message=f"Recorded but background ingestion could not be queued (Redis/Celery). {dispatch_exc}",
+        )
+
+    return AddReferenceResponse(
+        id=new_doc["id"], filename=new_doc["filename"], status="processing",
+        message="Queued for processing.",
+    )

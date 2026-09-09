@@ -2883,6 +2883,36 @@ body {
 .cite-peek-muted { color: var(--faint); }
 .cite-peek-error { color: #c0392b; }
 
+/* Bibliography citations ("[12]" -> resolve -> add to library). Reuses the
+   cite-wrap/cite-chip/cite-peek shell above; a bib-ref-peek can hold several
+   rows for a "[5, 2, 35]"-shaped bracket, one per cited paper. */
+.bib-ref-peek { padding: 8px 12px; }
+.bib-ref-row { display: block; }
+.bib-ref-row + .bib-ref-row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.bib-ref-num {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  color: var(--faint);
+  margin-right: 4px;
+}
+.bib-ref-body { display: inline; }
+.bib-ref-status { color: var(--faint); margin-left: 4px; }
+.bib-ref-resolved { display: block; margin-top: 3px; }
+.bib-ref-add, .bib-ref-retry, .bib-ref-open {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  margin-left: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 8px;
+  background: transparent;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.bib-ref-add:hover, .bib-ref-retry:hover, .bib-ref-open:hover { border-color: var(--accent); }
+.bib-ref-add:disabled { opacity: 0.6; }
+.bib-ref-open { margin-left: 4px; }
+
 /* ── Sticky board ── */
 .board {
   border-left: 1px solid var(--border);

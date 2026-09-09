@@ -46,6 +46,9 @@ GET    /papers/{paper_id}/chunks/{sequence_order}
 GET    /papers/{paper_id}/chunks/after/{sequence_order}
 GET    /papers/{paper_id}/chapters
 GET    /papers/{paper_id}/pages
+GET    /papers/{paper_id}/references
+GET    /papers/{paper_id}/references/{ref_number}/resolve
+POST   /papers/{paper_id}/references/{ref_number}/add
 GET    /papers/{paper_id}/figure-descriptions
 GET    /papers/{paper_id}/notes
 POST   /papers/{paper_id}/notes/stream
@@ -477,6 +480,58 @@ substitute page 1.
 Used by the book reader, which holds one chapter's window at a time and cannot derive the map from
 what it has loaded. The article reader does not need it: `GET /papers/{paper_id}/document` already
 returns `page_start` on every block.
+
+---
+
+## References
+
+**Papers only** — clickable in-body citations ("[12]"), resolved against Semantic Scholar and
+addable to the library in one click. See
+[clickable-citations.md](../plans/clickable-citations.md) for the full design.
+
+### `GET /papers/{paper_id}/references`
+
+The paper's own bibliography, parsed from its References section on first call and cached from
+then on — cheap, no external call.
+
+```json
+{
+  "references": [{
+    "number": 12,
+    "raw_text": "Sepp Hochreiter and Jürgen Schmidhuber. Long short-term memory. ...",
+    "resolve_status": "pending",
+    "resolved_title": null, "resolved_authors": null, "resolved_year": null, "resolved_pdf_url": null,
+    "already_in_library": false, "existing_document_id": null
+  }, ...],
+  "document_id": "<uuid>"
+}
+```
+
+⚠ **An empty list is a real answer, not a failure**: no References heading, or a paper that cites
+by author-year rather than numbered brackets (an alphabetical bibliography has no `[N]` markers to
+parse — verified live on a RoFormer-style paper in the corpus).
+
+### `GET /papers/{paper_id}/references/{ref_number}/resolve`
+
+Resolves one entry via Semantic Scholar — the call that leaves the box, so this is lazy (called
+per chip, not for the whole list up front). `resolve_status` becomes `resolved` or `no_match`
+(both cached permanently — a completed lookup) or `unavailable` (no `SEMANTIC_SCHOLAR_API_KEY`
+configured, rate-limited, or a network error — **not** cached as final, retried on the next call).
+404 if `ref_number` doesn't exist on this paper.
+
+### `POST /papers/{paper_id}/references/{ref_number}/add`
+
+Queues a resolved reference for ingestion — one click, no confirmation step, same as pasting a URL.
+422 if the reference isn't `resolved` yet. Dedupes by `source_url` (and by this row's own
+`added_document_id` on a repeat call) rather than re-ingesting a paper already in the library,
+whether it arrived here or through a different citation.
+
+```json
+{ "id": "<uuid>", "filename": "...", "status": "processing", "message": "Queued for processing.", "already_existed": false }
+```
+
+Same response shape `POST /papers/import-url` returns — poll `GET /papers/{paper_id}/progress` on
+`id`, exactly like any other import.
 
 ---
 
