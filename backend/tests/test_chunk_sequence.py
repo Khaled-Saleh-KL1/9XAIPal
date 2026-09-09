@@ -3,6 +3,7 @@ from uuid import uuid4
 from unittest.mock import patch, MagicMock
 
 from sqlalchemy import text
+from app.core.config import settings
 from app.extraction.chunker import create_chunks_from_markdown
 from app.embeddings.service_sync import embed_document_chunks_sync, get_chunks_without_embeddings_sync
 
@@ -72,9 +73,14 @@ def test_embedding_batching_resumption_and_casting(db_session_sync):
     unembedded = get_chunks_without_embeddings_sync(db_session_sync, doc_id, limit=100)
     assert len(unembedded) == 25
 
-    # Mock get_embeddings_batch_sync to return a flat list of 20 embeddings (each 4096 dimensions)
-    # Let's create mock embeddings (list of floats)
-    mock_embeddings = [[float(j) / 10.0 for j in range(4096)] for _ in range(20)]
+    # Mock get_embeddings_batch_sync to return a flat list of 20 embeddings, each
+    # sized to whatever chunk_embeddings.embedding was actually migrated to
+    # (settings.vector_dimension — the column is `vector({vector_dimension})`,
+    # see migrations.py). A hardcoded width here would drift from the real
+    # column the moment the configured embedding model changes and fail with
+    # pgvector's "expected N dimensions, not M" on every environment but the
+    # one it was written against.
+    mock_embeddings = [[float(j) / 10.0 for j in range(settings.vector_dimension)] for _ in range(20)]
 
     # We want to test resumption:
     # First, let's mock it so that the first call generates embeddings and works,
@@ -110,7 +116,7 @@ def test_embedding_batching_resumption_and_casting(db_session_sync):
     assert row is not None
 
     # Now let's resume embedding the remaining 5 chunks.
-    mock_remaining_embeddings = [[float(j) / 5.0 for j in range(4096)] for _ in range(5)]
+    mock_remaining_embeddings = [[float(j) / 5.0 for j in range(settings.vector_dimension)] for _ in range(5)]
     with patch("app.embeddings.service_sync.get_embeddings_batch_sync", return_value=mock_remaining_embeddings):
         total_embedded = embed_document_chunks_sync(db_session_sync, doc_id, batch_size=20)
         assert total_embedded == 5
