@@ -139,6 +139,24 @@ async def list_personal_notes(session: AsyncSession, document_id: UUID) -> list[
     return [dict(r) for r in result.mappings().all()]
 
 
+async def list_all_personal_notes_for_user(session: AsyncSession, user_id: UUID) -> list[dict]:
+    """Every personal note across this user's whole library, grouped by
+    paper — export.py's Markdown format needs this; see
+    notes.list_all_notes_for_user for the identical reasoning (one JOIN,
+    not one round trip per document)."""
+    result = await session.execute(
+        text("""
+            SELECT n.*, d.title AS document_title, d.original_filename AS document_original_filename
+            FROM personal_notes n
+            JOIN documents d ON d.id = n.document_id
+            WHERE d.user_id = :user_id
+            ORDER BY d.created_at ASC, n.anchor_sequence_id ASC, n.created_at ASC
+        """),
+        {"user_id": user_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def get_personal_note(session: AsyncSession, note_id: UUID) -> Optional[dict]:
     result = await session.execute(
         text("SELECT * FROM personal_notes WHERE id = :id"),
