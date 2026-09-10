@@ -98,8 +98,9 @@ def test_embedding_batching_resumption_and_casting(db_session_sync):
 
         mock_get_batch.side_effect = side_effect_fn
 
-        with pytest.raises(RuntimeError, match="Simulated Celery Worker Crash"):
-            embed_document_chunks_sync(db_session_sync, doc_id, batch_size=20)
+        with patch("app.embeddings.service_sync.active_embedding_model_sync", return_value="test-model"):
+            with pytest.raises(RuntimeError, match="Simulated Celery Worker Crash"):
+                embed_document_chunks_sync(db_session_sync, doc_id, batch_size=20)
 
     # Verify that the first batch of 20 was committed (resumption capability)
     # even though the second batch execution crashed.
@@ -117,10 +118,68 @@ def test_embedding_batching_resumption_and_casting(db_session_sync):
 
     # Now let's resume embedding the remaining 5 chunks.
     mock_remaining_embeddings = [[float(j) / 5.0 for j in range(settings.vector_dimension)] for _ in range(5)]
-    with patch("app.embeddings.service_sync.get_embeddings_batch_sync", return_value=mock_remaining_embeddings):
-        total_embedded = embed_document_chunks_sync(db_session_sync, doc_id, batch_size=20)
-        assert total_embedded == 5
+    with patch("app.embeddings.service_sync.active_embedding_model_sync", return_value="test-model"):
+        with patch("app.embeddings.service_sync.get_embeddings_batch_sync", return_value=mock_remaining_embeddings):
+            total_embedded = embed_document_chunks_sync(db_session_sync, doc_id, batch_size=20)
+            assert total_embedded == 5
 
     # Verify all 25 chunks now have embeddings
     unembedded_final = get_chunks_without_embeddings_sync(db_session_sync, doc_id, limit=100)
     assert len(unembedded_final) == 0
+
+def test_force_reembedding_replaces_each_chunk_without_duplicates(db_session_sync):
+    """A full repair updates each chunk in place and never cross-writes rows."""
+    doc_id = uuid4()
+    db_session_sync.execute(
+        text(
+            "INSERT INTO documents (id, filename, original_filename, status) "
+            "VALUES (:id, 'repair.pdf', 'repair.pdf', 'complete')"
+        ),
+        {"id": doc_id},
+    )
+    chunks = [
+        {
+            "id": str(uuid4()),
+            "document_id": str(doc_id),
+            "sequence_id": i,
+            "chunk_type": "text",
+            "markdown": f"Repair chunk {i}",
+            "plain_text": f"Repair chunk {i}",
+            "token_count": 3,
+        }
+        for i in (1, 2)
+    ]
+    db_session_sync.execute(
+        text(
+            """
+            INSERT INTO chunks
+                (id, document_id, sequence_id, chunk_type, markdown, plain_text, token_count)
+            VALUES (:id, :document_id, :sequence_id, :chunk_type, :markdown, :plain_text, :token_count)
+            """
+        ),
+        chunks,
+    )
+    db_session_sync.commit()
+
+    first = [[1.0] + [0.0] * (settings.vector_dimension - 1) for _ in chunks]
+    second = [
+        [0.0, 1.0] + [0.0] * (settings.vector_dimension - 2),
+        [0.0, 0.0, 1.0] + [0.0] * (settings.vector_dimension - 3),
+    ]
+    with patch("app.embeddings.service_sync.active_embedding_model_sync", return_value="test-model"):
+        with patch("app.embeddings.service_sync.get_embeddings_batch_sync", return_value=first):
+            assert embed_document_chunks_sync(db_session_sync, doc_id) == 2
+        with patch("app.embeddings.service_sync.get_embeddings_batch_sync", return_value=second):
+            assert embed_document_chunks_sync(db_session_sync, doc_id, force=True) == 2
+
+    count = db_session_sync.execute(
+        text(
+            "SELECT COUNT(*) FROM chunk_embeddings ce "
+            "JOIN chunks c ON c.id = ce.chunk_id WHERE c.document_id = :id"
+        ),
+        {"id": doc_id},
+    ).scalar_one()
+    assert count == 2
+    assert db_session_sync.execute(
+        text("SELECT COUNT(*) FROM chunk_embeddings WHERE embedding_model = 'test-model'")
+    ).scalar_one() == 2
