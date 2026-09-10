@@ -53,4 +53,6 @@ authenticated paper route that verifies both document ownership and the stored
 asset record before opening a path. Research images use an authenticated
 conversation route. The PDF viewer reuses the existing authenticated raw-file
 route. Focused tests cover URL generation, path traversal rejection, route
-registration, and agent-generated figure links.
+registration, and agent-generated figure links. The nginx site config no
+longer proxies `/static/*` and the storage/API reference docs describe the
+authenticated routes (VPS follow-up, 2026-09-10).

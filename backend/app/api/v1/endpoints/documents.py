@@ -128,7 +128,7 @@ async def upload_paper(
             file_size_bytes=file_size,
             doc_kind=doc_kind,
         )
-        # Save raw copy to assets/<doc_id>.pdf (for /raw download + /static/assets).
+        # Save raw copy to assets/<doc_id>.pdf (served by the authenticated /raw endpoint).
         raw_path = assets_dir() / f"{doc['id']}.pdf"
         await run_in_threadpool(shutil.copyfile, dest, raw_path)
 

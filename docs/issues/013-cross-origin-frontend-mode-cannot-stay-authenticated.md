@@ -6,7 +6,7 @@
 
 ## Resolution
 
-The shared API fetch wrapper always includes credentials, API-relative media paths are resolved against the configured backend origin, and SameSite mode is configurable for cross-site HTTPS deployments.
+The shared API fetch wrapper always includes credentials, API-relative media paths are resolved against the configured backend origin, and SameSite mode is configurable for cross-site HTTPS deployments. The PDF viewer passes `withCredentials` to pdf.js, whose own fetch does not go through the wrapper and would otherwise reach the cross-origin `/raw` route with no cookie (found on the VPS follow-up, 2026-09-10).
 
 ## What happens
 

@@ -36,3 +36,45 @@ priority; each report records its severity, trigger, root cause, and repair.
   first fix for 005: `(:document_id IS NULL OR ...)` left asyncpg unable to
   infer the parameter type (`AmbiguousParameterError`), which would have broken
   conversation-history loading in chat. Repaired with `CAST(:document_id AS uuid)`.
+
+## Verified on the VPS (2026-09-10)
+
+The audit and both fix passes ran off-box. What only the deployment host could
+answer was checked there, against a throwaway stack built from the production
+`backend-api` image with this branch's `app/` mounted, a fresh
+`pgvector/pgvector:pg16` and `redis:7-alpine`, and the live *Attention Is All
+You Need* rows and files copied in:
+
+- Full backend suite on that image: **592 passed** (21 deselected:
+  `test_multi_key_rotation.py` asserts on the provider cascade and reads the
+  real `NVIDIA_API_KEY`/`OLLAMA_API_KEY` from the environment, so it only
+  passes in an environment with no keys — unrelated to these fixes).
+- Over real HTTP: `/static/assets/<id>.pdf` → 404; `/raw` and
+  `/papers/{id}/assets/…` → 401 anonymous, the bytes for the owner, 404 for
+  `../` and `%2F` traversal (001). `/search/web` → 401 anonymous (002). A
+  second user reusing the first user's deck id → 404 and no row touched; a
+  foreign note id smuggled into a deck → dropped (003). A conversation id
+  used from another user or another paper → 404 on `/chat`, `/ask`,
+  `/ask/stream`, and a foreign `parent_turn_id` → 404 before any model call
+  (004, 005). A 3 MB upload against a 1 MB cap → 413 with no file left on
+  disk; a non-PDF → 415 (010). The image proxy refuses a private host, a
+  loopback address and a public host that *redirects* to loopback, and
+  fetches a real HTTPS image through the DNS-pinned transport with SNI
+  intact (011, 012). Six concurrent signups for one email → one 201, five
+  409, no 500 (018).
+- The book reader rendered in a real DOM (happy-dom + react-dom, fake fetch):
+  a fresh session reveals one unit, each *next* reveals exactly one more
+  across a chunk boundary (014); a 500 on the next chunk shows *Retry* and
+  does not become end-of-content, and Retry resumes (016); with the toggle on
+  the reader walks `reading_order` 3→1→2 and never calls the physical
+  `/chunks/after/` route (015).
+- Live data needs no migration: no `/static/` URL is persisted anywhere
+  (turns, notes, agent steps, chunk markdown), and no conversation id spans
+  two documents or two users, so the new scoping rejects nothing that exists.
+- The deployment itself was the one thing the fixes could not reach:
+  `backend/nginx/9xaipal.conf` still declared `/static/*` "not optional" and
+  proxied it, every reference doc still described the public mounts, and the
+  PDF viewer still loaded the PDF without credentials (fine same-origin,
+  a 401 in the hosted mode 013 is about). All three are fixed on this branch;
+  the host's installed nginx config only needs `static` dropped from the
+  proxy regex, which is cosmetic (the API answers 404 there either way).

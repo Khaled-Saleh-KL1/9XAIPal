@@ -21,7 +21,7 @@ def move_asset_to_storage(
 
     Returns a metadata dict including:
       - file_path: path relative to ``images_dir()`` (e.g. ``"<doc_id>/<uuid>.png"``),
-        suitable for serving under the ``/static/images/`` static mount.
+        served through the ownership-checked ``/papers/{id}/assets/`` endpoint.
       - original_name: the source filename, so callers can resolve markdown
         ``![...](filename.png)`` references back to the moved asset.
     """

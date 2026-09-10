@@ -80,11 +80,12 @@ The application code is more mature than the tooling around it. These are the ch
 - **Rate limiting is per-process and in-memory**, so with `--workers 2` the real ceiling is double
   the configured value. Documented honestly in the middleware docstring; a known tradeoff, not a
   bug.
-- ⚠ **Static mounts bypass auth entirely.** `/static/{images,extracted,assets}` are plain
-  `StaticFiles` mounts (`app/main.py`) with no `get_current_user` dependency: the JSON API is
-  per-user isolated (see [auth.md](../02-architecture/auth.md)), but a caller who already knows or
-  guesses a file path reads it with no login and no ownership check. Paths are UUID-derived, not
-  sequential, so this is not trivially enumerable, but it is not access-controlled either.
+- ~~**Static mounts bypass auth entirely.**~~ **fixed 2026-09-10.** `/static/{images,extracted,assets}`
+  were plain `StaticFiles` mounts (`app/main.py`) with no `get_current_user` dependency: a caller
+  who knew or guessed a file path read it with no login and no ownership check. The mounts are
+  gone; every file is now served under `/api/v1` behind the session and an ownership check —
+  [docs/issues/001](issues/001-public-static-files-bypass-authorization.md), and the 17 other
+  findings of the same audit are indexed at [docs/issues/000](issues/000-code-audit-index.md).
 - ~~**`READ` escaped the reader's progress ceiling**~~: **fixed 2026-09-08.** `SECTION` and
   `SEARCH` were clamped by `max_sequence_id`; `READ` took its range from the model's own numbers
   and queried the database directly. Measured on a 3663-block book with a ceiling of 20,

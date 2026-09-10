@@ -3,7 +3,7 @@ an arbitrary file off the server's disk.
 
 anchor.image_url is attacker-controlled (it's a request body field on
 POST /papers/{id}/notes/stream): _to_storage_path strips this app's own
-/static/images/ prefix, and file_path_belongs_to_document confirms what's
+/api/v1/papers/{id}/assets/ prefix, and file_path_belongs_to_document confirms what's
 left actually names a chunk_assets row owned by THIS document, before
 build_multimodal_messages is ever allowed to open it. Neither check alone
 is redundant — see notes.py's _to_storage_path docstring.

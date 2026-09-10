@@ -30,8 +30,9 @@ nginx (host, :80/:443)
    │  server_name <your-subdomain>
    │  same-origin: SPA + /api on one origin, no CORS preflight, no mixed content
    │
-   ├── /api/*, /static/*, /openapi.json, /docs*, /redoc*  ──► 127.0.0.1:8000 (api container)
-   └── everything else                                     ──► static files, backend/frontend-dist/
+   ├── /api/*, /openapi.json, /docs*, /redoc*  ──► 127.0.0.1:8000 (api container)
+   └── everything else                          ──► static files, backend/frontend-dist/
+       (figures and PDFs are under /api/v1 too, behind the session cookie — there is no /static/)
 
 api container (FastAPI, SERVE_FRONTEND=false, bound to 127.0.0.1 only, never exposed directly)
    │
