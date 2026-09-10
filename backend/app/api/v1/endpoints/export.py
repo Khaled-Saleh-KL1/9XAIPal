@@ -121,8 +121,16 @@ async def export_selected(
 
     qa_notes = await note_repo.list_all_notes_for_user(db, current_user["id"])
     if payload.format == "anki":
-        selected_notes = _notes_for_documents(qa_notes, documents)
-        return _attachment(to_anki_tsv(selected_notes), "flashcards.txt", "text/plain")
+        tsv = to_anki_tsv(_notes_for_documents(qa_notes, documents))
+        if not tsv:
+            # A 0-byte flashcards.txt downloading silently is not an export,
+            # it is a mystery. Say what would make cards exist.
+            raise HTTPException(
+                status_code=422,
+                detail="No flashcards to export: none of the selected papers have Q&A notes yet. "
+                       "Ask questions in the reader and each answer becomes a card.",
+            )
+        return _attachment(tsv, "flashcards.txt", "text/plain")
 
     personal_notes = await personal_repo.list_all_personal_notes_for_user(db, current_user["id"])
     notes_by_doc: dict[str, list[dict]] = {}

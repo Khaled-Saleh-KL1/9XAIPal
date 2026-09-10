@@ -46,7 +46,14 @@ with choosing what to export now appears only after pressing Export.
   the backslash it just inserted) — an untested title with a real `%` or `&`
   in it (verified against one) would otherwise produce a `.bib` file that
   doesn't parse. Cite keys collide-proofed with an `a`/`b`/`c` suffix, not
-  silently overwritten.
+  silently overwritten. ⚠ **`year` only when resolved.** The first version fell
+  back to the year the paper was *added*, which put `year = {2026}` on
+  *Attention Is All You Need* (2017): a bibliography year is a publication
+  year, and a fabricated one is worse than none — a reader pastes it into
+  their own paper and cites it wrong. The date-added lives in the CSV, whose
+  column is honestly named `date_added`. Unresolved cite keys are the title
+  slug cut at a word boundary (`attention-is-all-you-need`, not the
+  `attention-is-all-you-nee2026` a hard 24-char cut plus that fake year gave).
 - **Markdown** (`to_markdown_note` / `to_markdown_zip`) — one `.md` per paper,
   not one giant file and not one file per note. Obsidian (and anything that
   indexes a folder) treats each file as its own linkable unit; a paper with
@@ -58,12 +65,28 @@ with choosing what to export now appears only after pressing Export.
   place once there is more than one file to hold. The wizard's done screen
   reads the real filename off `Content-Disposition` for the same reason: a
   static label would name the wrong one.
-- **Anki** (`to_anki_tsv`) — plain `question\tanswer` lines, Anki's own "Import
-  File" reads this with zero setup. From `paper_notes` (the AI Q&A) only:
+- **Anki** (`to_anki_tsv`) — `question\tanswer` lines, Anki's own "Import File"
+  reads this with zero setup. From `paper_notes` (the AI Q&A) only:
   `personal_notes` are free text, not a front/back pair, and are not silently
-  reshaped into one. A literal tab or newline inside a field is escaped (tab →
-  space, newline → `<br>`, Anki's own convention) so a multi-paragraph answer
-  can't split into a third column or end the row early.
+  reshaped into one. **Each field is the answer's Markdown rendered to the HTML
+  Anki actually displays** (`markdown-it-py`, CommonMark, raw HTML escaped),
+  with `$x$`/`$$x$$` re-delimited to MathJax's `\( \)`/`\[ \]` — done on the
+  rendered HTML, *after* markdown-it, because `\(` is a CommonMark escape and
+  converting first hands the renderer a bare `(N=6)`. Then flattened to one
+  line: Anki's TSV contract, a literal tab or newline would break the row. The
+  first version shipped the raw Markdown — `*   **Encoder:**`, `$N=6$` and the
+  app's `[[30], [31]]` citation markers all appeared on the card verbatim. Zero
+  qualifying cards is a `422` naming what would make cards exist, not a silent
+  0-byte download.
+- **Citation markers are stripped from every model answer on the way out**
+  (`_strip_cite_markers`): `[[11]]`, `[[30], [31]]`, the desk's `[[P2:41]]`.
+  The reader turns these into chips; anywhere else they are noise, and in
+  Obsidian `[[11]]` is *wiki-link syntax* that creates a phantom note called
+  "11". Only digit/`P`/colon content matches, so a reader's own `[[My Note]]`
+  in a personal note is untouched.
+- **Titles match the library** (`_display_title`): a rename wins, else the
+  filename minus `.pdf` — the same rule as the frontend's `displayTitle`.
+  Shipped as `title = {Attention Is All You Need.pdf}` before this was mirrored.
 - **CSV** (`to_library_csv`) — the library index, one row per paper: title,
   resolved authors/year, doc_kind, status, date added, page count. Built with
   the stdlib `csv` module, never hand-joined strings — a title with a comma or
@@ -96,6 +119,15 @@ the citation endpoint's own (already-correct) check.
 
 Against a throwaway Postgres/Redis stack and the real container image, logged
 in as a real user — the live library (11 documents) was untouched throughout.
+
+⚠ **Status codes were not enough.** Every format returned `200` with the right
+headers from the first day, and four real defects sat behind those 200s until
+the exported *files* were opened as a reader would, with the reader's own notes
+(`.pdf` in titles, a fabricated `year`, citation markers and raw Markdown on
+Anki cards, a silent 0-byte flashcards file). The formatters had no pytest
+coverage at all; [`tests/test_export.py`](../../backend/tests/test_export.py)
+now holds every one of those as a test, so they cannot come back. The list
+below is what that file and the endpoint checks cover.
 
 - All four pure formatters directly, against realistic data including the
   named edge cases: a title with `{`, `}`, `&`, `%`, `$` (BibTeX escaping); two
