@@ -74,6 +74,7 @@ Thumbs.db
 .cache/huggingface/
 # Task handoffs are shared out-of-band, never committed (planning-flow)
 docs/tasks/
+docs/issues/
 
 # Evaluation corpus — 55 MB of arXiv PDFs, reproducible via
 # scripts/fetch_eval_corpus.sh. The two committed fixtures in samples/ stay.
