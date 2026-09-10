@@ -158,8 +158,26 @@ jobs:
       # so uv still skips re-downloading unchanged wheels (torch, mineru)
       # on the next deploy instead of every build going out to the network
       # cold.
-      - name: Reclaim disk space (old image layers + build cache)
+      # ⚠ `docker image prune` deliberately stays WITHOUT `-a` too, for a
+      # different reason than the builder prune above: `-a` removes every
+      # image not backing a *running* container, and deploy-once.sh's
+      # frontend build is a transient `docker run --rm node:20-alpine` that
+      # holds no container between deploys. `-a` would therefore delete
+      # node:20-alpine right after every single deploy used it, forcing a
+      # ~200MB re-pull on the next one — the exact rebuild slowdown the uv
+      # cache note above exists to avoid. Measured: that is what happened
+      # when a manual `-a` prune was run on this box on 2026-09-10.
+      #
+      # Volumes and stopped containers ARE pruned, and need no such care:
+      # both commands only ever touch objects with zero references, so an
+      # attached volume (postgres/redis data) or a live container is never a
+      # candidate. Orphaned anonymous volumes had reached 1GB across 15 dead
+      # volumes before this was added.
+      - name: Reclaim disk space (old image layers, build cache, dead volumes)
         if: always()
         run: |
           docker image prune -f
           docker builder prune -f
+          docker container prune -f
+          docker volume prune -f
+          docker system df
