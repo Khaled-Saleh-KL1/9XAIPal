@@ -138,7 +138,7 @@ async def get_conversation_history(
             SELECT *, parent_turn_id FROM conversation_turns
             WHERE conversation_id = :cid
               AND user_id = :user_id
-              AND (:document_id IS NULL OR document_id = :document_id)
+              AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
             ORDER BY created_at DESC
             LIMIT :limit
         """),
@@ -256,7 +256,7 @@ async def get_main_chat(
             WHERE conversation_id = :cid
               AND user_id = :user_id
               AND parent_turn_id IS NULL
-              AND (:document_id IS NULL OR document_id = :document_id)
+              AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
             ORDER BY created_at ASC
         """),
         {"cid": conversation_id, "user_id": user_id, "document_id": document_id},
@@ -289,7 +289,7 @@ async def get_thread_subtree(
             SELECT * FROM conversation_turns
             WHERE id = :rid
               AND user_id = :user_id
-              AND (:document_id IS NULL OR document_id = :document_id)
+              AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
         """),
         {"rid": root_turn_id, "user_id": user_id, "document_id": document_id},
     )
@@ -320,7 +320,7 @@ async def get_thread_subtree(
                   AND parent_turn_id IS NULL
                   AND id <> :rid
                   AND role = 'assistant'
-                  AND (:document_id IS NULL OR document_id = :document_id)
+                  AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
                   AND created_at >= (SELECT created_at FROM conversation_turns WHERE id = :rid)
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
@@ -345,7 +345,7 @@ async def get_thread_subtree(
                 SELECT * FROM conversation_turns
                 WHERE parent_turn_id = :pid
                   AND user_id = :user_id
-                  AND (:document_id IS NULL OR document_id = :document_id)
+                  AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
             """),
             {"pid": current, "user_id": user_id, "document_id": document_id},
         )
@@ -404,13 +404,13 @@ async def compute_turn_depth(
                 FROM conversation_turns
                 WHERE id = :tid
                   AND user_id = :user_id
-                  AND (:document_id IS NULL OR document_id = :document_id)
+                  AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
                 UNION ALL
                 SELECT t.id, t.parent_turn_id, c.depth + 1
                 FROM conversation_turns t
                 JOIN chain c ON t.id = c.parent_turn_id
                 WHERE t.user_id = :user_id
-                  AND (:document_id IS NULL OR t.document_id = :document_id)
+                  AND (CAST(:document_id AS uuid) IS NULL OR t.document_id = :document_id)
             )
             SELECT COALESCE(MAX(depth), 0) AS d FROM chain
         """),
