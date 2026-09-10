@@ -1011,10 +1011,13 @@ Returns every distinct conversation thread for a paper:
 
 Source: [endpoints/export.py](../../backend/app/api/v1/endpoints/export.py). Full
 design: [library-export.md](../plans/library-export.md). The POST endpoint accepts `{ "format": "bibtex" | "markdown" | "anki" | "csv",
-"document_ids": ["..."] }`. `document_ids` scopes the export to the checked
-papers; an empty list means the whole library. Formatting is synchronous, and
-the frontend displays a waiting/progress screen while the response is built.
-The GET endpoints below remain whole-library compatibility routes.
+"document_ids": ["..."] }`. `document_ids` scopes the export to the papers chosen
+in the export panel; an empty list means the whole library, and any id the caller
+does not own (or that does not exist) is a `404` for the whole request rather than
+a silent fallback to everything. Formatting is synchronous; the frontend shows a
+cancellable progress screen while the response is built (a cancel aborts the
+request client-side — the server finishes and discards its work). The GET
+endpoints below remain whole-library compatibility routes.
 
 ### `GET /export/bibtex`
 

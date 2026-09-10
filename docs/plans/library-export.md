@@ -18,13 +18,24 @@
 
 ---
 
-## 1. Four formats, library-wide or selected
+## 1. Four formats, chosen in a four-step panel
 
-All four formats can export the WHOLE library or an explicit set of selected
-papers. The browser sends the selected document ids to one authenticated POST
+All four formats export an explicit set of papers chosen in the export panel
+(`components/ExportWizard.tsx`): *select* (search + Books/Research/Articles
+chips + a checklist) → *format* → *running* (progress bar, a red Cancel that
+aborts the request) → *done* (tick, "Exported successfully", Done back to the
+library). The browser sends the chosen document ids to one authenticated POST
 endpoint. Formatting remains synchronous because a personal research library
-(dozens of papers, not thousands) is fast enough to build in one response; the
-frontend shows a waiting/progress screen while it runs.
+(dozens of papers, not thousands) is fast enough to build in one response.
+
+⚠ **Selection lives only inside the panel — recorded because it was shipped
+the other way first.** An intermediate version put a checkbox on every library
+card, permanently, and its Export menu did nothing until papers were ticked
+there: a visual tax on the whole library for an occasional action, and a flow
+that read as "broken" rather than "waiting" — the API logs showed **zero export
+requests had ever reached the server** from it, every click having died on an
+`if (!count) return` guard before any request or progress UI. Everything to do
+with choosing what to export now appears only after pressing Export.
 
 - **BibTeX** (`services/export.py::to_bibtex`) — one entry per paper. `@article`
   when Semantic Scholar resolved real authors, `@misc` with an honest `note`
@@ -95,6 +106,17 @@ in as a real user — the live library (11 documents) was untouched throughout.
   empty (empty BibTeX, header-only CSV, empty Anki file, a zero-file ZIP) —
   never a peek at the first user's papers or notes.
 - `npm ci` + `tsc && vite build`, clean.
+- **The panel itself, every step rendered for real** (2026-09-10): `ExportPanel` is
+  a pure render of one step from props, so each screen is `renderToString`'d
+  directly and asserted — 31 checks across select (list, chips, search, empty
+  and no-match states, Next disabled at 0 selected), format (all four offered,
+  Export disabled until one is picked, the post-cancel notice), running (bar
+  width, the red Cancel, the label flip at 70%), done (tick, filename, Done),
+  and error (message, Try again, Close). Not just `tsc`: the clickable-
+  citations regression passed `tsc` and a build and threw on first render.
+- **The wizard's exact POST against the real backend** for all four formats:
+  `200`, correct `Content-Disposition`, real content; a bogus id → `404`, not a
+  silent fall-back to exporting everything.
 
 ## 4. Explicitly out of scope
 

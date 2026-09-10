@@ -104,15 +104,21 @@ ids. On mount, calls `listPapers()`. Features:
 - Local search (substring match over title and authors).
 - Local sort cycle: `recent → title → pages`.
 - Two layouts: grid (cards) and list (rows). Both share `CardActions` and the cover.
-- **Export**: [`components/ExportMenu.tsx`](../../frontend/src/components/ExportMenu.tsx), a
-  top-bar dropdown (same click-to-toggle shape as `UserMenuInline`) — BibTeX / Markdown (Obsidian)
-  / Anki flashcards / library CSV, all library-wide. Full design:
-  [library-export.md](../plans/library-export.md). Each item is a plain click handler
-  (`api.ts`'s `downloadBibtex` etc.) that navigates `window.location.href` at the matching
-  `/export/*` route rather than fetching a Blob in JS — the backend's own
-  `Content-Disposition: attachment` header is what makes the browser download it, the same
-  mechanism `/papers/{id}/raw`'s `FileResponse` already relies on. No loading state anywhere:
-  there's no job to poll, every export is one fast, synchronous request.
+- **Export**: [`components/ExportWizard.tsx`](../../frontend/src/components/ExportWizard.tsx), a
+  four-step panel opened from one top-bar button: *select* (search + Books/Research/Articles chips +
+  a checklist) → *format* (BibTeX / Markdown / Anki / CSV) → *running* (progress bar, red Cancel
+  that aborts the request) → *done* (tick, "Exported successfully", Done). Full design:
+  [library-export.md](../plans/library-export.md). ⚠ **Selection lives only inside the panel.**
+  A previous version put a checkbox on every library card at all times, and its menu did nothing
+  until papers were ticked elsewhere — a permanent visual tax on the whole library for an
+  occasional action, and a flow that read as "broken" rather than "waiting" (zero export requests
+  ever reached the API from it). Split into `ExportWizard` (state, the request) and `ExportPanel`
+  (pure render of one step from props) so every step can be rendered and asserted directly,
+  without clicking through — the clickable-citations regression shipped because `tsc` and a build
+  passed while the component threw on first render. Cancel is a real `AbortController` passed to
+  `downloadExport`; an abort returns to the format step with the selection intact, not to an
+  error screen. Built on the `.confirm-*` dialog classes so it is the app's one modal, not a
+  second design.
 
 ### Renaming
 
