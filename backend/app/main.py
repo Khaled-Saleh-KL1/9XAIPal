@@ -30,6 +30,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The export client reads this header to preserve the server-provided
+    # filename when the frontend is hosted on a different origin.
+    expose_headers=["Content-Disposition", "Content-Length"],
 )
 
 app.include_router(api_router, prefix="/api/v1")

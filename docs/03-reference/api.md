@@ -85,10 +85,11 @@ POST   /papers/{paper_id}/ask/stream
 GET    /papers/{paper_id}/chat
 GET    /papers/{paper_id}/conversations
 GET    /models
-GET    /export/bibtex
-GET    /export/notes.zip
-GET    /export/anki.txt
-GET    /export/library.csv
+POST   /export                         (selected export)
+GET    /export/bibtex                  (legacy whole-library export)
+GET    /export/notes.zip               (legacy whole-library export)
+GET    /export/anki.txt                (legacy whole-library export)
+GET    /export/library.csv             (legacy whole-library export)
 GET    /search/vector
 GET    /search/web
 ```
@@ -1009,9 +1010,11 @@ Returns every distinct conversation thread for a paper:
 ## Export
 
 Source: [endpoints/export.py](../../backend/app/api/v1/endpoints/export.py). Full
-design: [library-export.md](../plans/library-export.md). Library-wide, not
-per-paper; synchronous (no job/polling — formatting a personal library is fast
-enough not to need one).
+design: [library-export.md](../plans/library-export.md). The POST endpoint accepts `{ "format": "bibtex" | "markdown" | "anki" | "csv",
+"document_ids": ["..."] }`. `document_ids` scopes the export to the checked
+papers; an empty list means the whole library. Formatting is synchronous, and
+the frontend displays a waiting/progress screen while the response is built.
+The GET endpoints below remain whole-library compatibility routes.
 
 ### `GET /export/bibtex`
 

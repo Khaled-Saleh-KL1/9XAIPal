@@ -18,12 +18,13 @@
 
 ---
 
-## 1. Four formats, library-wide
+## 1. Four formats, library-wide or selected
 
-All four export the WHOLE library in one request — matches how the ask was
-framed ("export your library," "export notes"), not a per-paper action. No
-job/polling: formatting a personal research library (dozens of papers, not
-thousands) is fast enough to be synchronous, unlike ingestion.
+All four formats can export the WHOLE library or an explicit set of selected
+papers. The browser sends the selected document ids to one authenticated POST
+endpoint. Formatting remains synchronous because a personal research library
+(dozens of papers, not thousands) is fast enough to build in one response; the
+frontend shows a waiting/progress screen while it runs.
 
 - **BibTeX** (`services/export.py::to_bibtex`) — one entry per paper. `@article`
   when Semantic Scholar resolved real authors, `@misc` with an honest `note`
@@ -97,7 +98,7 @@ in as a real user — the live library (11 documents) was untouched throughout.
 
 ## 4. Explicitly out of scope
 
-- Per-paper export (library-wide only, per the framing of the request).
+- A background job/polling system for exports; the current synchronous response is sufficient for the library size.
 - Personal notes as Anki cards (not Q&A-shaped — see §1).
 - Sticky notes / whiteboard notes (not a per-paper concept, different from a
   research library export).
