@@ -10,6 +10,7 @@ import {
   type AgentStep, type Citation, type ConversationSummary,
 } from '../api';
 import { AgentTrail } from './AgentTrail';
+import { EvidencePanel } from './EvidencePanel';
 
 // The shared set already supplies the image and diagram renderers; chat only
 // overrides the anchor, which it wants without the shared component's extra
@@ -257,6 +258,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
             text: t.content,
             refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
             agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
+            grounding: t.role === 'assistant' ? t.grounding : undefined,
             parentTurnId: t.parent_turn_id ?? undefined,
             threadRootTurnId: t.thread_root_turn_id ?? undefined,
           })));
@@ -306,6 +308,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
         text: t.content,
         refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
         agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
+        grounding: t.role === 'assistant' ? t.grounding : undefined,
         parentTurnId: t.parent_turn_id ?? undefined,
         threadRootTurnId: t.thread_root_turn_id ?? undefined,
       })));
@@ -339,6 +342,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
         text: t.content,
         refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
         agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
+        grounding: t.role === 'assistant' ? t.grounding : undefined,
         parentTurnId: t.parent_turn_id ?? undefined,
         threadRootTurnId: t.thread_root_turn_id ?? undefined,
       })));
@@ -432,6 +436,9 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
           onStatus: (msg) => setStreaming((prev) => ({ text: prev?.text ?? '', status: msg })),
           // A research synthesis pass restreams the answer from scratch.
           onReplace: () => setStreaming({ text: '', status: 'Rewriting with research findings…' }),
+          // The answer is complete; the stream stays open while the evidence
+          // check runs, and the status line says so instead of "thinking…".
+          onVerifying: () => setStreaming((prev) => ({ text: prev?.text ?? '', status: 'Verifying evidence…' })),
           onStep: (step) =>
             setLiveSteps((prev) => {
               const i = prev.findIndex((p) => p.id === step.id);
@@ -457,6 +464,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
           researchPerformed: res.research_performed,
           researchSummary: res.research_summary || undefined,
           agentSteps: liveSteps.length ? liveSteps : undefined,
+          grounding: res.grounding ?? null,
         },
       ]);
       setLiveSteps([]);
@@ -473,6 +481,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
             text: t.content,
             refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
             agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
+            grounding: t.role === 'assistant' ? t.grounding : undefined,
             parentTurnId: t.parent_turn_id ?? undefined,
             threadRootTurnId: t.thread_root_turn_id ?? undefined,
           })));
@@ -1060,6 +1069,9 @@ const MessageBubble = memo(function MessageBubble({
           <AgentTrail steps={m.agentSteps} />
         </div>
       )}
+      {/* No jump: the book chat has no reader beside it to open a block in;
+          the page or paragraph label still says where the quote is from. */}
+      {m.grounding && <EvidencePanel report={m.grounding} />}
       {m.researchPerformed && m.researchSummary && (
         <div className="text-[11px] font-mono mt-1" style={{ color: 'var(--muted)' }}>
           ↳ {m.researchSummary}

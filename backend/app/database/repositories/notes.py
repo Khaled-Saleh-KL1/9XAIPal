@@ -109,6 +109,17 @@ async def finalize_note(
     )
 
 
+async def set_grounding(session: AsyncSession, note_id: UUID, grounding: Optional[dict]) -> None:
+    """Attach the evidence check (chat/grounding.py's report) to a note.
+    Written AFTER finalize_note, once the judge has run — the answer is
+    already streamed and saved by then, so a judge failure can never cost
+    the reader the answer itself."""
+    await session.execute(
+        text("UPDATE paper_notes SET grounding = CAST(:grounding AS jsonb) WHERE id = :id"),
+        {"id": note_id, "grounding": json.dumps(grounding) if grounding is not None else None},
+    )
+
+
 async def list_notes(session: AsyncSession, document_id: UUID) -> list[dict]:
     """Every note on a paper, ordered by anchor position then time.
 

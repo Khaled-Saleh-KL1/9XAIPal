@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_ask_semaphore, get_current_user
 from app.api.errors import DocumentNotFound, ModelUnavailable, NoLLMConfigured
+from app.chat import grounding
 from app.chat.agent_tools import wants_outside_context
 from app.chat.paper_agent import answer_paper_question
 from app.core.config import settings
@@ -148,6 +149,9 @@ def _serialize_note(n: dict) -> dict:
         "id": str(n["id"]),
         "scope": n.get("scope") or "anchor",
         "agent_steps": n.get("agent_steps") or [],
+        # None = never checked (feature off, or a note older than the check).
+        # The report's own `status` distinguishes verified from unavailable.
+        "grounding": n.get("grounding"),
         "anchor_sequence_id": n["anchor_sequence_id"],
         "anchor_chunk_id": str(n["anchor_chunk_id"]) if n.get("anchor_chunk_id") else None,
         "anchor_kind": n.get("anchor_kind") or "text",
@@ -406,6 +410,27 @@ async def create_note_stream(
                     "cited_sequence_ids": cited,
                     "agent_steps": steps,
                 })
+
+                # The evidence check runs AFTER `done` on purpose: the answer
+                # is already streamed, saved, and readable; the verdicts fill
+                # in a few seconds later. The client reads until the stream
+                # closes, not until `done`, so this trailing event is
+                # received. Its own failures are already contained inside
+                # check_document_answer (status "unavailable") — this
+                # try/except is only so a bug here can never surface as a
+                # note-generation error after the note was, in fact, made.
+                if grounding.enabled() and answer:
+                    try:
+                        async with async_session_factory() as gsession:
+                            report = await grounding.check_document_answer(
+                                gsession, document_id=paper_id, answer=answer,
+                                agent_steps=steps, model=model or None,
+                            )
+                            await note_repo.set_grounding(gsession, note_id, report)
+                            await gsession.commit()
+                        yield sse({"type": "grounding", "note_id": str(note_id), "grounding": report})
+                    except Exception:
+                        logger.exception("grounding check failed for note %s", note_id)
             except NoLLMConfigured as e:
                 yield sse({"type": "error", "detail": str(e.model)})
             except ModelUnavailable as e:

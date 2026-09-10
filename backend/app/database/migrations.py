@@ -236,6 +236,15 @@ async def _ensure_recent_columns() -> None:
         # unavailable (no key, rate-limited, network error) is retried on
         # the next export rather than cached as a dead end.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS self_resolve_status TEXT NOT NULL DEFAULT 'pending'",
+        # The evidence check behind an AI answer (chat/grounding.py): one
+        # verdict per claim — supported / partial / unsupported / uncited —
+        # each pointing at the passage it was judged against. On paper_notes
+        # for the reader's margin Q&A, on conversation_turns for book chat and
+        # the desk (both persist there). NULL = not checked (feature off, or a
+        # note from before this existed); the JSON's own `status` says
+        # "verified" vs "unavailable" (judge failed) — never conflated.
+        "ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS grounding JSONB",
+        "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS grounding JSONB",
     ]
 
     async with engine.begin() as conn:

@@ -544,6 +544,29 @@ snatch away the record of the fetches at the exact moment they become checkable.
 ⚠ **A `WEB` step is coloured differently from the paper tools** (`--deck`, not `--accent`). Whether
 an answer drew on anything outside the paper is the one distinction worth seeing without reading.
 
+### The evidence panel ([views/EvidencePanel.tsx](../../frontend/src/views/EvidencePanel.tsx))
+
+The other half of "how this was answered": whether what the model wrote is actually in the
+passages it fetched, claim by claim. Rendered from the trailing `grounding` SSE event and from
+`note.grounding` / `turn.grounding` on reload, under the trail on all three surfaces
+(`NoteCard`, `ChatPane`, `StudyChat`). Protocol and verdicts:
+[chat-and-ask.md § The evidence check](chat-and-ask.md#the-evidence-check-every-claim-is-judged-none-is-rewritten-chatgroundingpy).
+
+| State | Behaviour |
+| --- | --- |
+| `verifying` (after `done`, before `grounding`) | One quiet line, "Verifying evidence…". The answer is already complete and readable above it. |
+| Verified, closed | One line: "6 of 7 claims verified · 1 not from the paper". Any flag warms the line to `--accent` so a flagged answer is not the same colour as a clean one. |
+| Verified, open | The claim list: ✓ in the paper · ◐ partly · ⚠ not in the cited passage · ○ not from the paper, each with the **quoted passage inline** and a jump to the block (notes: `onJump(seq)`; desk: opens the paper, labelled `P2 · p. 8`; book chat: label only, there is no reader beside it). |
+| `unavailable` | "Couldn't verify this answer" — never a tick. |
+| No report (older row, or `GROUNDING_CHECK=false`) | Renders nothing. |
+
+The footer says who judged: "Checked by the model (gemma4:31b) against the passages it cited and
+read. It flags; it does not rewrite." Split into a pure `EvidenceList` and a stateful wrapper so
+every state above has a `renderToString` test.
+
+⚠ **Outside the `Collapsible`, like the trail.** A long answer is clipped at 300px; the panel
+must stay reachable without first expanding the thing you were trying to check.
+
 ### The Marginalia panel
 
 [`MarginaliaPanel.tsx`](../../frontend/src/views/MarginaliaPanel.tsx): Contents, Bookmarks and
@@ -793,6 +816,8 @@ figures in LOCAL and GLOBAL responses.
 - [`views/DeskView.tsx`](../../frontend/src/views/DeskView.tsx): the desk page.
 - [`views/AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx): the tool calls behind an
   answer, live and after the fact. Shared by margin notes and the desk.
+- [`views/EvidencePanel.tsx`](../../frontend/src/views/EvidencePanel.tsx): the evidence check
+  behind an answer, claim by claim. Shared by margin notes, the book chat, and the desk.
 - [`views/StudyChat.tsx`](../../frontend/src/views/StudyChat.tsx): the desk's transcript.
 - [`views/StickyBoard.tsx`](../../frontend/src/views/StickyBoard.tsx): the reader's own notes.
 - [`views/CitationRef.tsx`](../../frontend/src/views/CitationRef.tsx): a `[[P2:41]]` that opens

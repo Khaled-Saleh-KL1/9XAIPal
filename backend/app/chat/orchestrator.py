@@ -627,6 +627,8 @@ async def _finalize_ask(
         conversation_id=prep.conversation_id,
         research_performed=research_performed,
         research_summary=research_summary,
+        turn_id=assistant_turn.get("id"),
+        agent_steps=prep.agent_steps or [],
     )
 
 
@@ -746,6 +748,8 @@ def _ask_response_event(resp: AskResponse) -> dict:
         "conversation_id": str(resp.conversation_id) if resp.conversation_id else None,
         "research_performed": resp.research_performed,
         "research_summary": resp.research_summary,
+        "turn_id": str(resp.turn_id) if resp.turn_id else None,
+        "agent_steps": resp.agent_steps,
     }
 
 

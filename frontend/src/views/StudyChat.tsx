@@ -4,6 +4,7 @@ import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/ma
 import { maskIncompleteMath } from '../lib/pacer';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import { AgentTrail } from './AgentTrail';
+import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
 import type { AgentStep, ModelCatalog, StudyPaper, StudyTurn } from '../api';
 
@@ -23,6 +24,8 @@ export interface PendingTurn {
   status: string | null;
   steps: AgentStep[];
   error: string | null;
+  /** The answer is complete; the evidence check is running (see api.ts). */
+  verifying: boolean;
 }
 
 /**
@@ -242,6 +245,15 @@ export function StudyChat({
                   <div className="msg-body md-body">
                     <Answer text={turn.content} papers={papers} onOpenPaper={onOpenPaper} />
                   </div>
+                  {/* Evidence spans papers here, so each quote names its P-number. */}
+                  <EvidencePanel
+                    report={turn.grounding}
+                    onJump={onOpenPaper ? (doc, seq) => { if (doc) onOpenPaper(doc, seq); } : undefined}
+                    paperLabel={(doc) => {
+                      const i = papers.findIndex((p) => p.id === doc);
+                      return i === -1 ? null : `P${i + 1}`;
+                    }}
+                  />
                   {turn.cited.length > 0 && (
                     <div className="msg-sources">
                       <span className="msg-sources-label">Read from</span>
@@ -278,6 +290,7 @@ export function StudyChat({
                     papers={papers}
                     onOpenPaper={onOpenPaper}
                   />
+                  <EvidencePanel report={null} verifying={pending.verifying} />
                 </div>
               ) : (
                 <div className="note-status">

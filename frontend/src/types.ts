@@ -80,6 +80,8 @@ export interface ChatRef {
 export interface ChatMessage {
   /** The agent's tool trail, when an agent answered (books). */
   agentSteps?: import('./api').AgentStep[];
+  /** The evidence check behind an assistant turn (see api.ts GroundingReport). */
+  grounding?: import('./api').GroundingReport | null;
   // 'compaction' = synthetic system bubble inserted when the chat history
   // is auto-summarized to keep context focused.
   role: 'user' | 'assistant' | 'compaction';

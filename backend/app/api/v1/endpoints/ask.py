@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_ask_limiter, get_ask_semaphore, get_current_user
 from app.api.errors import DocumentNotFound, ModelUnavailable, NoLLMConfigured
+from app.chat import grounding
 from app.chat.orchestrator import handle_ask, handle_ask_stream
 from app.core.logging import get_logger
+from app.database.connection import async_session_factory
 from app.services import documents as doc_service
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import conversations as conv_repo
@@ -119,6 +121,18 @@ async def ask_paper(
         document=doc,
     )
 
+    # Non-streaming: nothing to deliver early, so the evidence check runs
+    # inline and rides on the response. Its failures are self-contained.
+    report = None
+    if grounding.enabled() and result.answer:
+        report = await grounding.check_document_answer(
+            db, document_id=paper_id, answer=result.answer,
+            agent_steps=result.agent_steps, model=result.model or None,
+        )
+        if result.turn_id:
+            await conv_repo.set_turn_grounding(db, result.turn_id, report)
+            await db.commit()
+
     return {
         "answer": result.answer,
         "context_type": result.context_type,
@@ -126,6 +140,8 @@ async def ask_paper(
         "citations": [c.model_dump(mode="json") for c in result.citations],
         "model": result.model,
         "conversation_id": str(result.conversation_id) if result.conversation_id else None,
+        "turn_id": str(result.turn_id) if result.turn_id else None,
+        "grounding": report,
     }
 
 
@@ -152,6 +168,7 @@ async def ask_paper_stream(
     async def event_stream():
         async with get_ask_semaphore():
             try:
+                final: dict | None = None
                 async for event in handle_ask_stream(
                     user_id=user_id,
                     prompt=payload.query,
@@ -159,14 +176,35 @@ async def ask_paper_stream(
                     current_chunk_id=current_chunk_id,
                     conversation_id=payload.conversation_id,
                     visible_sequence_orders=payload.visible_sequence_orders,
-        max_sequence_id=payload.max_sequence_id,
+                    max_sequence_id=payload.max_sequence_id,
                     focused_element=payload.focused_element,
                     user_images_b64=payload.images_b64,
                     parent_turn_id=payload.parent_turn_id,
                     thread_root_turn_id=payload.thread_root_turn_id,
                     document=doc,
                 ):
+                    if event.get("type") == "done":
+                        final = event
                     yield sse(event)
+
+                # After `done`, same contract as the notes stream: the answer
+                # is already delivered and persisted; the verdicts follow in
+                # their own event, and the client reads until the stream
+                # closes. Own session — the request's was torn down before
+                # this body started (see handle_ask_stream's docstring).
+                if final and grounding.enabled() and final.get("answer"):
+                    try:
+                        async with async_session_factory() as gsession:
+                            report = await grounding.check_document_answer(
+                                gsession, document_id=paper_id, answer=final["answer"],
+                                agent_steps=final.get("agent_steps"), model=final.get("model") or None,
+                            )
+                            if final.get("turn_id"):
+                                await conv_repo.set_turn_grounding(gsession, UUID(final["turn_id"]), report)
+                                await gsession.commit()
+                        yield sse({"type": "grounding", "turn_id": final.get("turn_id"), "grounding": report})
+                    except Exception:
+                        logger.exception("grounding check failed for ask stream on %s", paper_id)
             except NoLLMConfigured as e:
                 # The message already carries full instructions — no prefix.
                 yield sse({"type": "error", "detail": str(e.model)})
@@ -196,6 +234,8 @@ def _serialize_turn(t: dict) -> dict:
         "context_type": t.get("context_type"),
         "citations": t.get("citations"),
         "agent_steps": t.get("agent_steps"),
+        # Evidence check (chat/grounding.py); None until the check has run.
+        "grounding": t.get("grounding"),
         "created_at": t["created_at"].isoformat() if t.get("created_at") else None,
         # Sub-thread support (None for main linear chat turns)
         "parent_turn_id": str(t["parent_turn_id"]) if t.get("parent_turn_id") else None,

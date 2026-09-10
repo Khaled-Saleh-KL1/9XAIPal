@@ -593,6 +593,7 @@ without calling a tool. Both are correct, not missing data.
     "question": "...", "answer": "...",
     "cited_sequence_ids": [<int>],
     "agent_steps": [AgentStep],
+    "grounding": GroundingReport | null,
     "retrieval_mode": "whole" | "agent" | null,
     "model": "<what the provider reported>|null",
     "requested_model": "<what the reader picked>|null",
@@ -640,7 +641,41 @@ Event types, one JSON object per `data:` line:
 | `step` | see below | One tool call. Arrives **twice** per call. |
 | `token` | `text` | Answer text as it generates. |
 | `done` | `note_id`, `answer`, `model`, `retrieval_mode`, `cited_sequence_ids`, `agent_steps` | Final state. |
+| `grounding` | `note_id`, `grounding` | **After `done`.** The evidence check (see below). Absent when `GROUNDING_CHECK=false`. |
 | `error` | `detail` | Generation failed; the row survives with an empty answer. |
+
+⚠ The stream stays open after `done` while the check runs (one extra model call, a few
+seconds). Clients read until the stream **closes**, not until `done`; the answer is complete
+and renderable from `done` onwards.
+
+`GroundingReport` — the evidence check (`chat/grounding.py`), the same shape on every surface:
+
+```ts
+{
+  status: "verified" | "unavailable",   // unavailable = the judge could not run; never a false clean bill
+  reason?: string,                       // why, when unavailable
+  model?: string,                        // the judge model, when it ran
+  summary: { supported, partial, unsupported, uncited: number },
+  claims: [{
+    text: string,                        // one sentence/bullet of the answer, markers stripped
+    refs: [[document_id | null, sequence_id]],   // what the answer cited for it
+    verdict: "supported" | "partial" | "unsupported" | "uncited",
+    evidence: { document_id, sequence_id, page } | null,   // the passage the judge tied it to
+    quote: string,                       // verbatim excerpt from that passage
+    note: string                         // one clause from the judge ("admission", "overstates…")
+  }]
+}
+```
+
+- `supported` — a cited (or, for an unmarked sentence, any retrieved) passage says this.
+- `partial` — part of it; the claim adds or generalises beyond what is written.
+- `unsupported` — the cited passage does not say this, or says otherwise.
+- `uncited` — no marker, and nothing retrieved supports it: the model's own inference.
+- An honest admission ("this is not present in the retrieved sections") is `supported`
+  with note `admission`, not flagged.
+
+The check **annotates**; it never rewrites or hides the answer. Headings and lead-ins
+("…as follows:") are not claims and are not counted.
 
 `AgentStep`:
 
@@ -847,6 +882,7 @@ partial update could repoint citations already on screen.
   "id", "role": "user"|"assistant", "content", "model",
   "cited": [{"paper": 2, "document_id", "label", "sequence_id": 41}],
   "agent_steps": [AgentStep],
+  "grounding": GroundingReport | null,
   "created_at"
 }]}
 ```
@@ -855,7 +891,10 @@ partial update could repoint citations already on screen.
 
 Body `{"question": "…", "model": null}`. SSE, **the same event shapes as the note stream**:
 `created` (carrying `turn_id`), `status`, `step`, `token`, `done`, `error`, so one client
-component renders both. `done` carries `turn_id`, `answer`, `model`, `cited`, `agent_steps`.
+component renders both. `done` carries `turn_id`, `answer`, `model`, `cited`, `agent_steps`,
+and a trailing `grounding` event (`turn_id`, `grounding`) follows `done` exactly as on the
+note stream. `[[P2:41]]` markers resolve through the study's paper list, so `refs` and
+`evidence.document_id` name the actual document.
 
 ⚠ The user's turn is stored **before** generation, so a failed model call still leaves the question
 in the transcript.
@@ -965,9 +1004,18 @@ Response:
   "model":               "gemma4:31b-cloud",
   "conversation_id":     "<uuid>",
   "research_performed":  true | false,
-  "research_summary":    "Studied N sources across M iterations" | null
+  "research_summary":    "Studied N sources across M iterations" | null,
+  "turn_id":             "<uuid>" | null,
+  "grounding":           GroundingReport | null
 }
 ```
+
+`turn_id` is the persisted assistant turn; `grounding` is the evidence check run inline
+after the answer (see the note stream for the shape), `null` when `GROUNDING_CHECK=false`.
+
+`POST /papers/{paper_id}/ask/stream` emits the same events as the note stream minus
+`created`; its `done` carries `turn_id` and `agent_steps` (the book agent's trail, `[]` on the
+non-agent routes), and a `grounding` event (`turn_id`, `grounding`) follows `done`. `[seq:12]` markers are the citation form on this surface.
 
 `Citation`:
 
@@ -985,7 +1033,8 @@ Response:
 ### `GET /papers/{paper_id}/chat?conversation_id=<uuid>`
 
 Returns saved conversation turns (oldest first) for a paper, optionally
-filtered to one conversation.
+filtered to one conversation. Assistant turns carry `grounding`
+(`GroundingReport | null`).
 
 ### `GET /papers/{paper_id}/conversations`
 

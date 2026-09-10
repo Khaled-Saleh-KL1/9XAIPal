@@ -11,6 +11,7 @@ import {
   type CardDrag,
 } from './NoteChrome';
 import { AgentTrail } from './AgentTrail';
+import { EvidencePanel } from './EvidencePanel';
 import { citeChips, usePageMap } from '../lib/pageMap';
 import type { AgentStep, PaperNote } from '../api';
 
@@ -40,6 +41,8 @@ export interface PendingNote {
   /** Tool calls so far, upserted by id as `running` then `done` events land. */
   steps: AgentStep[];
   error: string | null;
+  /** The answer is complete; the evidence check is running (see api.ts). */
+  verifying: boolean;
   parentNoteId: string | null;
   /** Which surface renders this card: the gutter, or the assistant panel. */
   scope: 'anchor' | 'document';
@@ -223,7 +226,10 @@ export function PendingNoteCard({
           {note.answer ? (
             // Still streaming: withhold a half-written LaTeX span so the reader
             // doesn't watch raw markup type itself out and then snap into a symbol.
-            <Answer text={withCitationLinks(maskIncompleteMath(note.answer))} />
+            <>
+              <Answer text={withCitationLinks(maskIncompleteMath(note.answer))} />
+              <EvidencePanel report={null} verifying={note.verifying} />
+            </>
           ) : (
             <div className="note-status">
               <span className="note-dot" />
@@ -318,6 +324,7 @@ export function NoteCardView({
             <Answer text={withCitationLinks(reply.answer)} />
             <CitationChips cited={reply.cited_sequence_ids} onJump={onJump} />
             <AgentTrail steps={reply.agent_steps} onJump={onJump} />
+            <EvidencePanel report={reply.grounding} onJump={(_doc, seq) => onJump(seq)} />
           </div>
         ))}
       </Collapsible>
@@ -328,6 +335,10 @@ export function NoteCardView({
           only by first expanding the thing you were trying to check. It is
           collapsed by default anyway, so it costs one line here. */}
       <AgentTrail steps={group.root.agent_steps} onJump={onJump} />
+      {/* Same placement, same reason: the claim-by-claim check is the other
+          half of "how this was answered", and must stay reachable on a
+          clipped card. Notes are single-paper, so the document id is dropped. */}
+      <EvidencePanel report={group.root.grounding} onJump={(_doc, seq) => onJump(seq)} />
 
       <div className="note-footer">
         {composing ? (
