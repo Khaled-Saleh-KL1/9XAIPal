@@ -54,14 +54,24 @@ const SANITIZE_SCHEMA: typeof defaultSchema = {
     ],
     span: [
       ...(defaultSchema.attributes?.span ?? []),
-      // 'citation-ref': lib/references.ts's remarkCitationRefs marks a "[12]"
-      // bracket this way; the span override just below reads data-numbers
-      // back off it to render <BibCitationRef>. Without both entries here
-      // the marker span (or its data attribute) would be silently stripped
-      // by this same rehype-sanitize pass, same reason `video` needed adding
-      // above.
+      // 'citation-ref': lib/references.tsx's remarkCitationRefs marks a "[12]"
+      // bracket this way; its span override reads the numbers back off it to
+      // render <BibCitationRef>. Without both entries here the marker span
+      // (or its data attribute) would be silently stripped by this same
+      // rehype-sanitize pass, same reason `video` needed adding above.
+      //
+      // ⚠ `dataNumbers`, the PROPERTY name — not `data-numbers`, the HTML
+      // attribute. rehypeRaw runs before this and round-trips the tree
+      // through parse5, which normalises every attribute to its
+      // property-information name (`data-numbers` → `dataNumbers`, the same
+      // way `class` is `className` in every entry of this schema). This
+      // list is matched against that normalised key, so the hyphenated form
+      // matches nothing and the attribute is stripped — silently, with the
+      // span itself surviving, so every citation rendered as inert text.
+      // Shipped that way once: a sanitize test that skipped rehypeRaw passed
+      // with the hyphenated name and never saw the rename.
       ['className', 'math', 'math-inline', 'citation-ref'],
-      'data-numbers',
+      'dataNumbers',
     ],
     div: [
       ...(defaultSchema.attributes?.div ?? []),

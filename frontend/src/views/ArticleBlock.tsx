@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import type { PluggableList } from 'unified';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_LINK_COMPONENT } from '../lib/markdown';
 import { remarkCitationRefs, makeCitationSpanComponent, EMPTY_REFERENCE_INDEX, type ReferenceIndex } from '../lib/references';
 import type { DocBlock } from '../api';
@@ -26,9 +27,20 @@ function Md({
   className?: string;
   citations?: { paperId: string; refIndex: ReferenceIndex; onOpenPaper?: (documentId: string) => void };
 }) {
-  const remarkPlugins = useMemo(
+  // ⚠ `[plugin, options]` tuple, NOT `remarkCitationRefs(numbers)`. unified
+  // treats each entry as an ATTACHER it calls itself at freeze time —
+  // `attacher(options)` — and uses the returned transformer. Calling the
+  // factory here and handing unified the transformer instead means unified
+  // invokes the transformer with no arguments, so `tree` is undefined and
+  // the very first `visit()` throws "Cannot use 'in' operator to search for
+  // 'children' in undefined". That crashed every paper that actually had a
+  // parsed bibliography (and only those — an empty set never reaches this
+  // branch), which is why it shipped: the pipeline test used the correct
+  // `.use(remarkCitationRefs, refs)` form and never exercised this one. Same
+  // shape MARKDOWN_REHYPE already uses for [rehypeSanitize, SANITIZE_SCHEMA].
+  const remarkPlugins = useMemo<PluggableList>(
     () => (citations && citations.refIndex.numbers.size > 0
-      ? [...MARKDOWN_REMARK, remarkCitationRefs(citations.refIndex.numbers)]
+      ? [...MARKDOWN_REMARK, [remarkCitationRefs, citations.refIndex.numbers]]
       : MARKDOWN_REMARK),
     [citations],
   );

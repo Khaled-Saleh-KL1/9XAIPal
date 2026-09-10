@@ -113,6 +113,35 @@ actual container image — the live library (11 documents) was untouched through
   this change updates (`unist-util-visit`, `@types/mdast` — added as explicit dependencies rather
   than relied on as another package's undeclared transitive install).
 
+### 5a. What that verification missed — the reader crashed in production (fixed 2026-09-10)
+
+The two pipeline tests above were each correct and each incomplete in a way the other did not
+cover, and the feature shipped broken for every paper that actually had a bibliography. Recorded
+here rather than quietly fixed, because "verified" above was true of the tests and false of the
+product:
+
+- **The plugin was tested in the wrong invocation form.** The pipeline test used
+  `.use(remarkCitationRefs, refs)` — unified calling the attacher itself. The shipped
+  `ArticleBlock` code passed `remarkCitationRefs(refs)` — the transformer — as if it were an
+  attacher, so unified invoked it with no tree and the first `visit()` threw
+  `Cannot use 'in' operator to search for 'children' in undefined`. No ErrorBoundary exists, so
+  this unmounted the whole app: the reader went blank on exactly the papers with parsed
+  references and no others, which is why DeepSeek/RoFormer (0 refs, plugin never engaged) kept
+  working and Attention Is All You Need (40 refs) did not. Fixed to the `[plugin, options]` tuple
+  form `MARKDOWN_REHYPE` already uses for `rehypeSanitize`.
+- **The sanitize test skipped `rehypeRaw`, which renames the attribute.** `rehypeRaw` runs first
+  in `MARKDOWN_REHYPE` and round-trips the tree through parse5, normalising `data-numbers` to the
+  property name `dataNumbers`. The schema entry said `data-numbers`, matched nothing after that
+  rename, and the attribute was stripped — silently, span intact, so once the crash above was
+  fixed every chip would have rendered as inert text. Fixed by naming the property (`dataNumbers`),
+  the same convention every other entry in that schema already follows (`className`, not `class`).
+- **How it was caught, and what now guards it:** a real `renderToString` of `ArticleBlock` on a
+  real block from the live corpus (`de0a084f`, block 28, "[5, 2, 35]"), with and without a
+  reference index. Before: throws with references, renders without. After: renders `<button
+  class="cite-chip" title="References [5, 2, 35]">` with references, byte-identical without. That
+  render is the test that should have existed from the start — `tsc` and the pipeline in
+  isolation cannot see either of these, only the component actually rendering can.
+
 ## 6. Explicitly out of scope
 
 - Books and articles (§1).
