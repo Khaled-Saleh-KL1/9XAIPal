@@ -66,6 +66,11 @@ export interface ExportPanelProps {
   progress: number;
   error: string | null;
   cancelled: boolean;
+  /** What the browser actually saved the file as — set only on the done
+   * step, straight from the server's Content-Disposition. Never guessed
+   * from the format: one paper's Markdown is `<title>.md`, several is
+   * `notes.zip`, and a static label would name the wrong one. */
+  savedAs: string | null;
   onQuery: (q: string) => void;
   onToggleKind: (key: string) => void;
   onTogglePaper: (id: string) => void;
@@ -216,7 +221,7 @@ export function ExportPanel(p: ExportPanelProps) {
             <div className="export-done">
               <span className="export-done-tick" aria-hidden="true"><IconCheck className="w-6 h-6" /></span>
               <h2 className="confirm-title" id="export-title">Exported successfully</h2>
-              <p className="confirm-body">{chosen?.file} has been saved to your downloads.</p>
+              <p className="confirm-body">{p.savedAs ?? chosen?.file} has been saved to your downloads.</p>
             </div>
             <div className="confirm-actions">
               <button type="button" className="confirm-go" onClick={p.onClose}>Done</button>
@@ -251,6 +256,7 @@ export function ExportWizard({ papers }: { papers: Paper[] }) {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [cancelled, setCancelled] = useState(false);
+  const [savedAs, setSavedAs] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const creepRef = useRef<number | null>(null);
 
@@ -273,6 +279,7 @@ export function ExportWizard({ papers }: { papers: Paper[] }) {
     setProgress(0);
     setError(null);
     setCancelled(false);
+    setSavedAs(null);
   };
 
   const toggleIn = (setter: (fn: (prev: Set<string>) => Set<string>) => void, key: string) =>
@@ -305,7 +312,7 @@ export function ExportWizard({ papers }: { papers: Paper[] }) {
     creepRef.current = window.setInterval(() => setProgress((x) => Math.min(0.7, x + 0.02)), 200);
 
     downloadExport(format, [...selected], (x) => setProgress((cur) => Math.max(cur, x)), controller.signal)
-      .then(() => { stopCreep(); setProgress(1); setStep('done'); })
+      .then((filename) => { stopCreep(); setProgress(1); setSavedAs(filename); setStep('done'); })
       .catch((e: unknown) => {
         stopCreep();
         if (e instanceof DOMException && e.name === 'AbortError') {
@@ -343,6 +350,7 @@ export function ExportWizard({ papers }: { papers: Paper[] }) {
           progress={progress}
           error={error}
           cancelled={cancelled}
+          savedAs={savedAs}
           onQuery={setQuery}
           onToggleKind={(k) => toggleIn(setKinds, k)}
           onTogglePaper={(id) => toggleIn(setSelected, id)}

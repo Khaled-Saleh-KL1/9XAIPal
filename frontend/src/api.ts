@@ -445,7 +445,10 @@ export async function downloadExport(
    * with a DOMException named 'AbortError', which the caller treats as
    * "cancelled", not "failed". */
   signal?: AbortSignal,
-): Promise<void> {
+  /** Resolves to the filename the file was saved as — read from the
+   * server's Content-Disposition, since it varies: a single paper's
+   * Markdown export is `<title-slug>.md`, several papers' is `notes.zip`. */
+): Promise<string> {
   if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
 
   onProgress?.(0.04);
@@ -490,15 +493,17 @@ export async function downloadExport(
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = filenameFromDisposition(
+  const filename = filenameFromDisposition(
     res.headers.get('content-disposition'),
     EXPORT_FILENAMES[format],
   );
+  anchor.download = filename;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   onProgress?.(1);
+  return filename;
 }
 
 // ── Notes (anchored margin annotations) ──────────────────────────────────────

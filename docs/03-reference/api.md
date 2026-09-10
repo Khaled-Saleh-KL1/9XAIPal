@@ -1019,6 +1019,12 @@ cancellable progress screen while the response is built (a cancel aborts the
 request client-side — the server finishes and discards its work). The GET
 endpoints below remain whole-library compatibility routes.
 
+⚠ **`format: "markdown"` returns a different shape depending on how many papers
+were chosen** — read `Content-Disposition` rather than assuming: exactly one
+paper → that paper's `.md` itself (`text/markdown`, filename `<title-slug>.md`);
+two or more → `notes.zip` (`application/zip`, one `.md` per paper inside). A
+single file wrapped in a ZIP is friction with no benefit.
+
 ### `GET /export/bibtex`
 
 The whole library as a `.bib` file (`Content-Disposition: attachment;

@@ -130,64 +130,84 @@ def _md_note_block(quote: Optional[str], body_lines: list[str]) -> list[str]:
     return out
 
 
+def _display_title(doc: dict) -> str:
+    return (doc.get("title") or doc.get("original_filename") or "Untitled").strip()
+
+
+def to_markdown_note(doc: dict, qa: list[dict], personal: list[dict]) -> str:
+    """One paper's notes as a single Markdown document: YAML frontmatter,
+    then personal notes and Q&A each as their own section, in anchor order,
+    quoting the passage a note hangs off as a blockquote above it the way
+    the reader itself shows it."""
+    title = _display_title(doc)
+    added = doc.get("created_at")
+    lines = [
+        "---",
+        f'title: "{_yaml_escape(title)}"',
+        f"doc_kind: {doc.get('doc_kind') or 'paper'}",
+        f"date_added: {added.date().isoformat() if isinstance(added, (datetime, date)) else ''}",
+        "---",
+        "",
+        f"# {title}",
+        "",
+    ]
+
+    if personal:
+        lines.append("## Personal notes")
+        lines.append("")
+        for note in personal:
+            lines.extend(_md_note_block(note.get("anchor_quote"), [(note.get("body") or "").strip()]))
+
+    if qa:
+        lines.append("## Questions & answers")
+        lines.append("")
+        for note in qa:
+            body = [f"**Q: {(note.get('question') or '').strip()}**", "", (note.get("answer") or "").strip()]
+            lines.extend(_md_note_block(note.get("anchor_quote"), body))
+
+    if not personal and not qa:
+        lines.append("_No notes on this paper yet._")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def markdown_filename(doc: dict) -> str:
+    """`<title-slug>.md` — the name a single-paper export downloads as, and
+    the per-entry name inside a multi-paper ZIP (before de-duplication)."""
+    return f"{_slug(_display_title(doc))}.md"
+
+
 def to_markdown_zip(
     documents: list[dict],
     notes_by_doc: dict[str, list[dict]],
     personal_by_doc: dict[str, list[dict]],
 ) -> bytes:
-    """One `.md` file per paper inside a ZIP — not one giant file, and not
-    one file per note. Obsidian (and any note app that indexes a folder)
-    treats each file as its own linkable, searchable unit; a paper with
-    thirty notes as thirty tiny files is worse to navigate than the same
-    thirty notes as sections of one file named after the paper they're on.
+    """Several papers' notes: one `.md` file per paper inside a ZIP — not
+    one giant file, and not one file per note. Obsidian (and any note app
+    that indexes a folder) treats each file as its own linkable, searchable
+    unit; a paper with thirty notes as thirty tiny files is worse to
+    navigate than the same thirty notes as sections of one file named after
+    the paper they're on.
+
+    ⚠ For exactly ONE paper the endpoint does not call this — it sends the
+    `.md` itself (see endpoints/export.py). A ZIP that has to be opened to
+    reach the single file inside it is friction with no benefit; the
+    container only earns its place once there is more than one file.
     """
     buf = io.BytesIO()
     used_names: set[str] = set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for doc in documents:
             doc_id = str(doc["id"])
-            title = (doc.get("title") or doc.get("original_filename") or "Untitled").strip()
-
-            base = _slug(title)
-            name = f"{base}.md"
+            name = markdown_filename(doc)
+            base = name[:-3]
             n = 2
             while name in used_names:
                 name = f"{base}-{n}.md"
                 n += 1
             used_names.add(name)
-
-            added = doc.get("created_at")
-            lines = [
-                "---",
-                f'title: "{_yaml_escape(title)}"',
-                f"doc_kind: {doc.get('doc_kind') or 'paper'}",
-                f"date_added: {added.date().isoformat() if isinstance(added, (datetime, date)) else ''}",
-                "---",
-                "",
-                f"# {title}",
-                "",
-            ]
-
-            personal = personal_by_doc.get(doc_id, [])
-            if personal:
-                lines.append("## Personal notes")
-                lines.append("")
-                for note in personal:
-                    lines.extend(_md_note_block(note.get("anchor_quote"), [(note.get("body") or "").strip()]))
-
-            qa = notes_by_doc.get(doc_id, [])
-            if qa:
-                lines.append("## Questions & answers")
-                lines.append("")
-                for note in qa:
-                    body = [f"**Q: {(note.get('question') or '').strip()}**", "", (note.get("answer") or "").strip()]
-                    lines.extend(_md_note_block(note.get("anchor_quote"), body))
-
-            if not personal and not qa:
-                lines.append("_No notes on this paper yet._")
-                lines.append("")
-
-            zf.writestr(name, "\n".join(lines))
+            zf.writestr(name, to_markdown_note(doc, notes_by_doc.get(doc_id, []), personal_by_doc.get(doc_id, [])))
 
     return buf.getvalue()
 
