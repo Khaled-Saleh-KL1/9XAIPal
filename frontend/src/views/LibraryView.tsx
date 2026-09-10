@@ -7,6 +7,7 @@ import {
 } from '../components/Icons';
 import { PaperCover } from './PaperCover';
 import { UserMenuInline } from '../components/UserMenu';
+import { ExportMenu } from '../components/ExportMenu';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
@@ -266,6 +267,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               <IconDoc className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />
               Raw files
             </button>
+            <ExportMenu />
             <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
             <UserMenuInline />
           </div>

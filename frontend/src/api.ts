@@ -404,6 +404,36 @@ export async function addReferenceToLibrary(paperId: string, number: number): Pr
   return res.json();
 }
 
+// ── Library export ────────────────────────────────────────────────────────
+
+/**
+ * Triggers a same-origin browser download rather than fetching a Blob and
+ * saving it in JS: the backend already sets Content-Disposition: attachment
+ * (see api/v1/endpoints/export.py), which is what a plain FileResponse
+ * download (e.g. /papers/{id}/raw) has always relied on here — the browser
+ * downloads the file itself and this navigation never actually leaves the
+ * SPA. The session cookie travels automatically since it's same-origin.
+ */
+function downloadFrom(path: string): void {
+  window.location.href = `${BASE}${path}`;
+}
+
+export function downloadBibtex(): void {
+  downloadFrom('/export/bibtex');
+}
+
+export function downloadNotesMarkdownZip(): void {
+  downloadFrom('/export/notes.zip');
+}
+
+export function downloadAnkiFlashcards(): void {
+  downloadFrom('/export/anki.txt');
+}
+
+export function downloadLibraryCsv(): void {
+  downloadFrom('/export/library.csv');
+}
+
 // ── Notes (anchored margin annotations) ──────────────────────────────────────
 
 /**
