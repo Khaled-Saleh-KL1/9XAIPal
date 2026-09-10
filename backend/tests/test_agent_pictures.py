@@ -30,16 +30,16 @@ def test_a_block_with_a_picture_carries_the_markdown_to_show_it():
         "sequence_id": 42,
         "chunk_type": "figure",
         "plain_text": "Figure 3: the encoder-decoder stack",
-        "image_url": "/static/images/doc/fig3.png",
+        "image_url": "/api/v1/papers/doc/assets/doc/fig3.png",
     }
     out = format_block(block)
-    assert "show with: ![Figure 3: the encoder-decoder stack](/static/images/doc/fig3.png)" in out
+    assert "show with: ![Figure 3: the encoder-decoder stack](/api/v1/papers/doc/assets/doc/fig3.png)" in out
     assert "[[42]] (figure)" in out
 
 
 def test_a_prefixed_block_still_cites_by_paper():
     block = {"sequence_id": 7, "chunk_type": "figure", "plain_text": "F1",
-             "image_url": "/static/images/d/a.png"}
+             "image_url": "/api/v1/papers/doc/assets/d/a.png"}
     assert "[[P2:7]]" in format_block(block, prefix="P2:")
 
 
@@ -75,7 +75,7 @@ async def test_asset_urls_are_attached_from_the_database(db_session):
 
     blocks = [{"id": chunk_id, "sequence_id": 1, "chunk_type": "figure", "plain_text": "Figure 1"}]
     await attach_asset_urls(db_session, blocks)
-    assert blocks[0]["image_url"] == f"/static/images/{doc_id}/fig1.png"
+    assert blocks[0]["image_url"] == f"/api/v1/papers/{doc_id}/assets/{doc_id}/fig1.png"
     assert "show with:" in format_block(blocks[0])
 
 

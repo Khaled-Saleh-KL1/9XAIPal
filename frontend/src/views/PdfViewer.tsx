@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -63,7 +63,16 @@ export function PdfViewer({ paper, onBack, onReadStructured, initialPage }: Prop
   const zoomIn = () => setScale((s) => Math.min(s + 0.25, 3.0));
   const zoomOut = () => setScale((s) => Math.max(s - 0.25, 0.5));
 
-  const pdfUrl = getStaticPdfUrl(paper.id);
+  // The PDF is the authenticated /raw route, not a public file. pdf.js loads
+  // it with its own fetch, which — unlike the app's fetch wrapper in api.ts —
+  // defaults to same-origin credentials, so a hosted SPA on another origin
+  // would get a 401 from the API with no cookie attached. withCredentials
+  // sends it. Memoised because react-pdf compares `file` by identity and
+  // would otherwise reload the document on every render.
+  const pdfFile = useMemo(
+    () => ({ url: getStaticPdfUrl(paper.id), withCredentials: true }),
+    [paper.id],
+  );
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
@@ -179,7 +188,7 @@ export function PdfViewer({ paper, onBack, onReadStructured, initialPage }: Prop
       <div className="flex-1 overflow-auto flex justify-center" style={{ background: '#f0ede8' }}>
         <div className="py-8">
           <Document
-            file={pdfUrl}
+            file={pdfFile}
             onLoadSuccess={onDocumentLoadSuccess}
             loading={
               <div className="flex items-center justify-center h-96">

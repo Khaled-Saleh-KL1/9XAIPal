@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import text
 
 from app.database.repositories import documents as doc_repo
+from app.database.repositories import conversations as conv_repo
 from app.database.repositories import studies as study_repo
 from app.database.repositories import stickies as sticky_repo
 
@@ -147,3 +148,74 @@ async def test_library_wide_chat_scoped_to_owner(db_session):
     await db_session.commit()
     assert len(await study_repo.list_turns(db_session, user_a, None)) == 1
     assert await study_repo.list_turns(db_session, user_b, None) == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_preview_stays_with_its_user_and_document(db_session):
+    user_a = await _make_user(db_session)
+    user_b = await _make_user(db_session)
+    doc_a = await doc_repo.create_document(
+        db_session, user_id=user_a, filename="a.pdf", original_filename="a.pdf"
+    )
+    doc_b = await doc_repo.create_document(
+        db_session, user_id=user_b, filename="b.pdf", original_filename="b.pdf"
+    )
+    conversation_id = uuid4()
+
+    await conv_repo.create_turn(
+        db_session,
+        user_id=user_a,
+        document_id=doc_a["id"],
+        conversation_id=conversation_id,
+        role="user",
+        content="A private first prompt",
+    )
+    await conv_repo.create_turn(
+        db_session,
+        user_id=user_b,
+        document_id=doc_b["id"],
+        conversation_id=conversation_id,
+        role="user",
+        content="B's own first prompt",
+    )
+    await db_session.commit()
+
+    rows = await conv_repo.list_conversations_by_document(db_session, user_b, doc_b["id"])
+    assert rows[0]["first_user_message"] == "B's own first prompt"
+
+
+@pytest.mark.asyncio
+async def test_conversation_id_cannot_cross_documents_for_the_same_user(db_session):
+    user = await _make_user(db_session)
+    first_document = await doc_repo.create_document(
+        db_session, user_id=user, filename="a.pdf", original_filename="a.pdf"
+    )
+    second_document = await doc_repo.create_document(
+        db_session, user_id=user, filename="b.pdf", original_filename="b.pdf"
+    )
+    conversation_id = uuid4()
+    turn = await conv_repo.create_turn(
+        db_session,
+        user_id=user,
+        document_id=first_document["id"],
+        conversation_id=conversation_id,
+        role="user",
+        content="Only about the first paper",
+    )
+    await db_session.commit()
+
+    assert await conv_repo.conversation_is_available_for_document(
+        db_session, user, first_document["id"], conversation_id
+    )
+    assert not await conv_repo.conversation_is_available_for_document(
+        db_session, user, second_document["id"], conversation_id
+    )
+    assert await conv_repo.get_conversation_history(
+        db_session, user, conversation_id, document_id=second_document["id"]
+    ) == []
+    assert await conv_repo.get_main_chat(
+        db_session, user, conversation_id, document_id=second_document["id"]
+    ) == []
+    assert await conv_repo.get_thread_subtree(
+        db_session, user, turn["id"], document_id=second_document["id"]
+    ) == []

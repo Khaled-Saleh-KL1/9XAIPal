@@ -126,17 +126,28 @@ async def create_trace(
 
 
 async def get_conversation_history(
-    session: AsyncSession, user_id: UUID, conversation_id: UUID, limit: int = 20
+    session: AsyncSession,
+    user_id: UUID,
+    conversation_id: UUID,
+    limit: int = 20,
+    document_id: Optional[UUID] = None,
 ) -> list[dict]:
     """Fetch recent conversation turns."""
     result = await session.execute(
         text("""
             SELECT *, parent_turn_id FROM conversation_turns
-            WHERE conversation_id = :cid AND user_id = :user_id
+            WHERE conversation_id = :cid
+              AND user_id = :user_id
+              AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
             ORDER BY created_at DESC
             LIMIT :limit
         """),
-        {"cid": conversation_id, "user_id": user_id, "limit": limit},
+        {
+            "cid": conversation_id,
+            "user_id": user_id,
+            "document_id": document_id,
+            "limit": limit,
+        },
     )
     rows = [dict(r) for r in result.mappings().all()]
     rows.reverse()
@@ -205,12 +216,14 @@ async def list_conversations_by_document(
                 FROM conversation_turns ct2
                 WHERE ct2.conversation_id = ct.conversation_id
                   AND ct2.role = 'user'
+                  AND ct2.user_id = ct.user_id
+                  AND ct2.document_id = ct.document_id
                 ORDER BY ct2.created_at ASC
                 LIMIT 1
               ) AS first_user_message
             FROM conversation_turns ct
             WHERE ct.document_id = :doc_id AND ct.user_id = :user_id
-            GROUP BY ct.conversation_id
+            GROUP BY ct.conversation_id, ct.user_id, ct.document_id
             ORDER BY MAX(ct.created_at) DESC
         """),
         {"doc_id": document_id, "user_id": user_id},
@@ -227,6 +240,7 @@ async def get_main_chat(
     session: AsyncSession,
     user_id: UUID,
     conversation_id: UUID,
+    document_id: Optional[UUID] = None,
 ) -> list[dict]:
     """Return ONLY the main linear chat turns for a conversation (parent_turn_id IS NULL).
 
@@ -242,9 +256,10 @@ async def get_main_chat(
             WHERE conversation_id = :cid
               AND user_id = :user_id
               AND parent_turn_id IS NULL
+              AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
             ORDER BY created_at ASC
         """),
-        {"cid": conversation_id, "user_id": user_id},
+        {"cid": conversation_id, "user_id": user_id, "document_id": document_id},
     )
     return [dict(r) for r in result.mappings().all()]
 
@@ -253,6 +268,7 @@ async def get_thread_subtree(
     session: AsyncSession,
     user_id: UUID,
     root_turn_id: UUID,
+    document_id: Optional[UUID] = None,
 ) -> list[dict]:
     """Return the full history of a sub-thread rooted at the given user turn.
 
@@ -269,8 +285,13 @@ async def get_thread_subtree(
     """
     # 1. The root
     root_res = await session.execute(
-        text("SELECT * FROM conversation_turns WHERE id = :rid AND user_id = :user_id"),
-        {"rid": root_turn_id, "user_id": user_id},
+        text("""
+            SELECT * FROM conversation_turns
+            WHERE id = :rid
+              AND user_id = :user_id
+              AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
+        """),
+        {"rid": root_turn_id, "user_id": user_id, "document_id": document_id},
     )
     root_row = root_res.mappings().first()
     if not root_row:
@@ -299,11 +320,17 @@ async def get_thread_subtree(
                   AND parent_turn_id IS NULL
                   AND id <> :rid
                   AND role = 'assistant'
+                  AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
                   AND created_at >= (SELECT created_at FROM conversation_turns WHERE id = :rid)
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
             """),
-            {"cid": conv_id, "rid": root_turn_id, "user_id": user_id},
+            {
+                "cid": conv_id,
+                "rid": root_turn_id,
+                "user_id": user_id,
+                "document_id": document_id,
+            },
         )
         first_ai = first_ai_res.mappings().first()
         if first_ai:
@@ -314,8 +341,13 @@ async def get_thread_subtree(
     while to_visit:
         current = to_visit.pop()
         children_res = await session.execute(
-            text("SELECT * FROM conversation_turns WHERE parent_turn_id = :pid AND user_id = :user_id"),
-            {"pid": current, "user_id": user_id},
+            text("""
+                SELECT * FROM conversation_turns
+                WHERE parent_turn_id = :pid
+                  AND user_id = :user_id
+                  AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
+            """),
+            {"pid": current, "user_id": user_id, "document_id": document_id},
         )
         for child in children_res.mappings():
             cid = child["id"]
@@ -354,6 +386,7 @@ async def compute_turn_depth(
     session: AsyncSession,
     user_id: UUID,
     turn_id: UUID,
+    document_id: Optional[UUID] = None,
 ) -> int:
     """Number of parent_turn_id hops from this turn up to a NULL parent.
 
@@ -369,19 +402,76 @@ async def compute_turn_depth(
             WITH RECURSIVE chain AS (
                 SELECT id, parent_turn_id, 0 AS depth
                 FROM conversation_turns
-                WHERE id = :tid AND user_id = :user_id
+                WHERE id = :tid
+                  AND user_id = :user_id
+                  AND (CAST(:document_id AS uuid) IS NULL OR document_id = :document_id)
                 UNION ALL
                 SELECT t.id, t.parent_turn_id, c.depth + 1
                 FROM conversation_turns t
                 JOIN chain c ON t.id = c.parent_turn_id
                 WHERE t.user_id = :user_id
+                  AND (CAST(:document_id AS uuid) IS NULL OR t.document_id = :document_id)
             )
             SELECT COALESCE(MAX(depth), 0) AS d FROM chain
         """),
-        {"tid": turn_id, "user_id": user_id},
+        {"tid": turn_id, "user_id": user_id, "document_id": document_id},
     )
     row = result.mappings().first()
     return int(row["d"]) if row else 0
+
+
+async def conversation_is_available_for_document(
+    session: AsyncSession,
+    user_id: UUID,
+    document_id: UUID,
+    conversation_id: UUID,
+) -> bool:
+    """Whether a caller may use this ID for this paper.
+
+    A previously unused UUID is available for a new conversation. Once any
+    turn exists, every row using that UUID must belong to this same user and
+    document; this prevents history collisions across papers or tenants.
+    """
+    result = await session.execute(
+        text("""
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM conversation_turns
+                WHERE conversation_id = :conversation_id
+                  AND (
+                    user_id IS DISTINCT FROM :user_id
+                    OR document_id IS DISTINCT FROM :document_id
+                  )
+            ) AS available
+        """),
+        {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "document_id": document_id,
+        },
+    )
+    return bool(result.scalar_one())
+
+
+async def get_turn_for_document(
+    session: AsyncSession,
+    user_id: UUID,
+    document_id: UUID,
+    turn_id: UUID,
+) -> Optional[dict]:
+    """Load a turn only when it belongs to this caller and paper."""
+    result = await session.execute(
+        text("""
+            SELECT *
+            FROM conversation_turns
+            WHERE id = :turn_id
+              AND user_id = :user_id
+              AND document_id = :document_id
+        """),
+        {"turn_id": turn_id, "user_id": user_id, "document_id": document_id},
+    )
+    row = result.mappings().first()
+    return dict(row) if row else None
 
 
 async def get_thread_message_count(

@@ -30,12 +30,13 @@ import time
 from pathlib import Path
 from typing import Optional, Union
 from uuid import UUID
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy import text
 
 from app.core.logging import get_logger
-from app.core.net_safety import resolves_to_private_address, safe_send_async
+from app.core.net_safety import resolves_to_private_address, safe_async_transport, safe_send_async
 from app.core.paths import research_images_dir
 
 logger = get_logger(__name__)
@@ -117,19 +118,35 @@ async def fetch_image_via_proxy(url: str) -> tuple[bytes, str, str]:
     # check above and then a plain follow_redirects=True — see
     # core/net_safety.py's module docstring for why that combination isn't
     # actually safe against a crafted redirect.
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, transport=safe_async_transport()) as client:
         resp = await safe_send_async(
-            client, "GET", url, headers={"User-Agent": "9XAIPal-ImageProxy/1.0"},
+            client,
+            "GET",
+            url,
+            headers={"User-Agent": "9XAIPal-ImageProxy/1.0"},
+            stream=True,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
 
-        content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-        if content_type not in ALLOWED_CONTENT_TYPES:
-            raise ValueError(f"Disallowed content type for image proxy: {content_type}")
+            content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+            if content_type not in ALLOWED_CONTENT_TYPES:
+                raise ValueError(f"Disallowed content type for image proxy: {content_type}")
 
-        content = resp.content
-        if len(content) > MAX_IMAGE_BYTES:
-            raise ValueError(f"Image too large ({len(content)} bytes > {MAX_IMAGE_BYTES})")
+            declared_size = resp.headers.get("content-length")
+            if declared_size and declared_size.isdigit() and int(declared_size) > MAX_IMAGE_BYTES:
+                raise ValueError(f"Image too large ({declared_size} bytes > {MAX_IMAGE_BYTES})")
+
+            content_parts: list[bytes] = []
+            total = 0
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > MAX_IMAGE_BYTES:
+                    raise ValueError(f"Image too large ({total} bytes > {MAX_IMAGE_BYTES})")
+                content_parts.append(chunk)
+            content = b"".join(content_parts)
+        finally:
+            await resp.aclose()
 
         ext = _guess_extension(content_type)
         filename = f"{cache_key}{ext}"
@@ -184,8 +201,8 @@ async def download_and_store_research_image(
 
 
 def build_research_image_url(conversation_id: Union[UUID, str], filename: str) -> str:
-    """Returns the stable static URL the frontend can use for a locally-persisted research image."""
-    return f"/static/images/research/{conversation_id}/{filename}"
+    """Return the authenticated URL for a locally persisted research image."""
+    return f"/api/v1/media/research/{conversation_id}/{quote(filename, safe='')}"
 
 
 # ── Storage cleanup ──────────────────────────────────────────────────────────

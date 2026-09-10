@@ -7,6 +7,7 @@ correctness is entirely about how they compose, which a mock would just
 restate rather than verify.
 """
 
+import asyncio
 import time
 from uuid import uuid4
 
@@ -151,3 +152,47 @@ async def test_exactly_at_the_cap_boundary():
     admitted, position = await capacity.touch_and_check_admission(one_more)
     assert admitted is False
     assert position == 1
+
+
+async def test_simultaneous_arrivals_cannot_exceed_the_cap(monkeypatch):
+    monkeypatch.setattr(settings, "max_active_users", 1)
+    users = [_uid() for _ in range(20)]
+
+    outcomes = await asyncio.gather(
+        *(capacity.touch_and_check_admission(user) for user in users)
+    )
+
+    assert sum(admitted for admitted, _ in outcomes) == 1
+    assert await capacity.active_count() == 1
+    assert await capacity.queue_length() == len(users) - 1
+
+
+async def test_only_the_queue_head_can_claim_a_released_slot(monkeypatch):
+    monkeypatch.setattr(settings, "max_active_users", 1)
+    a, c, d = _uid(), _uid(), _uid()
+    await capacity.touch_and_check_admission(a)
+    await capacity.touch_and_check_admission(c)
+    await capacity.touch_and_check_admission(d)
+
+    await capacity.release(a)
+    admitted_d, position_d = await capacity.touch_and_check_admission(d)
+    admitted_c, position_c = await capacity.touch_and_check_admission(c)
+
+    assert (admitted_d, position_d) == (False, 2)
+    assert (admitted_c, position_c) == (True, None)
+
+
+async def test_abandoned_queue_head_expires_and_stops_blocking(monkeypatch):
+    monkeypatch.setattr(settings, "max_active_users", 1)
+    a, c, d = _uid(), _uid(), _uid()
+    now = 1_000_000.0
+    monkeypatch.setattr(capacity.time, "time", lambda: now)
+
+    await capacity.touch_and_check_admission(a)
+    await capacity.touch_and_check_admission(c)
+    await capacity.release(a)
+
+    now += settings.active_window_seconds + 1
+    admitted_d, position_d = await capacity.touch_and_check_admission(d)
+
+    assert (admitted_d, position_d) == (True, None)

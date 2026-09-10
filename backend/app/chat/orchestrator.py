@@ -209,7 +209,9 @@ async def _prepare_ask(
                         "ASK[local-rich] visible_seqs=%s focused=%s",
                         visible_sequence_orders, focused_element
                     )
-                paper_block = format_local_context(ctx["chunks"], assets=ctx.get("assets"))
+                paper_block = format_local_context(
+                    ctx["chunks"], assets=ctx.get("assets"), document_id=document_id
+                )
                 citations.extend(citations_from_chunks(ctx["chunks"]))
                 for asset in ctx.get("assets", []):
                     if asset.get("asset_type") == "image" and asset.get("file_path"):
@@ -224,7 +226,9 @@ async def _prepare_ask(
                     session, query=prompt, document_id=document_id, limit=3,
                     max_sequence_id=max_sequence_id,
                 )
-                paper_block = format_global_context(ctx["chunks"], assets=ctx.get("assets"))
+                paper_block = format_global_context(
+                    ctx["chunks"], assets=ctx.get("assets"), document_id=document_id
+                )
                 citations.extend(citations_from_chunks(ctx["chunks"]))
                 # Surface paper figure images to the multimodal model so it can
                 # actually "see" them when the user asks about a diagram.
@@ -284,10 +288,11 @@ async def _prepare_ask(
                         "\n\n### RELEVANT PAPER FIGURES (from semantic search across the document)",
                         "The user asked for a figure/picture. These figures from across the paper",
                         "are semantically relevant to the query. Embed at least one inline using",
-                        "`![caption](/static/images/...)` markdown so the user can see it:",
+                        "the exact markdown image link below so the user can see it:",
                     ]
                     for a in figure_assets:
-                        url = f"/static/images/{a['file_path']}"
+                        from app.database.repositories.assets import resolve_asset_url
+                        url = resolve_asset_url(document_id, a["file_path"])
                         caption = (a.get("caption") or "paper figure").strip()
                         fig_lines.append(f"- ![{caption[:120]}]({url})")
                     paper_block = (paper_block + "\n".join(fig_lines)) if paper_block else "\n".join(fig_lines)
@@ -377,7 +382,7 @@ async def _prepare_ask(
     if is_sub_thread and thread_root_turn_id:
         try:
             history_turns = await conv_repo.get_thread_subtree(
-                session, user_id, thread_root_turn_id
+                session, user_id, thread_root_turn_id, document_id=document_id
             )
             history_block = format_conversation_history(history_turns)
             if history_block:
@@ -386,7 +391,9 @@ async def _prepare_ask(
             logger.exception("Failed to load sub-thread history (non-fatal)")
     elif conversation_id:
         try:
-            history_turns = await get_conversation_history(session, user_id, conversation_id, limit=12)
+            history_turns = await get_conversation_history(
+                session, user_id, conversation_id, limit=12, document_id=document_id
+            )
             history_block = format_conversation_history(history_turns)
             if history_block:
                 context_text = history_block + "\n\n" + context_text
@@ -819,7 +826,9 @@ async def _stream_book_agent(
     # Prior turns of this conversation, as the agent's Q+A thread.
     thread: list[dict] = []
     try:
-        history = await get_conversation_history(session, user_id, conversation_id, limit=12)
+        history = await get_conversation_history(
+            session, user_id, conversation_id, limit=12, document_id=document_id
+        )
         pending_q: Optional[str] = None
         for turn in history:
             if turn.get("role") == "user":
@@ -1092,7 +1101,9 @@ async def maybe_compact_conversation(
     if thread_root_turn_id:
         # Sub-thread compaction: use the subtree loader (it already includes
         # the special first AI reply even if it has parent=NULL).
-        history = await conv_repo.get_thread_subtree(session, user_id, thread_root_turn_id)
+        history = await conv_repo.get_thread_subtree(
+            session, user_id, thread_root_turn_id, document_id=document_id
+        )
         # Count user turns in *this subtree only* since the last compaction
         # that also belongs to the same subtree.
         # Hoisted out of the comprehension: it rescans `history` for
@@ -1126,7 +1137,9 @@ async def maybe_compact_conversation(
         )
         row = result.mappings().first()
         user_turns_since = int(row["user_turns_since_compaction"]) if row else 0
-        history = await conv_repo.get_main_chat(session, user_id, conversation_id)
+        history = await conv_repo.get_main_chat(
+            session, user_id, conversation_id, document_id=document_id
+        )
 
     if user_turns_since < COMPACTION_THRESHOLD:
         return

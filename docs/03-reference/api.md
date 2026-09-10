@@ -5,7 +5,9 @@
 > **Owns:** endpoint paths, request/response shapes, status codes.
 > **Does not own:** why a route behaves as it does ([chat-and-ask.md](../02-architecture/chat-and-ask.md)).
 >
-> **Status:** current · **Last verified:** the `/auth/*` routes 2026-08-27 against
+> **Status:** current · **Last verified:** the file routes, `/search/web` auth, upload `413`/`415`
+> and the conversation/deck scoping 2026-09-10 over HTTP against a throwaway API on the VPS
+> (`fix/audit-followup`); the `/auth/*` routes 2026-08-27 against
 > [`endpoints/auth.py`](../../backend/app/api/v1/endpoints/auth.py) (`main`, 502272b); the rest
 > 2026-07-28 against [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870).
 > The note anchor payload was re-read 2026-08-18 against
@@ -94,14 +96,25 @@ GET    /search/vector
 GET    /search/web
 ```
 
-Static (not under `/api/v1`):
+<a id="files"></a>Files (all under `/api/v1`, all behind the session cookie):
 
 ```
-GET /static/images/<doc_id>/<file>           : extracted chunk images
-GET /static/extracted/<doc_id>/...           : raw MinerU output
-GET /static/assets/<doc_id>.pdf              : original PDF, direct served
-GET /static/images/research/<conv_id>/<file> : research-agent-saved images
+GET /papers/{id}/assets/<file_path>          : one extracted figure/table/equation crop
+GET /papers/{id}/raw                         : the original PDF (also what the PDF viewer loads)
+GET /media/research/<conv_id>/<file>         : research-agent-saved images
 ```
+
+There is no `/static/` any more. The storage root used to be mounted there with
+no auth check at all ([docs/issues/001](../issues/001-public-static-files-bypass-authorization.md)):
+anyone holding a leaked path could read another user's PDF. Each route above
+loads the owning document (or conversation) scoped to `current_user` first, and
+`/assets/` additionally requires the path to name a `chunk_assets` row of that
+document — a forged path shaped like a real one 404s. Raw MinerU output
+(`extracted/`) is not served at all.
+
+Every `image_url` the API returns is one of these URLs. The frontend resolves
+them against `VITE_API_BASE_URL` (`getApiMediaUrl` in `api.ts`), so a hosted
+SPA on another origin still loads them.
 
 ## Health
 
@@ -201,9 +214,17 @@ Multipart upload of a single PDF.
 
 Request: `multipart/form-data` with `file=<binary>`.
 
-Errors: `429 QUEUE_FULL` if the ingestion queue is already at `MAX_QUEUED_INGESTION_JOBS` — checked
-before anything is written to disk. Same check, same error, on `POST /papers/import-url` and
-`POST /papers/{paper_id}/reextract` below.
+Errors: `413` once the body passes `MAX_UPLOAD_SIZE_MB` — the file is streamed to disk in 1 MB
+chunks and the count is checked as it goes, so an oversized upload is cut off at the limit and its
+partial file deleted, never buffered whole in the API worker
+([docs/issues/010](../issues/010-upload-limit-is-checked-after-buffering.md)). `415` if the first
+1 KB carries no `%PDF-` header. `429 QUEUE_FULL` if the ingestion queue is already at
+`MAX_QUEUED_INGESTION_JOBS`: the count and the job insert happen under one advisory lock in the
+same transaction as the `documents` row, so a burst of concurrent uploads cannot all pass a stale
+count ([007](../issues/007-ingestion-queue-capacity-check-races.md)); the rejected upload's files
+are removed. Same check, same error, on `POST /papers/import-url` and
+`POST /papers/{paper_id}/reextract` below — for reextract the existing chunks are only deleted in
+that same transaction, so a full queue leaves the paper untouched.
 
 Response: `201 Created`
 
@@ -219,7 +240,7 @@ Response: `201 Created`
 Side effects:
 
 - Writes `documents/<uuid>.pdf` (used by MinerU).
-- Writes `assets/<doc_id>.pdf` (used by `/raw` and `/static/assets/...`).
+- Writes `assets/<doc_id>.pdf` (what `/raw` serves).
 - Inserts a `documents` row (`status='queued'`).
 - Inserts an `ingestion_jobs` row (`status='queued'`).
 - Dispatches `process_ingestion.delay(doc_id, job_id, filename)` to Celery.
@@ -406,7 +427,7 @@ paper before a single word appeared.
       "heading_path": ["..."] | null,
       "page_start": <int|null>, "page_end": <int|null>,
       "table_json": {"headers": [...], "rows": [[...]]} | null,
-      "image_url": "/static/images/<doc_id>/<file>" | null
+      "image_url": "/api/v1/papers/<doc_id>/assets/<doc_id>/<file>" | null
     }
   ],
   "outline": [{"sequence_order": <int>, "text": "...", "level": <int>}],
@@ -450,7 +471,7 @@ client:
   "page_start":       <int|null>,
   "page_end":         <int|null>,
   "heading_path":     ["Section 1", "1.1 Setup"] | null,
-  "image_url":        "/static/images/<doc_id>/<uuid>.png" | null,
+  "image_url":        "/api/v1/papers/<doc_id>/assets/<doc_id>/<uuid>.png" | null,
   "image_refs":       ["<original_name>", ...]
 }
 ```
@@ -616,7 +637,7 @@ Create a note and stream its answer as Server-Sent Events.
     "sequence_id": <int>,
     "chunk_id": "<uuid>|null",
     "quote": "<selected text, or a figure caption / equation LaTeX>|null",
-    "image_url": "/static/images/...|null"
+    "image_url": "/api/v1/papers/<doc_id>/assets/...|null"
   },
   "parent_note_id": "<uuid>|null",
   "margin_side": "left" | "right" | null,
@@ -1113,7 +1134,10 @@ Embeds the query and returns the top-K chunks by cosine similarity.
 ### `GET /search/web?q=...&limit=5`
 
 Bypasses the chat router and hits the web search cascade directly, with the same
-ranking that EXTERNAL would apply.
+ranking that EXTERNAL would apply. Requires a session (it spends provider quota —
+[docs/issues/002](../issues/002-web-search-endpoint-is-public.md)) and is limited
+to 20 calls per user per minute (`429` with `Retry-After` past that); `q` is
+1–500 chars, `limit` 1–10.
 
 ---
 

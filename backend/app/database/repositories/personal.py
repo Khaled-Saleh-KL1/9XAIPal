@@ -11,6 +11,11 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
+class DeckOwnershipError(Exception):
+    """A supplied deck ID belongs to a different document."""
+
+
 # ── Bookmarks ───────────────────────────────────────────────────────────────
 
 
@@ -344,14 +349,26 @@ async def replace_decks(
     and a dropped request in the middle leaves a card in two decks or none.
 
     Deck ids supplied by the caller are preserved so that untouched decks keep
-    their identity (and their created_at ordering) across a write.
+    their identity (and their created_at ordering) across a write. A supplied
+    ID may create a new deck or update a deck on this document; it can never
+    update a deck belonging to another document.
 
     ⚠ Members are cleared for the whole document before any are inserted. The
     unique index that stops a card belonging to two decks does not care that
     the row it collides with is one this same statement is about to delete, so
     swapping two cards between two decks fails unless the slate is wiped first.
     """
-    decks = _valid_arrangement(decks)
+    valid_ai, valid_personal = await owned_note_ids(session, document_id)
+    sanitized_decks = []
+    for deck in decks:
+        members = [
+            member
+            for member in deck.get("members") or []
+            if member["id"] in (valid_ai if member["kind"] == "ai" else valid_personal)
+        ]
+        sanitized_decks.append({**deck, "members": members})
+
+    decks = _valid_arrangement(sanitized_decks)
     keep = [d["id"] for d in decks if d.get("id")]
 
     if keep:
@@ -380,7 +397,7 @@ async def replace_decks(
     )
 
     for deck in decks:
-        await session.execute(
+        result = await session.execute(
             text("""
                 INSERT INTO note_decks
                     (id, document_id, label, top_index, margin_side, study)
@@ -392,6 +409,8 @@ async def replace_decks(
                         margin_side = EXCLUDED.margin_side,
                         study       = EXCLUDED.study,
                         updated_at  = NOW()
+                WHERE note_decks.document_id = :document_id
+                RETURNING id
             """),
             {
                 "id": deck["id"],
@@ -402,6 +421,8 @@ async def replace_decks(
                 "study": bool(deck.get("study")),
             },
         )
+        if result.scalar_one_or_none() is None:
+            raise DeckOwnershipError("deck does not belong to this document")
 
         for ordinal, member in enumerate(deck.get("members") or []):
             await session.execute(

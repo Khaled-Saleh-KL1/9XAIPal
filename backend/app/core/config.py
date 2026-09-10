@@ -1,5 +1,7 @@
 """Application settings loaded from environment variables."""
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -459,6 +461,10 @@ class Settings(BaseSettings):
     # expires this many seconds after their last request.
     session_cookie_name: str = "9xaipal_session"
     session_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+    # Set SESSION_COOKIE_SAMESITE=none when the SPA and API are on different
+    # sites. Browsers require Secure alongside SameSite=None, so production's
+    # existing DEBUG=false setting supplies it automatically.
+    session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 
     # ── Capacity: concurrent-active-user cap + waiting queue ────────────────
     # See app/core/capacity.py. "Active" = made an authenticated request in
@@ -490,4 +496,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

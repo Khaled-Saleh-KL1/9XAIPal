@@ -42,9 +42,9 @@ raw-snapshot save to work with.
 
 ⚠ Images are hotlinked, never downloaded — by request. The tradeoff this
 buys: no storage, no risk of pulling arbitrary bytes onto this server for an
-image, but also no way to attach one to a VLM call (see chat/paper_agent.py
-and notes.py's _to_storage_path, which only ever resolves this app's own
-/static/images/ URLs). A reader can see every image while reading; asking
+  image, but also no way to attach one to a VLM call (see chat/paper_agent.py
+  and notes.py's _to_storage_path, which only accepts this app's authenticated
+  paper-asset URLs). A reader can see every image while reading; asking
 the AI to look closely at one specific photo isn't supported for articles.
 """
 
@@ -63,6 +63,7 @@ from app.core.net_safety import (
     TooManyRedirectsError,
     UnsafeRedirectError,
     resolves_to_private_address_sync,
+    safe_sync_transport,
     safe_send_sync,
 )
 from app.scraping import crw_client, firecrawl_client, tavily_extract_client
@@ -418,7 +419,7 @@ def _fetch_direct(url: str) -> FetchedResource:
     """
     resp = None
     try:
-        with httpx.Client(timeout=PAGE_FETCH_TIMEOUT) as client:
+        with httpx.Client(timeout=PAGE_FETCH_TIMEOUT, transport=safe_sync_transport()) as client:
             # safe_send_sync walks any redirect chain itself, re-checking the
             # private-address guard before following each hop — see its
             # docstring for why client.stream(..., follow_redirects=True)
@@ -822,7 +823,7 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     # inside _is_worth_keeping) forces it off on every call and walks
     # redirects itself, hop by hop, re-checked; a client-level True here
     # would be dead configuration that reads as if it still did something.
-    with httpx.Client() as client:
+    with httpx.Client(transport=safe_sync_transport()) as client:
         kept = {u for u in candidates if _is_worth_keeping(client, u)}
 
     all_refs = _image_urls_in(markdown)

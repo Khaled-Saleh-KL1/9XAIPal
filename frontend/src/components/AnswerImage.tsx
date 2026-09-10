@@ -4,7 +4,7 @@
  * Two sources reach this, and they behave differently enough to matter:
  *
  *  - a figure, table or equation lifted from a document the reader already
- *    has, served from this app at /static/images/… — always loads;
+ *    has, served through an authenticated paper-asset endpoint — always loads;
  *  - a picture the model found on the web, hotlinked from wherever it lives.
  *    Hotlink protection is extremely common, so a broken red X would be the
  *    normal case rather than the exception; a failure falls back to a labelled
@@ -21,6 +21,7 @@
  * reason to tell that third party which page the reader is on.
  */
 import { useState, type ImgHTMLAttributes } from 'react';
+import { getApiMediaUrl } from '../api';
 
 export type LightboxDetail = { src: string; alt?: string };
 
@@ -50,6 +51,7 @@ export const AnswerImage: React.FC<ImgHTMLAttributes<HTMLImageElement>> = ({
   const [failed, setFailed] = useState(false);
 
   if (!src) return null;
+  const resolvedSrc = getApiMediaUrl(src);
 
   if (failed) {
     return (
@@ -63,7 +65,7 @@ export const AnswerImage: React.FC<ImgHTMLAttributes<HTMLImageElement>> = ({
       >
         <span className="block">Image blocked by source (hotlink protection)</span>
         <a
-          href={src}
+          href={resolvedSrc}
           target="_blank"
           rel="noreferrer noopener"
           className="underline"
@@ -79,11 +81,11 @@ export const AnswerImage: React.FC<ImgHTMLAttributes<HTMLImageElement>> = ({
   return (
     <span className="block my-3">
       <img
-        src={src}
+        src={resolvedSrc}
         alt={alt || ''}
         loading="lazy"
         referrerPolicy="no-referrer"
-        onClick={() => openLightbox({ src, alt: alt || undefined })}
+        onClick={() => openLightbox({ src: resolvedSrc, alt: alt || undefined })}
         title="Click to enlarge"
         onError={() => setFailed(true)}
         style={{

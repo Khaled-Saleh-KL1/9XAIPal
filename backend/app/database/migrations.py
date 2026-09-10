@@ -247,12 +247,14 @@ async def _ensure_recent_columns() -> None:
         "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS grounding JSONB",
     ]
 
-    async with engine.begin() as conn:
-        for sql in critical_alters:
-            try:
+    for sql in critical_alters:
+        try:
+            # PostgreSQL aborts the whole transaction after one failed
+            # statement. Keep recovery statements isolated so a missing
+            # prerequisite does not prevent later independent repairs.
+            async with engine.begin() as conn:
                 await conn.execute(text(sql))
-                logger.info(f"Ensured column: {sql.split('ADD COLUMN IF NOT EXISTS ')[-1].split()[0]}")
-            except Exception as e:
-                # Not fatal — the column may already exist or the DB is in a weird state.
-                logger.debug(f"Ensure column skipped: {sql} -> {e}")
-
+            logger.info(f"Ensured column: {sql.split('ADD COLUMN IF NOT EXISTS ')[-1].split()[0]}")
+        except Exception as e:
+            # Not fatal — the column may already exist or the DB is in a weird state.
+            logger.debug(f"Ensure column skipped: {sql} -> {e}")

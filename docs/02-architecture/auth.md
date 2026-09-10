@@ -142,6 +142,15 @@ preflight first, and `CORSMiddleware` never allows a wildcard origin alongside
 `allow_credentials=True`. If `CORS_ORIGINS` is ever loosened to something broader, this reasoning
 needs revisiting.
 
+`lax` is the default, not the only option: `SESSION_COOKIE_SAMESITE` (`lax` | `strict` | `none`)
+exists for a hosted SPA on a different *site* from the API, where `Lax` would never send the cookie
+on a fetch at all ([docs/issues/013](../issues/013-cross-origin-frontend-mode-cannot-stay-authenticated.md)).
+`none` needs `Secure`, which `DEBUG=false` already supplies. The production deployment is
+same-origin (nginx serves the SPA and proxies `/api` on one host) and stays on `lax`. On the client
+side every API call goes through one `fetch` wrapper that sends `credentials: 'include'`, and the
+PDF viewer passes `withCredentials` to pdf.js, so a cross-origin API is reachable at all —
+`<img>` tags need nothing extra, a no-cors image request carries cookies subject only to SameSite.
+
 `get_current_user` ([`api/deps.py`](../../backend/app/api/deps.py)) is the FastAPI dependency
 every protected route carries. It's a thin wrapper: `_resolve_session_user` does the pure session
 lookup (reads the cookie → `get_session_user_id` → loads the user row → 401s if any step fails,

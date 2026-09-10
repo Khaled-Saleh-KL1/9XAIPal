@@ -102,6 +102,8 @@ async def get_current_user_optional(
 
 _AUTH_RATE_LIMIT = 10  # attempts
 _AUTH_RATE_WINDOW_SECONDS = 60
+_WEB_SEARCH_RATE_LIMIT = 20  # provider-backed searches per user
+_WEB_SEARCH_RATE_WINDOW_SECONDS = 60
 
 
 async def enforce_auth_rate_limit(request: Request) -> None:
@@ -118,6 +120,26 @@ async def enforce_auth_rate_limit(request: Request) -> None:
         raise HTTPException(
             status_code=429,
             detail="Too many attempts — slow down and retry shortly.",
+            headers={"Retry-After": str(max(1, ttl))},
+        )
+
+
+async def enforce_web_search_rate_limit(
+    current_user: dict = Depends(get_current_user),
+) -> None:
+    """Bound billable web-search requests per authenticated user in Redis."""
+    from app.core.redis import get_redis
+
+    key = f"websearchrl:{current_user['id']}"
+    r = get_redis()
+    count = await r.incr(key)
+    if count == 1:
+        await r.expire(key, _WEB_SEARCH_RATE_WINDOW_SECONDS)
+    if count > _WEB_SEARCH_RATE_LIMIT:
+        ttl = await r.ttl(key)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many web searches — slow down and retry shortly.",
             headers={"Retry-After": str(max(1, ttl))},
         )
 
@@ -158,4 +180,3 @@ def get_ask_semaphore() -> asyncio.Semaphore:
     beyond the Depends lifecycle (the SSE streaming endpoint acquires it
     inside its response generator, which runs after dependencies close)."""
     return _ask_semaphore
-

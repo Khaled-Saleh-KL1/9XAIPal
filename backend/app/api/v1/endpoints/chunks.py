@@ -2,14 +2,16 @@
 
 import re
 from uuid import UUID, uuid4
+from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
 from app.core.logging import get_logger
-from app.core.paths import documents_dir
+from app.core.paths import documents_dir, images_dir
 from app.api.errors import ChunkNotFound, DocumentNotFound
 from app.schemas.chunks import ChunkResponse, ChunkListResponse
 from app.schemas.references import ReferenceEntry, ReferenceListResponse, AddReferenceResponse
@@ -18,12 +20,12 @@ from app.services import documents as doc_service
 from app.services.outline import heading_level
 from app.services import book_outline
 from app.services.references import parse_references
-from app.services.ingestion import check_queue_capacity, create_ingestion_job
+from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.search.semantic_scholar_client import match_reference, Unresolved
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import figure_descriptions as fig_desc_repo
 from app.database.repositories import paper_references as ref_repo
-from app.database.repositories.documents import get_document_by_source_url
+from app.database.repositories.documents import get_document_by_source_url, update_document_status as update_doc_status_repo
 from app.workers.tasks import process_article_ingestion
 
 logger = get_logger(__name__)
@@ -81,7 +83,9 @@ async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
     if assets:
         for a in assets:
             if a.get("asset_type") == "image":
-                image_url = asset_repo.resolve_asset_url(a["file_path"])
+                image_url = asset_repo.resolve_asset_url(
+                    chunk["document_id"], a["file_path"]
+                )
                 break
 
     return _shape_chunk_for_reader(chunk, image_url)
@@ -121,7 +125,7 @@ async def get_full_document(
         chunk_assets = by_chunk.get(c["id"], [])
         image_url = next(
             (
-                asset_repo.resolve_asset_url(a["file_path"])
+                asset_repo.resolve_asset_url(paper_id, a["file_path"])
                 for a in chunk_assets
                 if a.get("asset_type") == "image" and a.get("file_path")
             ),
@@ -237,7 +241,7 @@ async def get_chunks_range(
     for c in chunks:
         image_url = next(
             (
-                asset_repo.resolve_asset_url(a["file_path"])
+                asset_repo.resolve_asset_url(paper_id, a["file_path"])
                 for a in by_chunk.get(c["id"], [])
                 if a.get("asset_type") == "image" and a.get("file_path")
             ),
@@ -246,6 +250,46 @@ async def get_chunks_range(
         result.append(_shape_chunk_for_reader(c, image_url))
 
     return {"chunks": result, "paper_id": str(paper_id)}
+
+
+def _local_asset_file(file_path: str) -> Path | None:
+    """Resolve a database-backed asset below images_dir without path escapes."""
+    if file_path.startswith(("http://", "https://")):
+        return None
+    relative = PurePosixPath(file_path)
+    if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+        return None
+
+    root = images_dir().resolve()
+    candidate = (root / Path(*relative.parts)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+@router.get("/{paper_id}/assets/{asset_path:path}")
+async def get_paper_asset(
+    paper_id: UUID,
+    asset_path: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Serve one extracted paper asset after document ownership verification."""
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    from app.database.repositories import assets as asset_repo
+
+    if not await asset_repo.file_path_belongs_to_document(db, asset_path, paper_id):
+        raise DocumentNotFound(str(paper_id))
+
+    path = _local_asset_file(asset_path)
+    if path is None or not path.is_file():
+        raise DocumentNotFound(str(paper_id))
+    return FileResponse(path=str(path))
 
 
 @router.get("/{paper_id}/chunks/{sequence_order}")
@@ -681,8 +725,6 @@ async def add_reference_to_library(
             already_existed=True,
         )
 
-    await check_queue_capacity(db)
-
     new_doc = await doc_service.create_document(
         db,
         user_id=current_user["id"],
@@ -692,7 +734,6 @@ async def add_reference_to_library(
         source_url=url,
     )
     await ref_repo.mark_added(db, paper_id, ref_number, new_doc["id"])
-    await db.commit()
 
     job = await create_ingestion_job(db, new_doc["id"])
     await db.commit()
@@ -701,6 +742,23 @@ async def add_reference_to_library(
         process_article_ingestion.delay(str(new_doc["id"]), str(job["id"]), url, "paper")  # type: ignore[attr-defined]
     except Exception as dispatch_exc:
         logger.exception(f"Failed to dispatch process_article_ingestion for {new_doc['id']} (reference [{ref_number}] of {paper_id})")
+        try:
+            await update_doc_status_repo(
+                db,
+                new_doc["id"],
+                "failed",
+                error_message=(
+                    "Failed to queue reference import (Celery broker / Redis unreachable). "
+                    f"Original error: {dispatch_exc}"
+                ),
+            )
+            await update_job_status_svc(
+                db, job["id"], "failed", error_message=f"Dispatch failed: {dispatch_exc}"
+            )
+            await db.commit()
+        except Exception as mark_exc:
+            await db.rollback()
+            logger.error(f"Failed to record reference import dispatch failure for {new_doc['id']}: {mark_exc}")
         return AddReferenceResponse(
             id=new_doc["id"], filename=new_doc["filename"], status="failed",
             message=f"Recorded but background ingestion could not be queued (Redis/Celery). {dispatch_exc}",
