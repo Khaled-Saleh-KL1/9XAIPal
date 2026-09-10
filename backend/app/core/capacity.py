@@ -27,7 +27,58 @@ from app.core.config import settings
 from app.core.redis import get_redis
 
 _ACTIVE_KEY = "capacity:active_users"
-_QUEUE_KEY = "capacity:waiting_queue"
+_QUEUE_KEY = "capacity:waiting_queue_v2"
+_QUEUE_HEARTBEATS_KEY = "capacity:waiting_heartbeats_v2"
+
+# All admission decisions happen in this one Redis script. A list retains
+# exact arrival order; the heartbeat sorted set lets us discard a queue head
+# that stopped polling before it blocks the whole line.
+_ADMIT_LUA = """
+local active_key = KEYS[1]
+local queue_key = KEYS[2]
+local heartbeat_key = KEYS[3]
+local uid = ARGV[1]
+local now = tonumber(ARGV[2])
+local cutoff = tonumber(ARGV[3])
+local max_active = tonumber(ARGV[4])
+
+redis.call('ZREMRANGEBYSCORE', active_key, '-inf', cutoff)
+redis.call('ZREMRANGEBYSCORE', heartbeat_key, '-inf', cutoff)
+
+local head = redis.call('LINDEX', queue_key, 0)
+while head do
+  if redis.call('ZSCORE', heartbeat_key, head) then
+    break
+  end
+  redis.call('LPOP', queue_key)
+  head = redis.call('LINDEX', queue_key, 0)
+end
+
+if redis.call('ZSCORE', active_key, uid) then
+  redis.call('ZADD', active_key, now, uid)
+  redis.call('LREM', queue_key, 0, uid)
+  redis.call('ZREM', heartbeat_key, uid)
+  return {1, 0}
+end
+
+local active_count = redis.call('ZCARD', active_key)
+if active_count < max_active and (not head or head == uid) then
+  if head == uid then
+    redis.call('LPOP', queue_key)
+    redis.call('ZREM', heartbeat_key, uid)
+  end
+  redis.call('ZADD', active_key, now, uid)
+  return {1, 0}
+end
+
+local position = redis.call('LPOS', queue_key, uid)
+if not position then
+  redis.call('RPUSH', queue_key, uid)
+  position = redis.call('LLEN', queue_key) - 1
+end
+redis.call('ZADD', heartbeat_key, now, uid)
+return {0, position + 1}
+"""
 
 
 async def touch_and_check_admission(user_id: UUID) -> tuple[bool, "int | None"]:
@@ -48,30 +99,19 @@ async def touch_and_check_admission(user_id: UUID) -> tuple[bool, "int | None"]:
     now = time.time()
     cutoff = now - settings.active_window_seconds
 
-    # Sweep first: anyone who's gone quiet longer than the window no longer
-    # holds a slot, whether or not this call is theirs.
-    await r.zremrangebyscore(_ACTIVE_KEY, "-inf", cutoff)
-
-    # Already in? Just refresh their timestamp — sticky admission.
-    if await r.zscore(_ACTIVE_KEY, uid) is not None:
-        await r.zadd(_ACTIVE_KEY, {uid: now})
-        await r.lrem(_QUEUE_KEY, 0, uid)  # in case they were queued before
-        return True, None
-
-    active_count = await r.zcard(_ACTIVE_KEY)
-    if active_count < settings.max_active_users:
-        await r.zadd(_ACTIVE_KEY, {uid: now})
-        await r.lrem(_QUEUE_KEY, 0, uid)
-        return True, None
-
-    # Not admitted: take (or keep) a place in the FIFO queue. LPOS finds an
-    # existing entry so a repeated poll doesn't push someone to the back of
-    # their own line.
-    position = await r.lpos(_QUEUE_KEY, uid)
-    if position is None:
-        await r.rpush(_QUEUE_KEY, uid)
-        position = await r.llen(_QUEUE_KEY) - 1
-    return False, position + 1
+    result = await r.eval(
+        _ADMIT_LUA,
+        3,
+        _ACTIVE_KEY,
+        _QUEUE_KEY,
+        _QUEUE_HEARTBEATS_KEY,
+        uid,
+        now,
+        cutoff,
+        settings.max_active_users,
+    )
+    admitted, position = (int(value) for value in result)
+    return bool(admitted), (None if admitted else position)
 
 
 async def release(user_id: UUID) -> None:
@@ -83,6 +123,7 @@ async def release(user_id: UUID) -> None:
     r = get_redis()
     await r.zrem(_ACTIVE_KEY, uid)
     await r.lrem(_QUEUE_KEY, 0, uid)
+    await r.zrem(_QUEUE_HEARTBEATS_KEY, uid)
 
 
 async def active_count() -> int:

@@ -9,8 +9,9 @@ that calls it (a single already-owned document, or a study's already-owned
 paper list) — never through this router.
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.api.deps import enforce_web_search_rate_limit, get_current_user
 from app.search.web import search as web_search
 from app.search.ranking import rank_results
 
@@ -19,8 +20,10 @@ router = APIRouter()
 
 @router.get("/web")
 async def external_search(
-    q: str = Query(..., description="Search query"),
-    limit: int = 5,
+    q: str = Query(..., min_length=1, max_length=500, description="Search query"),
+    limit: int = Query(default=5, ge=1, le=10),
+    _current_user: dict = Depends(get_current_user),
+    _rate_limit: None = Depends(enforce_web_search_rate_limit),
 ):
     """Search the web via the configured provider cascade (see app/search/web.py)."""
     raw = await web_search(q, limit=limit)

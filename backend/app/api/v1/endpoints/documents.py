@@ -3,6 +3,7 @@
 import os
 import shutil
 import traceback
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import aiofiles
@@ -13,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_settings, get_current_user
-from app.api.errors import DocumentNotFound
+from app.api.errors import DocumentNotFound, TooManyQueuedJobs
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.paths import documents_dir, assets_dir, extracted_dir, images_dir, raw_snapshots_dir, ensure_storage_dirs
@@ -28,7 +29,7 @@ from app.schemas.documents import (
 from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services import library_search
-from app.services.ingestion import check_queue_capacity, create_ingestion_job, update_job_status as update_job_status_svc
+from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
 from app.workers.tasks import (
     process_ingestion,
@@ -40,6 +41,49 @@ from app.workers.tasks import (
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int) -> int:
+    """Write an upload with a hard byte limit and without materializing it.
+
+    ``UploadFile`` may already have spooled part of the multipart body to
+    disk, but calling ``read()`` without a size would still allocate the full
+    body in the API worker. Keep only the first PDF-header window in memory.
+    """
+    total = 0
+    header = bytearray()
+    try:
+        async with aiofiles.open(destination, "wb") as output:
+            while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"File too large (more than {max_bytes / (1024 * 1024):.1f} MB). "
+                            "Maximum allowed size exceeded."
+                        ),
+                    )
+                if len(header) < 1024:
+                    header.extend(chunk[: 1024 - len(header)])
+                await output.write(chunk)
+
+        if b"%PDF-" not in header:
+            raise HTTPException(
+                status_code=415,
+                detail="Only PDF files are accepted (the uploaded file has no PDF header).",
+            )
+        return total
+    except Exception:
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    finally:
+        await file.close()
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=201)
@@ -54,34 +98,12 @@ async def upload_paper(
 
     ``kind`` is ``"book"`` (chapter-by-chapter reading) or ``"paper"`` (linear).
     """
-    # First thing, before reading the upload into memory or touching disk:
-    # reject up front if the ingestion queue is already full, rather than
-    # doing all that work and creating a documents row only to fail later.
-    await check_queue_capacity(db)
-
     doc_kind = kind if kind in ("book", "paper") else "paper"
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
 
     ext = ".pdf"
     filename = f"{uuid4().hex}{ext}"
     dest = documents_dir() / filename
-
-    content = await file.read()
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large ({len(content) / (1024*1024):.1f} MB). Maximum allowed is {settings.max_upload_size_mb} MB.",
-        )
-
-    # Reject anything that is not actually a PDF before it touches disk or the
-    # extraction pipeline. The PDF spec requires the %PDF- header within the
-    # first 1024 bytes; checking content (not the filename) blocks disguised
-    # uploads (e.g. an executable renamed to .pdf).
-    if b"%PDF-" not in content[:1024]:
-        raise HTTPException(
-            status_code=415,
-            detail="Only PDF files are accepted (the uploaded file has no PDF header).",
-        )
 
     # Defensive: ensure the storage directories exist right before we write.
     # (lifespan does this, but this protects against CWD differences, docker vs local runs, etc.)
@@ -91,10 +113,10 @@ async def upload_paper(
         logger.exception("ensure_storage_dirs failed")
 
     display_name = file.filename or "unknown.pdf"
+    raw_path: Path | None = None
 
     try:
-        async with aiofiles.open(dest, "wb") as f:
-            await f.write(content)
+        file_size = await _stream_pdf_upload(file, dest, max_bytes)
 
         original_name = display_name
 
@@ -103,15 +125,12 @@ async def upload_paper(
             user_id=current_user["id"],
             filename=filename,
             original_filename=original_name,
-            file_size_bytes=len(content),
+            file_size_bytes=file_size,
             doc_kind=doc_kind,
         )
-        await db.commit()
-
         # Save raw copy to assets/<doc_id>.pdf (for /raw download + /static/assets).
         raw_path = assets_dir() / f"{doc['id']}.pdf"
-        async with aiofiles.open(raw_path, "wb") as f:
-            await f.write(content)
+        await run_in_threadpool(shutil.copyfile, dest, raw_path)
 
         job = await create_ingestion_job(db, doc["id"])
         await db.commit()
@@ -157,6 +176,12 @@ async def upload_paper(
 
     except HTTPException:
         raise
+    except TooManyQueuedJobs:
+        await db.rollback()
+        dest.unlink(missing_ok=True)
+        if raw_path:
+            raw_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:
         # Safety net for DB/write errors early in upload. The full traceback is
         # logged server-side only — returning it to the client would leak
@@ -199,10 +224,6 @@ async def import_article(
     if not url:
         raise HTTPException(status_code=422, detail="A URL is required.")
 
-    # Before creating anything: reject up front if the ingestion queue is
-    # already full (see upload_paper's identical check for why "up front").
-    await check_queue_capacity(db)
-
     try:
         doc = await doc_service.create_document(
             db,
@@ -212,8 +233,6 @@ async def import_article(
             doc_kind="article",
             source_url=url,
         )
-        await db.commit()
-
         job = await create_ingestion_job(db, doc["id"])
         await db.commit()
 
@@ -252,6 +271,9 @@ async def import_article(
         )
 
     except HTTPException:
+        raise
+    except TooManyQueuedJobs:
+        await db.rollback()
         raise
     except Exception as exc:
         logger.error(f"Article import failed for {url}:\n{traceback.format_exc()}")
@@ -940,13 +962,6 @@ async def reextract_paper(
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
-    # Before wiping anything: reject up front if the ingestion queue is
-    # already full. This one matters most of the three call sites — the code
-    # below deletes the paper's existing chunks/embeddings before recreating
-    # the job, so checking any later would leave a paper with nothing to
-    # read and no job queued to fix it.
-    await check_queue_capacity(db)
-
     # Mark document back to processing + clear any prior error so the UI shows
     # the processing overlay again.
     await db.execute(
@@ -973,6 +988,10 @@ async def reextract_paper(
     """), {"doc_id": paper_id})
     await db.execute(text("DELETE FROM chunks WHERE document_id = :doc_id"),
                      {"doc_id": paper_id})
+    # Reserve and insert the job before committing the destructive changes.
+    # If the shared queue is full, the exception rolls this whole transaction
+    # back and leaves the existing paper untouched.
+    job = await create_ingestion_job(db, paper_id)
     await db.commit()
 
     # Wipe cached extraction + extracted images so MinerU runs fresh.
@@ -989,9 +1008,7 @@ async def reextract_paper(
     except OSError as e:
         logger.warning(f"could not rmtree {image_path}: {e}")
 
-    # Create a fresh ingestion job and dispatch.
-    job = await create_ingestion_job(db, paper_id)
-    await db.commit()
+    # The job was reserved in the same transaction as the DB-side reset.
     try:
         process_ingestion.delay(str(paper_id), str(job["id"]), doc["filename"])  # type: ignore[attr-defined]
     except Exception as e:

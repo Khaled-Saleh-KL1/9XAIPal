@@ -20,19 +20,24 @@ from app.database.repositories import documents as doc_repo
 
 
 def test_to_storage_path_only_accepts_the_apps_own_url_shape():
-    assert _to_storage_path("/static/images/doc-id/fig.png") == "doc-id/fig.png"
-    assert _to_storage_path(None) is None
-    assert _to_storage_path("") is None
+    document_id = uuid4()
+    base = f"/api/v1/papers/{document_id}/assets"
+    assert _to_storage_path(f"{base}/{document_id}/fig.png", document_id) == f"{document_id}/fig.png"
+    assert _to_storage_path(None, document_id) is None
+    assert _to_storage_path("", document_id) is None
     # Everything below is what an attacker controlling this field would try —
     # none of it starts with the one prefix this app ever generates.
-    assert _to_storage_path("/etc/passwd") is None
-    assert _to_storage_path("/app/backend/.env") is None
-    assert _to_storage_path("../../../../etc/passwd") is None
-    assert _to_storage_path("relative/but/not/prefixed.png") is None
+    assert _to_storage_path("/etc/passwd", document_id) is None
+    assert _to_storage_path("/app/backend/.env", document_id) is None
+    assert _to_storage_path("../../../../etc/passwd", document_id) is None
+    assert _to_storage_path("relative/but/not/prefixed.png", document_id) is None
     # Even a crafted string starting with the right prefix but escaping via
     # `..` afterward is stripped to a value that still won't match a real
     # asset — file_path_belongs_to_document is what actually rejects it.
-    assert _to_storage_path("/static/images/../../../../etc/passwd") == "../../../../etc/passwd"
+    assert _to_storage_path(f"{base}/../../../../etc/passwd", document_id) is None
+    assert _to_storage_path(
+        f"/api/v1/papers/{uuid4()}/assets/{document_id}/fig.png", document_id
+    ) is None
 
 
 async def _make_user(db_session) -> str:

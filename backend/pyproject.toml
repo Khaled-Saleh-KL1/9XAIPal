@@ -17,6 +17,9 @@ dependencies = [
 
     # HTTP client (Ollama / cloud LLM APIs)
     "httpx",
+    # Explicit because the SSRF-safe transport pins validated DNS addresses
+    # through httpcore's network-backend interface.
+    "httpcore>=1.0,<2",
 
     # Markdown -> HTML for the Anki export (services/export.py): a card
     # field is rendered as HTML, so a model answer's Markdown must be

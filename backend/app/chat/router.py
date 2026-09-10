@@ -13,8 +13,10 @@ from typing import Optional
 
 from app.llm import client as llm_client
 from app.chat.prompts import ROUTER_SYSTEM_PROMPT
+from app.core.logging import get_logger
 
 
+logger = get_logger(__name__)
 _VALID_CONTEXTS = {"LOCAL", "GLOBAL", "OVERVIEW", "EXTERNAL"}
 
 
@@ -189,7 +191,7 @@ async def route_prompt(
         return RouterDecision(context_type="GLOBAL", reason=raw)
 
     except Exception:
-        pass
+        logger.exception("Context router classification failed; using fallback")
 
     # Default: GLOBAL if document available (OVERVIEW is only taken via explicit keyword match above)
     if has_document:
@@ -198,4 +200,3 @@ async def route_prompt(
             reason="Default to global document vector search",
         )
     return RouterDecision(context_type="EXTERNAL", reason="Fallback to external search")
-

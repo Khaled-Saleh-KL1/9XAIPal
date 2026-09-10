@@ -355,6 +355,10 @@ async def replace_decks(
         for deck in payload.decks
     ]
 
-    await personal_repo.replace_decks(db, paper_id, cleaned)
+    try:
+        await personal_repo.replace_decks(db, paper_id, cleaned)
+    except personal_repo.DeckOwnershipError:
+        await db.rollback()
+        raise HTTPException(status_code=404, detail="Deck not found")
     await db.commit()
     return {"decks": [_deck(d) for d in await personal_repo.list_decks(db, paper_id)]}

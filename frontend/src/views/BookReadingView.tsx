@@ -20,9 +20,11 @@ import { ChatPane } from './ChatPane';
 import { PageMapProvider, useFetchedPageMap } from '../lib/pageMap';
 import {
   getNextChunk,
+  getChunk,
   getChunksRange,
   getChunkCount,
   getPaper,
+  getDocumentAssetUrl,
   getFigureDescriptions,
   triggerReadingOrderReconstruction,
   reextractPaper,
@@ -142,8 +144,10 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
 
   // Granular reveal: we break text into paragraphs and treat tables/figures as atomic clean units
   const [revealedUnits, setRevealedUnits] = useState<RevealedUnit[]>([]);
+  const [pendingUnits, setPendingUnits] = useState<RevealedUnit[]>([]);
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
-  const [paragraphIndexInCurrent, setParagraphIndexInCurrent] = useState(0);
+  const [, setParagraphIndexInCurrent] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Rich figure descriptions (generated at ingestion with VLM)
   const [figureDescriptions, setFigureDescriptions] = useState<Record<string, FigureDescription>>({});
@@ -405,16 +409,20 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
 
 
   // ── Loader: start (or restore) reading a chapter (null = whole paper). ──────
-  const startReading = useCallback(async (chapter: Chapter | null) => {
+  const startReading = useCallback(async (chapter: Chapter | null, logicalMode = useLogicalOrder) => {
     const chapKey = String(chapter?.index ?? -1);
     initedKeyRef.current = chapKey;
     setLoading(true);
     setAtEnd(false);
+    setLoadError(null);
 
     const startCursor = chapter ? chapter.start_sequence - 1 : 0;
     const prog = loadProgress();
     const savedSeq = prog.seqByChapter[chapKey];
     const restoring = typeof savedSeq === 'number' && savedSeq > startCursor;
+    const logicalOrder = logicalMode && readingOrder
+      ? readingOrder.filter((seq) => !chapter || (seq >= chapter.start_sequence && seq <= chapter.end_sequence))
+      : null;
 
     const loaded: ChunkData[] = [];
     const units: RevealedUnit[] = [];
@@ -424,7 +432,16 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     // out below a stale saved position.
     let finishedChapter = false;
     try {
-      if (restoring) {
+      if (logicalOrder?.length) {
+        const savedIndex = restoring && savedSeq != null ? logicalOrder.indexOf(savedSeq) : 0;
+        const lastIndex = savedIndex >= 0 ? savedIndex : 0;
+        for (const sequence of logicalOrder.slice(0, lastIndex + 1)) {
+          const chunk = await getChunk(paperId, sequence);
+          loaded.push(chunk);
+          units.push(...chunkToUnits(chunk));
+          cursor = sequence;
+        }
+      } else if (restoring) {
         // Fast-forward to the saved position in one bulk request instead of
         // one getNextChunk round trip per chunk: a deep chapter used to cost
         // hundreds of sequential HTTP calls just to restore where you left off.
@@ -453,13 +470,18 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
           loaded.push(c);
           units.push(...chunkToUnits(c));
           cursor = c.sequence_order;
-          if (loaded.length >= 2) break;
+          if (loaded.length >= 1) break;
         }
       }
-    } catch { /* fall through with whatever loaded */ }
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not load this part of the book.');
+    }
 
     setChunks(loaded);
-    setRevealedUnits(units);
+    // A new session shows one unit at a time. Restoring is intentionally
+    // different: those units were already read before the refresh.
+    setRevealedUnits(restoring ? units : units.slice(0, 1));
+    setPendingUnits(restoring ? [] : units.slice(1));
     setCurrentChunkIndex(Math.max(0, loaded.length - 1));
     setParagraphIndexInCurrent(0);
     setLastSeq(cursor);
@@ -473,7 +495,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     restoredRef.current = restoring;
     scrollToTopRef.current = !restoring;
     setLoading(false);
-  }, [paperId, chunkToUnits, loadProgress, saveProgress]);
+  }, [paperId, chunkToUnits, loadProgress, saveProgress, readingOrder, useLogicalOrder]);
 
   // Core function: fetch the next raw chunk (after the current cursor) and
   // convert it into units. Uses the gap-tolerant "after" endpoint so a hole in
@@ -481,9 +503,18 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
   const fetchAndAppend = useCallback(async () => {
     if (loading || atEnd) return;
     setLoading(true);
+    setLoadError(null);
 
     try {
-      const chunk = await getNextChunk(paperId, lastSeq);
+      const logicalOrder = useLogicalOrder && readingOrder
+        ? readingOrder.filter((seq) => !activeChapter || (seq >= activeChapter.start_sequence && seq <= activeChapter.end_sequence))
+        : null;
+      const nextLogicalIndex = logicalOrder ? logicalOrder.indexOf(lastSeq) + 1 : -1;
+      const chunk = logicalOrder
+        ? (nextLogicalIndex >= 0 && nextLogicalIndex < logicalOrder.length
+          ? await getChunk(paperId, logicalOrder[nextLogicalIndex])
+          : null)
+        : await getNextChunk(paperId, lastSeq);
       // Stop at end-of-document, or at the end of the active chapter (book mode).
       if (!chunk || (activeChapter && chunk.sequence_order > activeChapter.end_sequence)) {
         setAtEnd(true);
@@ -501,8 +532,10 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
 
       const newUnits = chunkToUnits(chunk);
 
-      // Append the new units
-      setRevealedUnits(prev => [...prev, ...newUnits]);
+      // Keep the rest of the chunk pending so each action reveals exactly
+      // one paragraph or structural unit.
+      setRevealedUnits(prev => [...prev, ...newUnits.slice(0, 1)]);
+      setPendingUnits(newUnits.slice(1));
 
       // Reset paragraph pointer for the new chunk
       setCurrentChunkIndex(chunks.length); // the index it will have after setState
@@ -516,36 +549,30 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
           readerRef.current.scrollTop = readerRef.current.scrollHeight;
         }
       }, 30);
-    } catch {
-      setAtEnd(true);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Could not load the next part.');
     } finally {
       setLoading(false);
     }
-  }, [paperId, loading, atEnd, chunkToUnits, chunks.length, lastSeq, activeChapter, saveProgress]);
+  }, [paperId, loading, atEnd, chunkToUnits, chunks.length, lastSeq, activeChapter, saveProgress, readingOrder, useLogicalOrder]);
 
   // ── Reveal the next small unit (paragraph or special element) ──────────────
   const revealNextUnit = useCallback(() => {
     if (loading || atEnd) return;
 
-    // If we have more paragraphs inside the current chunk, just advance the pointer
-    const currentChunk = chunks[currentChunkIndex];
-    if (currentChunk) {
-      const unitsFromCurrent = chunkToUnits(currentChunk);
-      const isTextChunk = currentChunk.structural_type === 'text' || !currentChunk.structural_type;
-
-      if (isTextChunk && paragraphIndexInCurrent < unitsFromCurrent.length - 1) {
-        setParagraphIndexInCurrent(prev => prev + 1);
-        // Scroll to bottom after render
-        setTimeout(() => {
-          if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight;
-        }, 20);
-        return;
-      }
+    if (pendingUnits.length > 0) {
+      setRevealedUnits(prev => [...prev, pendingUnits[0]]);
+      setPendingUnits(prev => prev.slice(1));
+      setParagraphIndexInCurrent(prev => prev + 1);
+      setTimeout(() => {
+        if (readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight;
+      }, 20);
+      return;
     }
 
     // Otherwise we need to fetch the next raw chunk from the backend
     fetchAndAppend();
-  }, [chunks, currentChunkIndex, paragraphIndexInCurrent, chunkToUnits, loading, atEnd, fetchAndAppend]);
+  }, [pendingUnits, loading, atEnd, fetchAndAppend]);
 
   // Load rich figure descriptions (for beautiful architecture rendering)
   useEffect(() => {
@@ -1019,11 +1046,24 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
                       unit={unit}
                       isLast={i === revealedUnits.length - 1}
                       figureDescriptions={figureDescriptions}
+                      paperId={paperId}
                     />
                   ))}
                   {loading && (
                     <div className="text-[13px] text-center py-2" style={{ color: 'var(--muted)' }}>
                       Loading…
+                    </div>
+                  )}
+                  {loadError && (
+                    <div className="text-[13px] text-center py-3" style={{ color: 'var(--danger, #b42318)' }}>
+                      <div>{loadError}</div>
+                      <button
+                        onClick={revealNext}
+                        className="mt-2 px-2.5 py-1 rounded border"
+                        style={{ borderColor: 'var(--border)', color: 'var(--fg)' }}
+                      >
+                        Retry
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1089,13 +1129,10 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
                       onChange={(e) => {
                         const enabled = e.target.checked;
                         setUseLogicalOrder(enabled);
-                        if (enabled && readingOrder) {
-                          // Reset reveal when switching to logical order
-                          setRevealedUnits([]);
-                          // TODO: the reveal loop still walks chunks in document
-                          // order here — readingOrder is collected and offered in
-                          // the UI but nothing consumes it yet.
-                        }
+                        // Reload from the first unit in the selected order;
+                        // startReading uses exact sequence IDs in readingOrder
+                        // rather than the physical "after" cursor.
+                        void startReading(activeChapter, enabled);
                       }}
                     />
                     <span>Use AI-corrected reading order</span>
@@ -1281,10 +1318,12 @@ function GranularUnit({
   unit,
   isLast,
   figureDescriptions = {},
+  paperId,
 }: {
   unit: RevealedUnit;
   isLast: boolean;
   figureDescriptions?: Record<string, FigureDescription>;
+  paperId: string;
 }) {
   const baseClass = "transition-opacity duration-300";
   const lastClass = isLast ? "animate-[fadeIn_0.2s_ease]" : "";
@@ -1377,11 +1416,13 @@ function GranularUnit({
     const richDesc = figureDescriptions?.[unit.sourceChunkId];
     // Fall back to the VLM description's image_path when chunk_assets didn't
     // link the extracted image back to this chunk. image_path is stored
-    // relative to images/ (e.g. "<doc_id>/<uuid>.png") and served at
-    // /static/images/...
+    // relative to images/ (e.g. "<doc_id>/<uuid>.png") and served through
+    // the authenticated paper-asset endpoint.
     const resolvedImageUrl =
       unit.imageUrl ||
-      (richDesc?.image_path ? `/static/images/${richDesc.image_path}` : undefined);
+      (richDesc?.image_path
+        ? getDocumentAssetUrl(paperId, richDesc.image_path)
+        : undefined);
 
     return (
       <div className={`${baseClass} ${lastClass} my-6`}>

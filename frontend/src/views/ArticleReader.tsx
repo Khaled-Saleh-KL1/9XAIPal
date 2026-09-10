@@ -60,6 +60,7 @@ import {
   deleteNote as deleteNoteApi,
   deletePersonalNote as deletePersonalNoteApi,
   getFullDocument,
+  getDocumentAssetUrl,
   listModels,
   listNotes,
   getStudy,
@@ -1669,7 +1670,7 @@ export function ArticleReader({
         anchorKind: parent.anchor_kind,
         quote: parent.anchor_quote,
         imageUrl: parent.anchor_image_path
-          ? `/static/images/${parent.anchor_image_path}`
+          ? getDocumentAssetUrl(paperId, parent.anchor_image_path)
           : null,
         question,
         answer: '',
@@ -1693,7 +1694,7 @@ export function ArticleReader({
         chunk_id: parent.anchor_chunk_id,
         quote: parent.anchor_quote,
         image_url: parent.anchor_image_path
-          ? `/static/images/${parent.anchor_image_path}`
+          ? getDocumentAssetUrl(paperId, parent.anchor_image_path)
           : null,
       });
     },

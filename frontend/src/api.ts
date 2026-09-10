@@ -13,6 +13,19 @@ import type { ContextType, User } from './types';
 const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '');
 const BASE = `${API_ORIGIN}/api/v1`;
 
+/** Every API call carries the session cookie, including a hosted SPA/API pair. */
+const fetch = (input: RequestInfo | URL, init: RequestInit = {}) =>
+  globalThis.fetch(input, { ...init, credentials: 'include' });
+
+/** Turn an API-relative media path into the configured backend origin. */
+export function getApiMediaUrl(url: string): string {
+  return url.startsWith('/api/') ? `${API_ORIGIN}${url}` : url;
+}
+
+function withApiImageUrl<T extends { image_url: string | null }>(item: T): T {
+  return item.image_url ? { ...item, image_url: getApiMediaUrl(item.image_url) } : item;
+}
+
 /**
  * Whether there is a backend to talk to at all: either an explicit origin was
  * configured, or we're on localhost where Vite proxies /api during dev. When
@@ -300,7 +313,7 @@ export async function getPaperProgress(paperId: string): Promise<ProgressRespons
 export async function getChunk(paperId: string, sequenceOrder: number): Promise<ChunkData> {
   const res = await fetch(`${BASE}/papers/${paperId}/chunks/${sequenceOrder}`);
   if (!res.ok) throw new Error(`Chunk fetch failed: ${res.status}`);
-  return res.json();
+  return withApiImageUrl(await res.json());
 }
 
 /**
@@ -313,7 +326,7 @@ export async function getNextChunk(paperId: string, afterSequence: number): Prom
   const res = await fetch(`${BASE}/papers/${paperId}/chunks/after/${afterSequence}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Chunk fetch failed: ${res.status}`);
-  return res.json();
+  return withApiImageUrl(await res.json());
 }
 
 /**
@@ -329,7 +342,7 @@ export async function getChunksRange(
   const res = await fetch(`${BASE}/papers/${paperId}/chunks/range?after=${afterSequence}&limit=${limit}`);
   if (!res.ok) throw new Error(`Chunk range fetch failed: ${res.status}`);
   const data = await res.json();
-  return data.chunks as ChunkData[];
+  return (data.chunks as ChunkData[]).map(withApiImageUrl);
 }
 
 // ── Whole document (article reader) ──────────────────────────────────────────
@@ -391,7 +404,8 @@ export async function getPageIndex(paperId: string): Promise<[number, number][]>
 export async function getFullDocument(paperId: string): Promise<FullDocument> {
   const res = await fetch(`${BASE}/papers/${paperId}/document`);
   if (!res.ok) throw new Error(`Document fetch failed: ${res.status}`);
-  return res.json();
+  const document = await res.json() as FullDocument;
+  return { ...document, blocks: document.blocks.map(withApiImageUrl) };
 }
 
 // ── Bibliography citations (clickable "[12]" markers, papers only) ──────────
@@ -1196,12 +1210,21 @@ export async function checkHealth(): Promise<{ status: string; database: string 
  * article — the backend branches on doc_kind, this URL is the same either
  * way. */
 export function getRawFileUrl(paperId: string): string {
-  return `${BASE}/papers/${paperId}/raw`;
+  return BASE + "/papers/" + paperId + "/raw";
 }
 
-/** URL to the static asset PDF (for embedding in iframe/viewer) */
+/** URL to the authenticated raw PDF (for embedding in the PDF viewer). */
 export function getStaticPdfUrl(paperId: string): string {
-  return `/static/assets/${paperId}.pdf`;
+  return getRawFileUrl(paperId);
+}
+
+/** URL to one authenticated, extracted image/table/equation asset. */
+export function getDocumentAssetUrl(paperId: string, filePath: string): string {
+  const encodedPath = filePath
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return BASE + "/papers/" + paperId + "/assets/" + encodedPath;
 }
 
 // ── Personal reading state (bookmarks, own notes, decks) ──────────────────────
