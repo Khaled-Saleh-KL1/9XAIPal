@@ -237,6 +237,32 @@ body {
   white-space: nowrap;
 }
 
+/* Export selection. The checkbox sits above the cover so selecting a paper
+   never opens the reader. The row variant stays in normal flow. */
+.paper-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.paper-row.is-selected {
+  background: var(--accent-soft);
+}
+.paper-select {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 4;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.paper-select.row-select {
+  position: relative;
+  inset: auto;
+  flex: 0 0 auto;
+}
+
 /* Rename and delete. Hidden until the card is hovered or something inside it
    has focus: the second condition is what makes them reachable by keyboard
    at all, since a control revealed only by a pointer cannot be tabbed to. */

@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     documents,
     chunks,
     ask,
+    export,
     models,
     notes,
     personal,
@@ -29,4 +30,5 @@ api_router.include_router(studies.router, prefix="/studies", tags=["studies"])
 api_router.include_router(stickies.router, prefix="/stickies", tags=["stickies"])
 api_router.include_router(search.router, prefix="/search", tags=["search"])
 api_router.include_router(models.router, prefix="/models", tags=["models"])
+api_router.include_router(export.router, prefix="/export", tags=["export"])
 

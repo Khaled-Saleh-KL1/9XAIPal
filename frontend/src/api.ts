@@ -404,6 +404,98 @@ export async function addReferenceToLibrary(paperId: string, number: number): Pr
   return res.json();
 }
 
+// ── Library export ────────────────────────────────────────────────────────
+
+
+export type ExportFormat = 'bibtex' | 'markdown' | 'anki' | 'csv';
+
+const EXPORT_FILENAMES: Record<ExportFormat, string> = {
+  bibtex: 'library.bib',
+  markdown: 'notes.zip',
+  anki: 'flashcards.txt',
+  csv: 'library.csv',
+};
+
+function filenameFromDisposition(value: string | null, fallback: string): string {
+  if (!value) return fallback;
+  const utf8 = value.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = value.match(/filename="?([^";]+)"?/i)?.[1];
+  const encoded = utf8 || plain;
+  if (!encoded) return fallback;
+  try {
+    return decodeURIComponent(encoded.replace(/^"|"$/g, '')) || fallback;
+  } catch {
+    return encoded.replace(/^"|"$/g, '') || fallback;
+  }
+}
+
+/**
+ * Build the export on the backend and save the returned bytes through a
+ * temporary object URL. A browser navigation cannot attach the explicit
+ * credentials needed when the frontend and API have different origins, and
+ * it also turns a 401/500 JSON response into a page that looks like a failed
+ * download. Reading the response here fixes both cases and lets the caller
+ * show real download progress when the response has a content length.
+ */
+export async function downloadExport(
+  format: ExportFormat,
+  documentIds: string[],
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
+
+  onProgress?.(0.04);
+  const res = await fetch(`${BASE}/export`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ format, document_ids: documentIds }),
+  });
+
+  if (!res.ok) {
+    let detail = `Export failed: ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      // Keep the status-only message when the response is not JSON.
+    }
+    throw new Error(detail);
+  }
+
+  onProgress?.(0.72);
+  const reader = res.body?.getReader();
+  const chunks: BlobPart[] = [];
+  const total = Number(res.headers.get('content-length')) || 0;
+  let received = 0;
+
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.byteLength;
+      onProgress?.(total ? 0.72 + (received / total) * 0.24 : 0.84);
+    }
+  } else {
+    chunks.push(await res.blob());
+  }
+
+  const blob = new Blob(chunks, { type: res.headers.get('content-type') || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filenameFromDisposition(
+    res.headers.get('content-disposition'),
+    EXPORT_FILENAMES[format],
+  );
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  onProgress?.(1);
+}
+
 // ── Notes (anchored margin annotations) ──────────────────────────────────────
 
 /**
