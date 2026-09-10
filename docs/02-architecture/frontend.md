@@ -104,6 +104,15 @@ ids. On mount, calls `listPapers()`. Features:
 - Local search (substring match over title and authors).
 - Local sort cycle: `recent → title → pages`.
 - Two layouts: grid (cards) and list (rows). Both share `CardActions` and the cover.
+- **Export**: [`components/ExportMenu.tsx`](../../frontend/src/components/ExportMenu.tsx), a
+  top-bar dropdown (same click-to-toggle shape as `UserMenuInline`) — BibTeX / Markdown (Obsidian)
+  / Anki flashcards / library CSV, all library-wide. Full design:
+  [library-export.md](../plans/library-export.md). Each item is a plain click handler
+  (`api.ts`'s `downloadBibtex` etc.) that navigates `window.location.href` at the matching
+  `/export/*` route rather than fetching a Blob in JS — the backend's own
+  `Content-Disposition: attachment` header is what makes the browser download it, the same
+  mechanism `/papers/{id}/raw`'s `FileResponse` already relies on. No loading state anywhere:
+  there's no job to poll, every export is one fast, synchronous request.
 
 ### Renaming
 
