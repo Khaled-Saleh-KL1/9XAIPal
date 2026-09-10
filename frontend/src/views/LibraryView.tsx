@@ -7,7 +7,7 @@ import {
 } from '../components/Icons';
 import { PaperCover } from './PaperCover';
 import { UserMenuInline } from '../components/UserMenu';
-import { ExportMenu } from '../components/ExportMenu';
+import { ExportWizard } from '../components/ExportWizard';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
@@ -61,7 +61,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   /** The paper whose title is being edited inline, if any. */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [selectedPaperIds, setSelectedPaperIds] = useState<Set<string>>(new Set());
 
   // Fetch papers from backend on mount and keep polling while the view is
   // mounted (so a fresh upload appears without a reload). The poll is
@@ -153,21 +152,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     { key: 'article', label: 'Articles' },
   ];
 
-  const allSelected = papers.length > 0 && selectedPaperIds.size === papers.length;
-
-  const togglePaperSelection = (paperId: string) => {
-    setSelectedPaperIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(paperId)) next.delete(paperId);
-      else next.add(paperId);
-      return next;
-    });
-  };
-
-  const toggleAllPaperSelection = () => {
-    setSelectedPaperIds(allSelected ? new Set() : new Set(papers.map((paper) => paper.id)));
-  };
-
   const toggleKindFilter = (key: string) => {
     setKindFilters((prev) => {
       const next = new Set(prev);
@@ -190,11 +174,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     try {
       await deletePaper(p.id);
       setPapers((prev) => prev.filter((x) => x.id !== p.id));
-      setSelectedPaperIds((prev) => {
-        const next = new Set(prev);
-        next.delete(p.id);
-        return next;
-      });
     } catch (e) {
       window.alert(`Delete failed: ${(e as Error).message}`);
     }
@@ -244,8 +223,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     onStartRename: () => setRenaming(p.id),
     onCancelRename: () => setRenaming(null),
     onCommitRename: (next: string) => void commitRename(p, next),
-    selected: selectedPaperIds.has(p.id),
-    onToggleSelect: () => togglePaperSelection(p.id),
   });
 
   return (
@@ -290,10 +267,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               <IconDoc className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />
               Raw files
             </button>
-            <ExportMenu
-              selectedPaperIds={[...selectedPaperIds]}
-              onSelectAll={() => setSelectedPaperIds(new Set(papers.map((paper) => paper.id)))}
-            />
+            <ExportWizard papers={papers} />
             <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
             <UserMenuInline />
           </div>
@@ -436,33 +410,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               </div>
             </div>
           </div>
-
-          <div className="mt-2 flex items-center gap-3 text-[12px]" style={{ color: 'var(--muted)' }}>
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={toggleAllPaperSelection}
-                disabled={!papers.length}
-                aria-label="Select all papers"
-                className="accent-[var(--accent)]"
-              />
-              Select all papers
-            </label>
-            <span aria-live="polite">
-              {selectedPaperIds.size ? `${selectedPaperIds.size} selected for export` : 'Choose one or more papers to export'}
-            </span>
-            {!!selectedPaperIds.size && (
-              <button
-                type="button"
-                onClick={() => setSelectedPaperIds(new Set())}
-                className="underline underline-offset-2"
-                style={{ color: 'var(--accent)' }}
-              >
-                Clear
-              </button>
-            )}
-          </div>
         </div>
       </div>
 
@@ -532,8 +479,6 @@ interface CardProps {
   onStartRename: () => void;
   onCancelRename: () => void;
   onCommitRename: (next: string) => void;
-  selected: boolean;
-  onToggleSelect: () => void;
 }
 
 /** The hover-revealed rename / delete pair, shared by both layouts. */
@@ -577,12 +522,10 @@ function PaperCard({
   onStartRename,
   onCancelRename,
   onCommitRename,
-  selected,
-  onToggleSelect,
 }: CardProps) {
   const processing = isProcessing(paper);
   return (
-    <article className={`paper-card${renaming ? ' is-renaming' : ''}${selected ? ' is-selected' : ''}`}>
+    <article className={`paper-card${renaming ? ' is-renaming' : ''}`}>
       {/*
         ⚠ The "open" target is this inner element, not the <article>.
         Rename and delete are real buttons, and nesting a button inside
@@ -595,14 +538,6 @@ function PaperCard({
         A card being renamed is not an open target at all: a stray click
         inside the editor would otherwise open the reader mid-edit.
       */}
-      <input
-        type="checkbox"
-        className="paper-select"
-        checked={selected}
-        onChange={onToggleSelect}
-        onClick={(e) => e.stopPropagation()}
-        aria-label={`Select ${paper.title} for export`}
-      />
       <div
         className="paper-open"
         onClick={renaming ? undefined : onOpen}
@@ -729,23 +664,13 @@ function PaperRow({
   onStartRename,
   onCancelRename,
   onCommitRename,
-  selected,
-  onToggleSelect,
 }: CardProps) {
   const processing = isProcessing(paper);
   return (
     <div
       onClick={renaming ? undefined : onOpen}
-      className={`paper-row${renaming ? ' is-renaming' : ''}${selected ? ' is-selected' : ''}`}
+      className={`paper-row${renaming ? ' is-renaming' : ''}`}
     >
-      <input
-        type="checkbox"
-        className="paper-select row-select"
-        checked={selected}
-        onChange={onToggleSelect}
-        onClick={(e) => e.stopPropagation()}
-        aria-label={`Select ${paper.title} for export`}
-      />
       <PaperCover
         paperId={paper.id}
         title={paper.title}

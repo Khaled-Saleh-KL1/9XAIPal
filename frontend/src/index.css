@@ -237,30 +237,66 @@ body {
   white-space: nowrap;
 }
 
-/* Export selection. The checkbox sits above the cover so selecting a paper
-   never opens the reader. The row variant stays in normal flow. */
-.paper-card.is-selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
+/* ── Export wizard (components/ExportWizard.tsx) ──
+   Selection happens INSIDE this panel, never on the library cards: a
+   permanent checkbox on every card was a visual tax on the whole library
+   for an occasional action. Built on the .confirm-* dialog classes so it
+   reads as the app's one modal. */
+.export-wizard { width: min(560px, 100%); }
+.export-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.export-list-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 12px; padding: 0 2px 6px;
+  font-size: 12px; color: var(--muted);
+  border-bottom: 1px solid var(--border);
 }
-.paper-row.is-selected {
-  background: var(--accent-soft);
+.export-list-head input, .export-row input { accent-color: var(--accent); cursor: pointer; }
+.export-list { max-height: min(42vh, 360px); overflow-y: auto; margin-top: 4px; }
+.export-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 6px; border-radius: 8px; cursor: pointer;
+  font-size: 13px; color: var(--fg);
 }
-.paper-select {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 4;
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
-  cursor: pointer;
+.export-row:hover { background: var(--bg-2); }
+.export-row.is-on { background: var(--accent-soft); }
+.export-row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.export-row-kind {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px;
+  padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted); flex: none;
 }
-.paper-select.row-select {
-  position: relative;
-  inset: auto;
-  flex: 0 0 auto;
+.export-empty { padding: 28px 0; text-align: center; font-size: 12.5px; color: var(--faint); }
+
+.export-formats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px; }
+.export-format {
+  text-align: left; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg-2);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.export-format:hover { border-color: var(--border-strong); }
+.export-format.is-on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+.export-format-label { display: block; font-size: 13px; font-weight: 500; color: var(--fg); }
+.export-format-hint { display: block; margin-top: 3px; font-size: 11px; line-height: 1.4; color: var(--muted); }
+
+.export-bar { margin-top: 18px; height: 8px; border-radius: 999px; overflow: hidden; background: var(--bg-3); }
+.export-bar-fill { height: 100%; background-color: var(--accent); transition: width 200ms ease; }
+.export-bar-meta {
+  display: flex; justify-content: space-between; margin-top: 8px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10.5px; color: var(--muted);
+}
+/* Red on purpose — asked for explicitly, and distinct from the rust
+   .confirm-go.is-danger so "stop this" never looks like "confirm this". */
+.export-cancel-run {
+  font-size: 12.5px; font-weight: 500; padding: 8px 16px; border-radius: 9px;
+  border: 1px solid transparent; color: #fff; background: #c0392b;
+}
+.export-cancel-run:hover { filter: brightness(1.08); }
+
+.export-done { text-align: center; padding-top: 6px; }
+.export-done-tick {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; margin-bottom: 12px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
 }
 
 /* Rename and delete. Hidden until the card is hovered or something inside it

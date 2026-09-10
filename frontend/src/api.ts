@@ -441,6 +441,10 @@ export async function downloadExport(
   format: ExportFormat,
   documentIds: string[],
   onProgress?: (fraction: number) => void,
+  /** Abort the request mid-flight — the wizard's Cancel button. Rejects
+   * with a DOMException named 'AbortError', which the caller treats as
+   * "cancelled", not "failed". */
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
 
@@ -450,6 +454,7 @@ export async function downloadExport(
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ format, document_ids: documentIds }),
+    signal,
   });
 
   if (!res.ok) {
