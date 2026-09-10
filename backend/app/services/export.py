@@ -17,6 +17,33 @@ import zipfile
 from datetime import date, datetime
 from typing import Optional
 
+from markdown_it import MarkdownIt
+
+
+# ── Shared ────────────────────────────────────────────────────────────────
+
+def _display_title(doc: dict) -> str:
+    """A rename wins; else the filename minus `.pdf`. Mirrors the frontend's
+    lib/titles.ts::displayTitle exactly, so an export names a paper the same
+    way the library does — `title = {Attention Is All You Need.pdf}` in a
+    bibliography is what shipped before this matched."""
+    renamed = (doc.get("title") or "").strip()
+    if renamed:
+        return renamed
+    return re.sub(r"\.pdf$", "", (doc.get("original_filename") or "").strip(), flags=re.IGNORECASE) or "Untitled"
+
+
+# The app's own citation markers in a model answer: `[[11]]`, `[[30], [31]]`,
+# and the desk's `[[P2:41]]`. The reader turns these into chips; outside the
+# app they are noise, and in Obsidian `[[11]]` is wiki-link syntax that
+# creates a phantom note called "11". Only digit/P/colon/comma content is
+# matched, so a real `[[Some Note]]` in a personal note is left alone.
+_CITE_MARKER_RE = re.compile(r"\s*\[\[[\dP:,\s\[\]]*\]\]")
+
+
+def _strip_cite_markers(text: str) -> str:
+    return _CITE_MARKER_RE.sub("", text or "")
+
 
 # ── BibTeX ────────────────────────────────────────────────────────────────
 
@@ -49,10 +76,19 @@ def _slug(text: str) -> str:
     return slug or "untitled"
 
 
-def _year_of(value) -> Optional[int]:
-    if isinstance(value, (datetime, date)):
-        return value.year
-    return None
+def _slug_key(title: str, limit: int = 32) -> str:
+    """A cite key from a title: the slug cut at a word boundary, never
+    mid-word. `attention-is-all-you-nee` (what a hard 24-char cut produced)
+    is the kind of key a reader retypes wrong."""
+    slug = _slug(title)
+    if len(slug) <= limit:
+        return slug
+    cut = slug[:limit]
+    # Only back off to the previous dash when the cut landed INSIDE a word;
+    # a cut that already sits on a boundary keeps its last segment.
+    if slug[limit] != "-":
+        cut = cut.rsplit("-", 1)[0] or cut
+    return cut
 
 
 def _bibtex_key(authors: str, year: Optional[int], title: str) -> str:
@@ -63,9 +99,8 @@ def _bibtex_key(authors: str, year: Optional[int], title: str) -> str:
         first_author = authors.split(",")[0].strip()
         last_name = first_author.split()[-1] if first_author.split() else first_author
         base = re.sub(r"[^a-zA-Z0-9]", "", last_name).lower() or "ref"
-    else:
-        base = _slug(title)[:24]
-    return f"{base}{year}" if year else base
+        return f"{base}{year}" if year else base
+    return _slug_key(title)
 
 
 def to_bibtex(papers: list[dict]) -> str:
@@ -73,6 +108,13 @@ def to_bibtex(papers: list[dict]) -> str:
     authors, else `@misc` with a `note` field saying so honestly rather than
     a blank author field a reader might mistake for a real bibliography gap
     in THEIR paper rather than an unresolved import.
+
+    ⚠ `year` is emitted ONLY when resolved. The first version fell back to
+    the year the paper was ADDED to the library, which put
+    `year = {2026}` on Attention Is All You Need (2017) — a bibliography's
+    `year` means publication year, and a fabricated one is worse than none:
+    a reader pastes it into their own paper and cites it wrong. The
+    date-added stays in the CSV, where its column is named `date_added`.
 
     ⚠ Author formatting is deliberately NOT "Last, First and Last, First" —
     ReferenceMatch.authors (search/semantic_scholar_client.py) is a plain
@@ -86,9 +128,9 @@ def to_bibtex(papers: list[dict]) -> str:
     entries: list[str] = []
     used_keys: dict[str, int] = {}
     for p in papers:
-        title = (p.get("title") or p.get("original_filename") or "Untitled").strip()
+        title = _display_title(p)
         authors = (p.get("resolved_authors") or "").strip()
-        year = p.get("resolved_year") or _year_of(p.get("created_at"))
+        year = p.get("resolved_year")
 
         key = _bibtex_key(authors, year, title)
         used_keys[key] = used_keys.get(key, 0) + 1
@@ -103,7 +145,7 @@ def to_bibtex(papers: list[dict]) -> str:
         if p.get("source_url"):
             fields["url"] = p["source_url"]
         if not authors:
-            fields["note"] = "Unresolved import -- authors/year not found by this library"
+            fields["note"] = "Unresolved import -- authors and year not found by this library; fill in before citing"
 
         body = ",\n".join(f"  {k} = {{{v}}}" for k, v in fields.items())
         entry_type = "article" if authors else "misc"
@@ -128,10 +170,6 @@ def _md_note_block(quote: Optional[str], body_lines: list[str]) -> list[str]:
     out.extend(body_lines)
     out.append("")
     return out
-
-
-def _display_title(doc: dict) -> str:
-    return (doc.get("title") or doc.get("original_filename") or "Untitled").strip()
 
 
 def to_markdown_note(doc: dict, qa: list[dict], personal: list[dict]) -> str:
@@ -162,7 +200,10 @@ def to_markdown_note(doc: dict, qa: list[dict], personal: list[dict]) -> str:
         lines.append("## Questions & answers")
         lines.append("")
         for note in qa:
-            body = [f"**Q: {(note.get('question') or '').strip()}**", "", (note.get("answer") or "").strip()]
+            # Markers stripped from the model's answer only — a personal
+            # note's body is the reader's own text, and a real [[wiki link]]
+            # in it (letters, not digits) is untouched by the regex anyway.
+            body = [f"**Q: {(note.get('question') or '').strip()}**", "", _strip_cite_markers(note.get("answer") or "").strip()]
             lines.extend(_md_note_block(note.get("anchor_quote"), body))
 
     if not personal and not qa:
@@ -214,19 +255,49 @@ def to_markdown_zip(
 
 # ── Anki flashcards ───────────────────────────────────────────────────────
 
+# CommonMark only, no HTML passthrough: an answer is model output, and a
+# card field is rendered by Anki as HTML, so raw tags in the source must not
+# reach the card verbatim. Escaping them is what "html=False" buys.
+_MD = MarkdownIt("commonmark", {"html": False})
+
+# `$x$` / `$$x$$` — what the model writes and KaTeX renders in the reader.
+# Anki's built-in MathJax wants `\( \)` / `\[ \]`; a bare `$N=6$` shows as
+# literal dollar signs on the card. Display first so `$$` is never eaten as
+# two empty inline spans. ⚠ Applied to the rendered HTML, AFTER markdown-it —
+# `\(` and `\[` are CommonMark backslash-escapes, so converting first hands
+# the renderer `\(N=6\)` and it emits a bare `(N=6)`. Caught by the test the
+# first time; `$` itself is not Markdown syntax, so it passes through the
+# renderer untouched and is safe to rewrite on the way out.
+_DISPLAY_MATH_RE = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
+_INLINE_MATH_RE = re.compile(r"(?<!\\)\$(?!\s)(.+?)(?<!\s)\$")
+
+
 def _anki_field(text: str) -> str:
-    """Anki's own TSV import convention: a literal tab would split into a
-    third column, a literal newline would end the row early — so a tab
-    becomes a space and any newline becomes a visible line break Anki
-    itself renders as `<br>` on the card, rather than corrupting the row."""
-    text = (text or "").replace("\t", " ")
-    return text.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+    """One card field: the app's citation markers stripped, Markdown
+    rendered to the HTML Anki actually displays, LaTeX re-delimited for
+    MathJax, then flattened to a single line.
+
+    The flattening is Anki's TSV import contract, not a formatting choice —
+    a literal tab would split into a third column and a literal newline
+    would end the row early. HTML collapses whitespace anyway, so a newline
+    becomes a space rather than a `<br>` that would break inside a `<ul>`.
+
+    The first version shipped the raw Markdown: `*   **Encoder:**` and
+    `$N=6$` and `[[30], [31]]` all appeared on the card verbatim.
+    """
+    html = _MD.render(_strip_cite_markers(text or ""))
+    html = _DISPLAY_MATH_RE.sub(lambda m: rf"\[{m.group(1)}\]", html)
+    html = _INLINE_MATH_RE.sub(lambda m: rf"\({m.group(1)}\)", html)
+    return re.sub(r"\s+", " ", html).strip()
 
 
 def to_anki_tsv(notes: list[dict]) -> str:
     """`question\tanswer` per line, from paper_notes (Q&A) only —
     personal_notes are free text, not naturally a front/back pair, and are
-    not silently reshaped into one here (see the plan doc for why)."""
+    not silently reshaped into one here (see the plan doc for why).
+
+    Returns "" when there is nothing to export; the endpoint turns that into
+    a real error rather than a silent 0-byte download."""
     lines = []
     for note in notes:
         q = _anki_field(note.get("question") or "")
@@ -248,7 +319,7 @@ def to_library_csv(papers: list[dict]) -> str:
     writer = csv.writer(buf)
     writer.writerow(["title", "authors", "year", "doc_kind", "status", "date_added", "page_count"])
     for p in papers:
-        title = (p.get("title") or p.get("original_filename") or "").strip()
+        title = _display_title(p)
         added = p.get("created_at")
         writer.writerow([
             title,

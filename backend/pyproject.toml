@@ -18,6 +18,13 @@ dependencies = [
     # HTTP client (Ollama / cloud LLM APIs)
     "httpx",
 
+    # Markdown -> HTML for the Anki export (services/export.py): a card
+    # field is rendered as HTML, so a model answer's Markdown must be
+    # converted, not shipped raw. Declared explicitly — it was already in
+    # the image only as a transitive dependency of `rich`, and relying on
+    # that would break the moment fastapi/typer stopped pulling rich in.
+    "markdown-it-py",
+
     # Database
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg",
