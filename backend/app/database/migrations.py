@@ -221,6 +221,21 @@ async def _ensure_recent_columns() -> None:
             UNIQUE (document_id, ref_number)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_paper_references_document ON paper_references(document_id, ref_number)",
+        # A paper resolving its OWN metadata (for BibTeX/CSV export,
+        # services/export.py) is the same operation paper_references.resolve_
+        # status already models for a CITATION's metadata — same
+        # match_reference call, just queried with the paper's own title
+        # instead of a bibliography entry's raw text. Columns rather than a
+        # parallel one-row-per-document table: there is exactly one
+        # resolution per document, unlike references which are many-per-
+        # document.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS resolved_authors TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS resolved_year INTEGER",
+        # pending | resolved | no_match | unavailable — identical semantics
+        # to paper_references.resolve_status: resolved/no_match are final,
+        # unavailable (no key, rate-limited, network error) is retried on
+        # the next export rather than cached as a dead end.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS self_resolve_status TEXT NOT NULL DEFAULT 'pending'",
     ]
 
     async with engine.begin() as conn:

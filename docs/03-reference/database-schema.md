@@ -169,6 +169,9 @@ The library row.
 | `raw_snapshot_status`       | `TEXT`      | `none` (default; anything that isn't `doc_kind='article'`) / `pending` / `complete` / `failed`. See `raw_snapshot_pages` below — never affects `status` above. |
 | `created_at`                | `TIMESTAMPTZ` | `DEFAULT NOW()`.                                    |
 | `updated_at`                | `TIMESTAMPTZ` | Bumped by `update_document_status`.                 |
+| `resolved_authors`          | `TEXT`      | This paper's own Semantic Scholar match, for BibTeX/CSV export ([library-export.md](../plans/library-export.md)) — comma-joined full names, `NULL` until resolved. |
+| `resolved_year`             | `INTEGER`   | Alongside `resolved_authors`.                         |
+| `self_resolve_status`       | `TEXT`      | `pending` (default) → `resolved` / `no_match` (final) or `unavailable` (retried on the next export — no key, rate-limited, or a network error). Identical semantics to `paper_references.resolve_status` below, just one-per-document instead of one-per-citation. |
 
 ### `chunks`
 

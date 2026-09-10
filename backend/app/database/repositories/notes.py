@@ -127,6 +127,26 @@ async def list_notes(session: AsyncSession, document_id: UUID) -> list[dict]:
     return [dict(r) for r in result.mappings().all()]
 
 
+async def list_all_notes_for_user(session: AsyncSession, user_id: UUID) -> list[dict]:
+    """Every Q&A note across this user's whole library, grouped by paper —
+    export.py's Markdown and Anki formats need this, and a JOIN here is one
+    query rather than one round trip per document (see list_documents's own
+    reasoning for the same trade). ``document_title`` rides along so the
+    caller never needs a second lookup to label a row.
+    """
+    result = await session.execute(
+        text("""
+            SELECT n.*, d.title AS document_title, d.original_filename AS document_original_filename
+            FROM paper_notes n
+            JOIN documents d ON d.id = n.document_id
+            WHERE d.user_id = :user_id
+            ORDER BY d.created_at ASC, n.anchor_sequence_id ASC, n.created_at ASC
+        """),
+        {"user_id": user_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def get_note(session: AsyncSession, note_id: UUID) -> Optional[dict]:
     result = await session.execute(
         text("SELECT * FROM paper_notes WHERE id = :id"),

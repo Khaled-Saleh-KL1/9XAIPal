@@ -121,6 +121,41 @@ async def list_documents(
     return [dict(r) for r in result.mappings().all()]
 
 
+async def list_all_documents_for_export(session: AsyncSession, user_id: UUID) -> list[dict]:
+    """Every document this user owns, no pagination — export.py's four
+    formats each need the whole library in one pass, not a page of it.
+    Skips list_documents's ingestion_jobs/raw_snapshot_pages LATERAL joins:
+    export needs none of that, and a plain scoped SELECT is materially
+    cheaper for a library that can run to hundreds of rows.
+    """
+    result = await session.execute(
+        text("SELECT * FROM documents WHERE user_id = :user_id ORDER BY created_at ASC"),
+        {"user_id": user_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def save_self_resolution(
+    session: AsyncSession,
+    document_id: UUID,
+    *,
+    status: str,
+    authors: Optional[str] = None,
+    year: Optional[int] = None,
+) -> None:
+    """Persist a document's own Semantic Scholar resolve attempt — see the
+    column comments in migrations.py for what `status` means and why
+    'unavailable' is deliberately not final."""
+    await session.execute(
+        text("""
+            UPDATE documents
+            SET self_resolve_status = :status, resolved_authors = :authors, resolved_year = :year
+            WHERE id = :document_id
+        """),
+        {"document_id": document_id, "status": status, "authors": authors, "year": year},
+    )
+
+
 async def count_documents(session: AsyncSession, user_id: UUID) -> int:
     """Return the total number of documents this user owns."""
     result = await session.execute(
