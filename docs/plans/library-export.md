@@ -47,11 +47,17 @@ with choosing what to export now appears only after pressing Export.
   in it (verified against one) would otherwise produce a `.bib` file that
   doesn't parse. Cite keys collide-proofed with an `a`/`b`/`c` suffix, not
   silently overwritten.
-- **Markdown** (`to_markdown_zip`) — one `.md` file per paper in a ZIP, not one
-  giant file and not one file per note. Obsidian (and anything that indexes a
-  folder) treats each file as its own linkable unit; a paper with thirty notes
-  as thirty tiny files would be worse to navigate than the same thirty notes as
-  sections of one file named after the paper.
+- **Markdown** (`to_markdown_note` / `to_markdown_zip`) — one `.md` per paper,
+  not one giant file and not one file per note. Obsidian (and anything that
+  indexes a folder) treats each file as its own linkable unit; a paper with
+  thirty notes as thirty tiny files would be worse to navigate than the same
+  thirty notes as sections of one file named after the paper. **One paper is
+  sent as the `.md` itself (`<title-slug>.md`); two or more as `notes.zip`.**
+  Shipped zip-always first, and a single-paper export arrived as a ZIP with
+  one file inside — friction with no benefit. The container only earns its
+  place once there is more than one file to hold. The wizard's done screen
+  reads the real filename off `Content-Disposition` for the same reason: a
+  static label would name the wrong one.
 - **Anki** (`to_anki_tsv`) — plain `question\tanswer` lines, Anki's own "Import
   File" reads this with zero setup. From `paper_notes` (the AI Q&A) only:
   `personal_notes` are free text, not a front/back pair, and are not silently

@@ -16,7 +16,9 @@ from app.database.repositories import documents as doc_repo
 from app.database.repositories import notes as note_repo
 from app.database.repositories import personal as personal_repo
 from app.search.semantic_scholar_client import match_reference, Unresolved
-from app.services.export import to_bibtex, to_markdown_zip, to_anki_tsv, to_library_csv
+from app.services.export import (
+    markdown_filename, to_anki_tsv, to_bibtex, to_library_csv, to_markdown_note, to_markdown_zip,
+)
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -129,6 +131,18 @@ async def export_selected(
     personal_by_doc: dict[str, list[dict]] = {}
     for note in _notes_for_documents(personal_notes, documents):
         personal_by_doc.setdefault(str(note["document_id"]), []).append(note)
+
+    # One paper -> the .md itself. A ZIP that has to be opened to reach the
+    # single file inside it is friction with no benefit; the container only
+    # earns its place once there is more than one file to hold.
+    if len(documents) == 1:
+        doc = documents[0]
+        doc_id = str(doc["id"])
+        return _attachment(
+            to_markdown_note(doc, notes_by_doc.get(doc_id, []), personal_by_doc.get(doc_id, [])),
+            markdown_filename(doc),
+            "text/markdown",
+        )
     return _attachment(
         to_markdown_zip(documents, notes_by_doc, personal_by_doc),
         "notes.zip",
