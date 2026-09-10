@@ -371,6 +371,16 @@ class Settings(BaseSettings):
     # document search engine, not a SERP) — search_images() is always [].
     exa_api_key: str = ""
 
+    # Semantic Scholar (https://www.semanticscholar.org/product/api) — resolves
+    # a paper's own bibliography entries ("[12] Cho et al., ..., 2014") to an
+    # actual paper: title/authors/year plus arXiv ID, DOI and often a direct
+    # open-access PDF URL in one call. ⚠ The unauthenticated tier is heavily
+    # rate-limited (verified: every call from this box came back 429) — a free
+    # key here is effectively required, not optional. Sent as the `x-api-key`
+    # header; empty means "not configured" and the client returns
+    # resolve_status='unavailable' rather than failing loudly.
+    semantic_scholar_api_key: str = ""
+
     # SerpApi (https://serpapi.com) — a paid scraping API returning genuine
     # Google SERP data (organic_results / images_results). This is the only
     # way Google's index is reached now: the Google APIs themselves were

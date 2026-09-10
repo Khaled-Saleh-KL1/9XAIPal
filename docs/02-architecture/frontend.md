@@ -370,6 +370,37 @@ Two landmines in the CSS, both in [`index.css`](../../frontend/src/index.css):
   leave the header floating with rows cut flush against its text. The header's separators are
   therefore drawn as `box-shadow: inset`, which travels with the cell.
 
+#### Bibliography citations ("[12]" → clickable), papers only
+
+Full design: [clickable-citations.md](../plans/clickable-citations.md). Distinct from
+`CitationRef.tsx` below (§Citations that open where they sit) — that resolves an AI answer's own
+`[[P2:41]]` into a block this app already has; `BibCitationRef.tsx` resolves the PAPER'S OWN
+citation into a different paper the app may not have yet.
+
+[`lib/references.ts`](../../frontend/src/lib/references.tsx)'s `remarkCitationRefs` is a remark
+plugin `Md` (the default-branch renderer above) conditionally adds — only when `citations` is
+passed, which `ArticleReader` only does for `doc_kind === 'paper'`. It walks text nodes for a
+`[5, 2, 35]`-shaped run and, **only when every number in the bracket is a known reference for this
+paper** (fetched once via `GET /papers/{id}/references`), replaces it with a marker `<span
+class="citation-ref" data-numbers="...">` — a real HTML tag rather than a made-up element name,
+because an unknown tag would be silently stripped by `rehype-sanitize` (see the schema entry in
+`lib/markdown.ts`) and wouldn't type-check against react-markdown's `Components` map either. A
+`span` override in the same file swaps that marker for `<BibCitationRef>`; every other `<span>`
+(KaTeX's math spans included) passes through untouched.
+
+⚠ Whole-bracket, not per-number: a bracket with even one unrecognised number is left as plain text
+rather than partially linkifying it — a half-clickable control is worse than an inert one. This is
+also what keeps a stray bracket (an index, a footnote marker) from ever being mistaken for a
+citation, with no heuristics beyond "is this number a real reference on this paper."
+
+`BibCitationRef.tsx` mirrors `CitationRef.tsx`'s click-to-toggle shell (same `.cite-chip`/
+`.cite-peek` CSS) but each number in a multi-citation bracket gets its own row with an independent
+resolve → add lifecycle. **Adding a reference does not reuse `App.tsx`'s
+`handleArticleImport`/`submitImportUrl`** — those navigate the whole app to the full-screen upload
+overlay, right for "I'm importing what I'm about to read," wrong for "queue this cited paper in the
+background while I keep reading." The chip calls `POST .../add` directly and polls
+`getPaperProgress` itself, entirely inline in the peek.
+
 ### The margin's scarce resource, and decks
 
 Cards are placed at their anchor and then pushed **downward** past each other by

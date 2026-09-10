@@ -118,6 +118,11 @@ The application code is more mature than the tooling around it. These are the ch
 - **No retry queue** for failed ingestions beyond `embed_document`'s in-Celery retries.
 - **Web-search images outside the research agent are not persisted**: remote URLs in older chat
   answers rot.
+- ⚠ **`SEMANTIC_SCHOLAR_API_KEY` is not set**, so clickable bibliography citations (shipped
+  2026-09-09, see [clickable-citations.md](plans/clickable-citations.md)) cannot actually resolve
+  anything on this box yet — every reference sits at `resolve_status='unavailable'`, a real,
+  surfaced state rather than a silent failure, but a setup step nonetheless. Free key:
+  https://www.semanticscholar.org/product/api. Not a code gap — closing it is a `.env` edit.
 
 ## Structural debt
 

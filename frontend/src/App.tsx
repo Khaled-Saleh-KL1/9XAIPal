@@ -541,6 +541,7 @@ export function App() {
           onBack={() => setRoute('library')}
           jumpToAnchor={readingAnchor}
           onJumpedAnchor={() => setReadingAnchor(null)}
+          onOpenPaper={openPaperById}
           onOpenRaw={(meta, page, anchors) => {
             navGenRef.current++; // commits now; outranks any fetch still in flight
             setPdfInitialPage(page);

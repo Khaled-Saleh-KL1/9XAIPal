@@ -62,6 +62,26 @@ async def get_document(session: AsyncSession, document_id: UUID, user_id: UUID) 
     return dict(row) if row else None
 
 
+async def get_document_by_source_url(
+    session: AsyncSession, source_url: str, user_id: UUID
+) -> Optional[dict]:
+    """Find this user's existing import of a URL, or None.
+
+    Used by the "add a cited reference to the library" flow
+    (endpoints/chunks.py) to dedupe: a paper resolved from a bibliography
+    entry might already be here — imported directly, or cited (and already
+    added) from a different paper — and re-ingesting it would just create a
+    second copy. Scoped to the owner for the same reason every other lookup
+    here is: documents are per-user.
+    """
+    result = await session.execute(
+        text("SELECT * FROM documents WHERE source_url = :source_url AND user_id = :user_id LIMIT 1"),
+        {"source_url": source_url, "user_id": user_id},
+    )
+    row = result.mappings().first()
+    return dict(row) if row else None
+
+
 async def list_documents(
     session: AsyncSession, user_id: UUID, limit: int = 50, offset: int = 0
 ) -> list[dict]:
