@@ -168,16 +168,35 @@ jobs:
       # cache note above exists to avoid. Measured: that is what happened
       # when a manual `-a` prune was run on this box on 2026-09-10.
       #
-      # Volumes and stopped containers ARE pruned, and need no such care:
-      # both commands only ever touch objects with zero references, so an
-      # attached volume (postgres/redis data) or a live container is never a
-      # candidate. Orphaned anonymous volumes had reached 1GB across 15 dead
-      # volumes before this was added.
+      # ⚠⚠ Volumes and containers ARE pruned, but ONLY this compose project's
+      # own — note the label filter. `docker prune` is daemon-wide, and this
+      # box is NOT single-tenant: it also runs an unrelated `lcms` stack
+      # (its own Postgres + Redis, holding its own data) started with plain
+      # `docker run`, so those containers carry NO compose project label at
+      # all. Unfiltered, this step would mean a 9xaipal deploy could delete
+      # a deliberately-STOPPED lcms container, or lcms-redis's anonymous
+      # data volume if that container were ever removed. A deploy workflow
+      # has no business reaching into another project on the same host, so
+      # it doesn't: `com.docker.compose.project=backend` is on every volume
+      # and container this stack creates (verified) and on nothing lcms owns.
+      #
+      # Consequence worth knowing: anonymous volumes left behind by ad-hoc
+      # `docker run` work (throwaway test databases from a dev session, for
+      # example — pgvector declares VOLUME /var/lib/postgresql/data, so each
+      # discarded test container orphans ~100MB) are deliberately NOT cleaned
+      # here. They are indistinguishable from lcms's own anonymous volume,
+      # which is exactly why this stays scoped. That is manual cleanup, and a
+      # dev session's mess is its own to clear up.
+      #
+      # Named volumes were never at risk either way: on Docker 29.x
+      # `volume prune` without `--all` only removes ANONYMOUS volumes, so
+      # backend_9xaipal_postgres_data and lcms-db-data are both immune even
+      # while temporarily detached mid-recreate (verified empirically).
       - name: Reclaim disk space (old image layers, build cache, dead volumes)
         if: always()
         run: |
           docker image prune -f
           docker builder prune -f
-          docker container prune -f
-          docker volume prune -f
+          docker container prune -f --filter label=com.docker.compose.project=backend
+          docker volume prune -f --filter label=com.docker.compose.project=backend
           docker system df
