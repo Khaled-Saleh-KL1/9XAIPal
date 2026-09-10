@@ -29,10 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_ask_semaphore, get_current_user
 from app.api.errors import ModelUnavailable, NoLLMConfigured
+from app.chat import grounding
 from app.chat.study_agent import answer_study_question
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.database.connection import async_session_factory
+from app.database.repositories import conversations as conv_repo
 from app.database.repositories import documents as doc_repo
 from app.database.repositories import stickies as sticky_repo
 from app.database.repositories import studies as study_repo
@@ -96,6 +98,16 @@ def _study(row: dict) -> dict:
     }
 
 
+def _jsonb(value):
+    """JSONB columns arrive parsed from asyncpg but as text from some fixtures."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return None
+    return value
+
+
 def _turn(row: dict) -> dict:
     citations = row.get("citations")
     if isinstance(citations, str):
@@ -116,6 +128,7 @@ def _turn(row: dict) -> dict:
         "model": row.get("model"),
         "cited": citations or [],
         "agent_steps": steps or [],
+        "grounding": _jsonb(row.get("grounding")),
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
     }
 
@@ -384,6 +397,22 @@ async def chat_stream(
                     "cited": cited,
                     "agent_steps": steps,
                 })
+
+                # After `done`, same contract as the note and book-chat
+                # streams. `papers` is this study's list in P-number order —
+                # the same mapping the answer's [[P2:41]] markers use.
+                if grounding.enabled() and answer:
+                    try:
+                        async with async_session_factory() as gsession:
+                            report = await grounding.check_desk_answer(
+                                gsession, papers=papers, answer=answer,
+                                agent_steps=steps, model=model or None,
+                            )
+                            await conv_repo.set_turn_grounding(gsession, turn["id"], report)
+                            await gsession.commit()
+                        yield sse({"type": "grounding", "turn_id": str(turn["id"]), "grounding": report})
+                    except Exception:
+                        logger.exception("grounding check failed for study chat %s", sid)
             except NoLLMConfigured as e:
                 yield sse({"type": "error", "detail": str(e.model)})
             except ModelUnavailable as e:

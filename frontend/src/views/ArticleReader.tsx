@@ -1516,6 +1516,9 @@ export function ArticleReader({
                   : [...p.steps, step],
               })),
             onToken: (text) => pacer.push(text),
+            // The answer is complete; the card keeps its streamed text and
+            // shows the check running until the stream closes with the report.
+            onVerifying: () => patch((p) => ({ ...p, verifying: true })),
           },
           undefined,
           draft.marginSide,
@@ -1636,6 +1639,7 @@ export function ArticleReader({
         status: null,
         steps: [],
         error: null,
+        verifying: false,
         parentNoteId: null,
         scope: 'anchor',
         marginSide: composer.marginSide,
@@ -1672,6 +1676,7 @@ export function ArticleReader({
         status: null,
         steps: [],
         error: null,
+        verifying: false,
         parentNoteId,
         // A follow-up belongs to the same surface as its parent: a follow-up
         // to a whole-paper question stays in the panel.
@@ -1889,7 +1894,7 @@ export function ArticleReader({
               note={p}
               onJump={jumpTo}
               onRetry={() => {
-                const retry = { ...p, error: null, answer: '', status: null, steps: [] };
+                const retry = { ...p, error: null, answer: '', status: null, steps: [], verifying: false };
                 void runNote(retry, {
                   kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'table' | 'block',
                   sequence_id: p.anchorSequenceId,

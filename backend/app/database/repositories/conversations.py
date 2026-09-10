@@ -73,6 +73,16 @@ async def create_turn(
     return dict(result.mappings().one())
 
 
+async def set_turn_grounding(session: AsyncSession, turn_id: UUID, grounding: Optional[dict]) -> None:
+    """Attach the evidence check (chat/grounding.py) to an assistant turn —
+    book chat and the desk both persist here. Same after-the-answer contract
+    as notes.set_grounding: the turn already exists with its content saved."""
+    await session.execute(
+        text("UPDATE conversation_turns SET grounding = CAST(:grounding AS jsonb) WHERE id = :id"),
+        {"id": turn_id, "grounding": json.dumps(grounding) if grounding is not None else None},
+    )
+
+
 async def create_trace(
     session: AsyncSession,
     *,
@@ -141,7 +151,7 @@ async def list_turns_by_document(
         text("""
             SELECT id, conversation_id, document_id, role, content,
                    context_type, router_reason, model, citations, created_at,
-                   parent_turn_id
+                   parent_turn_id, grounding
             FROM conversation_turns
             WHERE document_id = :doc_id AND user_id = :user_id
             ORDER BY created_at ASC
@@ -164,7 +174,7 @@ async def list_turns_by_conversation(
         text("""
             SELECT id, conversation_id, document_id, role, content,
                    context_type, router_reason, model, citations, created_at,
-                   parent_turn_id
+                   parent_turn_id, grounding
             FROM conversation_turns
             WHERE document_id = :doc_id AND conversation_id = :conv_id AND user_id = :user_id
             ORDER BY created_at ASC
@@ -227,7 +237,7 @@ async def get_main_chat(
         text("""
             SELECT id, conversation_id, document_id, role, content,
                    context_type, router_reason, model, citations, created_at,
-                   parent_turn_id
+                   parent_turn_id, grounding
             FROM conversation_turns
             WHERE conversation_id = :cid
               AND user_id = :user_id

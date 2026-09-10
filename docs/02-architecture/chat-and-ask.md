@@ -337,6 +337,46 @@ The stored `cited_sequence_ids` are unchanged — the block is still what the ch
 the page is only what it says. See
 [plans/page-numbers-in-citations.md](../plans/page-numbers-in-citations.md).
 
+## The evidence check: every claim is judged, none is rewritten ([chat/grounding.py](../../backend/app/chat/grounding.py))
+
+The trail says what the model fetched; the citations say what it *claims* to rest on. Neither
+says whether the sentence actually follows from the passage — a plausible wrong `[[42]]` looks
+exactly like a right one, and a sentence with no marker at all (the model's own inference, the
+thing a researcher most needs to see) renders identically to a grounded one.
+
+So after every answer, on all three surfaces (margin notes, book chat, the desk), one more model
+call judges the answer sentence by sentence:
+
+```text
+   answer ──split_claims──▶ claims, each with the refs cited *in it*
+                              ([[42]] · [seq:42] · [[P2:42]] all → (document, 42))
+   cited blocks + the blocks the agent READ ──build_evidence──▶ pool (cited first, ~6k chars)
+   claims + pool ──one chat() at temperature 0──▶ strict JSON, one verdict per claim
+                                                    ──▶ GroundingReport, persisted, one SSE event
+```
+
+Verdicts: `supported` / `partial` / `unsupported` / `uncited`. An **uncited claim is checked
+against the whole pool first**: a sentence the model forgot to mark but that *is* in the paper
+comes back `supported` with the block it was found in, not raised as a false alarm — the point is
+to flag inference, not punctuation. An honest admission ("not present in the retrieved sections")
+is `supported` with note `admission`, so the model is never penalised for saying the paper does
+not say something. Headings and lead-ins are not claims.
+
+⚠ **Flag, never rewrite.** The judge annotates the answer the reader already has; it does not
+edit it or hide anything. A silently corrected answer would be its own kind of fabrication.
+
+⚠ **The judge is a model, and it can fail.** Anything that goes wrong — the call, the JSON, a
+verdict count that does not match the claim count — degrades to `status: unavailable`, which the
+UI renders as "couldn't verify", never as a clean bill of health. `_parse_verdicts` is strict for
+this reason: a partial array is rejected whole rather than applied to the first *n* claims.
+
+⚠ **After `done`, in its own session.** The answer is yielded and persisted first; the check runs
+afterwards, commits separately, and arrives as a trailing `grounding` event. A judge failure can
+therefore never lose an answer, and the reader sees the answer while the check runs.
+
+Setting: `GROUNDING_CHECK` (default on). Design note and the live verification:
+[plans/answer-evidence.md](../plans/answer-evidence.md).
+
 ## The progress ceiling
 
 `max_sequence_id` is the last block the reader has actually been shown. Two clients send it, for

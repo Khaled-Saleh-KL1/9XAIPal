@@ -196,6 +196,12 @@ class Settings(BaseSettings):
     # Skip the LLM topic-guardrail when the user is reading a paper. Paper Q&A is
     # in-scope by definition, so this removes a whole model call per question.
     guardrail_skip_in_paper: bool = True
+    # After every AI answer, run one extra model call that checks each claim
+    # against the passages it cites and flags what the paper does not
+    # actually say (chat/grounding.py). One call per answer; free on a local
+    # model, cents on a cloud one. Off = answers render exactly as before,
+    # with no verdicts at all — never a false "verified".
+    grounding_check: bool = True
 
     @property
     def effective_classifier_model(self) -> str:

@@ -54,6 +54,26 @@ async def get_chunk_by_sequence(
     return dict(row) if row else None
 
 
+async def get_chunks_by_sequence_ids(
+    session: AsyncSession, document_id: UUID, sequence_ids: list[int]
+) -> list[dict]:
+    """``{sequence_id, plain_text, page_start}`` for a set of blocks, in
+    reading order — the evidence pool for chat/grounding.py. One query for
+    the whole set rather than one get_chunk_by_sequence per block: an answer
+    routinely cites a dozen blocks and the agent read forty more."""
+    if not sequence_ids:
+        return []
+    result = await session.execute(
+        text("""
+            SELECT sequence_id, plain_text, page_start FROM chunks
+            WHERE document_id = :document_id AND sequence_id = ANY(:sequence_ids)
+            ORDER BY sequence_id ASC
+        """),
+        {"document_id": document_id, "sequence_ids": list(sequence_ids)},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
 async def get_next_chunk(
     session: AsyncSession, document_id: UUID, current_sequence_id: int
 ) -> Optional[dict]:

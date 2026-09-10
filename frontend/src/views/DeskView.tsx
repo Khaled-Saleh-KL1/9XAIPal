@@ -206,6 +206,7 @@ export function DeskView({
         status: null,
         steps: [],
         error: null,
+        verifying: false,
       };
       setPending(draft);
       const patch = (fn: (p: PendingTurn) => PendingTurn) =>
@@ -237,6 +238,7 @@ export function DeskView({
               }));
             },
             onToken: (text) => pacer.push(text),
+            onVerifying: () => patch((p) => ({ ...p, verifying: true })),
           },
           model,
         );

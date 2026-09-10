@@ -32,4 +32,11 @@ class AskResponse(BaseModel):
     # When the model performed live research, this contains a short human-readable status
     research_performed: bool = False
     research_summary: Optional[str] = None  # e.g. "Studied 12 sources across 3 iterations"
+    # The persisted assistant turn, so the evidence check (chat/grounding.py)
+    # run after the answer can be attached to the right row.
+    turn_id: Optional[UUID] = None
+    # The book agent's tool trail (the blocks it READ feed the evidence check).
+    agent_steps: list[dict] = []
+    # The evidence check's report, filled in by the endpoint after the answer.
+    grounding: Optional[dict] = None
 

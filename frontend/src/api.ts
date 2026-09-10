@@ -88,6 +88,42 @@ export interface Citation {
   source?: string;
 }
 
+/**
+ * The evidence check behind an answer (backend `chat/grounding.py`).
+ *
+ * Runs after every answer on every surface: the answer is split into claims,
+ * each claim is judged against the passages it cited (and the ones the agent
+ * read), and the verdicts come back as one trailing `grounding` SSE event, then
+ * persist on the note or turn. The judge annotates — it never rewrites or hides
+ * anything — and when it cannot run the report says so (`unavailable`) rather
+ * than pretending everything checked out.
+ */
+export type GroundingVerdict = 'supported' | 'partial' | 'unsupported' | 'uncited';
+
+export interface GroundingClaim {
+  /** The sentence as the reader sees it, markers stripped. */
+  text: string;
+  /** What the answer cited for it: [document_id | null, sequence_id]. */
+  refs: [string | null, number][];
+  verdict: GroundingVerdict;
+  /** The passage the judge tied the claim to; null when it found none. */
+  evidence: { document_id: string; sequence_id: number; page: number | null } | null;
+  /** The judge's quote from that passage — the evidence, shown beside the claim. */
+  quote: string;
+  /** One line from the judge on a partial/unsupported/uncited verdict. */
+  note: string;
+}
+
+export interface GroundingReport {
+  status: 'verified' | 'unavailable';
+  /** Why, when `unavailable`. */
+  reason?: string;
+  /** The judge model, when it ran. */
+  model?: string | null;
+  claims: GroundingClaim[];
+  summary: Partial<Record<GroundingVerdict, number>>;
+}
+
 export interface AskResponse {
   answer: string;
   context_type: ContextType | string; // ContextType for known values, string for forward compatibility
@@ -98,6 +134,10 @@ export interface AskResponse {
   // New research capability signals (from hybrid research agent)
   research_performed?: boolean;
   research_summary?: string | null;
+  /** The persisted assistant turn, so the evidence check can be matched to it. */
+  turn_id?: string | null;
+  /** The evidence check; undefined until it arrives, absent when turned off. */
+  grounding?: GroundingReport | null;
 }
 
 export interface ChatTurn {
@@ -109,6 +149,8 @@ export interface ChatTurn {
   citations: Citation[] | null;
   /** The agent's tool trail, when an agent answered this turn (books). */
   agent_steps?: AgentStep[] | null;
+  /** The evidence check; null for turns answered before it existed or with it off. */
+  grounding?: GroundingReport | null;
   created_at: string | null;
 
   // === Sub-thread (nested tangent) support ===
@@ -601,6 +643,8 @@ export interface PaperNote {
   scope: 'anchor' | 'document';
   /** How the answer was reached. Empty for notes written before this existed. */
   agent_steps: AgentStep[];
+  /** The evidence check; null for notes written before it existed or with it off. */
+  grounding: GroundingReport | null;
   /** What the provider reported answering. Shown on the card. */
   model: string | null;
   /** What the reader picked. Follow-ups inherit this, never override it. */
@@ -645,6 +689,12 @@ export interface NoteStreamHandlers {
   onStep: (step: AgentStep) => void;
   /** Answer text, token by token. */
   onToken: (text: string) => void;
+  /**
+   * The answer is complete and the evidence check is running. The stream
+   * stays open until the check's `grounding` event (or closes at once when
+   * the check is off), so the promise below resolves only after it.
+   */
+  onVerifying?: () => void;
 }
 
 export interface NoteResult {
@@ -654,6 +704,8 @@ export interface NoteResult {
   retrieval_mode: string | null;
   cited_sequence_ids: number[];
   agent_steps: AgentStep[];
+  /** Undefined when the check is off; `unavailable` when it could not run. */
+  grounding?: GroundingReport;
 }
 
 /**
@@ -742,6 +794,10 @@ export async function askNoteStream(
           cited_sequence_ids: (ev.cited_sequence_ids as number[]) || [],
           agent_steps: (ev.agent_steps as AgentStep[]) || [],
         };
+        handlers.onVerifying?.();
+        break;
+      case 'grounding':
+        if (result) result.grounding = ev.grounding as GroundingReport;
         break;
     }
   };
@@ -928,6 +984,8 @@ export interface AskStreamHandlers {
   onReplace?: () => void;
   /** One tool call from the agent (books). Emitted twice: running → done. */
   onStep?: (step: AgentStep) => void;
+  /** The answer is complete; the evidence check is running (see NoteStreamHandlers). */
+  onVerifying?: () => void;
 }
 
 /**
@@ -1018,7 +1076,12 @@ export async function askPaperStream(
           conversation_id: (ev.conversation_id as string) ?? null,
           research_performed: Boolean(ev.research_performed),
           research_summary: (ev.research_summary as string) ?? null,
+          turn_id: (ev.turn_id as string) ?? null,
         };
+        handlers.onVerifying?.();
+        break;
+      case 'grounding':
+        if (result) result.grounding = ev.grounding as GroundingReport;
         break;
     }
   };
@@ -1356,6 +1419,8 @@ export interface StudyTurn {
   model: string | null;
   cited: StudyCitation[];
   agent_steps: AgentStep[];
+  /** The evidence check; null for turns answered before it existed or with it off. */
+  grounding: GroundingReport | null;
   created_at: string | null;
 }
 
@@ -1436,6 +1501,8 @@ export interface StudyStreamHandlers {
   onStatus: (message: string) => void;
   onStep: (step: AgentStep) => void;
   onToken: (text: string) => void;
+  /** The answer is complete; the evidence check is running (see NoteStreamHandlers). */
+  onVerifying?: () => void;
 }
 
 export interface StudyResult {
@@ -1444,6 +1511,8 @@ export interface StudyResult {
   model: string;
   cited: StudyCitation[];
   agent_steps: AgentStep[];
+  /** Undefined when the check is off; `unavailable` when it could not run. */
+  grounding?: GroundingReport;
 }
 
 /**
@@ -1499,6 +1568,10 @@ export async function askStudyStream(
           cited: (ev.cited as StudyCitation[]) || [],
           agent_steps: (ev.agent_steps as AgentStep[]) || [],
         };
+        handlers.onVerifying?.();
+        break;
+      case 'grounding':
+        if (result) result.grounding = ev.grounding as GroundingReport;
         break;
     }
   };
