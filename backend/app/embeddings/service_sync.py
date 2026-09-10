@@ -18,17 +18,32 @@ logger = get_logger(__name__)
 # Configurable via EMBED_MAX_CHARS (cloud embedders allow much more).
 
 
-def get_chunks_without_embeddings_sync(session: Session, document_id: UUID, limit: int = 20) -> list[dict]:
-    """Retrieve chunks without embeddings synchronously."""
+def get_chunks_without_embeddings_sync(
+    session: Session,
+    document_id: UUID,
+    limit: int | None = 20,
+    *,
+    include_existing: bool = False,
+) -> list[dict]:
+    """Retrieve chunks that need embedding work synchronously.
+
+    The normal ingestion path asks only for missing rows. A repair can set
+    ``include_existing`` to regenerate every chunk while the old vector stays
+    available until its replacement is committed. The chunk id remains the
+    sole upsert key, so a repair can never write one document's vector over a
+    different document's chunk.
+    """
+    limit_sql = "" if limit is None else "LIMIT :limit"
+    missing_sql = "" if include_existing else "AND ce.chunk_id IS NULL"
     result = session.execute(
-        text("""
+        text(f"""
             SELECT c.id, c.plain_text, c.chunk_type FROM chunks c
             LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id
-            WHERE c.document_id = :document_id AND ce.chunk_id IS NULL
+            WHERE c.document_id = :document_id {missing_sql}
             ORDER BY c.sequence_id
-            LIMIT :limit
+            {limit_sql}
         """),
-        {"document_id": document_id, "limit": limit},
+        {"document_id": document_id, **({"limit": limit} if limit is not None else {})},
     )
     return [dict(r) for r in result.mappings().all()]
 
@@ -80,7 +95,11 @@ def _persist_batch(session: Session, model_name: str, batch: list[dict], embeddi
 
 
 def embed_document_chunks_sync(
-    session: Session, document_id: UUID, batch_size: int = 20
+    session: Session,
+    document_id: UUID,
+    batch_size: int = 20,
+    *,
+    force: bool = False,
 ) -> int:
     """Generate embeddings for all un-embedded chunks of a document in committed batches.
 
@@ -104,8 +123,22 @@ def embed_document_chunks_sync(
     total_embedded = 0
     workers = max(1, settings.embedding_max_concurrency)
 
+
+    # Take a stable snapshot for forced repairs; re-querying for missing rows
+    # would return the same rows forever after each upsert.
+    forced_chunks = (
+        get_chunks_without_embeddings_sync(
+            session, document_id, limit=None, include_existing=True
+        )
+        if force
+        else None
+    )
     while True:
-        chunks = get_chunks_without_embeddings_sync(session, document_id, limit=batch_size * workers)
+        if forced_chunks is not None:
+            chunks = forced_chunks[: batch_size * workers]
+            del forced_chunks[: len(chunks)]
+        else:
+            chunks = get_chunks_without_embeddings_sync(session, document_id, limit=batch_size * workers)
         if not chunks:
             break
 

@@ -11,7 +11,10 @@ PDF ingestion (MinerU + chunking + assets) and embedding generation.
 
 Contains the real Celery `@celery_app.task` definitions:
 - `process_ingestion`: full MinerU extraction pipeline (sync DB session)
-- `embed_document`: batch embedding for a document
+- `embed_document`: batch embedding for a document; accepts `force=True` for a
+  safe full re-embedding pass that replaces vectors by chunk id without first
+  deleting the existing vector table. `scripts/reembed_library.py` queues this
+  for every embedded document with chunks.
 - `generate_section_summaries`: high-quality hierarchical section + paper-level summarization (runs after embeddings; can take many minutes; quality-first personal feature)
 
 These are what the API actually calls via `.delay()`.

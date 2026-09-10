@@ -177,9 +177,9 @@ def process_article_ingestion(
     default_retry_delay=10,
     acks_late=True,
 )
-def embed_document(self, document_id: str) -> dict:
-    """Generate embeddings for every un-embedded chunk of a document synchronously."""
-    logger.info(f"[celery] embed_document start document={document_id}")
+def embed_document(self, document_id: str, force: bool = False) -> dict:
+    """Generate embeddings for a document, optionally regenerating every chunk."""
+    logger.info(f"[celery] embed_document start document={document_id} force={force}")
     
     # Dispose of engine connection pool to avoid sharing sockets across forked Celery processes
     sync_engine.dispose()
@@ -187,7 +187,7 @@ def embed_document(self, document_id: str) -> dict:
     doc_uuid = UUID(document_id)
     try:
         with sync_session() as session:
-            count = embed_document_chunks_sync(session, doc_uuid)
+            count = embed_document_chunks_sync(session, doc_uuid, force=force)
     except Exception as exc:
         logger.exception(f"[celery] embed_document failed document={document_id}: {exc}")
         try:
@@ -201,6 +201,10 @@ def embed_document(self, document_id: str) -> dict:
 
     logger.info(f"[celery] embed_document done document={document_id} embedded={count}")
 
+    if force:
+        # A repair changes vectors only; summaries and figure descriptions are
+        # independent, prompt-hash-cached data and must not be regenerated.
+        return {"document_id": document_id, "embedded": count, "forced": True}
     # Fire the high-quality section summarization pass (personal quality-first mode).
     # This can take 5-15+ minutes per paper depending on length and hardware.
     # The author explicitly accepts the wait for excellent overview answers.
