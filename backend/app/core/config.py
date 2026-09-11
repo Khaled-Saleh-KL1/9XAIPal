@@ -421,8 +421,15 @@ class Settings(BaseSettings):
     # scrape API, tried second.
     crw_api_key: str = ""
 
-    # Upload limits
-    max_upload_size_mb: int = 100
+    # Upload limits. 500, not 100: this is a private box for Khaled and a
+    # few friends, and the library holds whole books and long theses — a
+    # scanned textbook is routinely 200 MB+. The number is safe to be
+    # generous with because the upload is streamed to disk in 1 MB chunks
+    # with the count checked as it goes (docs/issues/010), so the cap
+    # bounds disk, not API-worker memory. ⚠ nginx enforces its own copy
+    # (client_max_body_size in backend/nginx/9xaipal.conf); raise both or
+    # the browser sees nginx's bare 413 page before this value matters.
+    max_upload_size_mb: int = 500
     # Hard ceiling on ingestion jobs that are queued or in progress at once
     # (see app/services/ingestion.py::create_ingestion_job) — Celery runs
     # this box's extraction pipeline at --concurrency=1, so this is what
