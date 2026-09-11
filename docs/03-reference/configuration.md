@@ -95,7 +95,7 @@ cloud API; each cloud provider has its own `*_CHAT_MODEL` above.
 | `MINERU_TIMEOUT_SEC` | `14400` (4 h) | Wall clock for one MinerU subprocess. High by default because a 700-page book on CPU takes hours. |
 | `ALLOW_PYMUPDF_FALLBACK` | `false` | `true` degrades to text-only extraction when MinerU is missing, with no OCR, no tables, no math. Default `false` so a missing extractor fails loudly. |
 | `MINERU_PAGE_BATCH_SIZE` | `100` | Compose-only. Extract in page-range batches so peak RAM stays bounded on long books. `0` disables. |
-| `MAX_UPLOAD_SIZE_MB` | `100` | Hard cap on the upload body. |
+| `MAX_UPLOAD_SIZE_MB` | `500` | Hard cap on the upload body — generous on purpose: whole books and scanned theses are routinely 200 MB+, and since the upload is streamed (010) the cap bounds disk, not memory. nginx has its own `client_max_body_size`, kept equal in `backend/nginx/9xaipal.conf`; both must move together. |
 
 ## Ingest profile
 
