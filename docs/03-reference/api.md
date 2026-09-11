@@ -50,6 +50,7 @@ GET    /papers/{paper_id}/chapters
 GET    /papers/{paper_id}/pages
 GET    /papers/{paper_id}/references
 GET    /papers/{paper_id}/references/{ref_number}/resolve
+GET    /papers/{paper_id}/references/{ref_number}/resolve/stream   (SSE)
 POST   /papers/{paper_id}/references/{ref_number}/add
 GET    /papers/{paper_id}/figure-descriptions
 GET    /papers/{paper_id}/notes
@@ -544,6 +545,27 @@ per chip, not for the whole list up front). `resolve_status` becomes `resolved` 
 (both cached permanently — a completed lookup) or `unavailable` (no `SEMANTIC_SCHOLAR_API_KEY`
 configured, rate-limited, or a network error — **not** cached as final, retried on the next call).
 404 if `ref_number` doesn't exist on this paper.
+
+⚠ Semantic Scholar's `/paper/search/match` is a **title** matcher: the whole entry ("Authors.
+Title. Venue, year.") 404s, so the title is guessed out of the entry first
+(`services/references.py::title_candidates`, up to two guesses, one call each). Before that every
+citation in the corpus was cached as a permanent `no_match`.
+
+### `GET /papers/{paper_id}/references/{ref_number}/resolve/stream`
+
+The same lookup as an SSE stream — what the citation chip actually calls. The box is allowed one
+Semantic Scholar request per second in total, so simultaneous readers are served one by one from a
+shared Redis line (`core/pacer.py`), and a 429 (common even when correctly spaced — see
+[configuration.md](configuration.md#bibliography-citations)) re-queues. A plain GET would just
+hang for those seconds; this one says so:
+
+```
+data: {"type": "queued",   "position": 3, "wait_seconds": 3.1}   only when there is a wait; again on a re-queue
+data: {"type": "resolved", "entry": <ReferenceEntry>}            always, when the turn comes
+data: {"type": "error",    "detail": "..."}
+```
+
+Ownership and the 404 are checked before the stream opens, so those are still HTTP errors.
 
 ### `POST /papers/{paper_id}/references/{ref_number}/add`
 

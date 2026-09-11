@@ -1,11 +1,13 @@
 """Chunk endpoints: sequential reading by sequence_order."""
 
+import asyncio
+import json
 import re
 from uuid import UUID, uuid4
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,8 @@ from app.services import book_outline
 from app.services.references import parse_references
 from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.search.semantic_scholar_client import match_reference, Unresolved
+from app.core import pacer
+from app.database.connection import async_session_factory
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import figure_descriptions as fig_desc_repo
 from app.database.repositories import paper_references as ref_repo
@@ -648,10 +652,20 @@ async def resolve_reference(
     if not row:
         raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
 
+    return await _resolve_row(db, paper_id, ref_number, row)
+
+
+async def _resolve_row(
+    db: AsyncSession, paper_id: UUID, ref_number: int, row: dict, *, on_queued=None,
+) -> ReferenceEntry:
+    """The lookup-and-cache step shared by the JSON and streaming resolve
+    routes. `on_queued` is forwarded to the Semantic Scholar client's shared
+    1 req/s line (core/pacer.py) so the streaming route can report the
+    caller's place; the JSON route just waits."""
     if row["resolve_status"] in ("resolved", "no_match"):
         return _entry_out(row)
 
-    result = await match_reference(row["raw_text"])
+    result = await match_reference(row["raw_text"], on_queued=on_queued)
     if isinstance(result, Unresolved):
         updated = await ref_repo.save_resolution(db, paper_id, ref_number, status=result.value)
         await db.commit()
@@ -669,6 +683,82 @@ async def resolve_reference(
     )
     await db.commit()
     return _entry_out(updated)
+
+
+@router.get("/{paper_id}/references/{ref_number}/resolve/stream")
+async def resolve_reference_stream(
+    paper_id: UUID,
+    ref_number: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """`/resolve` as an SSE stream, for the citation chip.
+
+    Semantic Scholar allows one request per second for the whole box, so
+    when several readers open citations at once they are served one by one
+    (core/pacer.py). A plain JSON route would just hang for those seconds
+    with nothing to show; this one sends `queued` first — the reader's
+    place in line and roughly how long — so the chip can say "the link
+    will open shortly", then `resolved` with the entry when the turn comes.
+    Events:
+
+        {"type": "queued",   "position": 3, "wait_seconds": 3.2}   (only if there is a wait)
+        {"type": "resolved", "entry": <ReferenceEntry>}
+        {"type": "error",    "detail": "..."}
+
+    Ownership and the 404 are checked before the stream opens, so those are
+    still ordinary HTTP errors, not events.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    row = await ref_repo.get_reference(db, paper_id, ref_number)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
+
+    def sse(event: dict) -> str:
+        return f"data: {json.dumps(event)}\n\n"
+
+    async def event_stream():
+        # The request-scoped `db` closes when this handler returns, which is
+        # before the generator runs — same reason the chat streams open
+        # their own session.
+        queue: asyncio.Queue[str] = asyncio.Queue()
+
+        async def on_queued(turn: pacer.Turn) -> None:
+            await queue.put(sse({
+                "type": "queued",
+                "position": turn.position,
+                "wait_seconds": round(turn.wait_seconds, 1),
+            }))
+
+        async def run() -> None:
+            try:
+                async with async_session_factory() as session:
+                    entry = await _resolve_row(session, paper_id, ref_number, row, on_queued=on_queued)
+                await queue.put(sse({"type": "resolved", "entry": entry.model_dump(mode="json")}))
+            except Exception as e:  # noqa: BLE001 — surfaced to the reader, then the stream ends
+                logger.exception("reference resolve stream failed for %s [%s]", paper_id, ref_number)
+                await queue.put(sse({"type": "error", "detail": str(e) or "Could not resolve this reference"}))
+            finally:
+                await queue.put("")
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                frame = await queue.get()
+                if frame == "":
+                    break
+                yield frame
+        finally:
+            task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{paper_id}/references/{ref_number}/add", response_model=AddReferenceResponse, status_code=201)

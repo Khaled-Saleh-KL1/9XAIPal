@@ -335,6 +335,14 @@ services:
       LINKUP_API_KEY: ${LINKUP_API_KEY:-}
       EXA_API_KEY: ${EXA_API_KEY:-}
       SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+      # Bibliography citation lookups (search/semantic_scholar_client.py).
+      # ⚠ This block is an allow-list, not a pass-through: a key that is in
+      # .env but not listed here never reaches the container. That is
+      # exactly what happened to this one — set in .env on 2026-09-11 and
+      # silently absent until this line existed.
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+      SEMANTIC_SCHOLAR_MIN_INTERVAL_SECONDS: ${SEMANTIC_SCHOLAR_MIN_INTERVAL_SECONDS:-1.05}
+      SEMANTIC_SCHOLAR_MAX_ATTEMPTS: ${SEMANTIC_SCHOLAR_MAX_ATTEMPTS:-4}
       # Managed scrape APIs fronting article-import fetch (see
       # app/services/article_extraction.py) — same "third-party network
       # egress for one URL, nothing else leaves" shape as the web-search

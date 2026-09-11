@@ -220,6 +220,18 @@ own docstring for the full cascade order and reasoning.
 cascade just skips straight to the free direct fetch, which is exactly what article import already
 did before these existed. They only change behavior for the pages that fetch would have failed on.
 
+## Bibliography citations
+
+Resolving a paper's own "[12]" citations (and the author/year enrichment on BibTeX/CSV export)
+against Semantic Scholar — `search/semantic_scholar_client.py`. Separate from the web-search keys
+above: a different provider for a different question ("what paper is this citation?").
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SEMANTIC_SCHOLAR_API_KEY` | (empty) | Free key from <https://www.semanticscholar.org/product/api>, sent as `x-api-key`. ⚠ Effectively required: the unauthenticated tier 429s from this box on every call. Empty → every citation stays `resolve_status='unavailable'` (never cached as final; resolves on its next open once the key lands). |
+| `SEMANTIC_SCHOLAR_MIN_INTERVAL_SECONDS` | `1.05` | The keyed tier allows **one request per second per key**, for the whole box. Every call — from any API worker, any reader, the export loop — waits its turn in one Redis-backed FIFO line (`core/pacer.py`) spaced this far apart; simultaneous readers are told their place ("in the queue — #3, the link will open shortly") and served in arrival order. |
+| `SEMANTIC_SCHOLAR_MAX_ATTEMPTS` | `4` | Semantic Scholar's limiter is bursty: measured live (2026-09-11), a third to a half of correctly spaced requests still get 429. A 429 re-queues in the same line and backs off one extra interval per attempt; only when the attempts are spent does the citation show "unavailable" with a Retry. |
+
 ## Background jobs
 
 | Key | Default | Purpose |
