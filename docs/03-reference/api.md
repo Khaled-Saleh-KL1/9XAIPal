@@ -1135,9 +1135,9 @@ Embeds the query and returns the top-K chunks by cosine similarity.
 
 Bypasses the chat router and hits the web search cascade directly, with the same
 ranking that EXTERNAL would apply. Requires a session (it spends provider quota —
-[docs/issues/002](../issues/002-web-search-endpoint-is-public.md)) and is limited
-to 20 calls per user per minute (`429` with `Retry-After` past that); `q` is
-1–500 chars, `limit` 1–10.
+[docs/issues/002](../issues/002-web-search-endpoint-is-public.md)); `q` is 1–500 chars.
+No per-user rate limit and no ceiling on `limit`, on purpose: the cascade ends at
+keyless DuckDuckGo, so an exhausted key degrades to a free provider, not an error.
 
 ---
 

@@ -6,7 +6,7 @@
 
 ## Resolution
 
-The endpoint now requires an admitted session, constrains query and result sizes, and applies a Redis-backed per-user rate limit.
+The endpoint now requires an admitted session and bounds the query length. The per-user rate limit and the result-count ceiling the first fix added were **removed on 2026-09-11 at Khaled's request**: the provider cascade rotates through several keyed APIs and ends at keyless DuckDuckGo, so an exhausted quota degrades to a free provider rather than an error, and a cap only throttled the handful of readers this box serves. Authentication is the fix; the quota is theirs to use.
 
 ## What happens
 
