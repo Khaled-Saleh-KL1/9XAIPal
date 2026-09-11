@@ -137,7 +137,7 @@ async def test_web_search_requires_a_session_before_provider_is_called(client, m
 
 
 @pytest.mark.asyncio
-async def test_authenticated_web_search_is_bounded_and_calls_provider(client, monkeypatch):
+async def test_authenticated_web_search_calls_provider_uncapped(client, monkeypatch):
     signup = await client.post("/api/v1/auth/signup", json={
         "email": "searcher@example.com", "password": "correct horse battery",
     })
@@ -156,8 +156,11 @@ async def test_authenticated_web_search_is_bounded_and_calls_provider(client, mo
     provider.assert_awaited_once_with("transformers", limit=1)
     assert response.json()["total"] == 1
 
-    invalid_limit = await client.get(
-        "/api/v1/search/web", params={"q": "transformers", "limit": 11}
-    )
-    assert invalid_limit.status_code == 422
-    provider.assert_awaited_once()
+    # No ceiling on `limit` and no per-user rate limit: a burst of searches
+    # all reach the provider cascade (which ends at keyless DuckDuckGo).
+    for _ in range(25):
+        burst = await client.get(
+            "/api/v1/search/web", params={"q": "transformers", "limit": 30}
+        )
+        assert burst.status_code == 200
+    assert provider.await_count == 26
