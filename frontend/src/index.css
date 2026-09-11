@@ -3078,6 +3078,17 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 .bib-ref-add:hover, .bib-ref-retry:hover, .bib-ref-open:hover { border-color: var(--accent); }
 .bib-ref-add:disabled { opacity: 0.6; }
 .bib-ref-open { margin-left: 4px; }
+/* Waiting in the shared Semantic Scholar line: accent, not faint, so a
+   several-second wait reads as "in progress, on purpose" rather than as a
+   stuck spinner. */
+.bib-ref-queued { color: var(--accent); }
+.bib-ref-link {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent);
+}
 
 /* ── Sticky board ── */
 .board {

@@ -388,6 +388,17 @@ class Settings(BaseSettings):
     # header; empty means "not configured" and the client returns
     # resolve_status='unavailable' rather than failing loudly.
     semantic_scholar_api_key: str = ""
+    # The keyed tier allows ONE request per second per key, shared by every
+    # API worker. All Semantic Scholar calls go through one Redis-backed FIFO
+    # line (core/pacer.py) spaced this far apart; readers who arrive while
+    # someone else's slot is pending are told their place and served in
+    # order. Slightly over 1.0 so jitter between "slot time" and "socket
+    # write" can't land two requests inside the same provider-side second.
+    semantic_scholar_min_interval_seconds: float = 1.05
+    # Semantic Scholar's limiter is bursty: measured live, a third to a half
+    # of correctly spaced requests still get 429. Each retry re-queues in the
+    # shared line (fair to other readers) and backs off one more interval.
+    semantic_scholar_max_attempts: int = 4
 
     # SerpApi (https://serpapi.com) — a paid scraping API returning genuine
     # Google SERP data (organic_results / images_results). This is the only

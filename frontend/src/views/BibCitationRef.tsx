@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { resolveReference, addReferenceToLibrary, getPaperProgress, type ReferenceEntry } from '../api';
+import { resolveReferenceStream, addReferenceToLibrary, getPaperProgress, type ReferenceEntry, type ResolveQueueState } from '../api';
 import type { ReferenceIndex } from '../lib/references';
 
 interface RowState {
   entry: ReferenceEntry;
   resolving: boolean;
+  /** Set while the lookup is waiting its turn in the shared 1 req/s line;
+   * null once it fires (or when there was no wait). */
+  queue: ResolveQueueState | null;
   adding: boolean;
   error: string | null;
   addResult: { id: string; status: string; already_existed: boolean } | null;
@@ -46,7 +49,7 @@ export function BibCitationRef({
     const m = new Map<number, RowState>();
     for (const n of numbers) {
       const entry = refIndex.byNumber.get(n);
-      if (entry) m.set(n, { entry, resolving: false, adding: false, error: null, addResult: null, progress: null });
+      if (entry) m.set(n, { entry, resolving: false, queue: null, adding: false, error: null, addResult: null, progress: null });
     }
     return m;
   });
@@ -66,12 +69,12 @@ export function BibCitationRef({
     // docstring); 'unavailable' and the initial 'pending' both mean "worth
     // trying" — the same distinction the backend makes about what to cache.
     if (!row || row.resolving || row.entry.resolve_status === 'resolved' || row.entry.resolve_status === 'no_match') return;
-    patchRow(n, { resolving: true, error: null });
+    patchRow(n, { resolving: true, queue: null, error: null });
     try {
-      const updated = await resolveReference(paperId, n);
-      patchRow(n, { resolving: false, entry: updated });
+      const updated = await resolveReferenceStream(paperId, n, (queue) => patchRow(n, { queue }));
+      patchRow(n, { resolving: false, queue: null, entry: updated });
     } catch (e) {
-      patchRow(n, { resolving: false, error: (e as Error).message || 'Could not resolve this reference' });
+      patchRow(n, { resolving: false, queue: null, error: (e as Error).message || 'Could not resolve this reference' });
     }
   };
 
@@ -152,7 +155,18 @@ function BibRefRow({
       <span className="bib-ref-num">[{number}]</span>
       <span className="bib-ref-body">
         <span className="cite-peek-muted">{entry.raw_text}</span>
-        {row.resolving && <span className="bib-ref-status">Looking it up…</span>}
+        {row.resolving && (
+          row.queue ? (
+            // Semantic Scholar allows the whole box one lookup per second, so
+            // simultaneous readers are served in order. Say so, with the
+            // place in line, rather than leaving a spinner that looks stuck.
+            <span className="bib-ref-status bib-ref-queued">
+              In the queue — {row.queue.position === 1 ? 'next up' : `#${row.queue.position}`}, the link will open shortly…
+            </span>
+          ) : (
+            <span className="bib-ref-status">Looking it up…</span>
+          )
+        )}
         {row.error && <span className="cite-peek-error">{row.error}</span>}
         {entry.resolve_status === 'no_match' && !row.resolving && (
           <span className="bib-ref-status">
@@ -176,6 +190,16 @@ function BibRefRow({
             → {entry.resolved_title}
             {entry.resolved_authors ? ` — ${entry.resolved_authors}` : ''}
             {entry.resolved_year ? ` (${entry.resolved_year})` : ''}
+            {entry.resolved_pdf_url && (
+              <a
+                className="bib-ref-link"
+                href={entry.resolved_pdf_url}
+                target="_blank" rel="noopener noreferrer"
+                title="Open the open-access PDF Semantic Scholar found"
+              >
+                PDF ↗
+              </a>
+            )}
             {alreadyThere ? (
               <span className="bib-ref-status">
                 Already in your library.

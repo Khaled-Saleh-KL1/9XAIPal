@@ -447,6 +447,68 @@ export async function resolveReference(paperId: string, number: number): Promise
   return res.json();
 }
 
+/** The reader's place in the Semantic Scholar line: the box is allowed one
+ * request per second in total, so simultaneous lookups are served in
+ * arrival order. `position` counts the slots ahead (1 = next). */
+export interface ResolveQueueState {
+  position: number;
+  wait_seconds: number;
+}
+
+/** `resolveReference` as a stream: same result, but `onQueued` fires first
+ * whenever the lookup has to wait its turn, so the chip can say "opens
+ * shortly" instead of sitting on a spinner for several seconds. Never fires
+ * when the line is empty — the common case is indistinguishable from the
+ * JSON route. */
+export async function resolveReferenceStream(
+  paperId: string,
+  number: number,
+  onQueued?: (state: ResolveQueueState) => void,
+): Promise<ReferenceEntry> {
+  const res = await fetch(`${BASE}/papers/${paperId}/references/${number}/resolve/stream`);
+  if (!res.ok || !res.body) throw new Error(`Reference resolve failed: ${res.status}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let entry: ReferenceEntry | null = null;
+  let streamError: string | null = null;
+
+  const handleEvent = (raw: string) => {
+    let ev: Record<string, unknown>;
+    try { ev = JSON.parse(raw); } catch { return; }
+    switch (ev.type) {
+      case 'queued':
+        onQueued?.({ position: Number(ev.position) || 0, wait_seconds: Number(ev.wait_seconds) || 0 });
+        break;
+      case 'resolved':
+        entry = ev.entry as ReferenceEntry;
+        break;
+      case 'error':
+        streamError = String(ev.detail || 'Could not resolve this reference');
+        break;
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data:')) handleEvent(line.slice(5).trim());
+      }
+    }
+  }
+
+  if (streamError) throw new Error(streamError);
+  if (!entry) throw new Error('Reference resolve ended unexpectedly');
+  return entry;
+}
+
 /** Queue a resolved reference for ingestion. Returns immediately (the same
  * shape importArticleUrl's response has) — poll getPaperProgress(id) for
  * status, same as any other import. */
