@@ -33,7 +33,12 @@ hash when the user does not exist) and both answer `401 Invalid email or passwor
 "email exists" check answers `409` with a message that does not say which detail was wrong, and
 a race between two signups for the same email is caught by the `LOWER(email)` unique index and
 mapped to the same 409 rather than a 500 ([docs/issues/018](../issues/018-concurrent-signups-return-500.md)).
-Logout deletes the Redis key and frees the capacity slot immediately.
+Logout deletes the Redis key and frees the capacity slot immediately. The client side is the
+name badge in every view's header (`UserMenuInline`): click it, one red **Sign out** item. ⚠ The
+menu is portalled to `<body>` at a fixed position rather than dropped inside the badge — the
+library's header row is `overflow-x: auto` so it can swipe on a phone, and an overflow-x that is
+not `visible` clips overflow-y too, so the old inline dropdown was drawn and cut off at the
+header's edge: "I can't sign out" was true on the library and false on the Desk.
 
 **Why opaque-and-server-side, not a signed cookie.** A signed cookie needs no storage but cannot
 be revoked short of rotating the signing secret, which logs everyone out at once. Redis is already
