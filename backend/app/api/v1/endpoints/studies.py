@@ -66,6 +66,12 @@ class StudyPapersRequest(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1)
     model: Optional[str] = None
+    # Which of the scope's conversations this turn continues. None: a new
+    # conversation when `new_conversation` is set, else the scope's most
+    # recent one (or a new one if it has none) — the behaviour every client
+    # got before conversations were listable.
+    conversation_id: Optional[UUID] = None
+    new_conversation: bool = False
 
 
 def _display_title(doc: dict) -> str:
@@ -277,23 +283,56 @@ async def set_study_papers(
 
 # ── The chat ────────────────────────────────────────────────────────────────
 
-@router.get("/{study_id}/chat")
-async def get_chat(
+@router.get("/{study_id}/conversations")
+async def list_conversations(
     study_id: str, db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Every conversation this scope has had, most recent first — the desk's
+    "Chats · N" list. Same summary shape as the book reader's."""
     sid, _ = await _resolve_scope(db, study_id, current_user["id"])
-    rows = await study_repo.list_turns(db, current_user["id"], sid)
-    return {"turns": [_turn(r) for r in rows]}
+    rows = await study_repo.list_conversations(db, current_user["id"], sid)
+    return {
+        "conversations": [
+            {
+                "conversation_id": str(r["conversation_id"]),
+                "turn_count": r["turn_count"],
+                "started_at": r["started_at"].isoformat() if r.get("started_at") else None,
+                "last_at": r["last_at"].isoformat() if r.get("last_at") else None,
+                "first_user_message": r.get("first_user_message"),
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.get("/{study_id}/chat")
+async def get_chat(
+    study_id: str,
+    conversation_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """One conversation's transcript: the one asked for, else the scope's most
+    recent. `conversation_id` in the response says which, so a client that
+    asked for "the latest" learns the id to continue it with."""
+    sid, _ = await _resolve_scope(db, study_id, current_user["id"])
+    cid = conversation_id or await study_repo.latest_conversation_id(db, current_user["id"], sid)
+    rows = await study_repo.list_turns(db, current_user["id"], sid, cid) if cid else []
+    return {"conversation_id": str(cid) if cid else None, "turns": [_turn(r) for r in rows]}
 
 
 @router.delete("/{study_id}/chat", status_code=204)
 async def clear_chat(
-    study_id: str, db: AsyncSession = Depends(get_db),
+    study_id: str,
+    conversation_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
+    """Delete one conversation (`conversation_id`), or every conversation of
+    the scope when none is given."""
     sid, _ = await _resolve_scope(db, study_id, current_user["id"])
-    await study_repo.clear_turns(db, current_user["id"], sid)
+    await study_repo.clear_turns(db, current_user["id"], sid, conversation_id)
     await db.commit()
 
     # Same reasoning as delete_study: this scope's conversation_id just lost
@@ -324,8 +363,19 @@ async def chat_stream(
     sid, papers = await _resolve_scope(db, study_id, user_id)
     requested_model = resolve_requested_model(payload.model)
 
-    conversation_id = await study_repo.latest_conversation_id(db, user_id, sid) or uuid4()
-    history = await study_repo.list_turns(db, user_id, sid)
+    if payload.conversation_id is not None:
+        # Continue the named conversation — but only if it is this scope's:
+        # an id from another study (or another user) has no turns here, and
+        # continuing it would graft a foreign history onto this scope.
+        history = await study_repo.list_turns(db, user_id, sid, payload.conversation_id)
+        if not history:
+            raise HTTPException(status_code=404, detail="No such conversation in this scope")
+        conversation_id = payload.conversation_id
+    elif payload.new_conversation:
+        conversation_id, history = uuid4(), []
+    else:
+        conversation_id = await study_repo.latest_conversation_id(db, user_id, sid) or uuid4()
+        history = await study_repo.list_turns(db, user_id, sid, conversation_id)
 
     user_turn = await study_repo.add_turn(
         db,
@@ -352,7 +402,7 @@ async def chat_stream(
         return f"data: {json.dumps(event)}\n\n"
 
     async def event_stream():
-        yield sse({"type": "created", "turn_id": str(user_turn["id"])})
+        yield sse({"type": "created", "turn_id": str(user_turn["id"]), "conversation_id": str(conversation_id)})
         async with get_ask_semaphore():
             answer, model, cited, steps = "", "", [], []
             try:
