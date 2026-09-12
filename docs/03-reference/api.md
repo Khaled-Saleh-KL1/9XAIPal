@@ -220,10 +220,21 @@ chunks and the count is checked as it goes, so an oversized upload is cut off at
 partial file deleted, never buffered whole in the API worker
 ([docs/issues/010](../issues/010-upload-limit-is-checked-after-buffering.md)). `415` if the first
 1 KB carries no `%PDF-` header. `429 QUEUE_FULL` if the ingestion queue is already at
-`MAX_QUEUED_INGESTION_JOBS`: the count and the job insert happen under one advisory lock in the
-same transaction as the `documents` row, so a burst of concurrent uploads cannot all pass a stale
-count ([007](../issues/007-ingestion-queue-capacity-check-races.md)); the rejected upload's files
-are removed. Same check, same error, on `POST /papers/import-url` and
+`MAX_QUEUED_INGESTION_JOBS`, with a body the client acts on:
+
+```json
+{ "detail": "Too many papers waiting to process right now — try again in a few minutes.",
+  "code": "QUEUE_FULL", "queued": 50, "limit": 50 }
+```
+
+Checked twice: a cheap look at the count **before the body is streamed** (so a 300 MB book is
+not pushed up the wire only to be refused — it can race, and that is fine), then authoritatively
+under an advisory lock in the same transaction as the `documents` row, so a burst of concurrent
+uploads cannot all pass a stale count ([007](../issues/007-ingestion-queue-capacity-check-races.md)).
+Either way nothing is stored: no row, no file. The frontend turns this into its own overlay state —
+"HTTP 429 · queue full", the counts, *Try again now*, and an automatic resubmission every 45 s —
+rather than a pipeline failure, because nothing ran and the file is still in hand
+(`api.ts::QueueFullError`, `ProcessingOverlay` `status='queue_full'`). Same check, same error, on `POST /papers/import-url` and
 `POST /papers/{paper_id}/reextract` below — for reextract the existing chunks are only deleted in
 that same transaction, so a full queue leaves the paper untouched.
 

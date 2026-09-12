@@ -29,7 +29,7 @@ from app.schemas.documents import (
 from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services import library_search
-from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
+from app.services.ingestion import check_queue_capacity, create_ingestion_job, update_job_status as update_job_status_svc
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
 from app.workers.tasks import (
     process_ingestion,
@@ -98,6 +98,15 @@ async def upload_paper(
 
     ``kind`` is ``"book"`` (chapter-by-chapter reading) or ``"paper"`` (linear).
     """
+    # A cheap, non-atomic look at the queue BEFORE the body is streamed to
+    # disk. The authoritative check is the advisory-locked reservation inside
+    # create_ingestion_job below (docs/issues/007) — this one only exists so
+    # a reader does not push a 300 MB book up the wire to be told "queue
+    # full" and have it deleted. It can race (two uploads both see 49 of 50),
+    # and that is fine: the loser is caught by the real check after the
+    # write, exactly as before this pre-check existed.
+    await check_queue_capacity(db)
+
     doc_kind = kind if kind in ("book", "paper") else "paper"
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
 

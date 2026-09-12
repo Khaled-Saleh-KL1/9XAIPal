@@ -250,6 +250,37 @@ export async function searchPapersSemantic(query: string, limit = 20): Promise<s
 
 export type DocKind = 'book' | 'paper';
 
+/**
+ * The server declined to take the document because its processing queue is
+ * at its ceiling (HTTP 429, `code: "QUEUE_FULL"` — see backend
+ * api/errors.py and services/ingestion.py). Nothing was stored, so the
+ * right response is to wait and resubmit the same file, which is why this is
+ * its own error type rather than a message: the overlay keys a distinct
+ * state and a retry off it, instead of painting a pipeline failure.
+ */
+export class QueueFullError extends Error {
+  readonly status = 429;
+  constructor(readonly queued: number, readonly limit: number, message: string) {
+    super(message);
+    this.name = 'QueueFullError';
+  }
+}
+
+async function throwForUploadResponse(res: Response, fallback: string): Promise<never> {
+  let detail = fallback;
+  let body: { detail?: string; code?: string; queued?: number; limit?: number } | null = null;
+  try {
+    body = await res.json();
+    if (body?.detail) detail = body.detail;
+  } catch {
+    // body not JSON or no detail; keep status-only message
+  }
+  if (res.status === 429 && body?.code === 'QUEUE_FULL') {
+    throw new QueueFullError(Number(body.queued) || 0, Number(body.limit) || 0, detail);
+  }
+  throw new Error(detail);
+}
+
 export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<{ id: string; status: string }> {
   if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
   const form = new FormData();
@@ -259,16 +290,7 @@ export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<
     method: 'POST',
     body: form,
   });
-  if (!res.ok) {
-    let detail = `Upload failed: ${res.status}`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = body.detail;
-    } catch {
-      // body not JSON or no detail; keep status-only message
-    }
-    throw new Error(detail);
-  }
+  if (!res.ok) await throwForUploadResponse(res, `Upload failed: ${res.status}`);
   return res.json();
 }
 
@@ -289,16 +311,7 @@ export async function importArticleUrl(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(kind ? { url, kind } : { url }),
   });
-  if (!res.ok) {
-    let detail = `Import failed: ${res.status}`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = body.detail;
-    } catch {
-      // body not JSON or no detail; keep status-only message
-    }
-    throw new Error(detail);
-  }
+  if (!res.ok) await throwForUploadResponse(res, `Import failed: ${res.status}`);
   return res.json();
 }
 

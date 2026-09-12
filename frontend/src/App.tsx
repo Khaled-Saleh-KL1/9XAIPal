@@ -17,7 +17,7 @@ const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
 import { RawArticleViewer } from './views/RawArticleViewer';
-import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, pageToSequence, type PaperMeta, type DocKind } from './api';
+import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, pageToSequence, QueueFullError, type PaperMeta, type DocKind } from './api';
 import { IconLink } from './components/Icons';
 import { displayTitle } from './lib/titles';
 import { stageProgress } from './lib/progress';
@@ -99,9 +99,15 @@ export function App() {
   const [activePaperId, setActivePaperId] = useState<string | null>(null);
   const [uploadingFile, setUploadingFile] = useState<UploadingFile | null>(null);
   const [uploadStatus, setUploadStatus] = useState<
-    'queued' | 'extracting' | 'chunking' | 'embedding' | 'summarizing' | 'complete' | 'failed'
+    'queued' | 'extracting' | 'chunking' | 'embedding' | 'summarizing' | 'complete' | 'failed' | 'queue_full'
   >('queued');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // The server declined the document because its processing queue is at its
+  // ceiling (429 QUEUE_FULL). Nothing was stored, and the file (or URL) is
+  // still in hand, so the overlay offers a retry instead of a failure —
+  // `retryRef` is what "Try again" resubmits, with the same kind.
+  const [uploadQueueFull, setUploadQueueFull] = useState<{ queued: number; limit: number } | null>(null);
+  const retryRef = useRef<{ file: File; kind: DocKind } | { url: string; kind: 'book' | 'paper' | null } | null>(null);
   const [uploadExtractor, setUploadExtractor] = useState<string | null>(null);
   // Real progress within uploadStatus (e.g. pages extracted / total while
   // extracting), null when nothing finer than the status is available.
@@ -227,8 +233,10 @@ export function App() {
     });
     setUploadStatus('queued');
     setUploadError(null);
+    setUploadQueueFull(null);
     setUploadExtractor(null);
     setUploadKind(kind);
+    retryRef.current = { file, kind };
     setRoute('processing');
 
     try {
@@ -238,6 +246,11 @@ export function App() {
       setActivePaperId(paperId);
       pollUploadProgress(paperId);
     } catch (err) {
+      if (err instanceof QueueFullError) {
+        setUploadQueueFull({ queued: err.queued, limit: err.limit });
+        setUploadStatus('queue_full');
+        return;
+      }
       console.error('Upload failed:', err);
       setUploadStatus('failed');
       setUploadError((err as Error).message || 'Upload request failed');
@@ -264,6 +277,8 @@ export function App() {
     // still finishes (as an article) — this only affects which steps the
     // overlay narrates while it's in flight.
     setUploadKind(kind ?? 'article');
+    setUploadQueueFull(null);
+    retryRef.current = { url, kind };
     setRoute('processing');
 
     try {
@@ -273,11 +288,26 @@ export function App() {
       setActivePaperId(paperId);
       pollUploadProgress(paperId);
     } catch (err) {
+      if (err instanceof QueueFullError) {
+        setUploadQueueFull({ queued: err.queued, limit: err.limit });
+        setUploadStatus('queue_full');
+        return;
+      }
       console.error('Import failed:', err);
       setUploadStatus('failed');
       setUploadError((err as Error).message || 'Import request failed');
     }
   }, [pollUploadProgress]);
+
+  // "Try again" on the queue-full screen: the same file or URL, the same
+  // kind, through the same handler, so a success continues exactly as a
+  // first-time submission would.
+  const retryUpload = useCallback(() => {
+    const r = retryRef.current;
+    if (!r) return;
+    if ('file' in r) void handleFileUpload(r.file, r.kind);
+    else void handleArticleImport(r.url, r.kind);
+  }, [handleFileUpload, handleArticleImport]);
 
   // A URL can now be pasted through any of the three picker choices (Book,
   // Research paper, or the generic Article by URL), closes the modal and
@@ -356,8 +386,10 @@ export function App() {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = null;
     uploadIdRef.current = null;
+    retryRef.current = null;
     setUploadingFile(null);
     setUploadError(null);
+    setUploadQueueFull(null);
     refreshPapers();
     setRoute('library');
   }, [refreshPapers]);
@@ -622,10 +654,12 @@ export function App() {
           progressFraction={uploadProgressFraction}
           queuePosition={uploadQueuePosition}
           errorMessage={uploadError}
+          queueFull={uploadQueueFull}
           extractor={uploadExtractor}
           kind={uploadKind}
           onClose={onProcessingClose}
           onCancel={onCancel}
+          onRetry={retryUpload}
         />
       )}
 
