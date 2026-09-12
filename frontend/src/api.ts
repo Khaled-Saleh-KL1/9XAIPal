@@ -1616,18 +1616,40 @@ export async function setStudyPapers(
   return (await res.json()).papers || [];
 }
 
-export async function getStudyChat(studyId: string): Promise<StudyTurn[]> {
-  const res = await fetch(`${BASE}/studies/${studyId}/chat`);
+/**
+ * One conversation of a study: the one named, else the scope's most recent.
+ * `conversation_id` in the reply says which (null when the scope has none
+ * yet), so the caller knows what to continue with.
+ */
+export async function getStudyChat(
+  studyId: string,
+  conversationId?: string | null,
+): Promise<{ conversation_id: string | null; turns: StudyTurn[] }> {
+  const q = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : '';
+  const res = await fetch(`${BASE}/studies/${studyId}/chat${q}`);
   if (!res.ok) throw new Error(`Chat fetch failed: ${res.status}`);
-  return (await res.json()).turns || [];
+  const body = await res.json();
+  return { conversation_id: body.conversation_id ?? null, turns: body.turns || [] };
 }
 
-export async function clearStudyChat(studyId: string): Promise<void> {
-  const res = await fetch(`${BASE}/studies/${studyId}/chat`, { method: 'DELETE' });
+/** Every conversation a study has had, most recent first — the desk's "Chats · N". */
+export async function listStudyConversations(studyId: string): Promise<ConversationSummary[]> {
+  const res = await fetch(`${BASE}/studies/${studyId}/conversations`);
+  if (!res.ok) throw new Error(`Conversations fetch failed: ${res.status}`);
+  return (await res.json()).conversations || [];
+}
+
+/** Delete one conversation of a study, or every conversation when none is named. */
+export async function clearStudyChat(studyId: string, conversationId?: string | null): Promise<void> {
+  const q = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : '';
+  const res = await fetch(`${BASE}/studies/${studyId}/chat${q}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 404) throw new Error(`Clear failed: ${res.status}`);
 }
 
 export interface StudyStreamHandlers {
+  /** The user turn is stored; says which conversation it went into (a new
+   *  id when the ask started a fresh conversation). */
+  onCreated?: (conversationId: string) => void;
   onStatus: (message: string) => void;
   onStep: (step: AgentStep) => void;
   onToken: (text: string) => void;
@@ -1655,12 +1677,24 @@ export async function askStudyStream(
   handlers: StudyStreamHandlers,
   model?: string | null,
   signal?: AbortSignal,
+  conversation?: {
+    /** Continue this conversation. */
+    id?: string | null;
+    /** Start a fresh one (ignored when `id` is set). With neither, the
+     *  scope's most recent conversation is continued. */
+    fresh?: boolean;
+  },
 ): Promise<StudyResult> {
   const res = await fetch(`${BASE}/studies/${studyId}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal,
-    body: JSON.stringify({ question, model: model ?? null }),
+    body: JSON.stringify({
+      question,
+      model: model ?? null,
+      conversation_id: conversation?.id ?? null,
+      new_conversation: !conversation?.id && Boolean(conversation?.fresh),
+    }),
   });
   if (!res.ok || !res.body) {
     let detail = `HTTP ${res.status}`;
@@ -1678,6 +1712,9 @@ export async function askStudyStream(
     let ev: Record<string, unknown>;
     try { ev = JSON.parse(raw); } catch { return; }
     switch (ev.type) {
+      case 'created':
+        if (ev.conversation_id) handlers.onCreated?.(String(ev.conversation_id));
+        break;
       case 'status':
         handlers.onStatus(String(ev.message ?? ''));
         break;

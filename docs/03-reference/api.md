@@ -77,6 +77,7 @@ GET    /studies/{study_id}
 PATCH  /studies/{study_id}
 DELETE /studies/{study_id}
 PUT    /studies/{study_id}/papers
+GET    /studies/{study_id}/conversations
 GET    /studies/{study_id}/chat
 POST   /studies/{study_id}/chat/stream
 DELETE /studies/{study_id}/chat
@@ -979,10 +980,22 @@ partial update could repoint citations already on screen.
 
 ⚠ `400` past `STUDY_MAX_PAPERS` (24). Every paper is loaded on every question.
 
+### `GET /studies/{study_id}/conversations`
+
+Every conversation this scope has had, most recent first — the desk's **Chats · N** list (same
+summary shape as `GET /papers/{id}/conversations`): `{"conversations": [{"conversation_id",
+"turn_count", "started_at", "last_at", "first_user_message"}]}`. Turns always carried a
+`conversation_id`; since 2026-09-12 a scope can hold several and the desk lists them.
+
 ### `GET /studies/{study_id}/chat`
 
+Optional `?conversation_id=` — one conversation's transcript; without it, the scope's most recent.
+`conversation_id` in the reply says which (`null` when the scope has none yet), so a client that
+asked for "the latest" knows what to continue with. A conversation id from another scope (or user)
+reads as empty.
+
 ```json
-{"turns": [{
+{"conversation_id": "…", "turns": [{
   "id", "role": "user"|"assistant", "content", "model",
   "cited": [{"paper": 2, "document_id", "label", "sequence_id": 41}],
   "agent_steps": [AgentStep],
@@ -993,8 +1006,12 @@ partial update could repoint citations already on screen.
 
 ### `POST /studies/{study_id}/chat/stream`
 
-Body `{"question": "…", "model": null}`. SSE, **the same event shapes as the note stream**:
-`created` (carrying `turn_id`), `status`, `step`, `token`, `done`, `error`, so one client
+Body `{"question": "…", "model": null, "conversation_id": null, "new_conversation": false}`.
+`conversation_id` continues that conversation (`404` if it is not this scope's — a foreign id must
+not graft its history onto this scope); `new_conversation: true` starts a fresh one; with neither,
+the scope's most recent conversation is continued (or created) — what every client got before
+conversations were listable. SSE, **the same event shapes as the note stream**: `created`
+(carrying `turn_id` and `conversation_id`), `status`, `step`, `token`, `done`, `error`, so one client
 component renders both. `done` carries `turn_id`, `answer`, `model`, `cited`, `agent_steps`,
 and a trailing `grounding` event (`turn_id`, `grounding`) follows `done` exactly as on the
 note stream. `[[P2:41]]` markers resolve through the study's paper list, so `refs` and
@@ -1006,6 +1023,9 @@ in the transcript.
 ### `DELETE /studies/{study_id}/chat`
 
 `204`. Clears the scope's transcript. The papers and the sticky notes stay.
+
+Optional `?conversation_id=` deletes that one conversation; without it, every conversation of the
+scope. Sticky notes on the chat board are keyed by scope, not conversation, and stay either way.
 
 ---
 

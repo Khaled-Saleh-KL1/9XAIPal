@@ -184,13 +184,30 @@ thought, and the assistant cannot recreate one it was never asked to write again
 
 ---
 
-## 84. Clear chat, rename, delete study
+## 84. Several chats per scope; delete chat, rename, delete study
 
-**What it does.** `DELETE /studies/{id}/chat` clears the transcript (the notes stay);
-`PATCH /studies/{id}` renames; `DELETE /studies/{id}` removes the study and its chat, never the
+**What it does.** A scope (a study, or the whole library) keeps **every conversation** it has had,
+like the book reader: the chat header shows **Chats · N ▾** (first question, exchanges, last used;
+the open one marked) and **+ New chat**; asking in a fresh chat starts a new conversation, asking
+in an old one continues it with its own history. **Delete chat** removes only the conversation on
+screen (confirmed, says how many others stay) and shows the most recent remaining one. `PATCH
+/studies/{id}` renames; `DELETE /studies/{id}` removes the study and all its chats, never the
 papers. The synthetic library study has no id and cannot be renamed.
 
-**Where.** `endpoints/studies.py`, `DeskView.tsx` (in-app confirm on destructive actions).
+**Where.** `endpoints/studies.py` (`/conversations`, `/chat?conversation_id=`, `/chat/stream`
+with `conversation_id` / `new_conversation`), `repositories/studies.py::list_conversations`,
+`StudyChat.tsx::ConversationSwitch`, `DeskView.tsx` (`conversationId`, `selectConversation`,
+`startNewChat`, `clearChat`), `tests/test_desk_conversations.py`.
+
+**How it works.** Turns always carried a `conversation_id`; the desk simply used the latest one
+and listed every turn of the scope, so there was effectively one chat per study (2026-09-12: "the
+Desk has one chat per study, not a list of past chats like the book reader" — asked for and
+built the same day). Now the transcript is read per conversation, the list is a `GROUP BY
+conversation_id` over the scope, and the ask names the conversation it continues — the server
+refuses an id that is not this scope's (404) so a foreign history can never be grafted on. The
+`created` event carries the conversation id, which is how a fresh chat learns its own id after
+the first question. Chat-board sticky notes are keyed by scope, not conversation, so they stay
+beside every chat of the study.
 
 ---
 

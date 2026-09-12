@@ -13,6 +13,8 @@ import {
   LIBRARY_SCOPE,
   askStudyStream,
   clearStudyChat,
+  listStudyConversations,
+  type ConversationSummary,
   createStudy,
   createSticky,
   deleteSticky,
@@ -80,6 +82,12 @@ export function DeskView({
   const [study, setStudy] = useState<Study | null>(null);
   const [papers, setPapers] = useState<StudyPaper[]>([]);
   const [turns, setTurns] = useState<StudyTurn[]>([]);
+  // ── Several conversations per scope ("Chats · N", as the book reader has) ──
+  // `conversationId` is the one on screen; null means "a fresh one starts
+  // with the next question". The list is the scope's history, most recent
+  // first, refreshed after every answer and every delete.
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingTurn | null>(null);
   const [chatNotes, setChatNotes] = useState<Sticky[]>([]);
   const [wallNotes, setWallNotes] = useState<Sticky[]>([]);
@@ -150,15 +158,18 @@ export function DeskView({
     setPending(null);
     (async () => {
       try {
-        const [detail, chat, notes] = await Promise.all([
+        const [detail, chat, notes, convs] = await Promise.all([
           getStudy(scope),
           getStudyChat(scope),
           listStickies('chat', scope),
+          listStudyConversations(scope),
         ]);
         if (!alive) return;
         setStudy(detail.study);
         setPapers(detail.papers);
-        setTurns(chat);
+        setTurns(chat.turns);
+        setConversationId(chat.conversation_id);
+        setConversations(convs);
         setChatNotes(notes);
       } catch (e) {
         if (!alive) return;
@@ -219,11 +230,15 @@ export function DeskView({
       );
 
       let wrote = false;
+      let cid = conversationId;
       try {
         await askStudyStream(
           scope,
           question,
           {
+            // A fresh conversation gets its id from the server on the first
+            // turn; remember it so the next question continues it.
+            onCreated: (id) => { cid = id; if (scopeRef.current === scope) setConversationId(id); },
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
             // ⚠ Upsert by id, and clear the status: every call arrives twice,
             // running then done, and once a fetch is on screen the trail IS the
@@ -242,12 +257,16 @@ export function DeskView({
             onVerifying: () => patch((p) => ({ ...p, verifying: true })),
           },
           model,
+          undefined,
+          { id: conversationId, fresh: conversationId === null },
         );
         await pacer.finish();
         if (scopeRef.current !== scope) return; // reader moved on; this is another study's chat now
         // Refetch rather than splicing: the server owns the turn's final shape
         // (citations resolved against the study's current membership).
-        setTurns(await getStudyChat(scope));
+        const [chat, convs] = await Promise.all([getStudyChat(scope, cid), listStudyConversations(scope)]);
+        setTurns(chat.turns);
+        setConversations(convs);
         setPending(null);
       } catch (e) {
         pacer.cancel();
@@ -267,29 +286,68 @@ export function DeskView({
         }
       }
     },
-    [scope, model, refreshChatNotes, refreshWall],
+    [scope, model, conversationId, refreshChatNotes, refreshWall],
   );
+
+  /** Open one of the scope's past conversations. */
+  const selectConversation = useCallback(
+    async (id: string) => {
+      if (id === conversationId) return;
+      setPending(null);
+      try {
+        const chat = await getStudyChat(scope, id);
+        if (scopeRef.current !== scope) return;
+        setTurns(chat.turns);
+        setConversationId(chat.conversation_id);
+      } catch (e) {
+        setNotice((e as Error).message || 'Could not open that chat');
+      }
+    },
+    [scope, conversationId],
+  );
+
+  /** A clean slate: the next question starts a new conversation. */
+  const startNewChat = useCallback(() => {
+    setPending(null);
+    setTurns([]);
+    setConversationId(null);
+  }, []);
 
   const retry = useCallback(() => {
     const q = pending?.question;
     if (q) void ask(q);
   }, [pending, ask]);
 
+  // Deletes the conversation on screen only — the scope's other chats stay
+  // — then shows the most recent remaining one, or a clean slate.
   const clearChat = useCallback(async () => {
+    if (!conversationId) return;
     const ok = await confirm({
-      title: 'Clear this conversation?',
-      body: 'Its notes and papers stay.',
-      confirmLabel: 'Clear',
+      title: 'Delete this chat?',
+      body: conversations.length > 1
+        ? `Only this conversation goes; the scope's other ${conversations.length - 1} stay, and so do its notes and papers.`
+        : 'Its notes and papers stay.',
+      confirmLabel: 'Delete',
       tone: 'danger',
     });
     if (!ok) return;
     try {
-      await clearStudyChat(scope);
-      setTurns([]);
+      await clearStudyChat(scope, conversationId);
+      const remaining = conversations.filter((c) => c.conversation_id !== conversationId);
+      setConversations(remaining);
+      if (remaining.length > 0) {
+        const chat = await getStudyChat(scope, remaining[0].conversation_id);
+        if (scopeRef.current !== scope) return;
+        setTurns(chat.turns);
+        setConversationId(chat.conversation_id);
+      } else {
+        setTurns([]);
+        setConversationId(null);
+      }
     } catch (e) {
-      setNotice((e as Error).message || 'Could not clear the chat');
+      setNotice((e as Error).message || 'Could not delete the chat');
     }
-  }, [scope, confirm]);
+  }, [scope, confirm, conversationId, conversations]);
 
   // ── Studies ──────────────────────────────────────────────────────────────
   const newStudy = useCallback(async () => {
@@ -611,6 +669,10 @@ export function DeskView({
             onAsk={ask}
             onRetry={retry}
             onClear={clearChat}
+            conversations={conversations}
+            conversationId={conversationId}
+            onSelectConversation={(id) => void selectConversation(id)}
+            onNewChat={startNewChat}
             onOpenPaper={(documentId, sequenceId) => onOpenPaper(documentId, sequenceId)}
             catalog={catalog}
             model={model}

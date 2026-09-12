@@ -6,7 +6,7 @@ import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import { AgentTrail } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
-import type { AgentStep, ModelCatalog, StudyPaper, StudyTurn } from '../api';
+import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
 
 /**
  * The desk's chat.
@@ -144,6 +144,10 @@ export function StudyChat({
   onAsk,
   onRetry,
   onClear,
+  conversations,
+  conversationId,
+  onSelectConversation,
+  onNewChat,
   onOpenPaper,
   catalog,
   model,
@@ -155,7 +159,13 @@ export function StudyChat({
   pending: PendingTurn | null;
   onAsk: (question: string) => void;
   onRetry: () => void;
+  /** Deletes the conversation on screen. */
   onClear: () => void;
+  /** The scope's past conversations, most recent first, and the one on screen. */
+  conversations: ConversationSummary[];
+  conversationId: string | null;
+  onSelectConversation: (id: string) => void;
+  onNewChat: () => void;
   onOpenPaper?: (documentId: string, sequenceId: number) => void;
   catalog: ModelCatalog | null;
   model: string;
@@ -207,9 +217,16 @@ export function StudyChat({
               : `answers drawn from ${papers.length} paper${papers.length === 1 ? '' : 's'}`}
           </span>
         </div>
+        <ConversationSwitch
+          conversations={conversations}
+          conversationId={conversationId}
+          canStartNew={turns.length > 0 || pending !== null}
+          onSelect={onSelectConversation}
+          onNew={onNewChat}
+        />
         {turns.length > 0 && (
-          <button type="button" className="chat-clear" onClick={onClear}>
-            Clear
+          <button type="button" className="chat-clear" onClick={onClear} title="Delete this conversation">
+            Delete chat
           </button>
         )}
       </header>
@@ -333,5 +350,77 @@ export function StudyChat({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * "Chats · N ▾" and "+ New chat" — the same pair the book reader's pane has,
+ * so a reader who learned it there finds it here. The list shows each
+ * conversation's first question, its turn count and when it was last used.
+ */
+function ConversationSwitch({
+  conversations, conversationId, canStartNew, onSelect, onNew,
+}: {
+  conversations: ConversationSummary[];
+  conversationId: string | null;
+  canStartNew: boolean;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="chat-convs">
+      {conversations.length > 0 && (
+        <button type="button" className="chat-convs-toggle" onClick={() => setOpen((v) => !v)} title="Switch chat" aria-expanded={open}>
+          Chats · {conversations.length} <span aria-hidden="true">▾</span>
+        </button>
+      )}
+      <button
+        type="button"
+        className="chat-convs-toggle"
+        onClick={() => { setOpen(false); onNew(); }}
+        disabled={!canStartNew && conversationId === null}
+        title="Start a new chat in this scope — the current one stays in the list"
+      >
+        + New chat
+      </button>
+      {open && (
+        <div className="chat-convs-list" role="menu">
+          <div className="chat-convs-head">This scope · {conversations.length} chat{conversations.length !== 1 ? 's' : ''}</div>
+          <div className="chat-convs-scroll thin-scroll">
+            {conversations.map((c) => {
+              const active = c.conversation_id === conversationId;
+              const exchanges = Math.floor(c.turn_count / 2);
+              return (
+                <button
+                  key={c.conversation_id}
+                  type="button"
+                  role="menuitem"
+                  className={`chat-convs-row${active ? ' is-on' : ''}`}
+                  onClick={() => { setOpen(false); onSelect(c.conversation_id); }}
+                >
+                  <span className="chat-convs-title">{c.first_user_message?.trim() || 'Untitled chat'}</span>
+                  <span className="chat-convs-meta">
+                    {exchanges} exchange{exchanges === 1 ? '' : 's'}
+                    {c.last_at ? ` · ${new Date(c.last_at).toLocaleDateString()}` : ''}
+                    {active ? ' · open' : ''}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

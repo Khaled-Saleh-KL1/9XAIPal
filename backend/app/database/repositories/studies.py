@@ -176,19 +176,56 @@ async def studies_for_paper(session: AsyncSession, document_id: UUID, user_id: U
 # pure library-wide chat has study_id IS NULL — no parent row to derive
 # ownership from transitively.
 
-async def list_turns(session: AsyncSession, user_id: UUID, study_id: Optional[UUID]) -> list[dict]:
-    """The scope's transcript, oldest first.
+async def list_turns(
+    session: AsyncSession, user_id: UUID, study_id: Optional[UUID], conversation_id: UUID,
+) -> list[dict]:
+    """One conversation's transcript, oldest first.
 
     ⚠ ``IS NOT DISTINCT FROM`` rather than ``=``: the library-wide chat is
-    keyed by NULL, and ``study_id = NULL`` matches no rows at all.
+    keyed by NULL, and ``study_id = NULL`` matches no rows at all. The
+    conversation is checked against the scope too, so a conversation id
+    from another study (or another user's) reads as empty.
     """
     result = await session.execute(
         text("""
             SELECT * FROM conversation_turns
             WHERE user_id = :user_id
               AND study_id IS NOT DISTINCT FROM :study_id
+              AND conversation_id = :conversation_id
               AND parent_turn_id IS NULL
             ORDER BY created_at ASC
+        """),
+        {"user_id": user_id, "study_id": study_id, "conversation_id": conversation_id},
+    )
+    return [dict(r) for r in result.mappings().all()]
+
+
+async def list_conversations(
+    session: AsyncSession, user_id: UUID, study_id: Optional[UUID]
+) -> list[dict]:
+    """Every conversation this scope has had, most recent first — the same
+    summary shape the book reader's "Chats · N" list uses
+    (conversations.list_conversations_by_document): id, turn count, first
+    and last timestamps, and the first question as the preview."""
+    result = await session.execute(
+        text("""
+            SELECT
+              ct.conversation_id,
+              COUNT(*) AS turn_count,
+              MIN(ct.created_at) AS started_at,
+              MAX(ct.created_at) AS last_at,
+              (
+                SELECT ct2.content FROM conversation_turns ct2
+                WHERE ct2.conversation_id = ct.conversation_id
+                  AND ct2.user_id = ct.user_id AND ct2.role = 'user'
+                ORDER BY ct2.created_at ASC LIMIT 1
+              ) AS first_user_message
+            FROM conversation_turns ct
+            WHERE ct.user_id = :user_id
+              AND ct.study_id IS NOT DISTINCT FROM :study_id
+              AND ct.parent_turn_id IS NULL
+            GROUP BY ct.conversation_id, ct.user_id
+            ORDER BY MAX(ct.created_at) DESC
         """),
         {"user_id": user_id, "study_id": study_id},
     )
@@ -248,13 +285,19 @@ async def latest_conversation_id(
     return row["conversation_id"] if row else None
 
 
-async def clear_turns(session: AsyncSession, user_id: UUID, study_id: Optional[UUID]) -> int:
+async def clear_turns(
+    session: AsyncSession, user_id: UUID, study_id: Optional[UUID],
+    conversation_id: Optional[UUID] = None,
+) -> int:
+    """Delete one conversation of the scope, or — with no conversation_id —
+    every conversation it has (the old "Clear chat")."""
     result = await session.execute(
         text("""
             DELETE FROM conversation_turns
             WHERE user_id = :user_id AND study_id IS NOT DISTINCT FROM :study_id
+              AND (CAST(:conversation_id AS uuid) IS NULL OR conversation_id = CAST(:conversation_id AS uuid))
         """),
-        {"user_id": user_id, "study_id": study_id},
+        {"user_id": user_id, "study_id": study_id, "conversation_id": conversation_id},
     )
     return result.rowcount or 0
 
