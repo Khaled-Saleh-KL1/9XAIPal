@@ -6,12 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.lifecycle import lifespan
 from app.core.security import SecurityHeadersMiddleware, RateLimitMiddleware
+from app.core.version import APP_VERSION
 from app.api.v1.router import api_router
 from app.api.errors import register_exception_handlers
 
 app = FastAPI(
     title=settings.app_name,
-    version="0.1.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 

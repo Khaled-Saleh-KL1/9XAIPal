@@ -125,6 +125,7 @@ Source: [endpoints/health.py](../../backend/app/api/v1/endpoints/health.py).
 
 ```json
 {
+  "version": "2.0.0",                  // app.core.version — the build actually running
   "status": "ok" | "degraded",
   "database": "ok" | "unavailable",
   "ollama":   "ok" | "unavailable",
