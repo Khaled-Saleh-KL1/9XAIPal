@@ -437,6 +437,12 @@ export interface ReferenceEntry {
   resolved_authors?: string | null;
   resolved_year?: number | null;
   resolved_pdf_url?: string | null;
+  /** The title to search for by hand (resolved, or the resolver's own guess) —
+   *  never the whole citation string, which finds nothing anywhere. */
+  search_query?: string | null;
+  /** Landing pages for a match that has no fetchable PDF. */
+  s2_url?: string | null;
+  arxiv_url?: string | null;
   already_in_library: boolean;
   existing_document_id?: string | null;
 }

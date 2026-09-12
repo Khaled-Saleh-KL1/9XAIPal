@@ -170,13 +170,8 @@ function BibRefRow({
         {row.error && <span className="cite-peek-error">{row.error}</span>}
         {entry.resolve_status === 'no_match' && !row.resolving && (
           <span className="bib-ref-status">
-            No confident match.{' '}
-            <a
-              href={`https://www.semanticscholar.org/search?q=${encodeURIComponent(entry.raw_text)}`}
-              target="_blank" rel="noopener noreferrer"
-            >
-              Search manually ↗
-            </a>
+            No confident match. Search for it:{' '}
+            <ManualSearchLinks query={entry.search_query || entry.raw_text} />
           </span>
         )}
         {entry.resolve_status === 'unavailable' && !row.resolving && (
@@ -200,6 +195,19 @@ function BibRefRow({
                 PDF ↗
               </a>
             )}
+            {/* A match with nothing to fetch (no open-access PDF and no
+                arXiv id) cannot be added — say so and hand over the landing
+                pages, instead of an "Add to library" that always refuses. */}
+            {!entry.resolved_pdf_url && !alreadyThere && (
+              <span className="bib-ref-status">
+                No open-access PDF to add.{' '}
+                {entry.s2_url && (
+                  <a href={entry.s2_url} target="_blank" rel="noopener noreferrer">Semantic Scholar ↗</a>
+                )}
+                {entry.s2_url && ' · '}
+                <ManualSearchLinks query={entry.search_query || entry.resolved_title || entry.raw_text} />
+              </span>
+            )}
             {alreadyThere ? (
               <span className="bib-ref-status">
                 Already in your library.
@@ -218,14 +226,28 @@ function BibRefRow({
                   <button type="button" className="bib-ref-open" onClick={() => onOpenPaper(row.addResult!.id)}>Open →</button>
                 )}
               </span>
-            ) : (
+            ) : entry.resolved_pdf_url ? (
               <button type="button" className="bib-ref-add" onClick={onAdd} disabled={row.adding}>
                 {row.adding ? 'Adding…' : 'Add to library'}
               </button>
-            )}
+            ) : null}
           </span>
         )}
       </span>
     </span>
+  );
+}
+
+/** Google Scholar first — it is the search that finds a paper from a bare
+ *  title nearly every time — then Semantic Scholar. Both get the title, never
+ *  the whole citation: the site search answered "No Papers Found" to that. */
+function ManualSearchLinks({ query }: { query: string }) {
+  const q = encodeURIComponent(query);
+  return (
+    <>
+      <a href={`https://scholar.google.com/scholar?q=${q}`} target="_blank" rel="noopener noreferrer">Google Scholar ↗</a>
+      {' · '}
+      <a href={`https://www.semanticscholar.org/search?q=${q}`} target="_blank" rel="noopener noreferrer">Semantic Scholar ↗</a>
+    </>
   );
 }

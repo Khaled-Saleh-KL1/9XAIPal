@@ -21,7 +21,7 @@ from app.services import chunks as chunk_service
 from app.services import documents as doc_service
 from app.services.outline import heading_level
 from app.services import book_outline
-from app.services.references import parse_references
+from app.services.references import parse_references, title_candidates
 from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.search.semantic_scholar_client import match_reference, Unresolved
 from app.core import pacer
@@ -580,6 +580,16 @@ async def get_figure_descriptions(
 
 
 def _entry_out(row: dict) -> ReferenceEntry:
+    external = row.get("external_ids") or {}
+    if isinstance(external, str):
+        external = json.loads(external)
+    # What a manual search should be for: the resolved title when there is
+    # one, else the same title guess the resolver itself uses, else the raw
+    # entry. Searching Semantic Scholar's site for a whole citation string
+    # ("Haonan Chen, Hong Liu, … 2025.") answers "No Papers Found" — that was
+    # the reader's experience of the old link.
+    candidates = title_candidates(row["raw_text"])
+    search_query = row.get("resolved_title") or (candidates[0] if candidates else row["raw_text"])
     return ReferenceEntry(
         number=row["ref_number"],
         raw_text=row["raw_text"],
@@ -588,6 +598,9 @@ def _entry_out(row: dict) -> ReferenceEntry:
         resolved_authors=row.get("resolved_authors"),
         resolved_year=row.get("resolved_year"),
         resolved_pdf_url=row.get("resolved_pdf_url"),
+        search_query=search_query,
+        s2_url=f"https://www.semanticscholar.org/paper/{external['s2']}" if external.get("s2") else None,
+        arxiv_url=f"https://arxiv.org/abs/{external['arxiv']}" if external.get("arxiv") else None,
         already_in_library=row.get("added_document_id") is not None,
         existing_document_id=row.get("added_document_id"),
     )
@@ -679,7 +692,7 @@ async def _resolve_row(
         authors=match.authors or None,
         year=match.year,
         pdf_url=match.pdf_url,
-        external_ids={"arxiv": match.arxiv_id, "doi": match.doi},
+        external_ids={"arxiv": match.arxiv_id, "doi": match.doi, "s2": match.s2_paper_id},
     )
     await db.commit()
     return _entry_out(updated)
