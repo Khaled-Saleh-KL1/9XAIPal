@@ -30,8 +30,9 @@ nginx (host, :80/:443)
    │  server_name <your-subdomain>
    │  same-origin: SPA + /api on one origin, no CORS preflight, no mixed content
    │
-   ├── /api/*, /static/*, /openapi.json, /docs*, /redoc*  ──► 127.0.0.1:8000 (api container)
-   └── everything else                                     ──► static files, backend/frontend-dist/
+   ├── /api/*, /openapi.json, /docs*, /redoc*  ──► 127.0.0.1:8000 (api container)
+   └── everything else                          ──► static files, backend/frontend-dist/
+       (figures and PDFs are under /api/v1 too, behind the session cookie — there is no /static/)
 
 api container (FastAPI, SERVE_FRONTEND=false, bound to 127.0.0.1 only, never exposed directly)
    │
@@ -244,6 +245,24 @@ fails), the workflow restores `$DEPLOY_DIR` to `.last-good-sha` (via `git worktr
 the runner's full history) and re-runs `deploy-once.sh` against it. The workflow still reports
 failure either way: a step already failed, and nothing in the rollback changes that. This only
 decides whether the *site* stays down while the bad commit gets a fix.
+
+**Only what changed is rebuilt.** Every merge used to run the full sequence — `npm ci`, a Vite
+build, `docker compose up -d --build`, an API container recreate — five and a half minutes and a
+short API outage to ship a README fix. `scripts/deploy-scope.sh` now diffs the running commit
+(`.last-good-sha`) against the one CI validated and the workflow passes the answer to
+`deploy-once.sh` as `DEPLOY_SCOPE`: `none` (docs, tests, CI, samples — files synced, health
+confirmed, nothing built or restarted), `frontend` (Vite build only; no container touched),
+`backend` (api + celery_worker rebuilt and restarted; the SPA untouched), `both`, or `full` (the
+first deploy, or no diffable sha — and always the rollback path, since the failed attempt may have
+rebuilt any subset). The rules mirror `ci.yml`'s "detect changes" filters, with two deliberate
+differences: `backend/` means everything the images and their runtime config are built from
+(`pyproject.toml`, `uv.lock`, the Dockerfiles, `docker/`, the compose file, the deploy scripts
+themselves), not only `backend/app`; and `backend/nginx/` counts as *nothing*, because the host's
+nginx config is installed by hand — a change there produces a `::notice::` in the run instead.
+`npm ci` is skipped when `package-lock.json` is unchanged (its hash is kept in
+`frontend/node_modules/.deployed-lock-hash`, and `node_modules` is excluded from the rsync's
+`--delete` so it survives between runs). Measured: a frontend-only deploy is ~30 s; a docs-only
+one is the health check.
 
 The deploy job also builds the frontend in a throwaway `node:20-alpine` container with
 `--user "$(id -u):$(id -g)"`: without it, files written by the containerized build come out

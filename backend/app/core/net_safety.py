@@ -27,6 +27,7 @@ import socket
 from typing import Union
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
 
 IPAddress = Union[ipaddress.IPv4Address, ipaddress.IPv6Address]
@@ -74,6 +75,24 @@ async def resolves_to_private_address(url: str) -> bool:
     return _any_unsafe(infos)
 
 
+async def _resolve_public_address(host: str) -> str:
+    """Resolve once and return an address that is safe to connect to.
+
+    The returned address is passed directly to the TCP backend. That binds
+    validation to the connection itself instead of validating one DNS answer
+    and letting the HTTP client resolve the hostname a second time.
+    """
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, None, type=socket.SOCK_STREAM
+        )
+    except OSError as e:
+        raise UnsafeRedirectError(f"could not resolve host: {host}") from e
+    if not infos or _any_unsafe(infos):
+        raise UnsafeRedirectError(f"refusing to fetch from private/internal address: {host}")
+    return str(infos[0][4][0])
+
+
 def resolves_to_private_address_sync(url: str) -> bool:
     """Sync/blocking variant, for the Celery worker (sync throughout)."""
     host = urlparse(url).hostname
@@ -84,6 +103,16 @@ def resolves_to_private_address_sync(url: str) -> bool:
     except OSError:
         return True
     return _any_unsafe(infos)
+
+
+def _resolve_public_address_sync(host: str) -> str:
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError as e:
+        raise UnsafeRedirectError(f"could not resolve host: {host}") from e
+    if not infos or _any_unsafe(infos):
+        raise UnsafeRedirectError(f"refusing to fetch from private/internal address: {host}")
+    return str(infos[0][4][0])
 
 
 # httpx's own default is 20. A shorter budget is deliberate: every hop costs
@@ -111,6 +140,61 @@ class TooManyRedirectsError(UnsafeRedirectError):
     reader for someone else's redirect config (see
     article_extraction.fetch_resource).
     """
+
+
+class _PinnedAsyncNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Connect to the DNS answer just vetted, while httpcore keeps the host.
+
+    httpcore uses the original request hostname for Host and TLS SNI; only
+    the socket destination is substituted. That retains virtual-host routing
+    and certificate verification while removing the DNS TOCTOU window.
+    """
+
+    def __init__(self) -> None:
+        self._backend = httpcore.AnyIOBackend()
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        address = await _resolve_public_address(str(host))
+        return await self._backend.connect_tcp(
+            address, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+        )
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        return await self._backend.connect_unix_socket(path, timeout=timeout, socket_options=socket_options)
+
+    async def sleep(self, seconds):
+        await self._backend.sleep(seconds)
+
+
+class _PinnedSyncNetworkBackend(httpcore.NetworkBackend):
+    def __init__(self) -> None:
+        self._backend = httpcore.SyncBackend()
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        address = _resolve_public_address_sync(str(host))
+        return self._backend.connect_tcp(
+            address, port, timeout=timeout, local_address=local_address, socket_options=socket_options
+        )
+
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        return self._backend.connect_unix_socket(path, timeout=timeout, socket_options=socket_options)
+
+    def sleep(self, seconds):
+        self._backend.sleep(seconds)
+
+
+def safe_async_transport() -> httpx.AsyncHTTPTransport:
+    """HTTPX transport whose TCP connections are pinned to vetted DNS IPs."""
+    transport = httpx.AsyncHTTPTransport(trust_env=False)
+    transport._pool._network_backend = _PinnedAsyncNetworkBackend()  # type: ignore[attr-defined]
+    return transport
+
+
+def safe_sync_transport() -> httpx.HTTPTransport:
+    """Synchronous counterpart for Celery's article-fetching worker."""
+    transport = httpx.HTTPTransport(trust_env=False)
+    transport._pool._network_backend = _PinnedSyncNetworkBackend()  # type: ignore[attr-defined]
+    return transport
 
 
 # A malformed Location header reaches this code as a URL-parsing failure, not

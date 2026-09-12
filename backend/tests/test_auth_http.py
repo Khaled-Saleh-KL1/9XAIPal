@@ -13,9 +13,11 @@ Everything else stays at the repository level.
 
 import pytest
 import httpx
+from unittest.mock import AsyncMock
 
 from app.main import app
 from app.core.config import settings
+from app.api.v1.endpoints import search as search_endpoint
 
 
 @pytest.fixture(autouse=True)
@@ -121,3 +123,44 @@ async def test_login_unknown_email_rejected(client):
 async def test_protected_route_requires_session(client):
     resp = await client.get("/api/v1/papers")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_web_search_requires_a_session_before_provider_is_called(client, monkeypatch):
+    provider = AsyncMock(return_value=[])
+    monkeypatch.setattr(search_endpoint, "web_search", provider)
+
+    response = await client.get("/api/v1/search/web", params={"q": "transformers"})
+
+    assert response.status_code == 401
+    provider.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_authenticated_web_search_calls_provider_uncapped(client, monkeypatch):
+    signup = await client.post("/api/v1/auth/signup", json={
+        "email": "searcher@example.com", "password": "correct horse battery",
+    })
+    assert signup.status_code == 201
+
+    provider = AsyncMock(return_value=[
+        {"title": "Result", "url": "https://example.test/result", "snippet": "ok"},
+    ])
+    monkeypatch.setattr(search_endpoint, "web_search", provider)
+
+    response = await client.get(
+        "/api/v1/search/web", params={"q": "transformers", "limit": 1}
+    )
+
+    assert response.status_code == 200
+    provider.assert_awaited_once_with("transformers", limit=1)
+    assert response.json()["total"] == 1
+
+    # No ceiling on `limit` and no per-user rate limit: a burst of searches
+    # all reach the provider cascade (which ends at keyless DuckDuckGo).
+    for _ in range(25):
+        burst = await client.get(
+            "/api/v1/search/web", params={"q": "transformers", "limit": 30}
+        )
+        assert burst.status_code == 200
+    assert provider.await_count == 26

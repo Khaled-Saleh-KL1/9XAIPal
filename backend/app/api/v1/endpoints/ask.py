@@ -67,11 +67,32 @@ async def _resolve_ask_target(
     if not doc:
         raise DocumentNotFound(str(paper_id))
 
+    async def resolve_turn(turn_id: UUID, label: str) -> dict:
+        turn = await conv_repo.get_turn_for_document(db, user_id, paper_id, turn_id)
+        if not turn:
+            raise HTTPException(status_code=404, detail=f"{label} not found")
+        if payload.conversation_id is None:
+            payload.conversation_id = turn["conversation_id"]
+        elif payload.conversation_id != turn["conversation_id"]:
+            raise HTTPException(status_code=404, detail=f"{label} not found")
+        return turn
+
+    if payload.parent_turn_id is not None:
+        await resolve_turn(payload.parent_turn_id, "Parent turn")
+    if payload.thread_root_turn_id is not None:
+        await resolve_turn(payload.thread_root_turn_id, "Thread root")
+    if payload.conversation_id is not None and not await conv_repo.conversation_is_available_for_document(
+        db, user_id, paper_id, payload.conversation_id
+    ):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
     # Sub-thread depth cap: a sub-thread rooted at R has depth = chain_len(R) + 1.
     # Block any /ask whose target sub-thread would exceed MAX_SUB_THREAD_DEPTH.
     # This is defense-in-depth: the UI also hides the "Thread →" affordance at L3.
     if payload.thread_root_turn_id is not None:
-        root_chain = await conv_repo.compute_turn_depth(db, user_id, payload.thread_root_turn_id)
+        root_chain = await conv_repo.compute_turn_depth(
+            db, user_id, payload.thread_root_turn_id, document_id=paper_id
+        )
         sub_depth = root_chain + 1
         if sub_depth > MAX_SUB_THREAD_DEPTH:
             raise HTTPException(
@@ -268,9 +289,18 @@ async def get_paper_chat(
         raise DocumentNotFound(str(paper_id))
 
     if thread_root_turn_id is not None:
-        turns = await conv_repo.get_thread_subtree(db, current_user["id"], thread_root_turn_id)
+        root = await conv_repo.get_turn_for_document(
+            db, current_user["id"], paper_id, thread_root_turn_id
+        )
+        if not root:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        turns = await conv_repo.get_thread_subtree(
+            db, current_user["id"], thread_root_turn_id, document_id=paper_id
+        )
         # Depth of this sub-thread = chain length of its root turn + 1.
-        root_chain = await conv_repo.compute_turn_depth(db, current_user["id"], thread_root_turn_id)
+        root_chain = await conv_repo.compute_turn_depth(
+            db, current_user["id"], thread_root_turn_id, document_id=paper_id
+        )
         sub_depth = root_chain + 1
         # Pair user→assistant inside the sub-thread so each pair becomes a
         # potential deeper sub-thread root. Suppress pairing for the root
@@ -296,9 +326,15 @@ async def get_paper_chat(
         }
 
     if conversation_id is not None:
+        if not await conv_repo.conversation_is_available_for_document(
+            db, current_user["id"], paper_id, conversation_id
+        ):
+            raise HTTPException(status_code=404, detail="Conversation not found")
         # Main chat view must exclude sub-thread turns (parent_turn_id IS NOT NULL),
         # otherwise replies sent inside a tangent leak into the primary linear chat.
-        turns = await conv_repo.get_main_chat(db, current_user["id"], conversation_id)
+        turns = await conv_repo.get_main_chat(
+            db, current_user["id"], conversation_id, document_id=paper_id
+        )
     else:
         turns = await conv_repo.list_turns_by_document(db, current_user["id"], paper_id)
 
@@ -350,4 +386,3 @@ async def list_paper_conversations(
             if r.get("conversation_id") is not None
         ],
     }
-

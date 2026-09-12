@@ -84,11 +84,13 @@ async def attach_asset_urls(session: AsyncSession, chunks: Sequence[dict]) -> No
     first: dict = {}
     for a in assets:
         if a.get("asset_type") == "image" and a.get("file_path"):
-            first.setdefault(a["chunk_id"], a["file_path"])
+            first.setdefault(a["chunk_id"], a)
     for c in chunks:
-        path = first.get(c.get("id"))
-        if path:
-            c["image_url"] = asset_repo.resolve_asset_url(path)
+        asset = first.get(c.get("id"))
+        if asset:
+            c["image_url"] = asset_repo.resolve_asset_url(
+                asset["document_id"], asset["file_path"]
+            )
 
 
 def format_blocks(chunks: Sequence[dict], *, prefix: str = "") -> str:

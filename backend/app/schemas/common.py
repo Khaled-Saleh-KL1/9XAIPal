@@ -20,6 +20,9 @@ class PaginationMeta(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    # The running build, from app.core.version — the one field here that is
+    # about the deployment rather than its dependencies.
+    version: Optional[str] = None
     database: str
     ollama: Optional[str] = None
     # Health of the web search cascade: `web_search` is "ok" if at least one

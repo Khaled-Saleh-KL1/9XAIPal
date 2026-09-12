@@ -1,6 +1,6 @@
-# 9XAIPal (V1)
+# 9XAIPal
 
-[![Video demo](https://img.youtube.com/vi/m-uIaNKOOrk/0.jpg)](https://youtu.be/m-uIaNKOOrk)
+**Version 2.0.0** · a local-first reading companion for research papers, technical books, and long-form PDFs.
 
 ---
 

@@ -39,8 +39,25 @@ async def check_queue_capacity(session: AsyncSession) -> None:
         raise TooManyQueuedJobs(count, settings.max_queued_ingestion_jobs)
 
 
+async def _reserve_queue_capacity(session: AsyncSession) -> None:
+    """Serialize the count-and-insert invariant for one transaction.
+
+    PostgreSQL advisory transaction locks need no schema row and are released
+    automatically on commit or rollback. The job insert immediately follows
+    while the lock is held, so concurrent requests cannot all pass a stale
+    count and then enqueue beyond the configured ceiling.
+    """
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('9xaipal:ingestion_queue'))"))
+    await check_queue_capacity(session)
+
+
 async def create_ingestion_job(session: AsyncSession, document_id: UUID) -> dict:
-    """Create a new ingestion job."""
+    """Atomically reserve queue capacity and create a new ingestion job.
+
+    Callers must commit this session only after this function returns. The
+    advisory lock stays held until then, covering both the count and insert.
+    """
+    await _reserve_queue_capacity(session)
     result = await session.execute(
         text("""
             INSERT INTO ingestion_jobs (document_id, status)
@@ -120,4 +137,3 @@ async def mark_document_failed(
         session, document_id, "failed", error_message=error_message
     )
     logger.error(f"Document {document_id} failed: {error_message}")
-

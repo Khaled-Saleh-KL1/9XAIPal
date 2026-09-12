@@ -1,5 +1,7 @@
 """Application settings loaded from environment variables."""
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -386,6 +388,17 @@ class Settings(BaseSettings):
     # header; empty means "not configured" and the client returns
     # resolve_status='unavailable' rather than failing loudly.
     semantic_scholar_api_key: str = ""
+    # The keyed tier allows ONE request per second per key, shared by every
+    # API worker. All Semantic Scholar calls go through one Redis-backed FIFO
+    # line (core/pacer.py) spaced this far apart; readers who arrive while
+    # someone else's slot is pending are told their place and served in
+    # order. Slightly over 1.0 so jitter between "slot time" and "socket
+    # write" can't land two requests inside the same provider-side second.
+    semantic_scholar_min_interval_seconds: float = 1.05
+    # Semantic Scholar's limiter is bursty: measured live, a third to a half
+    # of correctly spaced requests still get 429. Each retry re-queues in the
+    # shared line (fair to other readers) and backs off one more interval.
+    semantic_scholar_max_attempts: int = 4
 
     # SerpApi (https://serpapi.com) — a paid scraping API returning genuine
     # Google SERP data (organic_results / images_results). This is the only
@@ -419,8 +432,15 @@ class Settings(BaseSettings):
     # scrape API, tried second.
     crw_api_key: str = ""
 
-    # Upload limits
-    max_upload_size_mb: int = 100
+    # Upload limits. 500, not 100: this is a private box for Khaled and a
+    # few friends, and the library holds whole books and long theses — a
+    # scanned textbook is routinely 200 MB+. The number is safe to be
+    # generous with because the upload is streamed to disk in 1 MB chunks
+    # with the count checked as it goes (docs/issues/010), so the cap
+    # bounds disk, not API-worker memory. ⚠ nginx enforces its own copy
+    # (client_max_body_size in backend/nginx/9xaipal.conf); raise both or
+    # the browser sees nginx's bare 413 page before this value matters.
+    max_upload_size_mb: int = 500
     # Hard ceiling on ingestion jobs that are queued or in progress at once
     # (see app/services/ingestion.py::create_ingestion_job) — Celery runs
     # this box's extraction pipeline at --concurrency=1, so this is what
@@ -459,6 +479,10 @@ class Settings(BaseSettings):
     # expires this many seconds after their last request.
     session_cookie_name: str = "9xaipal_session"
     session_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
+    # Set SESSION_COOKIE_SAMESITE=none when the SPA and API are on different
+    # sites. Browsers require Secure alongside SameSite=None, so production's
+    # existing DEBUG=false setting supplies it automatically.
+    session_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 
     # ── Capacity: concurrent-active-user cap + waiting queue ────────────────
     # See app/core/capacity.py. "Active" = made an authenticated request in
@@ -490,4 +514,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

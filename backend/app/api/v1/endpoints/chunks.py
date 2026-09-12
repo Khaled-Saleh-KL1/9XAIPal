@@ -1,15 +1,19 @@
 """Chunk endpoints: sequential reading by sequence_order."""
 
+import asyncio
+import json
 import re
 from uuid import UUID, uuid4
+from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
 from app.core.logging import get_logger
-from app.core.paths import documents_dir
+from app.core.paths import documents_dir, images_dir
 from app.api.errors import ChunkNotFound, DocumentNotFound
 from app.schemas.chunks import ChunkResponse, ChunkListResponse
 from app.schemas.references import ReferenceEntry, ReferenceListResponse, AddReferenceResponse
@@ -18,12 +22,14 @@ from app.services import documents as doc_service
 from app.services.outline import heading_level
 from app.services import book_outline
 from app.services.references import parse_references
-from app.services.ingestion import check_queue_capacity, create_ingestion_job
+from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.search.semantic_scholar_client import match_reference, Unresolved
+from app.core import pacer
+from app.database.connection import async_session_factory
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import figure_descriptions as fig_desc_repo
 from app.database.repositories import paper_references as ref_repo
-from app.database.repositories.documents import get_document_by_source_url
+from app.database.repositories.documents import get_document_by_source_url, update_document_status as update_doc_status_repo
 from app.workers.tasks import process_article_ingestion
 
 logger = get_logger(__name__)
@@ -81,7 +87,9 @@ async def _serialize_chunk(db: AsyncSession, chunk: dict) -> dict:
     if assets:
         for a in assets:
             if a.get("asset_type") == "image":
-                image_url = asset_repo.resolve_asset_url(a["file_path"])
+                image_url = asset_repo.resolve_asset_url(
+                    chunk["document_id"], a["file_path"]
+                )
                 break
 
     return _shape_chunk_for_reader(chunk, image_url)
@@ -121,7 +129,7 @@ async def get_full_document(
         chunk_assets = by_chunk.get(c["id"], [])
         image_url = next(
             (
-                asset_repo.resolve_asset_url(a["file_path"])
+                asset_repo.resolve_asset_url(paper_id, a["file_path"])
                 for a in chunk_assets
                 if a.get("asset_type") == "image" and a.get("file_path")
             ),
@@ -237,7 +245,7 @@ async def get_chunks_range(
     for c in chunks:
         image_url = next(
             (
-                asset_repo.resolve_asset_url(a["file_path"])
+                asset_repo.resolve_asset_url(paper_id, a["file_path"])
                 for a in by_chunk.get(c["id"], [])
                 if a.get("asset_type") == "image" and a.get("file_path")
             ),
@@ -246,6 +254,46 @@ async def get_chunks_range(
         result.append(_shape_chunk_for_reader(c, image_url))
 
     return {"chunks": result, "paper_id": str(paper_id)}
+
+
+def _local_asset_file(file_path: str) -> Path | None:
+    """Resolve a database-backed asset below images_dir without path escapes."""
+    if file_path.startswith(("http://", "https://")):
+        return None
+    relative = PurePosixPath(file_path)
+    if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+        return None
+
+    root = images_dir().resolve()
+    candidate = (root / Path(*relative.parts)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+@router.get("/{paper_id}/assets/{asset_path:path}")
+async def get_paper_asset(
+    paper_id: UUID,
+    asset_path: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Serve one extracted paper asset after document ownership verification."""
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    from app.database.repositories import assets as asset_repo
+
+    if not await asset_repo.file_path_belongs_to_document(db, asset_path, paper_id):
+        raise DocumentNotFound(str(paper_id))
+
+    path = _local_asset_file(asset_path)
+    if path is None or not path.is_file():
+        raise DocumentNotFound(str(paper_id))
+    return FileResponse(path=str(path))
 
 
 @router.get("/{paper_id}/chunks/{sequence_order}")
@@ -604,10 +652,20 @@ async def resolve_reference(
     if not row:
         raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
 
+    return await _resolve_row(db, paper_id, ref_number, row)
+
+
+async def _resolve_row(
+    db: AsyncSession, paper_id: UUID, ref_number: int, row: dict, *, on_queued=None,
+) -> ReferenceEntry:
+    """The lookup-and-cache step shared by the JSON and streaming resolve
+    routes. `on_queued` is forwarded to the Semantic Scholar client's shared
+    1 req/s line (core/pacer.py) so the streaming route can report the
+    caller's place; the JSON route just waits."""
     if row["resolve_status"] in ("resolved", "no_match"):
         return _entry_out(row)
 
-    result = await match_reference(row["raw_text"])
+    result = await match_reference(row["raw_text"], on_queued=on_queued)
     if isinstance(result, Unresolved):
         updated = await ref_repo.save_resolution(db, paper_id, ref_number, status=result.value)
         await db.commit()
@@ -625,6 +683,82 @@ async def resolve_reference(
     )
     await db.commit()
     return _entry_out(updated)
+
+
+@router.get("/{paper_id}/references/{ref_number}/resolve/stream")
+async def resolve_reference_stream(
+    paper_id: UUID,
+    ref_number: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """`/resolve` as an SSE stream, for the citation chip.
+
+    Semantic Scholar allows one request per second for the whole box, so
+    when several readers open citations at once they are served one by one
+    (core/pacer.py). A plain JSON route would just hang for those seconds
+    with nothing to show; this one sends `queued` first — the reader's
+    place in line and roughly how long — so the chip can say "the link
+    will open shortly", then `resolved` with the entry when the turn comes.
+    Events:
+
+        {"type": "queued",   "position": 3, "wait_seconds": 3.2}   (only if there is a wait)
+        {"type": "resolved", "entry": <ReferenceEntry>}
+        {"type": "error",    "detail": "..."}
+
+    Ownership and the 404 are checked before the stream opens, so those are
+    still ordinary HTTP errors, not events.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+
+    row = await ref_repo.get_reference(db, paper_id, ref_number)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
+
+    def sse(event: dict) -> str:
+        return f"data: {json.dumps(event)}\n\n"
+
+    async def event_stream():
+        # The request-scoped `db` closes when this handler returns, which is
+        # before the generator runs — same reason the chat streams open
+        # their own session.
+        queue: asyncio.Queue[str] = asyncio.Queue()
+
+        async def on_queued(turn: pacer.Turn) -> None:
+            await queue.put(sse({
+                "type": "queued",
+                "position": turn.position,
+                "wait_seconds": round(turn.wait_seconds, 1),
+            }))
+
+        async def run() -> None:
+            try:
+                async with async_session_factory() as session:
+                    entry = await _resolve_row(session, paper_id, ref_number, row, on_queued=on_queued)
+                await queue.put(sse({"type": "resolved", "entry": entry.model_dump(mode="json")}))
+            except Exception as e:  # noqa: BLE001 — surfaced to the reader, then the stream ends
+                logger.exception("reference resolve stream failed for %s [%s]", paper_id, ref_number)
+                await queue.put(sse({"type": "error", "detail": str(e) or "Could not resolve this reference"}))
+            finally:
+                await queue.put("")
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                frame = await queue.get()
+                if frame == "":
+                    break
+                yield frame
+        finally:
+            task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/{paper_id}/references/{ref_number}/add", response_model=AddReferenceResponse, status_code=201)
@@ -681,8 +815,6 @@ async def add_reference_to_library(
             already_existed=True,
         )
 
-    await check_queue_capacity(db)
-
     new_doc = await doc_service.create_document(
         db,
         user_id=current_user["id"],
@@ -692,7 +824,6 @@ async def add_reference_to_library(
         source_url=url,
     )
     await ref_repo.mark_added(db, paper_id, ref_number, new_doc["id"])
-    await db.commit()
 
     job = await create_ingestion_job(db, new_doc["id"])
     await db.commit()
@@ -701,6 +832,23 @@ async def add_reference_to_library(
         process_article_ingestion.delay(str(new_doc["id"]), str(job["id"]), url, "paper")  # type: ignore[attr-defined]
     except Exception as dispatch_exc:
         logger.exception(f"Failed to dispatch process_article_ingestion for {new_doc['id']} (reference [{ref_number}] of {paper_id})")
+        try:
+            await update_doc_status_repo(
+                db,
+                new_doc["id"],
+                "failed",
+                error_message=(
+                    "Failed to queue reference import (Celery broker / Redis unreachable). "
+                    f"Original error: {dispatch_exc}"
+                ),
+            )
+            await update_job_status_svc(
+                db, job["id"], "failed", error_message=f"Dispatch failed: {dispatch_exc}"
+            )
+            await db.commit()
+        except Exception as mark_exc:
+            await db.rollback()
+            logger.error(f"Failed to record reference import dispatch failure for {new_doc['id']}: {mark_exc}")
         return AddReferenceResponse(
             id=new_doc["id"], filename=new_doc["filename"], status="failed",
             message=f"Recorded but background ingestion could not be queued (Redis/Celery). {dispatch_exc}",

@@ -80,11 +80,12 @@ The application code is more mature than the tooling around it. These are the ch
 - **Rate limiting is per-process and in-memory**, so with `--workers 2` the real ceiling is double
   the configured value. Documented honestly in the middleware docstring; a known tradeoff, not a
   bug.
-- ⚠ **Static mounts bypass auth entirely.** `/static/{images,extracted,assets}` are plain
-  `StaticFiles` mounts (`app/main.py`) with no `get_current_user` dependency: the JSON API is
-  per-user isolated (see [auth.md](../02-architecture/auth.md)), but a caller who already knows or
-  guesses a file path reads it with no login and no ownership check. Paths are UUID-derived, not
-  sequential, so this is not trivially enumerable, but it is not access-controlled either.
+- ~~**Static mounts bypass auth entirely.**~~ **fixed 2026-09-10.** `/static/{images,extracted,assets}`
+  were plain `StaticFiles` mounts (`app/main.py`) with no `get_current_user` dependency: a caller
+  who knew or guessed a file path read it with no login and no ownership check. The mounts are
+  gone; every file is now served under `/api/v1` behind the session and an ownership check —
+  [docs/issues/001](issues/001-public-static-files-bypass-authorization.md), and the 17 other
+  findings of the same audit are indexed at [docs/issues/000](issues/000-code-audit-index.md).
 - ~~**`READ` escaped the reader's progress ceiling**~~: **fixed 2026-09-08.** `SECTION` and
   `SEARCH` were clamped by `max_sequence_id`; `READ` took its range from the model's own numbers
   and queried the database directly. Measured on a 3663-block book with a ceiling of 20,
@@ -118,14 +119,18 @@ The application code is more mature than the tooling around it. These are the ch
 - **No retry queue** for failed ingestions beyond `embed_document`'s in-Celery retries.
 - **Web-search images outside the research agent are not persisted**: remote URLs in older chat
   answers rot.
-- ⚠ **`SEMANTIC_SCHOLAR_API_KEY` is not set**, so two features cannot actually resolve anything on
-  this box yet: clickable bibliography citations (shipped 2026-09-09, see
+- ~~⚠ **`SEMANTIC_SCHOLAR_API_KEY` is not set**~~ **set 2026-09-11.** Two features could not resolve
+  anything on this box until then: clickable bibliography citations (shipped 2026-09-09, see
   [clickable-citations.md](plans/clickable-citations.md)) and BibTeX/CSV author-year enrichment on
   library export (shipped 2026-09-10, see [library-export.md](plans/library-export.md)). Both
   degrade to a real, surfaced state (`resolve_status`/`self_resolve_status='unavailable'`) rather
   than a silent failure, and both retry automatically on their next use — no rework needed once the
   key lands. Free key: https://www.semanticscholar.org/product/api. Not a code gap — closing it is
-  a `.env` edit.
+  a `.env` edit — plus one compose line: the `environment:` block is an allow-list, and the key
+  was not in it, so a key in `.env` never reached the container. Landing the key exposed two real gaps, both fixed the same day
+  ([citation-queue.md](plans/citation-queue.md)): the match endpoint is a *title* matcher, so
+  whole entries were being cached as permanent `no_match`; and the key's 1 req/s allowance is for
+  the whole box, so every call now waits in one shared Redis line and readers see their place.
 
 ## Structural debt
 

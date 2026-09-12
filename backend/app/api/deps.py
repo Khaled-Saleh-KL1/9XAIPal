@@ -158,4 +158,3 @@ def get_ask_semaphore() -> asyncio.Semaphore:
     beyond the Depends lifecycle (the SSE streaming endpoint acquires it
     inside its response generator, which runs after dependencies close)."""
     return _ask_semaphore
-

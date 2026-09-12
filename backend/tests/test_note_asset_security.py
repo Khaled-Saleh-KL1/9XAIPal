@@ -3,7 +3,7 @@ an arbitrary file off the server's disk.
 
 anchor.image_url is attacker-controlled (it's a request body field on
 POST /papers/{id}/notes/stream): _to_storage_path strips this app's own
-/static/images/ prefix, and file_path_belongs_to_document confirms what's
+/api/v1/papers/{id}/assets/ prefix, and file_path_belongs_to_document confirms what's
 left actually names a chunk_assets row owned by THIS document, before
 build_multimodal_messages is ever allowed to open it. Neither check alone
 is redundant — see notes.py's _to_storage_path docstring.
@@ -20,19 +20,24 @@ from app.database.repositories import documents as doc_repo
 
 
 def test_to_storage_path_only_accepts_the_apps_own_url_shape():
-    assert _to_storage_path("/static/images/doc-id/fig.png") == "doc-id/fig.png"
-    assert _to_storage_path(None) is None
-    assert _to_storage_path("") is None
+    document_id = uuid4()
+    base = f"/api/v1/papers/{document_id}/assets"
+    assert _to_storage_path(f"{base}/{document_id}/fig.png", document_id) == f"{document_id}/fig.png"
+    assert _to_storage_path(None, document_id) is None
+    assert _to_storage_path("", document_id) is None
     # Everything below is what an attacker controlling this field would try —
     # none of it starts with the one prefix this app ever generates.
-    assert _to_storage_path("/etc/passwd") is None
-    assert _to_storage_path("/app/backend/.env") is None
-    assert _to_storage_path("../../../../etc/passwd") is None
-    assert _to_storage_path("relative/but/not/prefixed.png") is None
+    assert _to_storage_path("/etc/passwd", document_id) is None
+    assert _to_storage_path("/app/backend/.env", document_id) is None
+    assert _to_storage_path("../../../../etc/passwd", document_id) is None
+    assert _to_storage_path("relative/but/not/prefixed.png", document_id) is None
     # Even a crafted string starting with the right prefix but escaping via
     # `..` afterward is stripped to a value that still won't match a real
     # asset — file_path_belongs_to_document is what actually rejects it.
-    assert _to_storage_path("/static/images/../../../../etc/passwd") == "../../../../etc/passwd"
+    assert _to_storage_path(f"{base}/../../../../etc/passwd", document_id) is None
+    assert _to_storage_path(
+        f"/api/v1/papers/{uuid4()}/assets/{document_id}/fig.png", document_id
+    ) is None
 
 
 async def _make_user(db_session) -> str:

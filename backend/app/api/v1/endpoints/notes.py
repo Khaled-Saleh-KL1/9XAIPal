@@ -6,6 +6,8 @@ app.chat.paper_agent for why none of that applies.
 """
 
 import json
+import re
+from pathlib import PurePosixPath
 from uuid import UUID
 from typing import Optional
 
@@ -44,8 +46,8 @@ class NoteAnchor(BaseModel):
     sequence_id: int
     chunk_id: Optional[UUID] = None
     quote: Optional[str] = None
-    # As served to the browser, e.g. "/static/images/<doc>/<uuid>.png". Stripped
-    # back to a storage-relative path before it reaches the model.
+    # As served to the browser through the paper-asset endpoint. Stripped back
+    # to a storage-relative path before it reaches the model.
     image_url: Optional[str] = None
 
 
@@ -110,13 +112,15 @@ async def _choose_margin(
     return "left" if right > left else "right"
 
 
-_IMAGE_URL_PREFIX = "/static/images/"
+_PAPER_ASSET_URL = re.compile(
+    r"^/api/v1/papers/(?P<document_id>[0-9a-fA-F-]{36})/assets/(?P<path>.+)$"
+)
 
 
-def _to_storage_path(image_url: Optional[str]) -> Optional[str]:
+def _to_storage_path(image_url: Optional[str], document_id: UUID) -> Optional[str]:
     """Turn a served image URL back into a chunk_assets.file_path.
 
-    ⚠ Only ever accepts the shape this app's own /static/images/ links use.
+    ⚠ Only ever accepts the shape this app's authenticated asset links use.
     Anything else — an absolute path, a bare filename, a `../` escape — is
     rejected here rather than passed through, because this string reaches
     disk (see build_multimodal_messages) if it survives. This is layer one
@@ -125,9 +129,14 @@ def _to_storage_path(image_url: Optional[str]) -> Optional[str]:
     before it's ever used — this function alone is necessary but not
     sufficient, since a forged path can still be shaped like a real one.
     """
-    if not image_url or not image_url.startswith(_IMAGE_URL_PREFIX):
+    match = _PAPER_ASSET_URL.fullmatch(image_url or "")
+    if not match or match["document_id"] != str(document_id):
         return None
-    return image_url[len(_IMAGE_URL_PREFIX):]
+    path = match["path"]
+    relative = PurePosixPath(path)
+    if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+        return None
+    return path
 
 
 def _allow_web_for_note(doc: dict, question: str) -> bool:
@@ -257,7 +266,7 @@ async def create_note_stream(
     chunk = await chunk_repo.get_chunk_by_sequence(db, paper_id, anchor.sequence_id)
     anchor_chunk_id = chunk["id"] if chunk else None
 
-    image_path = _to_storage_path(anchor.image_url)
+    image_path = _to_storage_path(anchor.image_url, paper_id)
     if image_path and not await asset_repo.file_path_belongs_to_document(db, image_path, paper_id):
         # A forged or stale reference (an old tab open across a re-chunk, or
         # a client sending a path that was never this paper's) — dropped the

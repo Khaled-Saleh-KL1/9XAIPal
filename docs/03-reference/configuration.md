@@ -95,7 +95,7 @@ cloud API; each cloud provider has its own `*_CHAT_MODEL` above.
 | `MINERU_TIMEOUT_SEC` | `14400` (4 h) | Wall clock for one MinerU subprocess. High by default because a 700-page book on CPU takes hours. |
 | `ALLOW_PYMUPDF_FALLBACK` | `false` | `true` degrades to text-only extraction when MinerU is missing, with no OCR, no tables, no math. Default `false` so a missing extractor fails loudly. |
 | `MINERU_PAGE_BATCH_SIZE` | `100` | Compose-only. Extract in page-range batches so peak RAM stays bounded on long books. `0` disables. |
-| `MAX_UPLOAD_SIZE_MB` | `100` | Hard cap on the upload body. |
+| `MAX_UPLOAD_SIZE_MB` | `500` | Hard cap on the upload body — generous on purpose: whole books and scanned theses are routinely 200 MB+, and since the upload is streamed (010) the cap bounds disk, not memory. nginx has its own `client_max_body_size`, kept equal in `backend/nginx/9xaipal.conf`; both must move together. |
 
 ## Ingest profile
 
@@ -220,6 +220,18 @@ own docstring for the full cascade order and reasoning.
 cascade just skips straight to the free direct fetch, which is exactly what article import already
 did before these existed. They only change behavior for the pages that fetch would have failed on.
 
+## Bibliography citations
+
+Resolving a paper's own "[12]" citations (and the author/year enrichment on BibTeX/CSV export)
+against Semantic Scholar — `search/semantic_scholar_client.py`. Separate from the web-search keys
+above: a different provider for a different question ("what paper is this citation?").
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SEMANTIC_SCHOLAR_API_KEY` | (empty) | Free key from <https://www.semanticscholar.org/product/api>, sent as `x-api-key`. ⚠ Effectively required: the unauthenticated tier 429s from this box on every call. Empty → every citation stays `resolve_status='unavailable'` (never cached as final; resolves on its next open once the key lands). |
+| `SEMANTIC_SCHOLAR_MIN_INTERVAL_SECONDS` | `1.05` | The keyed tier allows **one request per second per key**, for the whole box. Every call — from any API worker, any reader, the export loop — waits its turn in one Redis-backed FIFO line (`core/pacer.py`) spaced this far apart; simultaneous readers are told their place ("in the queue — #3, the link will open shortly") and served in arrival order. |
+| `SEMANTIC_SCHOLAR_MAX_ATTEMPTS` | `4` | Semantic Scholar's limiter is bursty: measured live (2026-09-11), a third to a half of correctly spaced requests still get 429. A 429 re-queues in the same line and backs off one extra interval per attempt; only when the attempts are spent does the citation show "unavailable" with a Retry. |
+
 ## Background jobs
 
 | Key | Default | Purpose |
@@ -237,6 +249,7 @@ did before these existed. They only change behavior for the pages that fetch wou
 | `SERVE_FRONTEND` | `true` (compose) | Serve the built SPA at `/` from the API container. |
 | `SESSION_COOKIE_NAME` | `9xaipal_session` | Name of the httponly session cookie. |
 | `SESSION_TTL_SECONDS` | `2592000` (30 days) | Sliding session expiry, refreshed on every authenticated request, so an active user is never logged out mid-session. |
+| `SESSION_COOKIE_SAMESITE` | `lax` | `lax`, `strict`, or `none`. Set `none` only for a cross-site HTTPS SPA/API deployment; production cookies are Secure when `DEBUG=false`. |
 | `MAX_ACTIVE_USERS` | `30` | Signup is open (no invite code). This is the concurrent-active-user cap that actually protects a single box with no autoscaling — everyone past it waits in a FIFO queue, auto-promoted the moment a slot frees. "Active" = made a request in the last `ACTIVE_WINDOW_SECONDS`, not "has a session" (sessions last 30 days). See [auth.md](../02-architecture/auth.md). |
 | `ACTIVE_WINDOW_SECONDS` | `300` | How long since their last request before an idle user's slot frees automatically. Freed immediately on logout regardless of this. |
 | `MAX_QUEUED_INGESTION_JOBS` | `50` | Hard ceiling on ingestion jobs queued or in progress at once — this box's Celery worker runs `--concurrency=1`, so this is what stops an extreme upload burst from growing disk/DB rows unbounded. A fresh upload past the ceiling is rejected with `429`. |

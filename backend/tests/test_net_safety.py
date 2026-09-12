@@ -15,12 +15,38 @@ for real (127.0.0.1 and 169.254.169.254 are IP literals, no lookup needed).
 import httpx
 import pytest
 
+from app.core import net_safety
 from app.core.net_safety import (
     TooManyRedirectsError,
     UnsafeRedirectError,
     safe_send_async,
     safe_send_sync,
 )
+
+
+class _AsyncDelegate:
+    def __init__(self):
+        self.host = None
+
+    async def connect_tcp(self, host, *args, **kwargs):
+        self.host = host
+        return "stream"
+
+
+async def test_pinned_backend_connects_to_the_validated_address(monkeypatch):
+    backend = net_safety._PinnedAsyncNetworkBackend()
+    delegate = _AsyncDelegate()
+    backend._backend = delegate
+
+    async def _resolve(host: str) -> str:
+        assert host == "rebind.example"
+        return "93.184.216.34"
+
+    monkeypatch.setattr(net_safety, "_resolve_public_address", _resolve)
+    result = await backend.connect_tcp("rebind.example", 443)
+
+    assert result == "stream"
+    assert delegate.host == "93.184.216.34"
 
 
 def _redirect_once(target: str):

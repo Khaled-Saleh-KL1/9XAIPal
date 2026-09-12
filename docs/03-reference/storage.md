@@ -5,14 +5,18 @@
 > **Owns:** the storage-root layout and the disk-path ↔ static-URL mapping.
 > **Does not own:** `STORAGE_ROOT` configuration ([configuration.md](configuration.md)).
 >
-> **Status:** current · **Last verified:** `covers/` 2026-08-26 (rendered and served against a
+> **Status:** current · **Last verified:** file serving 2026-09-10 over HTTP against a throwaway
+> API on the VPS (anonymous → 401, owner → the bytes, `../` and `%2F` traversal → 404,
+> `/static/*` → 404); `covers/` 2026-08-26 (rendered and served against a
 > live paper); the rest 2026-07-25 against
 > [`core/paths.py`](../../backend/app/core/paths.py) and
 > [`main.py`](../../backend/app/main.py)
 > **Verify with:** `ls -R backend/app/storage`
 >
-> ⚠ Every file under the storage root is served publicly at `/static/*` with no auth. Treat
-> uploaded PDFs and extracted assets as world-readable to anyone who can reach the API.
+> Nothing under the storage root is served directly. Figures, PDFs and research images each go
+> through an authenticated `/api/v1` route that checks ownership first (see
+> [api.md](api.md#files)); raw MinerU output (`extracted/`) is never served. The old public
+> `/static/*` mounts are gone — [docs/issues/001](../issues/001-public-static-files-bypass-authorization.md).
 
 Everything that isn't in Postgres lives under the **storage root**:
 configurable via `settings.storage_root` (default `app/storage`). Paths
@@ -49,8 +53,9 @@ The **canonical** location for chunk-linked images. Two important
 properties:
 
 1. **The DB stores `file_path` relative to `images_dir()`**, e.g.
-   `"<doc_id>/<asset_uuid>.png"`. This makes `/static/images/...` URLs
-   stable across deployments.
+   `"<doc_id>/<asset_uuid>.png"`. The served URL is built from it at read time
+   (`resolve_asset_url` → `/api/v1/papers/<doc_id>/assets/<file_path>`), so
+   nothing in the database depends on where files are mounted.
 2. **Filenames are randomized** to avoid collisions.
 
 ### `images/research/<conv_id>/...`
@@ -71,22 +76,29 @@ the source PDF. Deleting the paper deletes its cover.
 ### `assets/<doc_id>.pdf`
 A second copy of the upload, keyed by document ID so URLs are
 predictable. Used by:
-- `GET /papers/{id}/raw`: `FileResponse` with `Content-Disposition`.
-- `GET /static/assets/{id}.pdf`: direct static serving.
+- `GET /papers/{id}/raw`: `FileResponse` with `Content-Disposition`, ownership-checked.
+  The PDF viewer loads this same URL (with credentials); there is no direct serving.
 
 ### `logs/`
 Reserved for future structured logs. Not used at the moment.
 
-## Static mounts ([main.py](../../backend/app/main.py))
+## Serving files
 
-```python
-app.mount("/static/images",    StaticFiles(directory=images_dir(),    check_dir=False))
-app.mount("/static/extracted", StaticFiles(directory=extracted_dir(), check_dir=False))
-app.mount("/static/assets",    StaticFiles(directory=assets_dir(),    check_dir=False))
-app.mount("/static/images/research", StaticFiles(directory=research_images_dir(), check_dir=False))
-```
+`main.py` mounts nothing from the storage root. Each kind of file has one
+authenticated endpoint, and each resolves the path *from a database row*
+rather than from the URL alone:
 
-`check_dir=False` lets the mount succeed even before the directory exists.
+| File | Route | Ownership check |
+| --- | --- | --- |
+| extracted figure / table / equation crop | `GET /api/v1/papers/{id}/assets/{file_path}` ([chunks.py](../../backend/app/api/v1/endpoints/chunks.py)) | document belongs to the caller **and** `file_path` names a `chunk_assets` row of that document; then the resolved path must stay below `images_dir()` |
+| original PDF | `GET /api/v1/papers/{id}/raw` ([documents.py](../../backend/app/api/v1/endpoints/documents.py)) | document belongs to the caller |
+| research-agent image | `GET /api/v1/media/research/{conversation_id}/{filename}` ([media.py](../../backend/app/api/v1/endpoints/media.py)) | a turn of that conversation belongs to the caller; `filename` must be a bare name |
+
+⚠ The ownership check is what makes this safe, not the UUIDs in the paths. A
+UUID is an identifier, not a credential: it appears in histories, exported
+notes and browser logs. Before 2026-09-10 the whole root was a public
+`StaticFiles` mount and a leaked path read another user's PDF with no login
+([docs/issues/001](../issues/001-public-static-files-bypass-authorization.md)).
 
 ## URL conventions
 

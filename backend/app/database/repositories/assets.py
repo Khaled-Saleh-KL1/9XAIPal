@@ -2,24 +2,28 @@
 
 from uuid import UUID
 from typing import Optional
+from urllib.parse import quote
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-def resolve_asset_url(file_path: str) -> str:
+def resolve_asset_url(document_id: UUID, file_path: str) -> str:
     """Turn a chunk_assets.file_path into a URL the reader can load.
 
     Almost always a path relative to images_dir() (e.g. "<doc_id>/<uuid>.png"),
-    served under the /static/images/ mount — that's every extracted-PDF
-    figure. A web article's images are hotlinked rather than downloaded (see
-    services/article_extraction.py), so file_path is sometimes already a
-    full external URL for those rows; passed through unchanged rather than
-    getting "/static/images/" glued onto the front of an http(s) URL.
+    served by the authenticated paper-asset endpoint. A web article's images
+    are hotlinked rather than downloaded (see services/article_extraction.py),
+    so file_path is sometimes already a full external URL for those rows and
+    is passed through unchanged.
+
+    document_id is deliberately part of the URL even though the asset path
+    normally starts with one. The endpoint uses it to verify the parent
+    document belongs to the current user.
     """
     if file_path.startswith(("http://", "https://")):
         return file_path
-    return f"/static/images/{file_path}"
+    return f"/api/v1/papers/{document_id}/assets/{quote(file_path, safe='/')}"
 
 
 async def create_asset(
@@ -67,7 +71,13 @@ async def get_assets_for_chunks(session: AsyncSession, chunk_ids: list[UUID]) ->
     if not chunk_ids:
         return []
     result = await session.execute(
-        text("SELECT * FROM chunk_assets WHERE chunk_id = ANY(:ids) ORDER BY created_at"),
+        text("""
+            SELECT ca.*, c.document_id
+            FROM chunk_assets ca
+            JOIN chunks c ON c.id = ca.chunk_id
+            WHERE ca.chunk_id = ANY(:ids)
+            ORDER BY ca.created_at
+        """),
         {"ids": chunk_ids},
     )
     return [dict(r) for r in result.mappings().all()]
@@ -96,4 +106,3 @@ async def file_path_belongs_to_document(
         {"file_path": file_path, "document_id": document_id},
     )
     return result.first() is not None
-

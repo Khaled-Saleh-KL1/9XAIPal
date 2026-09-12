@@ -1,15 +1,14 @@
 """Auth endpoints: signup (open), login, logout, and /me.
 
 Session is a Redis-backed opaque token in an httponly cookie — see
-app.core.auth. `SameSite=Lax` is sufficient here without a separate CSRF
-token: these are JSON POSTs with a non-simple Content-Type, so a cross-origin
-request needs a CORS preflight first, and CORSMiddleware (app/main.py) only
-allows the explicit origins in CORS_ORIGINS — never a wildcard alongside
-allow_credentials=True. If that ever changes to allow a broader origin set,
-this reasoning needs revisiting.
+app.core.auth. The SameSite mode is deployment-configurable: hosted SPA/API
+pairs on different sites require `none` plus HTTPS, while the default `lax`
+keeps same-site and local deployments protected. JSON POSTs require a CORS
+preflight, and CORSMiddleware only allows explicit configured origins.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user_optional, enforce_auth_rate_limit
@@ -35,7 +34,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         max_age=settings.session_ttl_seconds,
         httponly=True,
         secure=not settings.debug,
-        samesite="lax",
+        samesite=settings.session_cookie_samesite,
         path="/",
     )
 
@@ -56,13 +55,24 @@ async def signup(
         # farming surface.
         raise HTTPException(status_code=409, detail="Could not create account — check your details or try logging in")
 
-    user = await user_repo.create_user(
-        db,
-        email=payload.email.lower(),
-        password_hash=hash_password(payload.password),
-        display_name=payload.display_name,
-    )
-    await db.commit()
+    try:
+        user = await user_repo.create_user(
+            db,
+            email=payload.email.lower(),
+            password_hash=hash_password(payload.password),
+            display_name=payload.display_name,
+        )
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        # The functional LOWER(email) index is the authoritative concurrent
+        # check. Preserve unrelated integrity failures for normal diagnosis.
+        if getattr(exc.orig, "sqlstate", None) == "23505":
+            raise HTTPException(
+                status_code=409,
+                detail="Could not create account — check your details or try logging in",
+            ) from exc
+        raise
 
     # Always mint a fresh token — never reuse one from an incoming cookie
     # (session fixation).

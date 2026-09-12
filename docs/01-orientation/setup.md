@@ -204,8 +204,8 @@ LAN mode as anywhere else: nothing disables `get_current_user` for it. Signup is
 can reach the API can create an account, on the LAN same as anywhere else — so on a LAN you don't
 fully control, that's effectively "anyone on the LAN can sign up". `MAX_ACTIVE_USERS` (default 30)
 is what actually bounds concurrent usage; it isn't an access-control gate.
-⚠ `/static/{images,extracted,assets}` are the exception: those mounts have no auth check at all.
-See [roadmap.md](../roadmap.md).
+Files are no exception: figures, PDFs and research images are served under `/api/v1` behind the
+same session and an ownership check (see [storage.md](../03-reference/storage.md#serving-files)).
 
 ---
 

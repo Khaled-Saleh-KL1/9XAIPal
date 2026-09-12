@@ -183,6 +183,49 @@ async def test_replace_decks_round_trips_members_in_order(db_session):
 
 
 @pytest.mark.asyncio
+async def test_replace_decks_rejects_an_id_owned_by_another_document(db_session):
+    first_document = await _document(db_session)
+    second_document = await _document(db_session)
+    first_notes = [await _ai_note(db_session, first_document, i) for i in (1, 2)]
+    second_notes = [await _ai_note(db_session, second_document, i) for i in (1, 2)]
+    deck_id = uuid4()
+
+    await personal_repo.replace_decks(
+        db_session,
+        first_document,
+        [{
+            "id": deck_id,
+            "label": "Private arrangement",
+            "members": [
+                {"kind": "ai", "id": first_notes[0]},
+                {"kind": "ai", "id": first_notes[1]},
+            ],
+        }],
+    )
+    await db_session.commit()
+
+    with pytest.raises(personal_repo.DeckOwnershipError):
+        await personal_repo.replace_decks(
+            db_session,
+            second_document,
+            [{
+                "id": deck_id,
+                "label": "Attempted overwrite",
+                "members": [
+                    {"kind": "ai", "id": second_notes[0]},
+                    {"kind": "ai", "id": second_notes[1]},
+                ],
+            }],
+        )
+    await db_session.rollback()
+
+    decks = await personal_repo.list_decks(db_session, first_document)
+    assert len(decks) == 1
+    assert decks[0]["label"] == "Private arrangement"
+    assert [member["id"] for member in decks[0]["members"]] == first_notes
+
+
+@pytest.mark.asyncio
 async def test_two_cards_can_swap_decks_in_one_write(db_session):
     """The regression this guards: the unique index that stops a card being in
     two decks does not care that the row it collides with is one the same

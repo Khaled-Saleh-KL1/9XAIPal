@@ -9,6 +9,9 @@ rather than in biology, physics, or everyday English.
 """
 
 from typing import Optional
+from uuid import UUID
+
+from app.database.repositories.assets import resolve_asset_url
 
 
 # ── LOCAL (current page / small window) ─────────────────────────────────────
@@ -64,11 +67,9 @@ How to answer here:
 # force-embed images into every answer (which regressed the normal in-chat
 # experience — the model started prepending an image to every reply).
 FIGURE_INSTRUCTIONS = """INLINE FIGURES (user explicitly asked for a figure):
-- The "AVAILABLE PAPER FIGURES" block in the context lists the public URLs of
-  paper figures (e.g. `/static/images/<doc>/<file>.png`).
-- **Begin your answer by embedding the most relevant figure** using the exact
-  markdown syntax shown in the list:
-  `![Figure description text](/static/images/PATH/TO/FILE.png)`
+- The "AVAILABLE PAPER FIGURES" block contains authenticated paper-asset URLs.
+- **Begin your answer by embedding the most relevant figure** by copying the
+  exact markdown image link shown in that list.
 - Place the image directly after the paragraph where it is first discussed.
 - Then continue with your textual explanation of what the figure shows.
 - You CAN write markdown image tags — the user's browser renders them.
@@ -391,13 +392,14 @@ Paper context and web results will be provided after this message.
 def format_local_context(
     chunks: list[dict],
     assets: Optional[list[dict]] = None,
+    document_id: Optional[UUID] = None,
 ) -> str:
     """Format local chunks into context text.
 
     If ``assets`` is supplied, image assets are listed under an
     "AVAILABLE PAPER FIGURES" block so the model can embed any genuinely
     relevant figure inline with `![alt](url)` — the chat UI renders these as
-    real <img> tags. URLs point at the backend's `/static/images/` mount.
+    real <img> tags. Local URLs are authenticated against the document.
     """
     parts = []
     for c in chunks:
@@ -409,7 +411,9 @@ def format_local_context(
         for a in assets:
             if a.get("asset_type") != "image" or not a.get("file_path"):
                 continue
-            url = f"/static/images/{a['file_path']}"
+            if document_id is None:
+                continue
+            url = resolve_asset_url(document_id, a["file_path"])
             caption = (a.get("caption") or a.get("description") or "paper figure").strip()
             img_lines.append(f"- ![{caption[:120]}]({url})")
         if len(img_lines) > 1:
@@ -421,13 +425,14 @@ def format_local_context(
 def format_global_context(
     results: list[dict],
     assets: Optional[list[dict]] = None,
+    document_id: Optional[UUID] = None,
 ) -> str:
     """Format vector search results into context text.
 
     If ``assets`` is supplied, image assets are listed under an
     "AVAILABLE PAPER FIGURES" block so the model can embed any genuinely
     relevant figure inline with `![alt](url)` — the chat UI renders these as
-    real <img> tags. URLs point at the backend's `/static/images/` mount.
+    real <img> tags. Local URLs are authenticated against the document.
     """
     parts = []
     for r in results:
@@ -439,7 +444,9 @@ def format_global_context(
         for a in assets:
             if a.get("asset_type") != "image" or not a.get("file_path"):
                 continue
-            url = f"/static/images/{a['file_path']}"
+            if document_id is None:
+                continue
+            url = resolve_asset_url(document_id, a["file_path"])
             caption = (a.get("caption") or a.get("description") or "paper figure").strip()
             img_lines.append(f"- ![{caption[:120]}]({url})")
         if len(img_lines) > 1:
