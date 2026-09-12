@@ -91,6 +91,20 @@ CREATE TABLE IF NOT EXISTS documents (
     -- still hand back a file named the way it arrived.
     title TEXT,
 
+    -- "Done reading". A finished book does not have to stay in front of the
+    -- reader, and deleting it is the wrong tool: the point of a library is to
+    -- keep what was read. NULL = still on the reading shelf; a timestamp moves
+    -- the row to the library's Done area. Nothing else changes — the chunks,
+    -- embeddings and notes stay exactly where they are, the Desk still sees
+    -- the document, and clearing the timestamp brings it straight back. This
+    -- is a shelf label, not a lifecycle state.
+    done_at TIMESTAMPTZ,
+    -- An optional folder inside the Done area ("Technical Books"). Folders
+    -- are implicit: one exists exactly while at least one done document names
+    -- it, so there is no folders table to keep in step and nothing to orphan.
+    -- Meaningless (and cleared) while done_at is NULL.
+    done_folder TEXT,
+
     -- Paper-only mode: whether this document was embedded at ingestion, or the
     -- embedding pass was skipped because the whole document fits in the chat
     -- model's context (see docs/plans/paper-only-embedding-skip.md).

@@ -40,6 +40,10 @@ class DocumentResponse(BaseModel):
     # True; irrelevant to the Desk, which spans every paper in a study by
     # design.
     strict_scope: bool = True
+    # "Done reading": set = shelved in the library's Done area (optionally in
+    # a folder), None = still on the reading shelf. See schema.sql.
+    done_at: Optional[datetime] = None
+    done_folder: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -54,6 +58,21 @@ class RenameDocumentRequest(BaseModel):
 
 class SetStrictScopeRequest(BaseModel):
     strict_scope: bool
+
+
+class SetDoneRequest(BaseModel):
+    # True shelves the document as done (in `folder`, or at the top of the
+    # Done area when None/blank); False puts it back on the reading shelf and
+    # clears any folder.
+    done: bool
+    folder: Optional[str] = Field(default=None, max_length=80)
+
+
+class RenameDoneFolderRequest(BaseModel):
+    # Folders are implicit (schema.sql: documents.done_folder), so renaming
+    # one is renaming it on every done document that names it.
+    from_name: str = Field(alias="from", min_length=1, max_length=80)
+    to: str = Field(min_length=1, max_length=80)
 
 
 class ImportArticleRequest(BaseModel):

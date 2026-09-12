@@ -65,6 +65,34 @@ async def rename_document(
     return await doc_repo.get_document(session, document_id, user_id)
 
 
+async def set_document_done(
+    session: AsyncSession,
+    document_id: UUID,
+    user_id: UUID,
+    done: bool,
+    folder: Optional[str],
+) -> Optional[dict]:
+    """Shelve a document as done / bring it back, and return its fresh row,
+    or None if it is gone (or not owned).
+
+    A blank folder means the top of the Done area, the same way a blank
+    title means "no override" in rename_document.
+    """
+    clean_folder = (folder or "").strip() or None
+    if not await doc_repo.set_document_done(session, document_id, user_id, done, clean_folder):
+        return None
+    return await doc_repo.get_document(session, document_id, user_id)
+
+
+async def rename_done_folder(
+    session: AsyncSession, user_id: UUID, from_name: str, to: str
+) -> int:
+    """Rename a Done-area folder; returns how many documents it held."""
+    return await doc_repo.rename_done_folder(
+        session, user_id, from_name.strip(), to.strip()
+    )
+
+
 async def set_document_strict_scope(
     session: AsyncSession, document_id: UUID, user_id: UUID, strict_scope: bool
 ) -> Optional[dict]:

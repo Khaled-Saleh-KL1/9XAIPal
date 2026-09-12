@@ -1,9 +1,9 @@
-# Area 1 — Library & getting documents in (features 1–18)
+# Area 1 — Library & getting documents in (features 1–18, 109)
 
 > Part of the [feature catalogue](README.md). Each entry: what it does, where it lives, how it
 > works, why it is built that way (including what was tried and failed), and how to see it.
 >
-> **Reflects code as of:** 2026-09-12 (`main`, 3c72291 + drop-anywhere).
+> **Reflects code as of:** 2026-09-12 (`main`, cb67f64 + done-reading).
 
 ---
 
@@ -505,3 +505,55 @@ crash, and the file had to be picked again.
 disk and DB rows unbounded. The first version checked the count *before* the transaction, so
 concurrent requests could all pass a stale count ([docs/issues/007](../issues/007-ingestion-queue-capacity-check-races.md)).
 An advisory lock needs no schema row and cannot be forgotten open.
+
+---
+
+## 109. Done Reading: a second shelf, with folders
+
+**What it does.** A finished book does not have to stay in front of the reader, and deleting it
+is the wrong tool — the point of a library is to keep what was read. Hovering a paper shows a
+**✓** beside rename and delete; pressing it opens a panel asking *where does this go*: the top of
+**Done Reading**, one of the reader's existing folders, or a new one typed there ("Technical
+Books"). The paper leaves the reading shelf. The **Done Reading** button beside the search bar
+(with a count) opens the Done area, navigated like a file manager: a breadcrumb (`Library ›
+Done Reading › Technical Books`), folder cards at the root with counts, the papers of the
+current level below. In the Done area a paper's hover actions become rename · **move** (folder)
+· **back to reading** (undo arrow) · delete; a folder card has a rename pencil. A search typed
+while in the Done area looks through every folder at once and tags each hit with its folder.
+
+**Where.** Client: [`LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) (`area`,
+`doneFolder`, `shelve`, `commitFolderRename`, `ShelfPanel`, the `.lib-crumbs` / `.lib-folders`
+markup), [`lib/shelves.ts`](../../frontend/src/lib/shelves.ts) (`doneFolders`, `groupByShelf`),
+`api.ts::setPaperDone` / `renameDoneFolder`. Server: `documents.done_at` / `done_folder`
+([schema.sql](../../backend/app/database/schema.sql), `migrations.py` critical alters),
+`PATCH /papers/{id}/done` and `PATCH /papers/done-folders`
+([`endpoints/documents.py`](../../backend/app/api/v1/endpoints/documents.py)),
+`repositories/documents.py::set_document_done` / `rename_done_folder`,
+`tests/test_done_reading.py`.
+
+**How it works.** The whole backend is two nullable columns on the row. `done_at` set = on the
+Done shelf; `done_folder` names the folder (null = the top of the Done area). **Nothing else
+moves**: chunks, embeddings, notes, the PDF on disk and the Desk's view of the document are
+untouched — it is a shelf label, not a lifecycle state, and `status` stays `complete`
+(`test_done_is_a_shelf_label_not_a_lifecycle_state`). Folders are **implicit**: one exists
+exactly while at least one done paper names it. That is what makes them safe with no folders
+table — nothing to orphan, nothing to keep in step, and "rename a folder" is one `UPDATE … WHERE
+user_id = … AND done_folder = :from`, scoped to the caller (another user's folder of the same
+name is untouched; the test proves it). The trade-off is stated in the UI: a folder that
+empties disappears, and the view steps out of it (`useEffect` on `folders`). Moving between
+folders keeps the original `done_at` (`COALESCE(done_at, NOW())`) — *when did I finish this* is
+not *when did I last tidy the shelf*; bringing a paper back clears both columns so it starts
+clean if shelved again. Folder names are trimmed and capped at 80 characters (422 past it).
+The client is optimistic in the same way rename is (feature 9): the card leaves the view
+immediately and comes back if the write fails; a rename onto an existing folder name is refused
+with a notice rather than silently merging two folders.
+
+**Why not localStorage.** "You can do the same experience from the front" was the brief, and the
+brief's real constraint — do not move embeddings around — is met. But the shelf has to be the same
+on the reader's laptop and tablet, and a friend's account must not see it, so it is two columns on
+the owner-scoped row rather than browser storage.
+
+**See it.** Verified in a real Chromium against a throwaway stack (`scratchpad/pw/shelves.mjs`):
+mark done into a new folder → folder card with count → open it → move to root → folder vanishes →
+re-file → rename folder → search finds it tagged → undo → reading shelf restored → API rows agree
+after reload.

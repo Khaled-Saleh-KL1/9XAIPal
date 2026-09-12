@@ -76,6 +76,12 @@ export interface PaperMeta {
    * design. Defaults true client-side too, matching the column's own
    * default, for a row read before this field existed. */
   strict_scope?: boolean;
+  /** "Done reading": set when the reader shelved this document in the
+   *  library's Done area (optionally in `done_folder`); null/absent while
+   *  it is still on the reading shelf. A shelf label, not a status — the
+   *  document stays fully readable and the Desk still sees it. */
+  done_at?: string | null;
+  done_folder?: string | null;
 }
 
 export interface ChunkData {
@@ -982,6 +988,40 @@ export async function renamePaper(paperId: string, title: string): Promise<Paper
   });
   if (!res.ok) throw new Error(`Rename failed: ${res.status}`);
   return res.json();
+}
+
+/**
+ * Shelve a paper as "done reading" — into `folder`, or at the top of the Done
+ * area when null — or bring it back to the reading shelf (done=false, which
+ * also clears its folder). Returns the fresh row. See PaperMeta.done_at.
+ */
+export async function setPaperDone(
+  paperId: string,
+  done: boolean,
+  folder: string | null = null,
+): Promise<PaperMeta> {
+  const res = await fetch(`${BASE}/papers/${paperId}/done`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ done, folder: folder?.trim() || null }),
+  });
+  if (!res.ok) throw new Error(`Could not update the shelf: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Rename a folder in the Done area. Folders are implicit — the set of done
+ * papers naming them — so this renames it on every paper at once and returns
+ * how many moved.
+ */
+export async function renameDoneFolder(from: string, to: string): Promise<number> {
+  const res = await fetch(`${BASE}/papers/done-folders`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to: to.trim() }),
+  });
+  if (!res.ok) throw new Error(`Could not rename the folder: ${res.status}`);
+  return (await res.json()).moved as number;
 }
 
 /**

@@ -240,6 +240,59 @@ async def set_document_title(
     return (result.rowcount or 0) > 0
 
 
+async def set_document_done(
+    session: AsyncSession,
+    document_id: UUID,
+    user_id: UUID,
+    done: bool,
+    folder: Optional[str],
+) -> bool:
+    """Shelve a document as done (optionally in a folder) or bring it back.
+
+    See documents.done_at / done_folder in schema.sql. ``done=False`` clears
+    both, so a document brought back and shelved again starts at the top of
+    the Done area rather than silently landing in its old folder. Returns
+    False when no such document exists (or it belongs to someone else), same
+    convention as set_document_title.
+    """
+    result = cast(
+        CursorResult[tuple[()]],
+        await session.execute(
+            text("""
+                UPDATE documents
+                SET done_at = CASE WHEN :done THEN COALESCE(done_at, NOW()) ELSE NULL END,
+                    done_folder = CASE WHEN :done THEN :folder ELSE NULL END,
+                    updated_at = NOW()
+                WHERE id = :id AND user_id = :user_id
+            """),
+            {"id": document_id, "user_id": user_id, "done": done, "folder": folder},
+        ),
+    )
+    return (result.rowcount or 0) > 0
+
+
+async def rename_done_folder(
+    session: AsyncSession, user_id: UUID, from_name: str, to: str
+) -> int:
+    """Rename a Done-area folder on every document of this user that is in it.
+
+    Folders are implicit, so this IS the rename. Returns how many documents
+    moved; 0 means no folder of that name existed for this user.
+    """
+    result = cast(
+        CursorResult[tuple[()]],
+        await session.execute(
+            text("""
+                UPDATE documents
+                SET done_folder = :to, updated_at = NOW()
+                WHERE user_id = :user_id AND done_at IS NOT NULL AND done_folder = :from_name
+            """),
+            {"user_id": user_id, "from_name": from_name, "to": to},
+        ),
+    )
+    return result.rowcount or 0
+
+
 async def set_document_strict_scope(
     session: AsyncSession, document_id: UUID, user_id: UUID, strict_scope: bool
 ) -> bool:

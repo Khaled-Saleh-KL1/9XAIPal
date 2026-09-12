@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogoMark } from '../components/LogoMark';
 import { IconBack, IconPencil, IconPlus, IconTrash } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
 import { NoteWall } from './NoteWall';
 import { PaperPicker } from './PaperPicker';
+import { ShelfGroups } from '../components/ShelfGroups';
 import { StickyBoard } from './StickyBoard';
 import { StudyChat, type PendingTurn } from './StudyChat';
 import { createPacer } from '../lib/pacer';
@@ -421,6 +422,16 @@ export function DeskView({
 
   const scopeName = study?.name || 'Whole library';
 
+  // The study endpoint returns papers as (id, title, P-number); which shelf
+  // each is on lives on the library row, so join the two here.
+  const railItems = useMemo(() => {
+    const byId = new Map(library.map((m) => [m.id, m]));
+    return papers.map((p) => {
+      const m = byId.get(p.id);
+      return { ...p, doc_kind: m?.doc_kind ?? null, done_at: m?.done_at ?? null, done_folder: m?.done_folder ?? null };
+    });
+  }, [papers, library]);
+
   return (
     <div className="desk">
       <header className="desk-bar">
@@ -541,19 +552,28 @@ export function DeskView({
               </p>
             )}
 
-            {papers.map((p) => (
-              <div key={p.id} className="rail-paper">
-                <button
-                  type="button"
-                  className="rail-paper-open"
-                  onClick={() => onOpenPaper(p.id)}
-                  title="Open in the reader"
-                >
-                  <span className="rail-paper-num">P{p.paper}</span>
-                  <span className="rail-paper-name">{p.title}</span>
-                </button>
-              </div>
-            ))}
+            {/* Shelved like a file tree — Books / Research / Articles / Done,
+                with the Done shelf's folders inside it — each collapsible, so
+                a long library folds down to what is in play. The P-numbers
+                are unchanged: they are the study's citation order, not the
+                display order. */}
+            <ShelfGroups
+              items={railItems}
+              className="rail-shelves"
+              renderItem={(p) => (
+                <div className="rail-paper">
+                  <button
+                    type="button"
+                    className="rail-paper-open"
+                    onClick={() => onOpenPaper(p.id)}
+                    title="Open in the reader"
+                  >
+                    <span className="rail-paper-num">P{p.paper}</span>
+                    <span className="rail-paper-name">{p.title}</span>
+                  </button>
+                </div>
+              )}
+            />
 
             {!isLibrary && papers.length > 0 && (
               <p className="marg-hint rail-hint rail-order-hint">

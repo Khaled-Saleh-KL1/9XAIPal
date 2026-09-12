@@ -34,6 +34,8 @@ function metaToPaper(m: PaperMeta): Paper {
     rawStatus: m.status,
     jobStatus: m.job_status ?? null,
     docKind: m.doc_kind ?? null,
+    doneAt: m.done_at ?? null,
+    doneFolder: m.done_folder ?? null,
     tags: [],
   };
 }

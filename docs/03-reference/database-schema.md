@@ -155,6 +155,8 @@ The library row.
 | `filename`                  | `TEXT`      | The opaque `<uuid>.pdf` on disk under `documents/`.   |
 | `original_filename`         | `TEXT`      | What the user uploaded (used by `/raw`). ⚠ Never rewritten by a rename. |
 | `title`                     | `TEXT`      | Reader-chosen display name, `NULL` = no override. Set by `PATCH /papers/{id}`. Deliberately separate from `original_filename` so the uploaded name is never lost and `/raw` still hands back a file named the way it arrived. |
+| `done_at`                   | `TIMESTAMPTZ` | "Done reading": set = shelved in the library's Done area, `NULL` = on the reading shelf. A shelf label, not a lifecycle state — nothing else about the row, its chunks or its files changes. Set/cleared by `PATCH /papers/{id}/done`. Kept when moving between folders. |
+| `done_folder`               | `TEXT`      | Folder inside the Done area (`NULL` = its top level). Folders are implicit: one exists while at least one done row names it; renamed in bulk by `PATCH /papers/done-folders`. Cleared whenever `done_at` is. |
 | `file_size_bytes`           | `BIGINT`    |                                                       |
 | `page_count`                | `INTEGER`   | Set by `pypdf` after pipeline completes.              |
 | `status`                    | `TEXT`      | `queued / complete / failed`.                         |

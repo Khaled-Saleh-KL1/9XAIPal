@@ -16,19 +16,19 @@
 > links out wherever the deeper material lives. When they disagree, the code wins and this file
 > needs a fix.
 >
-> **Status:** current · **Reflects code as of:** 2026-09-12 (`main`, c099d90). Every entry was
+> **Status:** current · **Reflects code as of:** 2026-09-12 (`main`, cb67f64 + done-reading). Every entry was
 > written against the source files it names, on that commit.
 
 ## The areas
 
 | Area | File | Features |
 | --- | --- | --- |
-| Library & getting documents in | [01-library-and-import.md](01-library-and-import.md) | 1–18 |
+| Library & getting documents in | [01-library-and-import.md](01-library-and-import.md) | 1–18, 109 |
 | The extraction pipeline | [02-extraction-pipeline.md](02-extraction-pipeline.md) | 19–32 |
 | The paper / article reader | [03-paper-reader.md](03-paper-reader.md) | 33–58 |
 | The book reader | [04-book-reader.md](04-book-reader.md) | 59–65 |
 | Asking: the AI answering paths | [05-asking.md](05-asking.md) | 66–75, 108 |
-| The desk: studies, cross-paper chat, notes | [06-desk.md](06-desk.md) | 76–85 |
+| The desk: studies, cross-paper chat, notes | [06-desk.md](06-desk.md) | 76–85, 110 |
 | Accounts, safety, capacity | [07-accounts-and-safety.md](07-accounts-and-safety.md) | 86–94 |
 | Models & configuration | [08-models-and-configuration.md](08-models-and-configuration.md) | 95–100 |
 | Operations | [09-operations.md](09-operations.md) | 101–107 |
@@ -145,6 +145,8 @@
 | 106 | Docs discipline | [operations](09-operations.md#106-docs-discipline) |
 | 107 | The test suite | [operations](09-operations.md#107-the-test-suite) |
 | 108 | Cross-session memory about the reader | [asking](05-asking.md#108-cross-session-memory-about-the-reader) |
+| 109 | Done Reading: a second shelf, with folders | [library and import](01-library-and-import.md#109-done-reading-a-second-shelf-with-folders) |
+| 110 | Shelved paper lists: the rail and the picker as a file tree | [desk](06-desk.md#110-shelved-paper-lists-the-rail-and-the-picker-as-a-file-tree) |
 
 ## How each entry is written
 
