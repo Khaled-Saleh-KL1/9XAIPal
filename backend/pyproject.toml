@@ -1,6 +1,6 @@
 [project]
 name = "9xaipal-backend"
-version = "0.1.0"
+version = "2.0.0"
 requires-python = ">=3.11"
 # Runtime dependencies every deployment needs, regardless of PDF extractor.
 # The `mineru` extra below is the one thing that's actually optional — see

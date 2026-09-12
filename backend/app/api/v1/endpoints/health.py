@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.core import circuit_breaker
+from app.core.version import APP_VERSION
 from app.schemas.common import HealthResponse
 from app.llm.client import is_available as llm_available
 from app.search.web import active_provider, is_available as web_search_available
@@ -43,6 +44,7 @@ async def health_check():
     }
 
     return HealthResponse(
+        version=APP_VERSION,
         status=overall,
         database=db_status,
         ollama=ollama_status,
