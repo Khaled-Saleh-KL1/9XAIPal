@@ -173,30 +173,48 @@ jobs:
             exit 1
           fi
 
-      # BuildKit build cache is unbounded by default and unrelated to the
-      # rollback mechanism above — that path rebuilds from source at
-      # $GOOD_SHA via the exact same deploy-once.sh, it never reuses a
-      # saved image or cache layer. Left unpruned, orphaned layer cache from
-      # old builds (whose resulting image is long gone) grew to 55GB over 3
-      # days of deploys — this clears that every run.
+      # ⚠ The prune here decides whether the NEXT backend deploy takes ~1
+      # minute or ~5. deploy-once.sh builds with `compose up -d --build`,
+      # and a build is fast only when BuildKit finds its previous step
+      # results (the apt-get layer, the `uv sync` layer, the MinerU model
+      # download) in the build cache: an `app/`-only change then rebuilds
+      # one small COPY layer and exports that alone. Measured 2026-09-12 on
+      # this box: fully cached, an api rebuild is 0.6 s; with the cache
+      # gone it is apt-get 20 s + uv sync 30 s + models 24 s + 130–175 s of
+      # "exporting layers" for the 9 GB worker image — the full five
+      # minutes, on every backend merge, whatever changed.
       #
-      # Deliberately NOT `-a`/`--all`: that flag also wipes BuildKit's
-      # internal cache, which includes the `--mount=type=cache` mount the
-      # backend Dockerfile uses for uv's download cache (see
-      # backend/Dockerfile). Plain `-f` only removes cache no longer
-      # referenced by any current build, which leaves that mount alone —
-      # so uv still skips re-downloading unchanged wheels (torch, mineru)
-      # on the next deploy instead of every build going out to the network
-      # cold.
-      # ⚠ `docker image prune` deliberately stays WITHOUT `-a` too, for a
-      # different reason than the builder prune above: `-a` removes every
-      # image not backing a *running* container, and deploy-once.sh's
-      # frontend build is a transient `docker run --rm node:20-alpine` that
-      # holds no container between deploys. `-a` would therefore delete
-      # node:20-alpine right after every single deploy used it, forcing a
-      # ~200MB re-pull on the next one — the exact rebuild slowdown the uv
-      # cache note above exists to avoid. Measured: that is what happened
-      # when a manual `-a` prune was run on this box on 2026-09-10.
+      # `docker builder prune -f` — what this step ran until today — is
+      # exactly what threw that cache away. Without `--all` it is documented
+      # as removing only "dangling" cache, and the earlier comment here
+      # assumed the just-built images' layers were therefore safe. They are
+      # not: under the containerd image store this daemon uses, the image's
+      # layers live in containerd and BuildKit's own step records are
+      # referenced by nothing once the build ends, so plain `-f` reclaims
+      # them (2.5–3.5 GB after every backend build — verified: prune, then
+      # rebuild the unchanged api image → 0 of 6 steps CACHED, 54 s; skip
+      # the prune → 6 of 6 CACHED, 0.6 s). Every backend deploy since the
+      # step was added has been a cold rebuild for this reason.
+      #
+      # So: prune only what has not been USED for a week (`until=168h`,
+      # measured against last use, so a step reused by today's build is
+      # kept), and never the `exec.cachemount` records — that is uv's
+      # download cache (backend/Dockerfile's --mount=type=cache), the torch
+      # and MinerU wheels. Growth is bounded because unchanged steps are
+      # reused rather than duplicated: a new 2.7 GB `uv sync` record appears
+      # only when the lockfile changes, and the old one ages out in a week.
+      # (Verified: `prune -f --filter until=1h --filter type!=exec.cachemount`
+      # right after a build removes 0 B and the next build is still fully
+      # cached.)
+      #
+      # ⚠ `docker image prune` deliberately stays WITHOUT `-a`: `-a`
+      # removes every image not backing a *running* container, and
+      # deploy-once.sh's frontend build is a transient `docker run --rm
+      # node:20-alpine` that holds no container between deploys. `-a` would
+      # therefore delete node:20-alpine (and the pinned uv image, and
+      # pgvector) right after every deploy used it, forcing a re-pull on the
+      # next one. Measured: that is what happened when a manual `-a` prune
+      # was run on this box on 2026-09-10 (and again on 2026-09-12).
       #
       # ⚠⚠ Volumes and containers ARE pruned, but ONLY this compose project's
       # own — note the label filter. `docker prune` is daemon-wide, and this
@@ -222,11 +240,19 @@ jobs:
       # `volume prune` without `--all` only removes ANONYMOUS volumes, so
       # backend_9xaipal_postgres_data and lcms-db-data are both immune even
       # while temporarily detached mid-recreate (verified empirically).
-      - name: Reclaim disk space (old image layers, build cache, dead volumes)
+      #
+      # ⚠ One thing this step cannot fix: the daemon's own builder GC policy
+      # caps `exec.cachemount` + `source.local` records at ~1.3 GiB by
+      # default (`docker buildx inspect default`, rule #0), and the worker's
+      # uv cache is ~1.7 GB, so BuildKit evicts it on its own shortly after
+      # every worker build regardless of what is pruned here. Raising that
+      # cap is a /etc/docker/daemon.json change (root) — see
+      # backend/DEPLOYMENT-PRODUCTION.md §9.
+      - name: Reclaim disk space (old image layers, week-old build cache, dead volumes)
         if: always()
         run: |
           docker image prune -f
-          docker builder prune -f
+          docker builder prune -f --filter until=168h --filter 'type!=exec.cachemount'
           docker container prune -f --filter label=com.docker.compose.project=backend
           docker volume prune -f --filter label=com.docker.compose.project=backend
           docker system df

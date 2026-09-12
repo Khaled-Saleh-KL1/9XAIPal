@@ -345,30 +345,73 @@ easy to cause and mildly annoying to unwind:
 ## 9. Reclaiming disk without slowing the next deploy
 
 What takes space on the box, in order: BuildKit's build cache (every backend rebuild leaves the
-previous images' layers behind — ~4 GB per rebuild, so this reaches 25–30 GB within a week of
-backend merges), then untagged `<none>` images from the same rebuilds, then the two 9XAIPal
-images themselves (~11 GB; the worker alone is 9 GB of torch + MinerU). Database volumes, the
-storage directory and container logs are small next to that.
+previous images' layers behind — ~4 GB per rebuild), then untagged `<none>` images from the same
+rebuilds, then the two 9XAIPal images themselves (~11 GB; the worker alone is 9 GB of torch +
+MinerU). Database volumes, the storage directory and container logs are small next to that.
 
-Two things in the build cache are worth keeping. The **layer cache of the current images** is
-what makes a backend deploy that changed only `app/` take ~2 min instead of ~5 (measured
-2026-09-12, fully cold: `apt-get` 25 s, `uv sync` 34 s, MinerU model download 24 s, and then
-**130 s just exporting the 9 GB worker image** — that last step runs on every rebuild and no cache
-helps it). The **`exec.cachemount` entry** is uv's download cache (`/root/.cache/uv`, shared by all
-three Dockerfiles, ~1.7 GB of wheels): it turns the 34 s cold `uv sync` into 6 s and, more
-importantly, protects a lockfile-changing deploy from the mirror's speed on a bad day.
+### What a backend deploy costs, and what decides it
 
-```bash
-# Safe recipe. Removes build cache nobody has used for a week, never the uv wheel cache,
-# then untagged leftover images and dangling volumes (the lcms stack's volumes are in
-# use and untouched).
-docker buildx prune --force --filter until=168h --filter 'type!=exec.cachemount'
-docker image prune --force
-docker volume ls -qf dangling=true | xargs -r docker volume rm
-```
+`deploy-once.sh` builds with `compose up -d --build`. Measured 2026-09-12 on this box:
 
-Do **not** use `docker system prune -a` or `docker builder prune -a` here: `-a` also removes the
-images the deploy pulls (`node:20-alpine`, `ghcr.io/astral-sh/uv`, `pgvector/pgvector`, …) and
-every cache entry including the uv mount, and the next deploy re-downloads all of it (this
-happened on 2026-09-12; the following build was cold). `docker system df -v` shows what is
-left; the row of type `exec.cachemount` is the one to keep.
+| | fully cached | cache gone |
+| --- | --- | --- |
+| `apt-get` layer | 0 s | 20 s |
+| `uv sync` (api / worker) | 0 s | 6 s / 32 s (with uv's download cache) · 34 s+ without |
+| MinerU model download | 0 s | 24 s |
+| exporting layers (9 GB worker image) | 0 s | 130–175 s |
+| **api image rebuild, nothing changed** | **0.6 s** | **54 s** |
+
+An `app/`-only change with a warm cache rebuilds one small `COPY` layer and exports that alone —
+about a minute end to end. With the cache gone it is the full five minutes, on every backend
+merge, whatever changed. Two things throw the cache away:
+
+1. **`docker builder prune -f`** — what `deploy.yml`'s cleanup step ran after every deploy until
+   2026-09-12. Without `--all` it is documented as removing only "dangling" cache, but under the
+   containerd image store this daemon uses, BuildKit's step records are referenced by nothing once
+   the build has finished, so plain `-f` reclaims them all (verified: prune, rebuild the unchanged
+   api image → 0 of 6 steps cached, 54 s; skip the prune → 6 of 6 cached, 0.6 s). Every backend
+   deploy since the step was added had been a cold rebuild. The step now prunes only records unused
+   for a week and never cache mounts:
+
+   ```bash
+   docker image prune -f
+   docker builder prune -f --filter until=168h --filter 'type!=exec.cachemount'
+   docker volume ls -qf dangling=true | xargs -r docker volume rm   # manual only, see deploy.yml
+   ```
+
+   `until` is measured against *last use*, so a step reused by today's build is kept; growth is
+   bounded because unchanged steps are reused, not duplicated — a new 2.7 GB `uv sync` record
+   appears only when the lockfile changes, and the old one ages out in a week.
+
+2. **The daemon's own builder GC** (`docker buildx inspect default`, "GC Policy rule#0"): with no
+   `/etc/docker/daemon.json`, BuildKit caps `exec.cachemount` + `source.local` records at ~1.3 GiB
+   and 48 h. The worker's uv download cache (the `--mount=type=cache` in `Dockerfile.mineru`) is
+   ~1.7 GB, so BuildKit evicts it on its own shortly after every worker build — the cold `uv sync`
+   is the default here, not an accident. This needs root. Create `/etc/docker/daemon.json`:
+
+   ```json
+   {
+     "builder": {
+       "gc": {
+         "enabled": true,
+         "defaultKeepStorage": "40GB",
+         "policy": [
+           { "keepStorage": "6GB",  "filter": ["type==source.local", "type==exec.cachemount", "type==source.git.checkout"] },
+           { "keepStorage": "40GB", "all": true }
+         ]
+       }
+     }
+   }
+   ```
+
+   then `sudo systemctl restart docker` (⚠ restarts every container on the box, the lcms stack
+   included — a few seconds, but pick the moment). `docker buildx inspect default` afterwards
+   should show rule #0 at 6 GiB.
+
+### Do not
+
+`docker system prune -a` / `docker builder prune -a` / `docker image prune -a`: `-a` also removes
+the images the deploy pulls (`node:20-alpine`, `ghcr.io/astral-sh/uv`, `pgvector/pgvector`, …) and
+every cache record including the uv mount, and the next deploy re-downloads all of it (this
+happened on 2026-09-10 and 2026-09-12). `docker system df -v` shows what is left; the row of type
+`exec.cachemount` is the one to keep.
