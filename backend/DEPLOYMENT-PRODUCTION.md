@@ -341,3 +341,34 @@ easy to cause and mildly annoying to unwind:
 - Stack status: `docker compose -f docker-compose.prod.yml ps`
 - Deploy history: the repo's **Actions** tab, or the **Environments** widget on the repo homepage
   (populated by `deploy.yml`'s `environment:` key).
+
+## 9. Reclaiming disk without slowing the next deploy
+
+What takes space on the box, in order: BuildKit's build cache (every backend rebuild leaves the
+previous images' layers behind — ~4 GB per rebuild, so this reaches 25–30 GB within a week of
+backend merges), then untagged `<none>` images from the same rebuilds, then the two 9XAIPal
+images themselves (~11 GB; the worker alone is 9 GB of torch + MinerU). Database volumes, the
+storage directory and container logs are small next to that.
+
+Two things in the build cache are worth keeping. The **layer cache of the current images** is
+what makes a backend deploy that changed only `app/` take ~2 min instead of ~5 (measured
+2026-09-12, fully cold: `apt-get` 25 s, `uv sync` 34 s, MinerU model download 24 s, and then
+**130 s just exporting the 9 GB worker image** — that last step runs on every rebuild and no cache
+helps it). The **`exec.cachemount` entry** is uv's download cache (`/root/.cache/uv`, shared by all
+three Dockerfiles, ~1.7 GB of wheels): it turns the 34 s cold `uv sync` into 6 s and, more
+importantly, protects a lockfile-changing deploy from the mirror's speed on a bad day.
+
+```bash
+# Safe recipe. Removes build cache nobody has used for a week, never the uv wheel cache,
+# then untagged leftover images and dangling volumes (the lcms stack's volumes are in
+# use and untouched).
+docker buildx prune --force --filter until=168h --filter 'type!=exec.cachemount'
+docker image prune --force
+docker volume ls -qf dangling=true | xargs -r docker volume rm
+```
+
+Do **not** use `docker system prune -a` or `docker builder prune -a` here: `-a` also removes the
+images the deploy pulls (`node:20-alpine`, `ghcr.io/astral-sh/uv`, `pgvector/pgvector`, …) and
+every cache entry including the uv mount, and the next deploy re-downloads all of it (this
+happened on 2026-09-12; the following build was cold). `docker system df -v` shows what is
+left; the row of type `exec.cachemount` is the one to keep.
