@@ -457,7 +457,20 @@ written.
 (`_reserve_queue_capacity`, `create_ingestion_job`), `api/errors.py::TooManyQueuedJobs`.
 
 **How it works.** `SELECT pg_advisory_xact_lock(hashtext('9xaipal:ingestion_queue'))`, then the
-count, then the insert, all in the caller's transaction; the lock releases on commit/rollback.
+count, then the insert, all in the caller's transaction; the lock releases on commit/rollback. An
+upload also takes a cheap, non-atomic look at the count *before* streaming the body, so a 300 MB
+book is not pushed up the wire only to be refused; the locked check after the write remains the
+authority.
+
+**What the reader sees.** Not a failure. The `429` carries `code: QUEUE_FULL` plus `queued` and
+`limit`; `api.ts` raises a typed `QueueFullError` and the processing overlay switches to its own
+state — header "HTTP 429 · queue full", "50 of 50 slots are taken by documents still being
+extracted", "your file was not uploaded and nothing is left behind", every step left pending
+(nothing ran, so nothing is painted red), a **Try again now** button that resubmits the same file
+with the same kind, and an automatic retry every 45 s with a visible countdown that stops the
+moment the reader leaves. The first version showed the same sentence under a "Failed" header
+with the *Extracting structure* step in red and only "Back to library" — a decline dressed as a
+crash, and the file had to be picked again.
 
 **Why.** The Celery worker runs `--concurrency=1`; this is what stops an upload burst from growing
 disk and DB rows unbounded. The first version checked the count *before* the transaction, so

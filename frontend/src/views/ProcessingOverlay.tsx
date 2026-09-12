@@ -1,5 +1,6 @@
 import type { UploadingFile, StepState } from '../types';
 import { IconDoc, IconCheck } from '../components/Icons';
+import { useEffect, useState } from 'react';
 import { stageProgress } from '../lib/progress';
 
 /**
@@ -27,7 +28,11 @@ type BackendStatus =
   | 'embedding'
   | 'summarizing'
   | 'complete'
-  | 'failed';
+  | 'failed'
+  // Not a pipeline state: the server declined the document before anything
+  // was stored, because its processing queue is at its ceiling (429
+  // QUEUE_FULL). Every step stays pending — nothing ran, so nothing failed.
+  | 'queue_full';
 
 interface StepDef {
   id: number;
@@ -88,6 +93,7 @@ const STEP_ORDER: BackendStatus[] = ['queued', 'extracting', 'chunking', 'embedd
 
 function stateFor(step: StepDef, status: BackendStatus): StepState {
   if (status === 'complete') return 'done';
+  if (status === 'queue_full') return 'pending';
   if (status === 'failed') {
     // The step that was active when we failed shows as error.
     // Previous steps are considered done.
@@ -112,6 +118,8 @@ interface Props {
    * while `status === 'queued'`. */
   queuePosition?: number | null;
   errorMessage?: string | null;
+  /** Set with `status === 'queue_full'`: how full the server's queue is. */
+  queueFull?: { queued: number; limit: number } | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | "trafilatura" | null while pending
   /**
    * What the caller believes this is. For a URL import it is a guess, not a
@@ -121,7 +129,14 @@ interface Props {
   kind?: 'book' | 'paper' | 'article';
   onClose: () => void;
   onCancel: () => void;
+  /** Resubmit the same file or URL. Only offered while `status === 'queue_full'`. */
+  onRetry?: () => void;
 }
+
+/** Seconds between automatic resubmissions on the queue-full screen. The
+ * worker finishes a paper in a minute or two and a book in many, so a slot
+ * rarely frees faster than this; the reader can always press Try again. */
+const QUEUE_FULL_RETRY_SECONDS = 45;
 
 function extractorLabel(ex: string | null | undefined): { label: string; tone: 'good' | 'warn' | 'pending' } {
   if (ex === 'mineru') return { label: 'MinerU (full layout + math + footnotes)', tone: 'good' };
@@ -130,9 +145,26 @@ function extractorLabel(ex: string | null | undefined): { label: string; tone: '
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
-export function ProcessingOverlay({ file, status, progressFraction, queuePosition, errorMessage, extractor, kind = 'paper', onClose, onCancel }: Props) {
+export function ProcessingOverlay({ file, status, progressFraction, queuePosition, errorMessage, queueFull, extractor, kind = 'paper', onClose, onCancel, onRetry }: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
+  const declined = status === 'queue_full';
+
+  // Automatic retry while the queue is full: a countdown the reader can see,
+  // reset on every fresh 429 (the `queueFull` object identity changes when
+  // App records a new one), cleared the moment the status moves on.
+  const [retryIn, setRetryIn] = useState(QUEUE_FULL_RETRY_SECONDS);
+  useEffect(() => {
+    if (!declined || !onRetry) return;
+    setRetryIn(QUEUE_FULL_RETRY_SECONDS);
+    const tick = setInterval(() => {
+      setRetryIn((n) => {
+        if (n <= 1) { onRetry(); return QUEUE_FULL_RETRY_SECONDS; }
+        return n - 1;
+      });
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [declined, queueFull, onRetry]);
   // `kind` is optimistic for a URL import: a link pasted through "Book" or
   // "Research paper" is assumed to be the PDF it looks like, because most are.
   // `extractor` is the first hard evidence of what the backend actually ran,
@@ -142,7 +174,7 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
   // where MinerU never executes, and labels the host "· runs locally".
   const effectiveKind = extractor === 'trafilatura' ? 'article' : kind;
   const steps = effectiveKind === 'article' ? [...ARTICLE_EXTRACT_STEPS, ...INDEX_STEPS] : [...EXTRACT_STEPS, ...INDEX_STEPS];
-  const overall = failed ? 0 : stageProgress(status, null, progressFraction);
+  const overall = failed || declined ? 0 : stageProgress(status, null, progressFraction);
 
   return (
     <div
@@ -167,7 +199,7 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-[12px] font-mono uppercase tracking-wider" style={{ color: 'var(--muted)' }}>
-              {complete ? 'Indexed · ready' : failed ? 'Failed' : 'Processing'}
+              {complete ? 'Indexed · ready' : failed ? 'Failed' : declined ? 'HTTP 429 · queue full' : 'Processing'}
             </div>
             <div className="mt-1 font-serif text-[20px] tracking-tight truncate" style={{ color: 'var(--fg)' }}>
               {file.name}
@@ -176,7 +208,7 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
               {effectiveKind === 'article' ? file.size : `${file.size} · runs locally`}
             </div>
           </div>
-          {!complete && !failed && (
+          {!complete && !failed && !declined && (
             <button
               onClick={onCancel}
               className="text-[12px] px-2 py-1 rounded"
@@ -194,7 +226,7 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
               className="text-[11px] font-mono uppercase tracking-wider"
               style={{ color: 'var(--muted)' }}
             >
-              {complete ? 'complete' : failed ? 'failed' : `status · ${status}`}
+              {complete ? 'complete' : failed ? 'failed' : declined ? 'not started' : `status · ${status}`}
             </span>
             <span className="text-[11px] font-mono tabular-nums" style={{ color: 'var(--muted)' }}>
               {Math.round(overall * 100)}%
@@ -205,11 +237,45 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
               className="h-full transition-[width] duration-200 ease-linear"
               style={{
                 width: `${overall * 100}%`,
-                background: failed ? 'var(--muted)' : complete ? 'var(--ok)' : 'var(--accent)',
+                background: failed || declined ? 'var(--muted)' : complete ? 'var(--ok)' : 'var(--accent)',
               }}
             />
           </div>
         </div>
+
+        {/* queue full: a decline, not a failure — say what happened, what was
+            kept (nothing), and what happens next, with a retry in hand */}
+        {declined && (
+          <div
+            className="mx-7 mb-5 px-4 py-3 rounded-md text-[12.5px] leading-relaxed"
+            style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--fg)' }}
+          >
+            <div className="font-medium">The processing queue is full right now.</div>
+            <div className="mt-1" style={{ color: 'var(--muted)' }}>
+              {queueFull && queueFull.limit > 0
+                ? `${queueFull.queued} of ${queueFull.limit} slots are taken by documents still being extracted. `
+                : ''}
+              {effectiveKind === 'article' ? 'Nothing was imported' : 'Your file was not uploaded'} and nothing is
+              left behind — it usually clears in a few minutes as the worker finishes what it has.
+            </div>
+            <div className="mt-2 flex items-center gap-3">
+              {onRetry && (
+                <button
+                  onClick={onRetry}
+                  className="text-[12px] px-3 py-1.5 rounded-md"
+                  style={{ background: 'var(--accent)', color: 'var(--accent-fg)', border: '1px solid var(--border)' }}
+                >
+                  Try again now
+                </button>
+              )}
+              {onRetry && (
+                <span className="text-[11px] font-mono tabular-nums" style={{ color: 'var(--muted)' }}>
+                  retrying automatically in {retryIn}s
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* extractor badge: tells the user whether MinerU or the fallback ran */}
         {(() => {
@@ -249,7 +315,7 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
         >
           <div
             className="w-1.5 h-1.5 rounded-full"
-            style={{ background: failed ? 'var(--muted)' : complete ? 'var(--ok)' : 'var(--accent)' }}
+            style={{ background: failed || declined ? 'var(--muted)' : complete ? 'var(--ok)' : 'var(--accent)' }}
           />
           <span className="text-[12px] font-mono" style={{ color: 'var(--muted)' }}>
             {complete
@@ -258,6 +324,8 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
                 : 'extracted, ready to read'
               : failed
               ? (errorMessage || 'pipeline failed').slice(0, 120)
+              : declined
+              ? 'declined by the server, nothing stored — leaving stops the automatic retry'
               : 'safe to leave, processing continues in the background'}
           </span>
           <button
