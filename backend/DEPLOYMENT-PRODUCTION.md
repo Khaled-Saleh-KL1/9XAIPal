@@ -203,6 +203,21 @@ sudo systemctl restart nginx actions.runner.Khaled-Saleh-KL1-9XAIPal.ovh-server.
 
 ---
 
+### What a restart does to a running ingestion
+
+Every backend deploy recreates the worker (`up -d --build api celery_worker`), and so does
+autoheal after a hung health check. A task running at that moment — a MinerU extraction is
+minutes long — dies with the process. Its message is `acks_late`, so Redis still holds it, but
+Redis only re-delivers an unacked message after the visibility timeout (one hour): the document
+sat at "extracting" for an hour, then started over (verified live 2026-09-12: a book pasted at
+20:48, killed by the 20:50 deploy, still "extracting" at 21:08 with its message in `unacked`).
+`core/celery_app.py::_restore_interrupted_tasks` now runs on `worker_ready` and hands every
+unacked message straight back to the queue — the same thing kombu does on a warm shutdown, which
+a container stop never gets for a long task. The interrupted document starts over within seconds
+of the new worker coming up; the reader sees its progress bar restart, nothing else. Assumes the
+single worker this box runs (with several, another worker's in-flight task would be restored too
+and run twice — the pipelines survive that, it is only wasted work).
+
 ## 5. CI/CD: self-hosted runner, no secrets over the wire, gated on CI, self-healing on failure
 
 `.github/workflows/deploy.yml` runs on a **self-hosted** GitHub Actions runner living on this same

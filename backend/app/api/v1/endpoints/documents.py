@@ -31,6 +31,7 @@ from app.schemas.documents import (
 from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services import library_search
+from app.services.reference_finder import canonical_pdf_url
 from app.services.ingestion import check_queue_capacity, create_ingestion_job, update_job_status as update_job_status_svc
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
 from app.workers.tasks import (
@@ -234,6 +235,15 @@ async def import_article(
     url = payload.url.strip()
     if not url:
         raise HTTPException(status_code=422, detail="A URL is required.")
+    if payload.kind in ("book", "paper"):
+        # A link pasted as a book or a research paper is meant to be the
+        # file, and what people paste is the landing page: arxiv.org/abs/…,
+        # openreview.net/forum?id=…, aclanthology.org/… — fetched as-is those
+        # are HTML and would become an article snapshot of a landing page
+        # (verified live 2026-09-12: an arXiv abs link pasted as "Research
+        # paper" came back doc_kind='article'). Known hosts have a
+        # deterministic PDF URL; anything else is left exactly as pasted.
+        url = canonical_pdf_url(url)
 
     try:
         doc = await doc_service.create_document(

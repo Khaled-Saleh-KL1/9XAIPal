@@ -149,6 +149,47 @@ _NOISE_LINE_PATTERNS = [
 ]
 
 
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_OG_TITLE_RE = re.compile(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']*)["\']', re.IGNORECASE)
+_SITE_SUFFIX_RE = re.compile(r"\s+[-–—|·]\s+[^-–—|·]{2,40}$")
+
+
+def _page_title(html: str, extracted: Optional[str], markdown: str, url: str) -> str:
+    """The article's title, defended against two ways of getting it wrong.
+
+    trafilatura's metadata title is right for a page fetched whole, but a
+    provider that hands back only the body (Firecrawl, CRW) leaves it no
+    <title> to read and it falls back to the first heading of the body — a
+    Wikipedia article arrived as "History" that way. So: take the extracted
+    title unless it is just one of the body's own headings; then the markup's
+    <title>/og:title if any; then the URL's last path segment made readable
+    ("Transformer_(deep_learning_architecture)" → "Transformer (deep learning
+    architecture)"); the raw URL only as the very last resort. A trailing
+    " - Site Name" is dropped from a <title>.
+    """
+    candidate = (extracted or "").strip()
+    headings = {
+        line.lstrip("#").strip().lower()
+        for line in (markdown or "").splitlines()
+        if line.startswith("#")
+    }
+    if candidate and candidate.lower() not in headings:
+        return candidate
+    for rx in (_OG_TITLE_RE, _HTML_TITLE_RE):
+        m = rx.search(html or "")
+        if m:
+            from html import unescape
+            t = unescape(re.sub(r"\s+", " ", m.group(1))).strip()
+            t = _SITE_SUFFIX_RE.sub("", t).strip()
+            if t:
+                return t
+    from urllib.parse import unquote, urlparse
+    slug = unquote(urlparse(url).path.rstrip("/").rsplit("/", 1)[-1]).replace("_", " ").replace("-", " ").strip()
+    if len(slug) >= 4 and not slug.lower().endswith((".html", ".htm", ".php")):
+        return slug
+    return candidate or url
+
+
 def _clean_markdown(markdown: str) -> str:
     for pattern in _NOISE_LINE_PATTERNS:
         markdown = pattern.sub("", markdown)
@@ -814,7 +855,7 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
         )
 
     meta = trafilatura.extract_metadata(html, default_url=url)
-    title = ((meta.title if meta else None) or "").strip() or url
+    title = _page_title(html, (meta.title if meta else None), markdown, url)
 
     markdown = _clean_markdown(markdown)
 
