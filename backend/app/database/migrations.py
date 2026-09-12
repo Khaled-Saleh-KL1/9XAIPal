@@ -199,6 +199,11 @@ async def _ensure_recent_columns() -> None:
         f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_embedding vector({settings.vector_dimension})",
         # See the column's own comment in schema.sql for what this gates.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS strict_scope BOOLEAN NOT NULL DEFAULT TRUE",
+        # Books and articles are always scoped (2026-09-12): the switch is
+        # research-papers-only now and the endpoint refuses the others, so any
+        # book/article flipped open while the switch still existed is put
+        # back. Idempotent: matches nothing once applied.
+        "UPDATE documents SET strict_scope = TRUE WHERE doc_kind IN ('book', 'article') AND strict_scope = FALSE",
         # The library's "Done reading" shelf and its folders — see the columns'
         # own comments in schema.sql.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ",

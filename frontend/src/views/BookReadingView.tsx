@@ -13,7 +13,6 @@ import { loadReadingProgress, markChapterFinished, saveReadingPosition } from '.
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
-import { StrictScopeToggle } from '../components/StrictScopeToggle';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { ChatPane } from './ChatPane';
@@ -920,13 +919,10 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
               Raw file
             </button>
           )}
-          {meta && (
-            <StrictScopeToggle
-              paperId={paperId}
-              strictScope={meta.strict_scope ?? true}
-              onChange={(next) => setMeta((m) => (m ? { ...m, strict_scope: next } : m))}
-            />
-          )}
+          {/* No scope switch here: a book's chat is always scoped to the book
+              (documents.strict_scope stays TRUE and the backend refuses to
+              change it for books). The switch exists for research papers only —
+              see StrictScopeToggle. */}
           <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
           <UserMenuInline />
         </div>

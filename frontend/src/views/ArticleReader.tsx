@@ -2268,7 +2268,11 @@ export function ArticleReader({
             </button>
           )}
 
-          {doc && (
+          {/* Research papers only. An article is a web page: its chat stays
+              scoped to what the page says, and the reader asked for no switch
+              there; books likewise (BookReadingView has none). The backend
+              refuses the PATCH for both, so this gate is UI, not policy. */}
+          {doc && (doc.doc_kind ?? 'paper') === 'paper' && (
             <StrictScopeToggle
               paperId={paperId}
               strictScope={doc.strict_scope ?? true}
