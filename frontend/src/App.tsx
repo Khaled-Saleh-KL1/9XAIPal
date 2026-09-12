@@ -516,6 +516,30 @@ export function App() {
     };
   }, [activePaperId, openPaperById, viewingPdf?.id]);
 
+  // A file dropped where nothing claims it is not ignored by the browser: it
+  // navigates the tab to the file, and the app is gone — replaced by a PDF
+  // viewer, with every in-flight upload poll and unsaved note with it. The
+  // library view accepts drops everywhere (LibraryView); this is the safety
+  // net for every other route. It runs after the element handlers (window is
+  // the end of the bubble), so anything that already claimed the drag — the
+  // library, the chat's image attachments — is left alone via
+  // defaultPrevented; an unclaimed one is refused (dropEffect none) and
+  // cannot navigate.
+  useEffect(() => {
+    const refuseUnclaimedFileDrag = (e: DragEvent) => {
+      if (e.defaultPrevented) return;
+      if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return;
+      e.preventDefault();
+      if (e.type === 'dragover' && e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+    };
+    window.addEventListener('dragover', refuseUnclaimedFileDrag);
+    window.addEventListener('drop', refuseUnclaimedFileDrag);
+    return () => {
+      window.removeEventListener('dragover', refuseUnclaimedFileDrag);
+      window.removeEventListener('drop', refuseUnclaimedFileDrag);
+    };
+  }, []);
+
   useEffect(() => {
     // The very first run is the app settling onto its opening screen, not a
     // navigation — replacing keeps a phantom entry from sitting behind it,

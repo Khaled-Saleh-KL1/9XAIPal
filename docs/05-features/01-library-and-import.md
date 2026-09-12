@@ -3,15 +3,15 @@
 > Part of the [feature catalogue](README.md). Each entry: what it does, where it lives, how it
 > works, why it is built that way (including what was tried and failed), and how to see it.
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-09-12 (`main`, 3c72291 + drop-anywhere).
 
 ---
 
 ## 1. PDF upload: drag-and-drop or click
 
-**What it does.** Drop a PDF on the library (or click the dropzone), say whether it is a *book* or
-a *research paper*, and it is stored and queued for extraction. The processing overlay takes over
-until the document is readable.
+**What it does.** Drop a PDF **anywhere on the library view** (or click the dashed card), say
+whether it is a *book* or a *research paper*, and it is stored and queued for extraction. The
+processing overlay takes over until the document is readable.
 
 **Where.** Client: [`App.tsx`](../../frontend/src/App.tsx) (`startUpload`, `pickFileWithKind`,
 `handleFileUpload`), [`LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) (the dropzone),
@@ -19,6 +19,23 @@ until the document is readable.
 and `_stream_pdf_upload`.
 
 **How it works.**
+0. *The whole view is the drop target, not the card.* `LibraryView`'s root element handles
+   `dragenter/dragover/dragleave/drop` for any drag whose `dataTransfer.types` includes `Files`,
+   and a full-screen "Drop to add to your library" overlay (`.lib-drop-overlay`,
+   `pointer-events: none`) shows while one is over it; the dashed card only mirrors that state.
+   ⚠ Before 2026-09-12 only the card accepted drops, and a PDF dropped a few pixels below it was
+   not ignored — with no handler claiming it, the browser did its default for a dropped file and
+   **navigated the tab to it**, replacing the app with the PDF viewer. The reader assumed the
+   upload had happened; the API never saw a request; the library had nothing. `dragenter` and
+   `dragleave` fire for every child crossed, so the overlay is driven by a depth counter, not a
+   boolean, and only clears when the drag really leaves the window. A drop with no PDF in it
+   (a `.txt`, a `.docx`) shows a notice saying so — the old fallback of opening the file picker
+   read as "the drop was lost"; a multi-PDF drop takes the first and says the rest must come one
+   at a time, because the kind question is per file. Every other route has a safety net in
+   `App.tsx`: a window-level `dragover`/`drop` listener that refuses (`dropEffect = 'none'`) any
+   file drag nothing else claimed — it runs last in the bubble and checks `defaultPrevented`, so
+   the book chat's image attachments (feature 63) keep working — and the app can no longer be
+   navigated away by a stray drop.
 1. *The kind chooser always runs first.* `startUpload(file?)` stores a dropped `File` in
    `pendingFile` and opens the modal. A click passes nothing. Either way the user must pick a
    `DocKind` — it decides which reader opens and whether the embedding pass runs at all, and a

@@ -418,6 +418,29 @@ body {
   border-color: var(--accent);
   background: var(--accent-soft) !important;
 }
+/* Whole-view drop target (LibraryView): shown while a file drag is over the
+   page. pointer-events: none so the overlay itself never receives the drop —
+   the events keep reaching the view underneath, which is what counts them. */
+.lib-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  pointer-events: none;
+}
+.lib-drop-overlay-frame {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--fg);
+}
 
 /* ── Kbd ────────────────────────────────────────────────────── */
 .kbd {
