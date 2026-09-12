@@ -199,10 +199,18 @@ one the user picked. **[untested]**: no test covers the upload entry path.
 
 1. Sets `uploadingFile`, switches to `route='processing'`.
 2. Calls `uploadPaper(file)`. Gets back `{id, status:'processing'}`.
-3. Starts `setInterval` every 1000 ms polling `/progress`.
-4. On `status === 'complete'`: switch to `route='reading'`.
-5. On `status === 'failed'`: go back to `library`.
-6. Clear interval on cancel/unmount.
+3. Bumps the library refresh token so the mounted `LibraryView` reloads the newly committed row
+   immediately; closing the overlay bumps it too. This avoids waiting for the settled-library
+   poll when the user returns before extraction has started.
+4. Starts `setInterval` every 1000 ms polling `/progress`.
+5. On `status === 'complete'` or `failed`: stop polling; completion also drops the cancel handle.
+6. The user chooses **Back to library** to hide the overlay; **Cancel** deletes an in-flight upload.
+7. Clear interval on cancel/unmount.
+
+`LibraryView` receives that refresh token as a dependency of its polling effect. Changing it
+cleans up the previous timer/request and starts a fresh fetch, so a stale response from before the
+upload commit cannot overwrite the current list. **Back to library** does not delete the upload;
+only **Cancel** calls the delete endpoint.
 
 ## ArticleReader ([views/ArticleReader.tsx](../../frontend/src/views/ArticleReader.tsx))
 

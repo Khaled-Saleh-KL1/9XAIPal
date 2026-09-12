@@ -38,6 +38,7 @@ function metaToPaper(m: PaperMeta): Paper {
   };
 }
 
+
 type HashState =
   | { route: 'library' }
   | { route: 'reading'; paperId: string }
@@ -145,6 +146,10 @@ export function App() {
   // Raw files state
   const [rawPapers, setRawPapers] = useState<PaperMeta[]>([]);
   const [rawFilesOpen, setRawFilesOpen] = useState(false);
+  // LibraryView normally polls on its own. This signal forces an immediate
+  // reload around the upload boundary, where the previous settled-library
+  // poll could otherwise miss a document that was just committed.
+  const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
   const [viewingPdf, setViewingPdf] = useState<PaperMeta | null>(null);
   /** Page the raw viewer should open on — set only by the structured
    * reader's own "Raw file" button, so the two views land in step. Every
@@ -175,6 +180,10 @@ export function App() {
     listPapers()
       .then((metas) => setRawPapers(metas))
       .catch(() => {});
+  }, []);
+
+  const requestLibraryRefresh = useCallback(() => {
+    setLibraryRefreshToken((token) => token + 1);
   }, []);
 
   // This list only feeds the Raw Files slide-over, so don't hammer the backend
@@ -244,6 +253,7 @@ export function App() {
       const paperId = result.id;
       uploadIdRef.current = paperId;
       setActivePaperId(paperId);
+      requestLibraryRefresh();
       pollUploadProgress(paperId);
     } catch (err) {
       if (err instanceof QueueFullError) {
@@ -255,7 +265,7 @@ export function App() {
       setUploadStatus('failed');
       setUploadError((err as Error).message || 'Upload request failed');
     }
-  }, [pollUploadProgress]);
+  }, [pollUploadProgress, requestLibraryRefresh]);
 
   // Web article import handler: the third pipeline, mirroring
   // handleFileUpload exactly (same processing route + progress poll) but
@@ -286,6 +296,7 @@ export function App() {
       const paperId = result.id;
       uploadIdRef.current = paperId;
       setActivePaperId(paperId);
+      requestLibraryRefresh();
       pollUploadProgress(paperId);
     } catch (err) {
       if (err instanceof QueueFullError) {
@@ -297,7 +308,7 @@ export function App() {
       setUploadStatus('failed');
       setUploadError((err as Error).message || 'Import request failed');
     }
-  }, [pollUploadProgress]);
+  }, [pollUploadProgress, requestLibraryRefresh]);
 
   // "Try again" on the queue-full screen: the same file or URL, the same
   // kind, through the same handler, so a success continues exactly as a
@@ -390,9 +401,10 @@ export function App() {
     setUploadingFile(null);
     setUploadError(null);
     setUploadQueueFull(null);
+    requestLibraryRefresh();
     refreshPapers();
     setRoute('library');
-  }, [refreshPapers]);
+  }, [refreshPapers, requestLibraryRefresh]);
 
   // Cancel actually aborts the upload: stop polling AND delete the document on
   // the backend (rows + on-disk artefacts) so it doesn't keep processing and
@@ -584,6 +596,7 @@ export function App() {
           onOpenDesk={() => openDesk('library')}
           layout={layout}
           setLayout={setLayout}
+          refreshToken={libraryRefreshToken}
         />
       )}
 
@@ -931,4 +944,3 @@ function UploadKindModal({
     </div>
   );
 }
-
