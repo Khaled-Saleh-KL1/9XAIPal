@@ -547,6 +547,29 @@ export async function addReferenceToLibrary(paperId: string, number: number): Pr
   return res.json();
 }
 
+export interface FindReferenceResult {
+  found: boolean;
+  /** What was searched — shown either way so a miss is not a mystery. */
+  query: string;
+  entry: ReferenceEntry;
+  added?: AddReferenceResult | null;
+}
+
+/**
+ * Second attempt when Semantic Scholar has nothing (or nothing fetchable):
+ * search the web for the paper's PDF and, if a copy is found, add it to the
+ * library as a research paper in the same call.
+ */
+export async function findReferenceOnWeb(paperId: string, number: number): Promise<FindReferenceResult> {
+  const res = await fetch(`${BASE}/papers/${paperId}/references/${number}/find-web`, { method: 'POST' });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { detail = (await res.json()).detail || detail; } catch { /* keep the status */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 // ── Library export ────────────────────────────────────────────────────────
 
 

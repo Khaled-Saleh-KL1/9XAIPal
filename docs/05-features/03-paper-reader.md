@@ -370,6 +370,24 @@ fallback for `no_match` used to search Semantic Scholar's site for the **whole c
 which answers "No Papers Found"; it now searches Google Scholar and Semantic Scholar for the
 **title** (`search_query`: the resolved title, else the resolver's own `title_candidates` guess).
 
+**Find on the web & add (2026-09-12).** When Semantic Scholar has nothing — `no_match`, or a match
+with no fetchable PDF — the chip offers **Find on the web & add**: `POST …/find-web` runs
+[`services/reference_finder.py`](../../backend/app/services/reference_finder.py). It searches
+the same provider cascade the research agent uses (Tavily first, DuckDuckGo last) for `"<title>"
+pdf`, keeps only results that will fetch as a PDF (a `.pdf` link, or a landing page with a known
+PDF form — `arxiv.org/abs/…` → `arxiv.org/pdf/…`, `openreview.net/forum?id=` → `/pdf?id=`,
+`aclanthology.org/X/` → `X.pdf`) and whose title overlaps the citation's, then asks the
+classifier-role model which candidate is *the same paper* (JSON `{"choice": n | -1}`, bounded to
+the shortlist — it can pick the wrong paper, it cannot invent a URL); with the model down, only a
+near-identical top title (≥ 0.85) is taken. A hit marks the entry `resolved` with
+`external_ids.via = "web"` and goes straight through `/add`'s import path **as a research paper**;
+a miss changes nothing and says what was searched. Verified against the live cascade: a blog-post
+citation → none (correct); "Decoupled weight decay regularization" → `arxiv.org/pdf/1711.05101`;
+"Deep residual learning…" → the CVF open-access PDF, chosen by the model. ⚠ `/import-url` now
+canonicalises the same landing pages when the link was pasted as a **book or research paper**
+(an arXiv abs link pasted as "Research paper" came back `doc_kind='article'`, a snapshot of the
+abs page — verified live); the generic "Article by URL" path is left exactly as pasted.
+
 **Why whole-bracket.** A bracket with one unrecognised number stays plain text — a half-clickable
 control is worse than an inert one — and no heuristic beyond "is this number a real reference"
 ever mistakes an index or footnote marker for a citation.

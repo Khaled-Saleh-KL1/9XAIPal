@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { resolveReferenceStream, addReferenceToLibrary, getPaperProgress, type ReferenceEntry, type ResolveQueueState } from '../api';
+import { resolveReferenceStream, addReferenceToLibrary, getPaperProgress, type ReferenceEntry, type ResolveQueueState, findReferenceOnWeb } from '../api';
 import type { ReferenceIndex } from '../lib/references';
 
 interface RowState {
@@ -9,6 +9,9 @@ interface RowState {
    * null once it fires (or when there was no wait). */
   queue: ResolveQueueState | null;
   adding: boolean;
+  /** The web attempt: in flight, or its outcome (the query, and a miss). */
+  finding: boolean;
+  findMiss: string | null;
   error: string | null;
   addResult: { id: string; status: string; already_existed: boolean } | null;
   progress: { status: string; job_status?: string | null } | null;
@@ -49,7 +52,7 @@ export function BibCitationRef({
     const m = new Map<number, RowState>();
     for (const n of numbers) {
       const entry = refIndex.byNumber.get(n);
-      if (entry) m.set(n, { entry, resolving: false, queue: null, adding: false, error: null, addResult: null, progress: null });
+      if (entry) m.set(n, { entry, resolving: false, queue: null, adding: false, finding: false, findMiss: null, error: null, addResult: null, progress: null });
     }
     return m;
   });
@@ -103,6 +106,23 @@ export function BibCitationRef({
     tick();
   };
 
+  const findOne = async (n: number) => {
+    const row = rows.get(n);
+    if (!row || row.finding) return;
+    patchRow(n, { finding: true, findMiss: null, error: null });
+    try {
+      const result = await findReferenceOnWeb(paperId, n);
+      if (!result.found || !result.added) {
+        patchRow(n, { finding: false, entry: result.entry, findMiss: result.query });
+        return;
+      }
+      patchRow(n, { finding: false, entry: result.entry, addResult: result.added });
+      if (!result.added.already_existed && result.added.status !== 'failed') pollAdded(n, result.added.id);
+    } catch (e) {
+      patchRow(n, { finding: false, error: (e as Error).message || 'Could not search the web for this reference' });
+    }
+  };
+
   const addOne = async (n: number) => {
     const row = rows.get(n);
     if (!row || row.adding) return;
@@ -129,7 +149,7 @@ export function BibCitationRef({
       {open && (
         <span className="cite-peek bib-ref-peek">
           {[...rows.entries()].map(([n, row]) => (
-            <BibRefRow key={n} number={n} row={row} onResolve={() => resolveOne(n)} onAdd={() => addOne(n)} onOpenPaper={onOpenPaper} />
+            <BibRefRow key={n} number={n} row={row} onResolve={() => resolveOne(n)} onAdd={() => addOne(n)} onFind={() => findOne(n)} onOpenPaper={onOpenPaper} />
           ))}
         </span>
       )}
@@ -138,12 +158,13 @@ export function BibCitationRef({
 }
 
 function BibRefRow({
-  number, row, onResolve, onAdd, onOpenPaper,
+  number, row, onResolve, onAdd, onFind, onOpenPaper,
 }: {
   number: number;
   row: RowState;
   onResolve: () => void;
   onAdd: () => void;
+  onFind: () => void;
   onOpenPaper?: (documentId: string) => void;
 }) {
   const { entry } = row;
@@ -168,10 +189,11 @@ function BibRefRow({
           )
         )}
         {row.error && <span className="cite-peek-error">{row.error}</span>}
-        {entry.resolve_status === 'no_match' && !row.resolving && (
+        {entry.resolve_status === 'no_match' && !row.resolving && !row.addResult && (
           <span className="bib-ref-status">
-            No confident match. Search for it:{' '}
-            <ManualSearchLinks query={entry.search_query || entry.raw_text} />
+            No confident match.{' '}
+            <WebFind row={row} onFind={onFind} />
+            {' '}Or search for it: <ManualSearchLinks query={entry.search_query || entry.raw_text} />
           </span>
         )}
         {entry.resolve_status === 'unavailable' && !row.resolving && (
@@ -198,9 +220,11 @@ function BibRefRow({
             {/* A match with nothing to fetch (no open-access PDF and no
                 arXiv id) cannot be added — say so and hand over the landing
                 pages, instead of an "Add to library" that always refuses. */}
-            {!entry.resolved_pdf_url && !alreadyThere && (
+            {!entry.resolved_pdf_url && !alreadyThere && !row.addResult && (
               <span className="bib-ref-status">
                 No open-access PDF to add.{' '}
+                <WebFind row={row} onFind={onFind} />
+                {' '}
                 {entry.s2_url && (
                   <a href={entry.s2_url} target="_blank" rel="noopener noreferrer">Semantic Scholar ↗</a>
                 )}
@@ -249,5 +273,24 @@ function ManualSearchLinks({ query }: { query: string }) {
       {' · '}
       <a href={`https://www.semanticscholar.org/search?q=${q}`} target="_blank" rel="noopener noreferrer">Semantic Scholar ↗</a>
     </>
+  );
+}
+
+/** The web attempt: a button, then "Searching…", then either the add flow
+ *  takes over (handled by the row) or the miss says what was searched. */
+function WebFind({ row, onFind }: { row: RowState; onFind: () => void }) {
+  if (row.finding) return <span className="bib-ref-status">Searching the web for it…</span>;
+  if (row.findMiss) {
+    return (
+      <span className="bib-ref-status">
+        Nothing fetchable on the web for “{row.findMiss.replace(/^"|" pdf$/g, '')}”.{' '}
+        <button type="button" className="bib-ref-retry" onClick={onFind}>Try again</button>
+      </span>
+    );
+  }
+  return (
+    <button type="button" className="bib-ref-add" onClick={onFind} title="Search the web for this paper's PDF and add it to the library as a research paper">
+      Find on the web &amp; add
+    </button>
   );
 }

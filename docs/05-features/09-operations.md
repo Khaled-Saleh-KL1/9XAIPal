@@ -32,6 +32,11 @@ never `docker builder prune -a` on this box, or torch/MinerU re-download cold. �
 single-tenant for Docker: an unrelated `lcms` stack runs alongside with its own Postgres/Redis,
 started with plain `docker run` (no compose label), so daemon-wide prunes must be filtered by
 `label=com.docker.compose.project=backend`.
+⚠ **A restart used to lose the running ingestion for an hour** (2026-09-12): the task died with
+the container, and Redis re-delivers an unacked message only after its one-hour visibility timeout.
+`core/celery_app.py::_restore_interrupted_tasks` (on `worker_ready`) hands every unacked message
+back to the queue at once, so a document interrupted by a deploy starts over within seconds. See
+`DEPLOYMENT-PRODUCTION.md` §4.
 
 ---
 

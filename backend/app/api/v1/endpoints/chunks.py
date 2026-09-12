@@ -16,12 +16,13 @@ from app.core.logging import get_logger
 from app.core.paths import documents_dir, images_dir
 from app.api.errors import ChunkNotFound, DocumentNotFound
 from app.schemas.chunks import ChunkResponse, ChunkListResponse
-from app.schemas.references import ReferenceEntry, ReferenceListResponse, AddReferenceResponse
+from app.schemas.references import ReferenceEntry, ReferenceListResponse, AddReferenceResponse, FindReferenceResponse
 from app.services import chunks as chunk_service
 from app.services import documents as doc_service
 from app.services.outline import heading_level
 from app.services import book_outline
 from app.services.references import parse_references, title_candidates
+from app.services.reference_finder import canonical_pdf_url, find_pdf_on_web
 from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.search.semantic_scholar_client import match_reference, Unresolved
 from app.core import pacer
@@ -807,7 +808,15 @@ async def add_reference_to_library(
             status_code=422,
             detail="This reference has no resolved, fetchable PDF to add yet.",
         )
+    return await _import_reference(db, paper_id, ref_number, row, current_user)
 
+
+async def _import_reference(
+    db: AsyncSession, paper_id: UUID, ref_number: int, row: dict, current_user: dict,
+) -> AddReferenceResponse:
+    """Queue the reference's PDF into the library as a research paper — the
+    tail of /add, shared with /find-web. Dedupes against a document already
+    imported from the same URL and against a previous add of this entry."""
     if row.get("added_document_id"):
         existing = await doc_service.get_document(db, row["added_document_id"], current_user["id"])
         if existing:
@@ -817,7 +826,9 @@ async def add_reference_to_library(
                 already_existed=True,
             )
 
-    url = row["resolved_pdf_url"]
+    # The landing-page form of a known host (arxiv.org/abs/…) becomes its
+    # PDF form here, so the import fetches the file and not a page about it.
+    url = canonical_pdf_url(row["resolved_pdf_url"])
     dedupe = await get_document_by_source_url(db, url, current_user["id"])
     if dedupe:
         await ref_repo.mark_added(db, paper_id, ref_number, dedupe["id"])
@@ -871,3 +882,53 @@ async def add_reference_to_library(
         id=new_doc["id"], filename=new_doc["filename"], status="processing",
         message="Queued for processing.",
     )
+
+
+@router.post("/{paper_id}/references/{ref_number}/find-web", response_model=FindReferenceResponse)
+async def find_reference_on_web(
+    paper_id: UUID,
+    ref_number: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Second attempt when Semantic Scholar cannot deliver: search the web for
+    the cited paper's PDF, and if a copy is found, add it to the library the
+    same way /add does (as a research paper).
+
+    Allowed for an entry in any state except one already added: a
+    ``no_match``, a ``resolved`` entry that has no fetchable PDF, even an
+    ``unavailable`` one — the web is a different index, not a retry of the
+    same one. On success the entry is marked ``resolved`` with the URL found
+    (``external_ids.via = "web"``) so a later click behaves like any resolved
+    entry; on failure nothing about the entry changes and the manual search
+    links stay. See services/reference_finder.py for how a result is judged.
+    """
+    doc = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+    row = await ref_repo.get_reference(db, paper_id, ref_number)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
+    if row.get("added_document_id"):
+        raise HTTPException(status_code=409, detail="This reference is already in your library.")
+
+    found, query = await find_pdf_on_web(row["raw_text"], row.get("resolved_title"))
+    if not found:
+        return FindReferenceResponse(found=False, query=query, entry=_entry_out(row))
+
+    external = row.get("external_ids") or {}
+    if isinstance(external, str):
+        external = json.loads(external)
+    updated = await ref_repo.save_resolution(
+        db, paper_id, ref_number,
+        status="resolved",
+        title=row.get("resolved_title") or found.title or None,
+        authors=row.get("resolved_authors"),
+        year=row.get("resolved_year"),
+        pdf_url=found.url,
+        external_ids={**external, "via": "web", "engine": found.engine, "how": found.how},
+    )
+    await db.commit()
+    added = await _import_reference(db, paper_id, ref_number, updated, current_user)
+    fresh = await ref_repo.get_reference(db, paper_id, ref_number)
+    return FindReferenceResponse(found=True, query=query, entry=_entry_out(fresh or updated), added=added)

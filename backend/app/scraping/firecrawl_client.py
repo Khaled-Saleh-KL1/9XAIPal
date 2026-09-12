@@ -17,6 +17,7 @@ about the reader's paper library, chat history, or account leaves with it —
 only the one URL.
 """
 
+from html import escape as _escape
 import httpx
 
 from app.core.config import settings
@@ -94,6 +95,16 @@ def fetch_html(url: str) -> tuple[str, str, bool]:
     metadata = data.get("metadata") or {}
     final_url = metadata.get("sourceURL") or url
     content_type = (metadata.get("contentType") or "").split(";")[0].strip().lower()
+    # Firecrawl's `html` is the cleaned BODY: no <head>, so no <title>. The
+    # page title it did read sits in `metadata` instead. Downstream,
+    # trafilatura.extract_metadata reads titles from the markup, and with no
+    # <title> it falls back to the first heading — which is how a Wikipedia
+    # article came into the library called "History" (its first h2;
+    # verified live 2026-09-12). Put the real title back where the markup
+    # readers expect it.
+    page_title = (metadata.get("title") or metadata.get("ogTitle") or "").strip()
+    if page_title and "<title" not in html[:4000].lower():
+        html = f"<title>{_escape(page_title)}</title>\n{html}"
     return html, final_url, content_type == "application/pdf"
 
 

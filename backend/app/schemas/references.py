@@ -46,3 +46,13 @@ class AddReferenceResponse(BaseModel):
     status: str
     message: str
     already_existed: bool = False
+
+
+class FindReferenceResponse(BaseModel):
+    # The web attempt (POST …/find-web). `query` is what was searched, shown
+    # either way so a miss is not a mystery; `added` is the same payload /add
+    # returns, present only when a copy was found and queued.
+    found: bool
+    query: str
+    entry: ReferenceEntry
+    added: Optional[AddReferenceResponse] = None

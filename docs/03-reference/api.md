@@ -241,6 +241,17 @@ rather than a pipeline failure, because nothing ran and the file is still in han
 `POST /papers/{paper_id}/reextract` below — for reextract the existing chunks are only deleted in
 that same transaction, so a full queue leaves the paper untouched.
 
+### `POST /papers/import-url`
+
+`{"url": "…", "kind": "book" | "paper" | null}` → the same `DocumentUploadResponse` shape as
+`/upload`; the fetch, SSRF guard and extraction all happen in the Celery task. A URL that turns out
+to be a PDF becomes a real PDF document of the given kind (`paper` when `kind` is null); anything
+else becomes an article. ⚠ When `kind` is `book` or `paper`, a landing page of a known host is
+canonicalised to its PDF first — `arxiv.org/abs/X` → `arxiv.org/pdf/X`, `openreview.net/forum?id=`
+→ `/pdf?id=`, `aclanthology.org/X/` → `X.pdf` — so the import fetches the file rather than a page
+about it (verified live: pasted as-is, an arXiv abs link became an article snapshot of the abs
+page). With no `kind` the URL is used exactly as pasted.
+
 Response: `201 Created`
 
 ```json
@@ -591,6 +602,15 @@ resolver's own guess, never the whole citation), and once resolved `s2_url` / `a
 pages). `resolved_pdf_url` is Semantic Scholar's open-access link, or `arxiv.org/pdf/<id>` when S2
 has none but the match has an arXiv id — which is most arXiv papers; without this, "Add to
 library" had nothing to fetch for any of them.
+
+### `POST /papers/{paper_id}/references/{ref_number}/find-web`
+
+The second attempt when Semantic Scholar has nothing: search the web (the search-provider cascade)
+for the cited paper's PDF and, if a copy is found, add it to the library as a research paper in the
+same call. `{"found": bool, "query": "<what was searched>", "entry": ReferenceEntry, "added":
+AddReferenceResponse | null}`. Allowed for any entry not already added (`409` otherwise). On a hit
+the entry becomes `resolved` with `external_ids.via = "web"`; on a miss nothing changes. See feature
+47 for how a result is judged.
 
 ### `GET /papers/{paper_id}/references/{ref_number}/resolve/stream`
 
