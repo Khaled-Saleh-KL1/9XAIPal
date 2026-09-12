@@ -3,15 +3,15 @@
 > Part of the [feature catalogue](README.md). Each entry: what it does, where it lives, how it
 > works, why it is built that way (including what was tried and failed), and how to see it.
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-09-12 (`main`, 3c72291 + drop-anywhere).
 
 ---
 
 ## 1. PDF upload: drag-and-drop or click
 
-**What it does.** Drop a PDF on the library (or click the dropzone), say whether it is a *book* or
-a *research paper*, and it is stored and queued for extraction. The processing overlay takes over
-until the document is readable.
+**What it does.** Drop a PDF **anywhere on the library view** (or click the dashed card), say
+whether it is a *book* or a *research paper*, and it is stored and queued for extraction. The
+processing overlay takes over until the document is readable.
 
 **Where.** Client: [`App.tsx`](../../frontend/src/App.tsx) (`startUpload`, `pickFileWithKind`,
 `handleFileUpload`), [`LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) (the dropzone),
@@ -19,6 +19,23 @@ until the document is readable.
 and `_stream_pdf_upload`.
 
 **How it works.**
+0. *The whole view is the drop target, not the card.* `LibraryView`'s root element handles
+   `dragenter/dragover/dragleave/drop` for any drag whose `dataTransfer.types` includes `Files`,
+   and a full-screen "Drop to add to your library" overlay (`.lib-drop-overlay`,
+   `pointer-events: none`) shows while one is over it; the dashed card only mirrors that state.
+   ⚠ Before 2026-09-12 only the card accepted drops, and a PDF dropped a few pixels below it was
+   not ignored — with no handler claiming it, the browser did its default for a dropped file and
+   **navigated the tab to it**, replacing the app with the PDF viewer. The reader assumed the
+   upload had happened; the API never saw a request; the library had nothing. `dragenter` and
+   `dragleave` fire for every child crossed, so the overlay is driven by a depth counter, not a
+   boolean, and only clears when the drag really leaves the window. A drop with no PDF in it
+   (a `.txt`, a `.docx`) shows a notice saying so — the old fallback of opening the file picker
+   read as "the drop was lost"; a multi-PDF drop takes the first and says the rest must come one
+   at a time, because the kind question is per file. Every other route has a safety net in
+   `App.tsx`: a window-level `dragover`/`drop` listener that refuses (`dropEffect = 'none'`) any
+   file drag nothing else claimed — it runs last in the bubble and checks `defaultPrevented`, so
+   the book chat's image attachments (feature 63) keep working — and the app can no longer be
+   navigated away by a stray drop.
 1. *The kind chooser always runs first.* `startUpload(file?)` stores a dropped `File` in
    `pendingFile` and opens the modal. A click passes nothing. Either way the user must pick a
    `DocKind` — it decides which reader opens and whether the embedding pass runs at all, and a
@@ -457,7 +474,20 @@ written.
 (`_reserve_queue_capacity`, `create_ingestion_job`), `api/errors.py::TooManyQueuedJobs`.
 
 **How it works.** `SELECT pg_advisory_xact_lock(hashtext('9xaipal:ingestion_queue'))`, then the
-count, then the insert, all in the caller's transaction; the lock releases on commit/rollback.
+count, then the insert, all in the caller's transaction; the lock releases on commit/rollback. An
+upload also takes a cheap, non-atomic look at the count *before* streaming the body, so a 300 MB
+book is not pushed up the wire only to be refused; the locked check after the write remains the
+authority.
+
+**What the reader sees.** Not a failure. The `429` carries `code: QUEUE_FULL` plus `queued` and
+`limit`; `api.ts` raises a typed `QueueFullError` and the processing overlay switches to its own
+state — header "HTTP 429 · queue full", "50 of 50 slots are taken by documents still being
+extracted", "your file was not uploaded and nothing is left behind", every step left pending
+(nothing ran, so nothing is painted red), a **Try again now** button that resubmits the same file
+with the same kind, and an automatic retry every 45 s with a visible countdown that stops the
+moment the reader leaves. The first version showed the same sentence under a "Failed" header
+with the *Extracting structure* step in red and only "Back to library" — a decline dressed as a
+crash, and the file had to be picked again.
 
 **Why.** The Celery worker runs `--concurrency=1`; this is what stops an upload burst from growing
 disk and DB rows unbounded. The first version checked the count *before* the transaction, so
