@@ -18,6 +18,7 @@
 | Know what listens on which port | [01-orientation/runtime-topology.md](01-orientation/runtime-topology.md) | `docker compose ps` |
 | Diagnose something broken | [01-orientation/operations.md](01-orientation/operations.md) | `ask_traces` / `ingestion_jobs` queries in that doc |
 | Understand the system end-to-end | [02-architecture/overview.md](02-architecture/overview.md) | n/a |
+| Study every feature the app has, one by one — what, where, how, why | [05-features/README.md](05-features/README.md) (108 entries in nine areas) | the files each entry names |
 | Trace a PDF from upload to readable | [02-architecture/ingestion-pipeline.md](02-architecture/ingestion-pipeline.md) | `tests/test_ingestion_pipeline.py` |
 | Understand how a question gets answered | [02-architecture/chat-and-ask.md](02-architecture/chat-and-ask.md) | `NOTE[...]` / `ASK[stepN]` log lines |
 | Know which model serves which call | [02-architecture/ai-backend.md](02-architecture/ai-backend.md) | `tests/test_provider_resolver.py` |
