@@ -95,6 +95,16 @@ frontend in a `node:20-alpine` container with `VITE_API_BASE_URL` set, copy `dis
 the commit is written to `.last-good-sha`; on failure the workflow checks out that sha into a
 worktree and runs **the exact same script** again — one script, one place a deploy bug can hide.
 
+**Only what changed is rebuilt.** `scripts/deploy-scope.sh` diffs `.last-good-sha` against the new
+commit and the workflow passes `DEPLOY_SCOPE` to the script: `none` for docs/tests/CI (files
+synced, health confirmed, nothing built or restarted), `frontend` (Vite build only, no container
+touched), `backend` (api + worker rebuilt and restarted), `both`, `full` (first deploy, undiffable
+sha, and always the rollback). `backend/` means everything the images are built from — lockfile,
+Dockerfiles, compose, the deploy scripts — not just `backend/app`; `backend/nginx/` counts as
+nothing because the host config is hand-installed, and produces a notice instead. `npm ci` is
+skipped when the lockfile hash matches the last install. Before this, every merge — a README fix
+included — cost five and a half minutes and a short API outage.
+
 ---
 
 ## 105. nginx same-origin serving

@@ -81,6 +81,29 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
+      # Decided BEFORE the sync overwrites anything: the diff is between the
+      # commit that is running (.last-good-sha, recorded by the last deploy
+      # that passed its health check) and the one CI just validated. A
+      # README merge comes out `none`; a frontend-only change never
+      # restarts a container. See scripts/deploy-scope.sh for the rules —
+      # they mirror ci.yml's "detect changes" filters on purpose.
+      - name: Decide what this deploy has to rebuild
+        id: scope
+        run: |
+          DEPLOYED=$(cat "$DEPLOY_DIR/.last-good-sha" 2>/dev/null || true)
+          SCOPE=$(bash scripts/deploy-scope.sh "$DEPLOYED" "${{ github.event.workflow_run.head_sha }}")
+          echo "Running: ${DEPLOYED:-<none>} → new: ${{ github.event.workflow_run.head_sha }} → scope: $SCOPE"
+          echo "scope=$SCOPE" >> "$GITHUB_OUTPUT"
+          # The host's nginx config is installed by hand (sudo) — nothing
+          # here can apply a change to it, so say so where it will be seen.
+          if [ -n "$DEPLOYED" ] && ! git diff --quiet "$DEPLOYED" "${{ github.event.workflow_run.head_sha }}" -- backend/nginx; then
+            echo "::notice::backend/nginx/ changed in this deploy. The host's /etc/nginx/sites-enabled/9xaipal.conf is installed by hand and was NOT updated — diff it against backend/nginx/9xaipal.conf and reload nginx with sudo."
+          fi
+
+      # frontend/node_modules is untracked (so absent from the checkout) and
+      # would be deleted by --delete on every run, forcing a full `npm ci`
+      # each time; excluded so deploy-once.sh can skip the install when the
+      # lockfile is unchanged.
       - name: Sync tracked files into the deployment directory
         run: |
           rsync -a --delete \
@@ -88,6 +111,7 @@ jobs:
             --exclude='backend/.env' \
             --exclude='backend/app/storage/' \
             --exclude='backend/frontend-dist/' \
+            --exclude='frontend/node_modules/' \
             --exclude='.last-good-sha' \
             ./ "$DEPLOY_DIR"/
 
@@ -98,6 +122,8 @@ jobs:
       # it drifting out of sync in this file.
       - name: Deploy
         id: deploy
+        env:
+          DEPLOY_SCOPE: ${{ steps.scope.outputs.scope }}
         run: bash "$DEPLOY_DIR/scripts/deploy-once.sh"
 
       # Only reached if the step above actually succeeded — this commit is
@@ -132,11 +158,15 @@ jobs:
             --exclude='backend/.env' \
             --exclude='backend/app/storage/' \
             --exclude='backend/frontend-dist/' \
+            --exclude='frontend/node_modules/' \
             --exclude='.last-good-sha' \
             /tmp/rollback-src/ "$DEPLOY_DIR"/
           git worktree remove /tmp/rollback-src --force
 
-          if bash "$DEPLOY_DIR/scripts/deploy-once.sh"; then
+          # Always a full deploy: the failed attempt may have rebuilt any
+          # subset of the stack, so the restored tree has to be rebuilt in
+          # every area to be known-good again.
+          if DEPLOY_SCOPE=full bash "$DEPLOY_DIR/scripts/deploy-once.sh"; then
             echo "::notice::Rollback to $GOOD_SHA restored service. ${{ github.event.workflow_run.head_sha }} is still broken and needs a fix — the site is running the last good version in the meantime."
           else
             echo "::error::Rollback to $GOOD_SHA ALSO failed its health check. The box needs manual attention now — this is no longer just a bad commit."
