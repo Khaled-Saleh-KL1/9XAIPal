@@ -20,8 +20,9 @@ async def create_document(
     file_size_bytes: Optional[int] = None,
     doc_kind: str = "paper",
     source_url: Optional[str] = None,
+    title: Optional[str] = None,
 ) -> dict:
-    """Create a document record."""
+    """Create a document record (``title`` when the display name is already known)."""
     return await doc_repo.create_document(
         session,
         user_id=user_id,
@@ -30,6 +31,7 @@ async def create_document(
         file_size_bytes=file_size_bytes,
         doc_kind=doc_kind,
         source_url=source_url,
+        title=title,
     )
 
 

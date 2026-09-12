@@ -19,8 +19,14 @@ async def create_document(
     file_size_bytes: Optional[int] = None,
     doc_kind: str = "paper",
     source_url: Optional[str] = None,
+    title: Optional[str] = None,
 ) -> dict:
     """Insert a new document record.
+
+    ``title`` is the display name when it is already known at creation —
+    a cited reference added from a chip arrives with its resolved title,
+    and showing "1512.03385.pdf" until someone renames it is the wrong
+    default. NULL otherwise: the UI falls back to original_filename.
 
     user_id is a required, non-Optional argument (not enforced at the DB
     level — see the column comment in schema.sql) so a missing owner is a
@@ -31,9 +37,9 @@ async def create_document(
     """
     result = await session.execute(
         text("""
-            INSERT INTO documents (user_id, filename, original_filename, file_size_bytes, doc_kind, source_url)
-            VALUES (:user_id, :filename, :original_filename, :file_size_bytes, :doc_kind, :source_url)
-            RETURNING id, filename, original_filename, file_size_bytes, doc_kind, source_url, status, created_at
+            INSERT INTO documents (user_id, filename, original_filename, file_size_bytes, doc_kind, source_url, title)
+            VALUES (:user_id, :filename, :original_filename, :file_size_bytes, :doc_kind, :source_url, :title)
+            RETURNING id, filename, original_filename, file_size_bytes, doc_kind, source_url, title, status, created_at
         """),
         {
             "user_id": user_id,
@@ -42,6 +48,7 @@ async def create_document(
             "file_size_bytes": file_size_bytes,
             "doc_kind": doc_kind if doc_kind in VALID_DOC_KINDS else "paper",
             "source_url": source_url,
+            "title": (title or "").strip()[:500] or None,
         },
     )
     return dict(result.mappings().one())

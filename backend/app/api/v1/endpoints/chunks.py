@@ -845,6 +845,10 @@ async def _import_reference(
         original_filename=url,
         doc_kind="article",
         source_url=url,
+        # The library names a paper by its title; without this the new row
+        # would be called "1512.03385.pdf" (the URL's filename) until someone
+        # renamed it. The resolver already knows the title — use it.
+        title=row.get("resolved_title"),
     )
     await ref_repo.mark_added(db, paper_id, ref_number, new_doc["id"])
 

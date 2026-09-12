@@ -5,6 +5,8 @@ from pathlib import Path
 from uuid import UUID
 from typing import Callable, Optional
 
+import re
+
 from sqlalchemy import text, Table, MetaData, Column, String, Integer, JSON, insert
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PG_UUID
 from sqlalchemy.orm import Session
@@ -383,6 +385,26 @@ def run_pipeline_sync(
 
         page_count = get_page_count(pdf_path)
 
+        # A pasted arXiv link arrives as "1512.03385.pdf"; the library would
+        # show that until someone renamed it. MinerU's first heading is the
+        # paper's title nearly every time — use it, but only when the
+        # filename is an identifier and no title has been set (a title the
+        # resolver or the reader already gave the row wins).
+        try:
+            row = session.execute(
+                text("SELECT title, original_filename FROM documents WHERE id = :id"), {"id": document_id}
+            ).mappings().first()
+            if row and not (row.get("title") or "").strip():
+                inferred = infer_pdf_title(chunks, row.get("original_filename") or "")
+                if inferred:
+                    session.execute(
+                        text("UPDATE documents SET title = :t WHERE id = :id AND title IS NULL"),
+                        {"t": inferred, "id": document_id},
+                    )
+                    logger.info(f"[pipeline] titled {document_id} from its first heading: {inferred!r}")
+        except Exception:
+            logger.exception("[pipeline] title inference failed (non-fatal)")
+
         _finish_ingestion(
             session,
             document_id=document_id,
@@ -581,6 +603,51 @@ def _handle_ingestion_failure(session: Session, document_id: UUID, job_id: UUID,
         logger.error(f"Failed to record failure status: {status_err}")
 
     logger.exception(f"Pipeline sync error for {document_id}: {exc}")
+
+
+# Filenames that identify a paper to a filesystem and to nobody else: an
+# arXiv id (with or without a version), a DOI-ish or all-digit name, a hex
+# blob. For these, the first heading MinerU found is a better name.
+_IDENTIFIER_NAME_RE = re.compile(
+    r"^(?:\d{4}\.\d{4,5}(?:v\d+)?|[a-z\-]+/\d{7}(?:v\d+)?|[0-9a-f]{16,}|[\d._\-]+|10\.\d{4,}[^\s]*)$",
+    re.IGNORECASE,
+)
+# Headings that are section names, never a paper's title.
+_SECTION_WORDS = {
+    "abstract", "introduction", "contents", "table of contents", "references", "acknowledgements",
+    "acknowledgments", "appendix", "keywords", "index", "preface", "summary", "overview",
+}
+
+
+def looks_like_identifier_name(original_filename: str) -> bool:
+    stem = re.sub(r"\.pdf$", "", (original_filename or "").strip(), flags=re.IGNORECASE)
+    return bool(stem) and bool(_IDENTIFIER_NAME_RE.match(stem))
+
+
+def infer_pdf_title(chunks: list[dict], original_filename: str) -> Optional[str]:
+    """A display title for a PDF whose filename says nothing — "1512.03385.pdf"
+    from a pasted arXiv link, "2506.23115v2.pdf" from a download — taken from
+    the first level-1 heading MinerU extracted, when that heading reads like
+    a title rather than a section name. None when the filename is already a
+    name (the reader's own "Attention Is All You Need.pdf" stays as it is)
+    or nothing title-shaped was found; the caller leaves the title NULL then
+    and the UI falls back to the filename as before.
+    """
+    if not looks_like_identifier_name(original_filename):
+        return None
+    for chunk in chunks[:12]:
+        if chunk.get("chunk_type") != "heading":
+            continue
+        md = (chunk.get("markdown") or "").strip()
+        if not md.startswith("# "):        # level 1 only
+            continue
+        text_ = " ".join((chunk.get("plain_text") or md.lstrip("# ")).split()).strip(" .:")
+        if not 4 <= len(text_) <= 200:
+            continue
+        if text_.lower() in _SECTION_WORDS or re.match(r"^\d+(\.\d+)*\s", text_):
+            continue
+        return text_
+    return None
 
 
 def _pdf_name_from_url(url: str) -> str:

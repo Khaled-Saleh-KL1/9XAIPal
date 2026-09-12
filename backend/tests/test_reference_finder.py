@@ -247,3 +247,58 @@ def test_page_title_prefers_the_extracted_title_unless_it_is_a_body_heading():
                        "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)") == "Transformer (deep learning architecture)"
     # Nothing usable at all: the raw URL, never an empty name.
     assert _page_title("", "", "", "https://x/") == "https://x/"
+
+
+# ── A paper's name: the title, not the identifier ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_added_reference_row_carries_the_resolved_title_async(client, db_session, monkeypatch):
+    from app.api.v1.endpoints import chunks as ep
+    signup = await client.post("/api/v1/auth/signup", json={"email": f"{uuid4()}@example.com", "password": "correct horse battery"})
+    user_id = signup.json()["id"]
+    doc = (await db_session.execute(text(
+        "INSERT INTO documents (user_id, filename, original_filename, status, doc_kind) VALUES (:u, :f, :f, 'complete', 'paper') RETURNING id"
+    ), {"u": user_id, "f": f"{uuid4()}.pdf"})).scalar_one()
+    await db_session.execute(text(
+        "INSERT INTO paper_references (document_id, ref_number, raw_text, resolve_status, resolved_title, resolved_pdf_url) "
+        "VALUES (:d, 3, 'He et al. Deep residual learning. CVPR 2016.', 'resolved', 'Deep Residual Learning for Image Recognition', 'https://arxiv.org/pdf/1512.03385')"
+    ), {"d": doc})
+    await db_session.commit()
+    monkeypatch.setattr(ep.process_article_ingestion, "delay", lambda *a: None)
+    resp = await client.post(f"/api/v1/papers/{doc}/references/3/add")
+    assert resp.status_code == 201, resp.text
+    new_id = resp.json()["id"]
+    row = (await db_session.execute(text("SELECT title, original_filename FROM documents WHERE id = :id"), {"id": new_id})).one()
+    assert row[0] == "Deep Residual Learning for Image Recognition"
+    assert row[1] == "https://arxiv.org/pdf/1512.03385"      # the on-disk name is untouched
+    listing = await client.get("/api/v1/papers")
+    (shown,) = [d for d in listing.json()["documents"] if d["id"] == new_id]
+    assert shown["title"] == "Deep Residual Learning for Image Recognition"
+
+
+def _heading(seq, text_, level=1):
+    return {"chunk_type": "heading", "markdown": f"{'#' * level} {text_}", "plain_text": text_, "sequence_id": seq}
+
+
+def test_pdf_title_is_inferred_only_for_identifier_filenames():
+    from app.extraction.pipeline_sync import infer_pdf_title, looks_like_identifier_name
+    for name in ("1512.03385.pdf", "2506.23115v2.pdf", "cs/0112017.pdf", "87a959ce5539469d9031ab58bc71ecad.pdf", "10.48550_arXiv.2506.pdf"):
+        assert looks_like_identifier_name(name), name
+    for name in ("Attention Is All You Need.pdf", "DeepSeek_V4.pdf", "01. ROFORMER_KIMI.pdf", "thesis-final.pdf"):
+        assert not looks_like_identifier_name(name), name
+
+    chunks = [
+        {"chunk_type": "text", "markdown": "arXiv:1512.03385v1 [cs.CV]", "plain_text": "arXiv:1512.03385v1 [cs.CV]"},
+        _heading(2, "Deep Residual Learning for Image Recognition"),
+        {"chunk_type": "text", "markdown": "Kaiming He …", "plain_text": "Kaiming He …"},
+        _heading(4, "Abstract"),
+        _heading(5, "1 Introduction"),
+    ]
+    assert infer_pdf_title(chunks, "1512.03385.pdf") == "Deep Residual Learning for Image Recognition"
+    # A named file is left alone.
+    assert infer_pdf_title(chunks, "Deep Residual Learning.pdf") is None
+    # Section names and numbered headings are never a title; level-2 headings neither.
+    assert infer_pdf_title([_heading(1, "Abstract"), _heading(2, "1 Introduction")], "1512.03385.pdf") is None
+    assert infer_pdf_title([_heading(1, "Some Title", level=2)], "1512.03385.pdf") is None
+    # Nothing heading-shaped early on: no guess.
+    assert infer_pdf_title([{"chunk_type": "text", "markdown": "x", "plain_text": "x"}] * 20 + [_heading(21, "Late Title")], "1512.03385.pdf") is None
