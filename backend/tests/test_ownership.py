@@ -141,13 +141,15 @@ async def test_library_wide_chat_scoped_to_owner(db_session):
     assert b_docs == []
 
     # Library-wide chat turns (study_id=None) are also isolated per user.
+    cid = uuid4()
     turn = await study_repo.add_turn(
-        db_session, user_id=user_a, study_id=None, conversation_id=uuid4(),
+        db_session, user_id=user_a, study_id=None, conversation_id=cid,
         role="user", content="What's in my library?",
     )
     await db_session.commit()
-    assert len(await study_repo.list_turns(db_session, user_a, None)) == 1
-    assert await study_repo.list_turns(db_session, user_b, None) == []
+    assert len(await study_repo.list_turns(db_session, user_a, None, cid)) == 1
+    assert await study_repo.list_turns(db_session, user_b, None, cid) == []
+    assert await study_repo.list_conversations(db_session, user_b, None) == []
 
 
 @pytest.mark.asyncio
