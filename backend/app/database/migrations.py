@@ -212,6 +212,13 @@ async def _ensure_recent_columns() -> None:
            SET resolved_pdf_url = 'https://arxiv.org/pdf/' || (external_ids->>'arxiv')
            WHERE resolve_status = 'resolved' AND resolved_pdf_url IS NULL
              AND COALESCE(external_ids->>'arxiv', '') <> ''""",
+        # A reference added from a citation chip before 2026-09-12 was named
+        # by its URL ("1512.03385.pdf"); the resolver's title was known all
+        # along. Give those rows their title once. Idempotent.
+        """UPDATE documents d SET title = r.resolved_title
+           FROM paper_references r
+           WHERE r.added_document_id = d.id AND d.title IS NULL
+             AND COALESCE(r.resolved_title, '') <> ''""",
         # The library's "Done reading" shelf and its folders — see the columns'
         # own comments in schema.sql.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ",

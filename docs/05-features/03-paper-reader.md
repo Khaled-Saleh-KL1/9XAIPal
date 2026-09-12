@@ -374,6 +374,15 @@ fallback for `no_match` used to search Semantic Scholar's site for the **whole c
 which answers "No Papers Found"; it now searches Google Scholar and Semantic Scholar for the
 **title** (`search_query`: the resolved title, else the resolver's own `title_candidates` guess).
 
+**The added paper's name (2026-09-12).** "It perfectly added, but the name is numbers": the new row
+was named by the URL's filename (`1512.03385.pdf`) until someone renamed it, although the resolver
+knew the title. It is created with `title = resolved_title` now (a migration fills it in for rows
+added before), and the PDF pipeline names any identifier-named PDF — an arXiv id, a hex blob,
+digits — from the first level-1 heading MinerU extracted (`pipeline_sync.infer_pdf_title`; never a
+section word like "Abstract", never a numbered heading, never a file that already has a real
+name, and never over a title the resolver or the reader set). The on-disk `original_filename`
+is untouched: `/raw` still serves the file as it arrived.
+
 **Find on the web & add (2026-09-12).** When Semantic Scholar has nothing — `no_match`, or a match
 with no fetchable PDF — the chip offers **Find on the web & add**: `POST …/find-web` runs
 [`services/reference_finder.py`](../../backend/app/services/reference_finder.py). It searches
