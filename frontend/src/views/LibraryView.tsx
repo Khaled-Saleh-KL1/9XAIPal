@@ -23,6 +23,8 @@ interface Props {
   onOpenDesk: () => void;
   layout: LibraryLayout;
   setLayout: (v: LibraryLayout) => void;
+  /** Incremented by App when an upload is accepted or the overlay closes. */
+  refreshToken: number;
 }
 
 function deriveProgress(m: PaperMeta): number {
@@ -46,7 +48,7 @@ function metaToPaper(m: PaperMeta): Paper {
   };
 }
 
-export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout }: Props) {
+export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout, refreshToken }: Props) {
   const confirm = useConfirm();
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
@@ -65,6 +67,10 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   // mounted (so a fresh upload appears without a reload). The poll is
   // adaptive: fast while any paper is still processing (live progress bars),
   // slow once the library is fully settled.
+  //
+  // App bumps refreshToken when an upload is accepted or the processing panel
+  // closes. Making it an effect dependency restarts the poll immediately,
+  // rather than waiting for the old settled-library 10-second timer.
   //
   // ⚠ The poll is paused while a rename is open. It replaces the whole paper
   // list every tick, and a tick landing mid-edit would blow away the input the
@@ -101,7 +107,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
       alive = false;
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [refreshToken]);
 
   // Debounce the search text so each keystroke doesn't re-filter (and
   // re-render) the whole grid on large libraries.

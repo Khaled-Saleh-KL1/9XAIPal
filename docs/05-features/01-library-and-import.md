@@ -55,6 +55,12 @@ and `_stream_pdf_upload`.
    (served by `/raw`, feature 11/12). Then a `documents` row (`status='queued'`), an
    `ingestion_jobs` row, and `process_ingestion.delay(...)` to Celery.
 
+   As soon as the server accepts the upload, `App` signals `LibraryView` to reload immediately.
+   This matters when the user presses **Back to library** before extraction starts: the library is
+   still mounted underneath the processing panel, so returning to it must not wait for the normal
+   settled-library poll. If the upload request itself is still in flight, its response sends the
+   same signal when the committed document ID arrives.
+
 **Why.**
 - *The drop handler consumes `e.dataTransfer` synchronously.* It plucks the first PDF (by MIME or
   `.pdf` extension) inside `onDrop` before any state update — the `DataTransfer` is neutered once
@@ -196,6 +202,11 @@ status, done if an earlier one is active. The same `STAGE_PROGRESS` map (queued 
 0.3 → chunking 0.55 → embedding 0.78 → summarizing 0.92 → complete 1) feeds the library card, the
 deep-linked paper load and the overlay. On `complete` the cancel handle is dropped so a later
 Cancel click can never delete a finished document.
+
+**Leaving early.** **Back to library** only hides the overlay; processing continues and the
+document remains in the database. It triggers an immediate library reload, and the library poll
+effect is restarted so an older in-flight response cannot replace the fresh list. **Cancel** is
+the separate action that deletes the document and its stored files.
 
 **Why.** The step list is the same for every kind on purpose. It used to branch on `kind`, and a
 paper showed both its steps "done" the moment it left chunking (the 4-item order lacked
