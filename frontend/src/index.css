@@ -525,6 +525,33 @@ body {
   color: var(--fg);
 }
 
+/* ── User menu (components/UserMenu.tsx) ──
+   Portalled to <body> and fixed-positioned under the name badge — see the
+   component's own note on why it cannot live inside a header. */
+.user-menu-pop {
+  position: fixed;
+  z-index: 80;
+  min-width: 140px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.28);
+  animation: marg-fade 120ms ease;
+}
+.user-menu-signout {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #c0392b;   /* red on purpose: asked for, and it is the one destructive item */
+  white-space: nowrap;
+}
+.user-menu-signout:hover { background: color-mix(in srgb, #c0392b 10%, var(--bg)); }
+
 /* ── Kbd ────────────────────────────────────────────────────── */
 .kbd {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
