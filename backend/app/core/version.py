@@ -7,6 +7,11 @@ where each ecosystem's tooling expects it; ``tests/test_version.py`` fails if
 the three ever disagree, which is what keeps this from becoming a fourth
 place to forget.
 
+⚠ ``uv.lock`` records the project's own version too, so a bump here means
+``uv lock`` (with the pinned uv, 0.10.8) as well — ``uv sync --locked`` in CI
+and in the Dockerfile refuses to run against a stale lockfile. That is the
+first thing this bump got wrong.
+
 History: v1.0.0–v1.0.3 were tagged in June 2026 for the first release. What
 followed — the article reader with margin notes, the paper and study agents,
 the desk, the evidence check, accounts and the waiting room, exports, decks,
