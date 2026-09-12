@@ -380,6 +380,89 @@ body {
   animation: pulse-soft 1.6s ease-in-out infinite;
 }
 
+/* ── Done Reading (views/LibraryView.tsx) ──
+   The library's second area, navigated like a file manager: breadcrumb,
+   folder cards at the root, the papers of the current level below. */
+.lib-crumbs {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 14px; font-size: 13px; color: var(--muted);
+}
+.lib-crumbs button { color: var(--fg-2); }
+.lib-crumbs button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.lib-crumbs .is-here { display: inline-flex; align-items: center; gap: 5px; color: var(--fg); font-weight: 500; }
+.lib-crumb-sep { color: var(--faint); }
+
+.lib-folders {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;
+  margin-bottom: 18px;
+}
+.lib-folder { position: relative; }
+.lib-folder-open {
+  width: 100%; display: flex; align-items: center; gap: 10px; text-align: left;
+  padding: 12px 14px; border-radius: 12px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--fg);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.lib-folder-open:hover { border-color: var(--accent); background: var(--bg); }
+.lib-folder-open > svg { color: var(--accent); }
+.lib-folder.is-renaming .lib-folder-open { cursor: default; }
+.lib-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.lib-folder-count { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10.5px; color: var(--muted); }
+.lib-folder .paper-actions { top: 50%; transform: translateY(-50%); right: 40px; }
+.lib-folder:hover .paper-actions, .lib-folder:focus-within .paper-actions { opacity: 1; }
+.paper-actions button.is-done:hover { border-color: var(--ok); color: var(--ok); }
+
+/* The "where does this go?" panel. */
+.shelf-panel { width: min(460px, 100%); }
+.shelf-panel-paper { color: var(--fg); font-weight: 500; }
+.shelf-options { display: flex; flex-direction: column; gap: 6px; margin-top: 16px; max-height: min(40vh, 300px); overflow-y: auto; }
+.shelf-option {
+  display: flex; align-items: center; gap: 10px; text-align: left;
+  padding: 10px 12px; border-radius: 10px; font-size: 13px; color: var(--fg);
+  background: var(--bg-2); border: 1px solid var(--border);
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.shelf-option:hover { border-color: var(--accent); background: var(--bg); }
+.shelf-option.is-current { border-color: var(--accent); background: var(--accent-soft); }
+.shelf-option > svg { color: var(--accent); flex: none; }
+.shelf-option-hint { margin-left: auto; font-size: 11px; color: var(--muted); }
+.shelf-new { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.shelf-new input {
+  flex: 1; min-width: 0; padding: 8px 10px; border-radius: 9px; font-size: 13px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--fg); outline: none;
+}
+.shelf-new input:focus { border-color: var(--accent); }
+.shelf-new .confirm-go { padding: 8px 12px; font-size: 12.5px; white-space: nowrap; }
+.shelf-new .confirm-go:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+.shelf-unshelve { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
+
+/* ── Shelves (components/ShelfGroups.tsx) ──
+   Collapsible Books / Research / Articles / Done groups with the Done
+   shelf's folders nested one level in; used by the Desk rail and the
+   study picker. */
+.shelf + .shelf { margin-top: 6px; }
+.shelf-head { display: flex; align-items: center; gap: 6px; }
+.shelf-toggle {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  padding: 5px 6px; border-radius: 6px; text-align: left;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px;
+  text-transform: uppercase; letter-spacing: 0.09em; color: var(--faint);
+}
+.shelf-toggle:hover { background: var(--bg-3); color: var(--fg-2); }
+.shelf-head.is-folder .shelf-toggle { text-transform: none; letter-spacing: 0; font-family: inherit; font-size: 12px; color: var(--fg-2); }
+.shelf-caret { display: inline-block; transition: transform 120ms ease; font-size: 10px; }
+.shelf-caret.is-open { transform: rotate(90deg); }
+.shelf-folder-glyph { color: var(--accent); }
+.shelf-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shelf-count { font-size: 9.5px; color: var(--faint); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.shelf-body { padding-left: 4px; }
+.shelf-body.is-folder { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 8px; }
+.shelf-folder { margin-top: 4px; }
+.shelf-add-all { margin-left: auto; }
+.picker-shelves .shelf-item { margin-bottom: 5px; }
+.picker-shelves .shelf-head { margin: 6px 0 4px; }
+.rail-shelves .shelf-item { margin-bottom: 1px; }
+
 .lib-notice {
   display: flex;
   align-items: center;

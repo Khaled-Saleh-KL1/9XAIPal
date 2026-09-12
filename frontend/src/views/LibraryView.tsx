@@ -4,7 +4,9 @@ import { LogoMark } from '../components/LogoMark';
 import {
   IconSearch, IconPlus, IconUpload, IconDoc,
   IconPin, IconSort, IconGrid, IconList, IconPencil, IconTrash,
+  IconCheck, IconFolder, IconUndo,
 } from '../components/Icons';
+import { doneFolders } from '../lib/shelves';
 import { PaperCover } from './PaperCover';
 import { UserMenuInline } from '../components/UserMenu';
 import { ExportWizard } from '../components/ExportWizard';
@@ -12,7 +14,7 @@ import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
 import { stageProgress } from '../lib/progress';
-import { listPapers, deletePaper, renamePaper, searchPapersSemantic, type PaperMeta } from '../api';
+import { listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type PaperMeta } from '../api';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -44,6 +46,8 @@ function metaToPaper(m: PaperMeta): Paper {
     rawStatus: m.status,
     jobStatus: m.job_status ?? null,
     docKind: m.doc_kind ?? null,
+    doneAt: m.done_at ?? null,
+    doneFolder: m.done_folder ?? null,
     tags: [],
   };
 }
@@ -62,6 +66,24 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   /** The paper whose title is being edited inline, if any. */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // ── The Done shelf ──────────────────────────────────────────────────
+  // A finished book does not have to stay in front of the reader, and
+  // deleting it is the wrong tool — the point of a library is to keep what
+  // was read. "Done Reading" is a second area of the same library: the
+  // reading shelf hides what is done, the Done area shows it, optionally
+  // sorted into the reader's own folders ("Technical Books"), navigated like
+  // a file manager (root → folder → back). Nothing else changes: a done
+  // paper opens, searches and joins a Desk study exactly as before. The
+  // backend of all this is two columns on the row (PaperMeta.done_at /
+  // done_folder); folders are implicit — one exists while a paper names it.
+  const [area, setArea] = useState<'reading' | 'done'>('reading');
+  /** The folder open inside the Done area; null = its top level. */
+  const [doneFolder, setDoneFolder] = useState<string | null>(null);
+  /** The paper the shelf panel is open for (mark as done / move). */
+  const [shelving, setShelving] = useState<Paper | null>(null);
+  /** The Done-area folder whose name is being edited inline. */
+  const [folderRenaming, setFolderRenaming] = useState<string | null>(null);
 
   // Fetch papers from backend on mount and keep polling while the view is
   // mounted (so a fresh upload appears without a reload). The poll is
@@ -135,6 +157,10 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     return () => { alive = false; };
   }, [debouncedQuery]);
 
+  const donePapers = useMemo(() => papers.filter((p) => p.doneAt), [papers]);
+  const folders = useMemo(() => doneFolders(donePapers), [donePapers]);
+  const searching = debouncedQuery.trim() !== '';
+
   const filtered = useMemo(() => {
     const q = debouncedQuery.toLowerCase();
     let xs = papers.filter(
@@ -144,20 +170,46 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           semanticIds.has(p.id)) &&
         (kindFilters.size === 0 || kindFilters.has(p.docKind || 'paper')),
     );
+    // Which area, and where in it. A search inside the Done area looks
+    // through every folder at once — "where did I put that?" is the
+    // question a search there answers — and the card shows the folder as a
+    // tag so the answer is visible; without a search, the area is browsed
+    // one level at a time like a file manager.
+    if (area === 'reading') xs = xs.filter((p) => !p.doneAt);
+    else if (searching) xs = xs.filter((p) => p.doneAt).map((p) => (p.doneFolder ? { ...p, tags: [p.doneFolder] } : p));
+    else xs = xs.filter((p) => p.doneAt && (p.doneFolder ?? null) === doneFolder);
     if (sort === 'title') xs = [...xs].sort((a, b) => a.title.localeCompare(b.title));
     if (sort === 'pages') xs = [...xs].sort((a, b) => b.pages - a.pages);
     return xs;
-  }, [debouncedQuery, sort, kindFilters, papers, semanticIds]);
+  }, [debouncedQuery, sort, kindFilters, papers, semanticIds, area, doneFolder, searching]);
+
+  /** Folders shown at the top of the Done area's root, with what they hold. */
+  const folderCards = useMemo(() => {
+    if (area !== 'done' || doneFolder !== null || searching) return [];
+    return folders.map((name) => ({
+      name,
+      count: donePapers.filter(
+        (p) => p.doneFolder === name && (kindFilters.size === 0 || kindFilters.has(p.docKind || 'paper')),
+      ).length,
+    }));
+  }, [area, doneFolder, searching, folders, donePapers, kindFilters]);
+
+  // A folder that emptied (its last paper moved out, or deleted) no longer
+  // exists; do not leave the reader standing in it.
+  useEffect(() => {
+    if (doneFolder !== null && !folders.includes(doneFolder)) setDoneFolder(null);
+  }, [folders, doneFolder]);
 
   // Keep the header honest about the whole library, not just the current
   // search/filter result. Older rows without doc_kind are papers by schema
   // default, so they belong in the paper count as well.
   const libraryCounts = useMemo(() => {
-    const counts = { books: 0, papers: 0, articles: 0 };
+    const counts = { books: 0, papers: 0, articles: 0, done: 0 };
     for (const paper of papers) {
       if (paper.docKind === 'book') counts.books += 1;
       else if (paper.docKind === 'article') counts.articles += 1;
       else counts.papers += 1;
+      if (paper.doneAt) counts.done += 1;
     }
     return counts;
   }, [papers]);
@@ -219,6 +271,64 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     } catch (e) {
       setPapers((prev) => prev.map((x) => (x.id === p.id ? { ...x, title: previous } : x)));
       setNotice(`Could not rename: ${(e as Error).message}`);
+    }
+  };
+
+  /**
+   * Shelve a paper (done, in `folder` or at the Done root) or bring it back
+   * (`done=false`). Optimistic like rename: the card leaves the current view
+   * immediately and comes back if the write fails.
+   */
+  const shelve = async (p: Paper, done: boolean, folder: string | null) => {
+    setShelving(null);
+    const previous = { doneAt: p.doneAt, doneFolder: p.doneFolder };
+    const clean = folder?.trim() || null;
+    setPapers((prev) =>
+      prev.map((x) =>
+        x.id === p.id
+          ? { ...x, doneAt: done ? (x.doneAt ?? new Date().toISOString()) : null, doneFolder: done ? clean : null }
+          : x,
+      ),
+    );
+    try {
+      const meta = await setPaperDone(p.id, done, clean);
+      setPapers((prev) =>
+        prev.map((x) =>
+          x.id === p.id ? { ...x, doneAt: meta.done_at ?? null, doneFolder: meta.done_folder ?? null } : x,
+        ),
+      );
+      if (done) {
+        setNotice(
+          clean
+            ? `"${p.title}" is done — filed under ${clean}.`
+            : `"${p.title}" is done — it is in Done Reading now.`,
+        );
+      }
+    } catch (e) {
+      setPapers((prev) => prev.map((x) => (x.id === p.id ? { ...x, ...previous } : x)));
+      setNotice(`Could not update the shelf: ${(e as Error).message}`);
+    }
+  };
+
+  /** Rename a Done-area folder on every paper in it, optimistically. */
+  const commitFolderRename = async (from: string, next: string) => {
+    setFolderRenaming(null);
+    const to = next.trim();
+    if (!to || to === from) return;
+    if (folders.includes(to)) {
+      // Merging two folders by renaming one onto the other is a real
+      // outcome, so say so rather than silently doing it.
+      setNotice(`There is already a folder called "${to}".`);
+      return;
+    }
+    setPapers((prev) => prev.map((x) => (x.doneFolder === from ? { ...x, doneFolder: to } : x)));
+    if (doneFolder === from) setDoneFolder(to);
+    try {
+      await renameDoneFolder(from, to);
+    } catch (e) {
+      setPapers((prev) => prev.map((x) => (x.doneFolder === to ? { ...x, doneFolder: from } : x)));
+      if (doneFolder === to) setDoneFolder(from);
+      setNotice(`Could not rename the folder: ${(e as Error).message}`);
     }
   };
 
@@ -299,6 +409,9 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     onStartRename: () => setRenaming(p.id),
     onCancelRename: () => setRenaming(null),
     onCommitRename: (next: string) => void commitRename(p, next),
+    area,
+    onShelve: () => setShelving(p),
+    onUnshelve: () => void shelve(p, false, null),
   });
 
   return (
@@ -340,6 +453,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           <div className="ml-auto min-w-0 flex items-center gap-2 overflow-x-auto no-scrollbar hdr-scroll">
             <span className="hidden sm:inline text-[12px]" style={{ color: 'var(--muted)' }}>
               {libraryCounts.books} Books · {libraryCounts.papers} Papers · {libraryCounts.articles} Articles
+              {libraryCounts.done > 0 && ` · ${libraryCounts.done} done`}
             </span>
             <span className="hidden sm:inline-block mx-2 h-4 w-px" style={{ background: 'var(--border)' }} />
             <button
@@ -443,6 +557,25 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 }}
               />
             </div>
+            <button
+              type="button"
+              onClick={() => { setArea((a) => (a === 'done' ? 'reading' : 'done')); setDoneFolder(null); }}
+              className="lib-done-toggle px-3 py-2 rounded-md text-[12.5px] flex items-center gap-1.5 shrink-0"
+              aria-pressed={area === 'done'}
+              style={{
+                background: area === 'done' ? 'var(--accent)' : 'var(--bg-2)',
+                color: area === 'done' ? 'var(--accent-fg)' : 'var(--fg)',
+                border: '1px solid',
+                borderColor: area === 'done' ? 'var(--accent)' : 'var(--border)',
+              }}
+              title={area === 'done' ? 'Back to the reading shelf' : 'What you have finished reading'}
+            >
+              <IconCheck className="w-3.5 h-3.5" />
+              Done Reading
+              {libraryCounts.done > 0 && (
+                <span className="font-mono text-[10.5px] opacity-80">{libraryCounts.done}</span>
+              )}
+            </button>
             <div className="flex items-center gap-1 ml-auto">
               {/* Kind filter chips: each toggles independently, so "Books" +
                   "Articles" together (papers hidden) is a valid combination.
@@ -512,6 +645,61 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             </div>
           )}
 
+          {area === 'done' && (
+            <nav className="lib-crumbs" aria-label="Where you are in Done Reading">
+              <button type="button" onClick={() => setArea('reading')}>Library</button>
+              <span className="lib-crumb-sep">›</span>
+              {doneFolder === null ? (
+                <span className="is-here">Done Reading</span>
+              ) : (
+                <>
+                  <button type="button" onClick={() => setDoneFolder(null)}>Done Reading</button>
+                  <span className="lib-crumb-sep">›</span>
+                  <span className="is-here"><IconFolder className="w-3.5 h-3.5" /> {doneFolder}</span>
+                </>
+              )}
+            </nav>
+          )}
+
+          {folderCards.length > 0 && (
+            <div className="lib-folders">
+              {folderCards.map((f) => (
+                <div key={f.name} className={`lib-folder${folderRenaming === f.name ? ' is-renaming' : ''}`}>
+                  <button
+                    type="button"
+                    className="lib-folder-open"
+                    onClick={() => { if (folderRenaming !== f.name) setDoneFolder(f.name); }}
+                    aria-label={`Open folder ${f.name}`}
+                  >
+                    <IconFolder className="w-5 h-5 shrink-0" />
+                    {folderRenaming === f.name ? (
+                      <TitleEditor
+                        value={f.name}
+                        onCommit={(next) => void commitFolderRename(f.name, next)}
+                        onCancel={() => setFolderRenaming(null)}
+                      />
+                    ) : (
+                      <span className="lib-folder-name" title={f.name}>{f.name}</span>
+                    )}
+                    <span className="lib-folder-count">{f.count}</span>
+                  </button>
+                  {folderRenaming !== f.name && (
+                    <div className="paper-actions">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setFolderRenaming(f.name); }}
+                        title="Rename this folder"
+                        aria-label={`Rename folder ${f.name}`}
+                      >
+                        <IconPencil className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {loading ? (
             <div className="lib-grid">
               {/* Skeletons in the real card shape. A centred "Loading…" line
@@ -549,10 +737,36 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               Your library is empty. Drop a PDF above to add your first paper.
             </p>
           )}
-          {!loading && !loadError && filtered.length === 0 && papers.length > 0 && (
+          {!loading && !loadError && filtered.length === 0 && papers.length > 0 && searching && (
             <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
-              No papers match "{query}".
+              No papers match "{query}"{area === 'done' ? ' in Done Reading' : ''}.
             </p>
+          )}
+          {!loading && !loadError && filtered.length === 0 && papers.length > 0 && !searching && area === 'reading' && (
+            <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
+              {kindFilters.size > 0
+                ? 'Nothing of that kind on the reading shelf.'
+                : 'Everything here is done — it is all in Done Reading.'}
+            </p>
+          )}
+          {!loading && !loadError && filtered.length === 0 && folderCards.length === 0 && !searching && area === 'done' && (
+            <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
+              {doneFolder !== null
+                ? 'This folder is empty.'
+                : donePapers.length === 0
+                ? 'Nothing finished yet. When you are done with a paper, hover it and press ✓ — it moves here, out of the way but never gone.'
+                : 'Nothing of that kind in Done Reading.'}
+            </p>
+          )}
+
+          {shelving && (
+            <ShelfPanel
+              paper={shelving}
+              folders={folders}
+              onChoose={(folder) => void shelve(shelving, true, folder)}
+              onUnshelve={() => void shelve(shelving, false, null)}
+              onClose={() => setShelving(null)}
+            />
           )}
         </div>
       </main>
@@ -568,14 +782,26 @@ interface CardProps {
   onStartRename: () => void;
   onCancelRename: () => void;
   onCommitRename: (next: string) => void;
+  /** Which area the card is shown in — decides which shelf action it offers. */
+  area: 'reading' | 'done';
+  /** Open the shelf panel: "mark as done" on the reading shelf, "move" in Done. */
+  onShelve: () => void;
+  /** Done area only: straight back to the reading shelf, no panel. */
+  onUnshelve: () => void;
 }
 
-/** The hover-revealed rename / delete pair, shared by both layouts. */
+/** The hover-revealed rename / shelf / delete set, shared by both layouts. */
 function CardActions({
+  area,
   onStartRename,
+  onShelve,
+  onUnshelve,
   onDelete,
 }: {
+  area: 'reading' | 'done';
   onStartRename: () => void;
+  onShelve: () => void;
+  onUnshelve: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -588,6 +814,36 @@ function CardActions({
       >
         <IconPencil className="w-3.5 h-3.5" />
       </button>
+      {area === 'reading' ? (
+        <button
+          type="button"
+          className="is-done"
+          onClick={(e) => { e.stopPropagation(); onShelve(); }}
+          title="Done reading — move it to Done Reading"
+          aria-label="Mark as done reading"
+        >
+          <IconCheck className="w-3.5 h-3.5" />
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onShelve(); }}
+            title="Move to a folder"
+            aria-label="Move to a folder"
+          >
+            <IconFolder className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onUnshelve(); }}
+            title="Back to the reading shelf"
+            aria-label="Back to the reading shelf"
+          >
+            <IconUndo className="w-3.5 h-3.5" />
+          </button>
+        </>
+      )}
       <button
         type="button"
         className="is-danger"
@@ -611,6 +867,9 @@ function PaperCard({
   onStartRename,
   onCancelRename,
   onCommitRename,
+  area,
+  onShelve,
+  onUnshelve,
 }: CardProps) {
   const processing = isProcessing(paper);
   return (
@@ -671,7 +930,7 @@ function PaperCard({
         </div>
       </div>
 
-      {!renaming && <CardActions onStartRename={onStartRename} onDelete={onDelete} />}
+      {!renaming && <CardActions area={area} onStartRename={onStartRename} onShelve={onShelve} onUnshelve={onUnshelve} onDelete={onDelete} />}
     </article>
   );
 }
@@ -753,6 +1012,9 @@ function PaperRow({
   onStartRename,
   onCancelRename,
   onCommitRename,
+  area,
+  onShelve,
+  onUnshelve,
 }: CardProps) {
   const processing = isProcessing(paper);
   return (
@@ -791,7 +1053,108 @@ function PaperRow({
             : <span style={{ color: 'var(--ok)' }}>{Math.round(paper.progress * 100)}%</span>}
         </span>
       </div>
-      {!renaming && <CardActions onStartRename={onStartRename} onDelete={onDelete} />}
+      {!renaming && <CardActions area={area} onStartRename={onStartRename} onShelve={onShelve} onUnshelve={onUnshelve} onDelete={onDelete} />}
+    </div>
+  );
+}
+
+// ── ShelfPanel ────────────────────────────────────────────────────────────────
+//
+// "Where does this go?" — opened by ✓ on the reading shelf (mark as done) and
+// by the folder button in the Done area (move). One panel for both: the
+// choice is the same either way — the top of Done Reading, one of the
+// existing folders, or a new one typed here. Built on the confirm dialog's
+// classes so it reads as the app's one modal.
+
+function ShelfPanel({
+  paper,
+  folders,
+  onChoose,
+  onUnshelve,
+  onClose,
+}: {
+  paper: Paper;
+  folders: string[];
+  /** null = the top of Done Reading, otherwise the folder name. */
+  onChoose: (folder: string | null) => void;
+  onUnshelve: () => void;
+  onClose: () => void;
+}) {
+  const [newName, setNewName] = useState('');
+  const moving = Boolean(paper.doneAt);
+  const clean = newName.trim();
+  const exists = folders.some((f) => f.toLowerCase() === clean.toLowerCase());
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="shelf-title" onClick={onClose}>
+      <div className="confirm-card shelf-panel" onClick={(e) => e.stopPropagation()}>
+        <h2 className="confirm-title" id="shelf-title">
+          {moving ? 'Move' : 'Done reading'}
+        </h2>
+        <p className="confirm-body">
+          <span className="shelf-panel-paper">{paper.title}</span>
+          {moving
+            ? ' — where should it go?'
+            : ' — it leaves the reading shelf but stays in your library, your notes and the Desk. Where should it go?'}
+        </p>
+
+        <div className="shelf-options">
+          <button
+            type="button"
+            className={`shelf-option${moving && !paper.doneFolder ? ' is-current' : ''}`}
+            onClick={() => onChoose(null)}
+          >
+            <IconCheck className="w-4 h-4" />
+            <span>Done Reading</span>
+            <span className="shelf-option-hint">no folder</span>
+          </button>
+          {folders.map((f) => (
+            <button
+              key={f}
+              type="button"
+              className={`shelf-option${paper.doneFolder === f ? ' is-current' : ''}`}
+              onClick={() => onChoose(f)}
+            >
+              <IconFolder className="w-4 h-4" />
+              <span>{f}</span>
+              {paper.doneFolder === f && <span className="shelf-option-hint">here now</span>}
+            </button>
+          ))}
+        </div>
+
+        <form
+          className="shelf-new"
+          onSubmit={(e) => { e.preventDefault(); if (clean && !exists) onChoose(clean); }}
+        >
+          <IconFolder className="w-4 h-4 shrink-0" style={{ color: 'var(--muted)' }} />
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="New folder, e.g. Technical Books"
+            maxLength={80}
+            aria-label="New folder name"
+            autoFocus
+          />
+          <button type="submit" className="confirm-go" disabled={!clean || exists}>
+            {exists ? 'Exists' : 'Create & move'}
+          </button>
+        </form>
+
+        <div className="confirm-actions">
+          {moving && (
+            <button type="button" className="confirm-cancel shelf-unshelve" onClick={onUnshelve}>
+              <IconUndo className="w-3.5 h-3.5" /> Back to reading
+            </button>
+          )}
+          <button type="button" className="confirm-cancel" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
     </div>
   );
 }

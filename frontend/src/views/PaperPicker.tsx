@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PaperCover } from './PaperCover';
+import { ShelfGroups } from '../components/ShelfGroups';
 import { displayTitle } from '../lib/titles';
 import type { PaperMeta, StudyPaper } from '../api';
 
@@ -205,27 +206,41 @@ export function PaperPicker({
                   : 'Every paper is already in this study.'}
               </p>
             ) : (
-              <ul className="picker-available">
-                {available.map((m) => (
-                  <li key={m.id}>
-                    <button type="button" className="picker-row" onClick={() => add(m.id)}>
-                      <PaperCover
-                        paperId={m.id}
-                        title={displayTitle(m)}
-                        ready={m.status === 'complete'}
-                        className="is-thumb"
-                      />
-                      <span className="picker-name">
-                        {displayTitle(m)}
-                        {m.status !== 'complete' && (
-                          <span className="picker-warn"> · still processing</span>
-                        )}
-                      </span>
-                      <span className="picker-plus" aria-hidden="true">+</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              /* Shelved like the library and the rail: Books / Research /
+                 Articles / Done (with the Done shelf's folders inside),
+                 each collapsible, each with its own "Add all" so a whole
+                 shelf or folder can go into the study in one click. */
+              <ShelfGroups
+                items={available}
+                className="picker-shelves"
+                renderHead={({ items }) => (
+                  <button
+                    type="button"
+                    className="picker-clear shelf-add-all"
+                    onClick={() => setIds((prev) => [...prev, ...items.map((m) => m.id)])}
+                    title="Add every paper on this shelf to the study"
+                  >
+                    Add all
+                  </button>
+                )}
+                renderItem={(m) => (
+                  <button type="button" className="picker-row" onClick={() => add(m.id)}>
+                    <PaperCover
+                      paperId={m.id}
+                      title={displayTitle(m)}
+                      ready={m.status === 'complete'}
+                      className="is-thumb"
+                    />
+                    <span className="picker-name">
+                      {displayTitle(m)}
+                      {m.status !== 'complete' && (
+                        <span className="picker-warn"> · still processing</span>
+                      )}
+                    </span>
+                    <span className="picker-plus" aria-hidden="true">+</span>
+                  </button>
+                )}
+              />
             )}
           </section>
         </div>

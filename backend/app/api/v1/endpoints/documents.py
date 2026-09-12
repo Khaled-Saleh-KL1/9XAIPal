@@ -24,6 +24,8 @@ from app.schemas.documents import (
     DocumentUploadResponse,
     ImportArticleRequest,
     RenameDocumentRequest,
+    RenameDoneFolderRequest,
+    SetDoneRequest,
     SetStrictScopeRequest,
 )
 from app.services import covers as cover_service
@@ -562,6 +564,33 @@ async def get_paper_progress(
     }
 
 
+@router.patch("/done-folders")
+async def rename_done_folder(
+    payload: RenameDoneFolderRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Rename a folder in the library's Done area.
+
+    Folders are implicit — a folder is the set of this user's done documents
+    whose ``done_folder`` names it (schema.sql) — so the rename is one UPDATE
+    over those rows and returns how many moved. 404 when nothing was in a
+    folder of that name: the client has a stale view, not a wrong request.
+
+    ⚠ Declared BEFORE the ``/{paper_id}`` routes on purpose. FastAPI matches
+    in declaration order and ``/done-folders`` is one path segment, exactly
+    like ``/{paper_id}``; declared after it, this would be swallowed by the
+    UUID parser and answer 422 for every call.
+    """
+    moved = await doc_service.rename_done_folder(
+        db, current_user["id"], payload.from_name, payload.to
+    )
+    if moved == 0:
+        raise HTTPException(status_code=404, detail="No such folder")
+    await db.commit()
+    return {"moved": moved, "folder": payload.to.strip()}
+
+
 @router.patch("/{paper_id}", response_model=DocumentResponse)
 async def rename_paper(
     paper_id: UUID,
@@ -582,6 +611,31 @@ async def rename_paper(
     ``original_filename``, which stays the as-uploaded name.
     """
     doc = await doc_service.rename_document(db, paper_id, current_user["id"], payload.title)
+    if not doc:
+        raise DocumentNotFound(str(paper_id))
+    await db.commit()
+    return DocumentResponse(**doc)
+
+
+@router.patch("/{paper_id}/done", response_model=DocumentResponse)
+async def set_done(
+    paper_id: UUID,
+    payload: SetDoneRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Shelve a paper as "done reading" (optionally into a folder), or bring
+    it back to the reading shelf.
+
+    This is the whole backend of the library's Done area: two columns on the
+    row (documents.done_at / done_folder, see schema.sql). Nothing is moved on
+    disk or in the vector store — a done document is still fully readable,
+    searchable and available to the Desk; only where the library shows it
+    changes.
+    """
+    doc = await doc_service.set_document_done(
+        db, paper_id, current_user["id"], payload.done, payload.folder
+    )
     if not doc:
         raise DocumentNotFound(str(paper_id))
     await db.commit()

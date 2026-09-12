@@ -1,10 +1,10 @@
-# Area 6 — The desk: studies, cross-paper chat, notes (features 76–85)
+# Area 6 — The desk: studies, cross-paper chat, notes (features 76–85, 110)
 
 > Part of the [feature catalogue](README.md). Companions:
 > [frontend.md § The desk](../02-architecture/frontend.md),
 > [chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md).
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-09-12 (`main`, cb67f64 + done-reading).
 
 The desk (`#/desk`) is **a place to work on papers without opening them** — a page, not a panel,
 because an overlay implies the document underneath is the subject. Three columns, each a question:
@@ -204,3 +204,32 @@ papers. The synthetic library study has no id and cannot be renamed.
 **Why.** No router library: a tiny state machine over the hash. `notes` is not a valid study id, so
 the two desk pages cannot collide. Real back-button history arrived with the lightbox
 (2026-09-02) so closing an overlay with Back does not leave the page.
+
+---
+
+## 110. Shelved paper lists: the rail and the picker as a file tree
+
+**What it does.** The Desk's left rail ("Every paper" / "In this study") and the picker's "Your
+library" column no longer list papers flat. They are grouped into collapsible shelves — **Books,
+Research, Articles, Done** — and the Done shelf shows the reader's folders (feature 109) nested
+one level in, each collapsible too, so a long library folds down to what is in play: open
+Research, pick, collapse it, open Books. Every shelf and folder in the picker has its own **Add
+all**. Done papers stay fully available to the Desk — finishing a book is not leaving it out of a
+study.
+
+**Where.** [`components/ShelfGroups.tsx`](../../frontend/src/components/ShelfGroups.tsx),
+[`lib/shelves.ts`](../../frontend/src/lib/shelves.ts) (`groupByShelf`, `shelfOf`, `SHELVES`),
+[`DeskView.tsx`](../../frontend/src/views/DeskView.tsx) (`railItems`),
+[`PaperPicker.tsx`](../../frontend/src/views/PaperPicker.tsx).
+
+**How it works.** One grouping function for all three surfaces (the library's kind chips, the
+rail, the picker) so "Done" cannot mean something slightly different in each: `shelfOf` is
+`done` when `done_at` is set, else the kind (older rows with no `doc_kind` are papers by schema
+default); `groupByShelf` returns the four shelves in fixed order, empty ones dropped, input order
+preserved inside each so a caller's sort survives, folder names alphabetical. The study endpoint
+returns papers as `(id, title, P-number)` only, so the rail joins each against the library list
+it already loads to learn the shelf. **P-numbers are unchanged** — they are the study's citation
+order (feature 77), not the display order — which is why grouping is purely visual. Open/closed
+state is per mount and per tree: the rail and the picker are different trees, and remembering a
+collapse from one in the other would be surprising. Everything starts open: the ask was to be
+able to *minimise* what is not in play, not to hunt for what is.

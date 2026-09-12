@@ -37,6 +37,8 @@ GET    /papers/{paper_id}/raw
 GET    /papers/{paper_id}/raw/{page_id}
 GET    /papers/{paper_id}/cover
 PATCH  /papers/{paper_id}
+PATCH  /papers/{paper_id}/done
+PATCH  /papers/done-folders
 DELETE /papers/{paper_id}
 POST   /papers/{paper_id}/rechunk
 POST   /papers/{paper_id}/reextract
@@ -362,6 +364,27 @@ UI falls back to `original_filename`.
 ⚠ **This renames the row, never the file.** `filename` is the on-disk key that `documents/`,
 `extracted/`, `images/` and every chunk asset path are built from, and `original_filename` is what
 `GET /raw` serves the download as. Renaming either to match a label would break both.
+
+### `PATCH /papers/{paper_id}/done`
+
+Shelve a paper as "done reading", or bring it back. Body `{"done": true|false, "folder":
+"<name>" | null}` → the updated `DocumentResponse` (`done_at`, `done_folder`). `done: true` sets
+`done_at` (kept if already set — moving between folders does not change when it was finished)
+and `done_folder` (trimmed; blank → `null`, the top of the Done area; max 80 chars, `422` past
+it). `done: false` clears both. `404 DocumentNotFound` for a paper that is not yours.
+
+A shelf label, not a lifecycle state: `status` is untouched, nothing moves on disk or in the
+vector store, the paper stays readable, searchable and available to the Desk. Feature 109.
+
+### `PATCH /papers/done-folders`
+
+Rename a folder in the Done area. Body `{"from": "<old>", "to": "<new>"}` → `{"moved": <n>,
+"folder": "<new>"}`. Folders are implicit (a folder is the set of your done papers whose
+`done_folder` names it), so this is one `UPDATE` over those rows, scoped to the caller. `404 No
+such folder` when none of your papers is in a folder of that name.
+
+⚠ Declared before the `/{paper_id}` routes in `endpoints/documents.py`: FastAPI matches in
+declaration order and `done-folders` is one segment, exactly like `{paper_id}`.
 
 ### `GET /papers/{paper_id}/cover`
 

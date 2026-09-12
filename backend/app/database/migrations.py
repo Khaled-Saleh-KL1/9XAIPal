@@ -199,6 +199,10 @@ async def _ensure_recent_columns() -> None:
         f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_embedding vector({settings.vector_dimension})",
         # See the column's own comment in schema.sql for what this gates.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS strict_scope BOOLEAN NOT NULL DEFAULT TRUE",
+        # The library's "Done reading" shelf and its folders — see the columns'
+        # own comments in schema.sql.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS done_folder TEXT",
         # A paper's own bibliography, parsed once from its References section
         # (see services/references.py) and resolved lazily per entry against
         # Semantic Scholar (search/semantic_scholar_client.py) — the backing
