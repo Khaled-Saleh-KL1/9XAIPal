@@ -66,6 +66,19 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   /** The paper whose title is being edited inline, if any. */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // A confirmation ("… is done — filed under X") is read once and should
+  // then get out of the way: it clears itself after 3 s. Errors do not — a
+  // failed rename or shelf write must stay until the reader dismisses it.
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flash = (text: string) => {
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    setNotice(text);
+    flashTimer.current = setTimeout(() => {
+      setNotice((cur) => (cur === text ? null : cur));
+      flashTimer.current = null;
+    }, 3000);
+  };
+  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current); }, []);
 
   // ── The Done shelf ──────────────────────────────────────────────────
   // A finished book does not have to stay in front of the reader, and
@@ -298,7 +311,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
         ),
       );
       if (done) {
-        setNotice(
+        flash(
           clean
             ? `"${p.title}" is done — filed under ${clean}.`
             : `"${p.title}" is done — it is in Done Reading now.`,

@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS documents (
     -- restore the old, fully open behavior for one document permanently,
     -- rather than relying on catching that phrasing every time.
     --
+    -- ⚠ 2026-09-12: the reader's Scoped/Open switch is gone (redundant with
+    -- Whole/Stepped, which already bounds what the assistant sees), and so
+    -- is the endpoint that wrote FALSE. Every row is TRUE and stays TRUE;
+    -- the column remains because the policy code reads it.
+    --
     -- Deliberately per-document, not per-user or global: the Desk
     -- (chat/study_agent.py) is unaffected either way — reaching across every
     -- paper in a study is its entire purpose, not a leak to plug.

@@ -250,29 +250,6 @@ async def test_a_new_document_defaults_to_strict_scope(db_session):
     assert row.scalar_one() is True
 
 
-@pytest.mark.asyncio
-async def test_repository_toggles_it_and_is_owner_scoped(db_session):
-    from app.database.repositories import documents as doc_repo
-
-    owner = await _make_user(db_session)
-    other = await _make_user(db_session)
-    doc_id = await _make_doc(db_session, owner)
-
-    # Someone else's write touches nothing and reports failure.
-    assert await doc_repo.set_document_strict_scope(db_session, doc_id, other, False) is False
-    row = await db_session.execute(
-        text("SELECT strict_scope FROM documents WHERE id = :id"), {"id": doc_id}
-    )
-    assert row.scalar_one() is True
-
-    # The owner's write actually lands.
-    assert await doc_repo.set_document_strict_scope(db_session, doc_id, owner, False) is True
-    row = await db_session.execute(
-        text("SELECT strict_scope FROM documents WHERE id = :id"), {"id": doc_id}
-    )
-    assert row.scalar_one() is False
-
-
 @pytest.fixture(autouse=True)
 async def _fresh_redis_client():
     """Same reason as test_auth_http.py's copy: the cached client is bound to
@@ -295,66 +272,14 @@ async def client():
 
 
 @pytest.mark.asyncio
-async def test_the_endpoint_toggles_and_persists(client, db_session):
-    email = f"{uuid4()}@example.com"
-    signup = await client.post(
-        "/api/v1/auth/signup", json={"email": email, "password": "correct horse battery"}
-    )
-    assert signup.status_code == 201
-    user_id = signup.json()["id"]
+async def test_there_is_no_scope_endpoint_any_more(client, db_session):
+    """The reader's Scoped/Open switch was removed on 2026-09-12 (redundant
+    with Whole/Stepped); the flag stays TRUE for every document and nothing
+    can write FALSE from outside."""
+    user_id = await _make_user(db_session)
     doc_id = await _make_doc(db_session, user_id)
-
-    resp = await client.patch(
-        f"/api/v1/papers/{doc_id}/strict-scope", json={"strict_scope": False}
-    )
-    assert resp.status_code == 200
-    assert resp.json()["strict_scope"] is False
-
-    # Persisted, not just echoed back: a fresh read agrees.
-    row = await db_session.execute(
-        text("SELECT strict_scope FROM documents WHERE id = :id"), {"id": doc_id}
-    )
-    assert row.scalar_one() is False
-
-
-@pytest.mark.asyncio
-async def test_the_endpoint_404s_for_someone_elses_document(client, db_session):
-    victim_id = await _make_user(db_session)
-    doc_id = await _make_doc(db_session, victim_id)
-
-    email = f"{uuid4()}@example.com"
-    signup = await client.post(
-        "/api/v1/auth/signup", json={"email": email, "password": "correct horse battery"}
-    )
-    assert signup.status_code == 201
-
-    resp = await client.patch(
-        f"/api/v1/papers/{doc_id}/strict-scope", json={"strict_scope": False}
-    )
-    assert resp.status_code == 404
-
-
-@pytest.mark.parametrize("kind", ["book", "article"])
-@pytest.mark.asyncio
-async def test_books_and_articles_have_no_scope_switch(client, db_session, kind):
-    """Research papers only: the flag on a book/article is refused (409) and
-    stays TRUE — a book must never silently answer from the web."""
-    signup = await client.post(
-        "/api/v1/auth/signup",
-        json={"email": f"{uuid4()}@example.com", "password": "correct horse battery"},
-    )
-    assert signup.status_code == 201
-    user_id = signup.json()["id"]
-    doc_id = await _make_doc(db_session, user_id)
-    await db_session.execute(
-        text("UPDATE documents SET doc_kind = :k WHERE id = :id"), {"k": kind, "id": doc_id}
-    )
-    await db_session.commit()
-
-    resp = await client.patch(
-        f"/api/v1/papers/{doc_id}/strict-scope", json={"strict_scope": False}
-    )
-    assert resp.status_code == 409
+    resp = await client.patch(f"/api/v1/papers/{doc_id}/strict-scope", json={"strict_scope": False})
+    assert resp.status_code in (404, 405)
     row = await db_session.execute(
         text("SELECT strict_scope FROM documents WHERE id = :id"), {"id": doc_id}
     )

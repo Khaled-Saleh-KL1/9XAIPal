@@ -1054,20 +1054,6 @@ export async function renameDoneFolder(from: string, to: string): Promise<number
 }
 
 /**
- * Set whether this document's own reading chat may answer from outside what
- * it itself says. See PaperMeta.strict_scope.
- */
-export async function setStrictScope(paperId: string, strictScope: boolean): Promise<PaperMeta> {
-  const res = await fetch(`${BASE}/papers/${paperId}/strict-scope`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ strict_scope: strictScope }),
-  });
-  if (!res.ok) throw new Error(`Setting scope failed: ${res.status}`);
-  return res.json();
-}
-
-/**
  * URL of a paper's first-page thumbnail.
  *
  * ⚠ Served as 204 No Content when the page cannot be rendered, which an

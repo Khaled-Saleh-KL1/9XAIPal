@@ -938,10 +938,9 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
               Raw file
             </button>
           )}
-          {/* No scope switch here: a book's chat is always scoped to the book
-              (documents.strict_scope stays TRUE and the backend refuses to
-              change it for books). The switch exists for research papers only —
-              see StrictScopeToggle. */}
+          {/* No scope switch: the book's chat is always scoped to the book —
+              what has been revealed so far (maxSequenceId) — and reaches for
+              the web only when the question asks for it. */}
           <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
           <UserMenuInline />
         </div>

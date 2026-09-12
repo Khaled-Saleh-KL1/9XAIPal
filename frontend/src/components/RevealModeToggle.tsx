@@ -2,9 +2,12 @@
  * Header pill for the paper reader's reveal mode: whole article, or one block
  * at a time the way the book reader works.
  *
- * Styled like StrictScopeToggle beside it rather than as a `reader-chip`,
- * following this codebase's precedent that a header control with a state dot
- * is a shared component with its own plain-Tailwind styling.
+ * Styled with plain Tailwind and a state dot rather than as a `reader-chip`,
+ * this codebase's precedent for a shared header control. It is also the
+ * reader's one and only "how much does the assistant see" control: Whole =
+ * the whole paper, Stepped = what has been revealed (the ask ceiling), the
+ * web only when a question asks for it. The Scoped/Open switch that used to
+ * sit beside it was removed on 2026-09-12 as redundant with this one.
  *
  * ⚠ Papers only, deliberately. Books already read this way and have no use for
  * a toggle that turns their own behavior off; an imported article is a web

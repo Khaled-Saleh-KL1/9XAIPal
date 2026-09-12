@@ -545,7 +545,8 @@ folders keeps the original `done_at` (`COALESCE(done_at, NOW())`) — *when did 
 not *when did I last tidy the shelf*; bringing a paper back clears both columns so it starts
 clean if shelved again. Folder names are trimmed and capped at 80 characters (422 past it).
 The client is optimistic in the same way rename is (feature 9): the card leaves the view
-immediately and comes back if the write fails; a rename onto an existing folder name is refused
+immediately and comes back if the write fails; the confirmation line ("… is done — filed under
+X") clears itself after 3 s, while an error stays until dismissed; a rename onto an existing folder name is refused
 with a notice rather than silently merging two folders.
 
 **Why not localStorage.** "You can do the same experience from the front" was the brief, and the

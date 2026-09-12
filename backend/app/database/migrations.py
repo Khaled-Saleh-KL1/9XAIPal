@@ -199,11 +199,11 @@ async def _ensure_recent_columns() -> None:
         f"ALTER TABLE documents ADD COLUMN IF NOT EXISTS search_embedding vector({settings.vector_dimension})",
         # See the column's own comment in schema.sql for what this gates.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS strict_scope BOOLEAN NOT NULL DEFAULT TRUE",
-        # Books and articles are always scoped (2026-09-12): the switch is
-        # research-papers-only now and the endpoint refuses the others, so any
-        # book/article flipped open while the switch still existed is put
-        # back. Idempotent: matches nothing once applied.
-        "UPDATE documents SET strict_scope = TRUE WHERE doc_kind IN ('book', 'article') AND strict_scope = FALSE",
+        # Every document is scoped (2026-09-12): the Scoped/Open switch and
+        # its endpoint are gone (Whole/Stepped already bounds what the
+        # assistant sees), so any row flipped open while the switch existed
+        # is put back. Idempotent: matches nothing once applied.
+        "UPDATE documents SET strict_scope = TRUE WHERE strict_scope = FALSE",
         # References resolved before 2026-09-12 stored no PDF when Semantic
         # Scholar's openAccessPdf was null, although their arXiv id is one —
         # see semantic_scholar_client._to_match. Fill the link in once so
