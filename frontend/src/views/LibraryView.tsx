@@ -48,7 +48,6 @@ function metaToPaper(m: PaperMeta): Paper {
 
 export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout }: Props) {
   const confirm = useConfirm();
-  const [over, setOver] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('recent');
   // Which doc_kind chips are active. Empty = no filter, show everything —
@@ -204,15 +203,73 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     }
   };
 
-  const onDrop = (e: DragEvent) => {
+  // ── Drag-and-drop: the whole view is the target ─────────────────────
+  // The dashed card is the invitation, but a reader dragging a PDF in from
+  // their file manager aims at the page, not at one 80 px strip of it — and
+  // a drop that lands anywhere else is not simply ignored by the browser.
+  // With no handler claiming it, Chrome and Firefox do what they do with any
+  // dropped file: navigate the tab to it. The app is replaced by the
+  // browser's PDF viewer, the reader assumes the upload happened, and the
+  // library has nothing. So every drag carrying files over this view is
+  // claimed, wherever it lands, and an overlay says so while it is over.
+  //
+  // `dragenter`/`dragleave` fire for every child element crossed, so a plain
+  // boolean flickers off and on across the grid; the depth counter goes to
+  // zero only when the drag actually leaves the window.
+  const [fileOver, setFileOver] = useState(false);
+  const dragDepth = useRef(0);
+  const carriesFiles = (e: DragEvent) =>
+    Array.from(e.dataTransfer?.types ?? []).includes('Files');
+
+  const onDragEnter = (e: DragEvent) => {
+    if (!carriesFiles(e)) return;
     e.preventDefault();
-    setOver(false);
-    // Carry the dropped file through to the upload flow. Without this the drop
-    // falls back to the click path, which asks the user to find the file again.
-    const file = Array.from(e.dataTransfer?.files ?? []).find(
+    dragDepth.current += 1;
+    setFileOver(true);
+  };
+  const onDragOver = (e: DragEvent) => {
+    if (!carriesFiles(e)) return;
+    // preventDefault on dragover is what makes an element a drop target at
+    // all; without it the drop event never fires.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onDragLeave = (e: DragEvent) => {
+    if (!carriesFiles(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setFileOver(false);
+  };
+  const onDrop = (e: DragEvent) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setFileOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    const pdfs = files.filter(
       (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'),
     );
-    onUpload(file);
+    if (pdfs.length === 0) {
+      // Say why nothing happened. Opening the file picker here (the old
+      // behaviour) reads as "the drop was lost", not "that file type is not
+      // accepted" — and a web page is imported by URL, not by dropping it.
+      const names = files.map((f) => f.name).slice(0, 3).join(', ');
+      setNotice(
+        `${names || 'That'} is not a PDF — only PDF files can be dropped here. ` +
+          'For a web page, choose "Add paper" and paste its address.',
+      );
+      return;
+    }
+    if (pdfs.length > 1) {
+      // The book/paper question is asked per file, so a multi-file drop
+      // takes the first and says so rather than silently dropping the rest.
+      setNotice(
+        `Dropped ${pdfs.length} PDFs — added "${pdfs[0].name}". ` +
+          'Drop the others one at a time, so each can be marked as a book or a paper.',
+      );
+    }
+    // Carry the dropped file through to the upload flow. Without this the drop
+    // falls back to the click path, which asks the user to find the file again.
+    onUpload(pdfs[0]);
   };
 
   const cardProps = (p: Paper) => ({
@@ -226,7 +283,23 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   });
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
+    <div
+      className="h-screen flex flex-col overflow-hidden"
+      style={{ background: 'var(--bg)' }}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {fileOver && (
+        <div className="lib-drop-overlay" aria-hidden="true">
+          <div className="lib-drop-overlay-frame">
+            <IconUpload className="w-6 h-6" />
+            <div className="font-serif text-[22px] tracking-tight">Drop to add to your library</div>
+            <div className="text-[12.5px]" style={{ color: 'var(--muted)' }}>PDF · book or research paper — you choose next</div>
+          </div>
+        </div>
+      )}
 
       {/* ── Fixed top bar ── */}
       <header className="shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -299,12 +372,9 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
 
           {/* dropzone */}
           <div
-            onDragOver={(e) => { e.preventDefault(); setOver(true); }}
-            onDragLeave={() => setOver(false)}
-            onDrop={onDrop}
             onClick={() => onUpload()}
-            className={`dropzone${over ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
-            style={{ background: over ? undefined : 'var(--bg-2)' }}
+            className={`dropzone${fileOver ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
+            style={{ background: fileOver ? undefined : 'var(--bg-2)' }}
           >
             <div
               className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
