@@ -915,15 +915,9 @@ async def rechunk_paper(
 
     await db.commit()
 
-    # Re-queue embedding generation so chat works again. The rechunk above
-    # already replaced the chunks in-process; only embeddings need to be
-    # (re)generated, so dispatch embed_document (not the full ingestion task,
-    # which requires job_id/filename and would re-run extraction).
-    #
-    # Under the fast profile a paper has no embeddings to regenerate — the new
-    # chunks are immediately answerable via app.chat.paper_agent, which reads
-    # the chunks table directly. Dispatching here would burn worker time on an
-    # index nothing queries.
+    # Re-queue the indexes after replacing chunks. The full profile regenerates
+    # the whole-document embeddings; the fast profile only rebuilds the private
+    # figure index used to find original images by what they show.
     from app.core.config import settings as app_settings
     reembedding = not (app_settings.fast_ingest and doc.get("doc_kind") != "book")
     if reembedding:
@@ -932,6 +926,15 @@ async def rechunk_paper(
         except Exception:
             logger.exception("could not dispatch re-embedding task after rechunk")
             reembedding = False
+
+    figure_indexing = False
+    if app_settings.generate_figure_descriptions:
+        try:
+            from app.workers.tasks import generate_figure_descriptions
+            generate_figure_descriptions.delay(str(paper_id))  # type: ignore[attr-defined]
+            figure_indexing = True
+        except Exception:
+            logger.exception("could not dispatch figure indexing task after rechunk")
 
     counts: dict[str, int] = {}
     for c in chunks:
@@ -946,9 +949,9 @@ async def rechunk_paper(
         "glyphs_repaired": glyphs_repaired,
         "code_blocks_cropped": code_blocks_cropped,
         "message": (
-            "Re-chunked from cached extraction. Embeddings are regenerating in "
-            "the background; chat may be slow until they finish."
-            if reembedding
+            "Re-chunked from cached extraction. Indexes are regenerating in the "
+            "background; chat may be slow until they finish."
+            if reembedding or figure_indexing
             else "Re-chunked from cached extraction. Reopen the paper to read it."
         ),
     }

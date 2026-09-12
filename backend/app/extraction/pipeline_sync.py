@@ -476,15 +476,15 @@ def _finish_ingestion(
     session.commit()
     logger.info(f"Synchronously persisted {len(chunks)} chunks and {len(asset_payloads)} assets for document {document_id}")
 
-    # Step 5a: Fast profile — extraction IS the pipeline. Mark the document
-    # complete right here and dispatch nothing.
+    # Step 5a: Fast profile — extraction is the document pipeline. Mark the
+    # document complete right here, then optionally build the small,
+    # retrieval-only figure index in the background.
     #
     # ⚠ This is the ONE place other than generate_section_summaries that
     # sets status='complete'. That is deliberate and safe precisely because
-    # nothing is dispatched afterwards: there is no downstream task left to
-    # contradict it. Adding a dispatch to this branch without moving the
-    # completion would reintroduce the "UI says done while the worker is
-    # still running" bug.
+    # nothing required for document readiness is dispatched afterwards. The
+    # optional figure-only task does not change readiness; it only adds private
+    # descriptions and figure vectors later.
     if _is_fast_ingest(session, document_id):
         set_embedding_mode_sync(
             session, document_id, "skipped", "fast_ingest"
@@ -494,10 +494,19 @@ def _finish_ingestion(
         )
         update_job_status_sync(session, job_id, JobStatus.COMPLETE)
         session.commit()
+        if settings.generate_figure_descriptions:
+            try:
+                from app.workers.tasks import generate_figure_descriptions
+                generate_figure_descriptions.delay(str(document_id))  # type: ignore[attr-defined]
+            except Exception:
+                # The paper remains usable without the optional retrieval index.
+                logger.exception(
+                    f"[fast-ingest] Failed to dispatch figure description task for {document_id}"
+                )
         logger.info(
             f"[fast-ingest] Document {document_id} complete after extraction: "
             f"{len(chunks)} chunks, {len(asset_payloads)} assets, {page_count} pages "
-            "— no embeddings, no summaries, no figure descriptions"
+            "— whole-document embeddings skipped; figure descriptions/index dispatched"
         )
         return
 

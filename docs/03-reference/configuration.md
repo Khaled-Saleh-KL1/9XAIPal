@@ -104,8 +104,8 @@ Which pipeline a document takes after chunking. Detail:
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `INGEST_PROFILE` | `fast` | `fast` = a paper is complete once MinerU and the chunker have run: no embeddings, no section summaries, no VLM figure descriptions. `full` = the historical chain, still honouring `PAPER_ONLY_MODE` below. |
-| `VLM_MAX_CONCURRENCY` | `4` | Figure descriptions generated in parallel (`full` profile only). The calls are network I/O, so a small pool turns wall-clock from the sum of every figure into roughly the slowest one. `1` restores sequential. ⚠ Concurrent load on one inference endpoint: a hosted one may rate-limit. |
+| `INGEST_PROFILE` | `fast` | `fast` = a paper is complete once MinerU and the chunker have run: no whole-document embeddings or section summaries; figure-only retrieval indexing still runs when enabled. `full` = the historical chain, still honouring `PAPER_ONLY_MODE` below. |
+| `VLM_MAX_CONCURRENCY` | `4` | Figure descriptions generated in parallel. The calls are network I/O, so a small pool turns wall-clock from the sum of every figure into roughly the slowest one. `1` restores sequential. ⚠ Concurrent load on one inference endpoint: a hosted one may rate-limit. |
 
 ⚠ The profile applies **only to `doc_kind='paper'`**. A book always takes the full chain: it can
 neither be stuffed into a context window nor usefully full-text scanned, so it still needs vectors
@@ -113,8 +113,8 @@ to be answerable.
 
 ⚠ Under `fast`, `documents.embedding_mode` is recorded as `'skipped'` with reason `fast_ingest`,
 and the document reaches `status='complete'` inside `run_pipeline_sync` rather than at the end of
-the Celery chain. That is the one other place completion is set, and it is safe precisely because
-the fast path dispatches nothing afterwards
+the Celery chain. Optional figure descriptions and figure-only vectors are indexed afterward and
+do not delay readiness or change the reader payload
 ([`pipeline_sync.py`](../../backend/app/extraction/pipeline_sync.py)).
 
 ## Paper agent

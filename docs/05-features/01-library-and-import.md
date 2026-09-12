@@ -270,9 +270,10 @@ Cosine similarity below 0.3 is dropped (found empirically: below that it is "not
 more often than a real hit). The keyword filter still reaches everything below the line, so the
 threshold only trims the semantic side's tail.
 
-**Why.** Most documents are fast-ingested with **no chunk embeddings at all**, so there is nothing
-to reuse; one short embedding per document is cheap enough to piggyback on a search rather than
-add an ingestion step or a backfill job. `/papers/search` is registered before `/papers/{id}` so
+**Why.** Most documents are fast-ingested with **no whole-document chunk embeddings**; only the
+small figure-only index is built for image retrieval. There is nothing useful for library search to
+reuse, so one short embedding per document is cheap enough to piggyback on a search rather than
+add a full ingestion step or a backfill job. `/papers/search` is registered before `/papers/{id}` so
 the word "search" is never swallowed as a paper id.
 
 ---

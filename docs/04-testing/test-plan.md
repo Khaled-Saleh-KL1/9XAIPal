@@ -22,7 +22,7 @@ POSTGRES_DB=9xaipal_test pytest -v
 | File | Covers |
 | --- | --- |
 | [`test_chunk_sequence.py`](../../backend/tests/test_chunk_sequence.py) | Chunker sequence numbering + structural type detection |
-| [`test_ingestion_pipeline.py`](../../backend/tests/test_ingestion_pipeline.py) | End-to-end pipeline (extractor stub → chunks → assets); the fast/full profile split: a paper completes at chunking with nothing dispatched, a book still dispatches `embed_document` |
+| [`test_ingestion_pipeline.py`](../../backend/tests/test_ingestion_pipeline.py) | End-to-end pipeline (extractor stub → chunks → assets); the fast/full profile split: a paper is ready at chunking and dispatches only the optional figure index, while a book still dispatches `embed_document` |
 | [`test_vector_retrieval.py`](../../backend/tests/test_vector_retrieval.py) | `search_chunks` against pgvector with deterministic vectors |
 | [`test_provider_resolver.py`](../../backend/tests/test_provider_resolver.py) | Provider auto-detection, fallback order, namespace isolation, `NoLLMConfigured` |
 | [`test_subthread_conversations.py`](../../backend/tests/test_subthread_conversations.py) | Sub-thread trees via `parent_turn_id`, recursive history |

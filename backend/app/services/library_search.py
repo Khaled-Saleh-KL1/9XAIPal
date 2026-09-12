@@ -4,7 +4,7 @@ from app.services.retrieval (search *inside* an already-open document).
 
 A document's search_embedding (title + a short lead excerpt) is computed
 lazily, on its first appearance in a search, rather than at ingestion — most
-documents are fast-ingested with no chunk embeddings at all (see
+documents are fast-ingested with no whole-document chunk embeddings (see
 extraction/pipeline_sync.py::_is_fast_ingest), and this is cheap enough
 (one short embedding per document, not per chunk) that piggybacking on a
 search beats a separate backfill job or a new ingestion step.

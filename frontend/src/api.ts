@@ -1232,29 +1232,6 @@ export async function listPaperConversations(paperId: string): Promise<Conversat
   return body.conversations || [];
 }
 
-// ── Rich Figure Descriptions (from VLM at ingestion time) ───────────────────
-
-export interface FigureDescription {
-  id: string;
-  chunk_id: string;
-  image_path: string;
-  description_markdown: string;
-  description_plain: string;
-  source_sequence_start?: number;
-  model: string;
-  created_at: string;
-}
-
-export async function getFigureDescriptions(paperId: string): Promise<FigureDescription[]> {
-  const res = await fetch(`${BASE}/papers/${paperId}/figure-descriptions`);
-  if (!res.ok) {
-    if (res.status === 404) return [];
-    throw new Error(`Figure descriptions fetch failed: ${res.status}`);
-  }
-  const body = await res.json();
-  return body.descriptions || [];
-}
-
 export async function triggerReadingOrderReconstruction(paperId: string) {
   const res = await fetch(`${BASE}/papers/${paperId}/reconstruct-reading-order`, {
     method: 'POST',

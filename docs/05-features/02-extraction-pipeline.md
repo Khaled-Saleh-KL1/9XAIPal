@@ -197,15 +197,18 @@ routes a code-only change.
 ## 26. Fast vs full ingest profile
 
 **What it does.** `INGEST_PROFILE=fast` (default) + `doc_kind='paper'`: the document is
-**complete the moment chunking finishes** — no embeddings, no summaries, no VLM. `full`, or any
-book: the whole chain runs.
+**complete the moment chunking finishes** — no whole-document embeddings or summaries. When
+`GENERATE_FIGURE_DESCRIPTIONS=true`, a small background task still builds descriptions and
+figure-only vectors for image retrieval. `full`, or any book: the whole chain runs.
 
 **Where.** `pipeline_sync.py::_is_fast_ingest`, `config.py::ingest_profile`.
 
 **How it works.** On the fast path the pipeline sets `embedding_mode='skipped'` (reason
-`fast_ingest`), records `page_count`, marks document and job `complete`, and dispatches nothing.
-On the full chain the pipeline does **not** mark completion — `_mark_document_and_job_complete`
-at the end of `generate_section_summaries` does, the normal exit whenever anything is dispatched.
+`fast_ingest`), records `page_count`, marks document and job `complete`, and optionally dispatches
+the retrieval-only figure task. The task stores descriptions privately and embeds only figure
+chunks; it never changes the chunk text shown to the reader. On the full chain the pipeline does
+**not** mark completion — `_mark_document_and_job_complete` at the end of
+`generate_section_summaries` does, the normal exit whenever anything is dispatched.
 
 **Why.** Nothing should stand between dropping a PDF and reading it; everything the paper agent
 needs (feature 66) is derived at question time from the chunks. Marking complete before the chain
@@ -259,12 +262,14 @@ outline. Computed once at ingestion because it is minutes of model time per book
 ## 29. VLM figure descriptions
 
 **What it does.** For every `figure` chunk, a vision model writes a description (what the figure
-shows, axes, trends), stored in `figure_descriptions` and shown in the book reader's figure units
-and used as retrieval text.
+shows, axes, trends), stored privately in `figure_descriptions` and folded into that figure's
+embedding input. The description is retrieval metadata: it is not added to chunk text and is not
+shown in the frontend. When a user asks for a figure, semantic retrieval can use the description
+to select the original image, which the chat can embed in its answer.
 
 **Where.** [`extraction/vlm_client.py`](../../backend/app/extraction/vlm_client.py),
-`generate_section_summaries` (second half), `GET /papers/{id}/figure-descriptions`,
-`GENERATE_FIGURE_DESCRIPTIONS` (off on the live box — it is the slowest step), `VLM_MODEL`,
+`generate_section_summaries` (second half) or the fast-profile figure task,
+`GET /papers/{id}/figure-descriptions`, `GENERATE_FIGURE_DESCRIPTIONS`, `VLM_MODEL`,
 `VLM_MAX_CONCURRENCY`.
 
 **How it works.** The crop is base64-encoded into a multimodal chat request. `vlm_client` also
@@ -273,8 +278,9 @@ model for the page's blocks as JSON. Its prompt carries two rules learned from r
 blank ablation-table cells must be emitted as empty `<td></td>` (the model was shifting values
 into neighbouring columns), and long paragraphs must not be cut mid-sentence.
 
-**Why.** A figure's caption rarely says what the figure *shows*; the description is what lets
-"which figure compares latency?" find it.
+**Why.** A figure's caption rarely says what the figure *shows*; the private description is what
+lets "which figure compares latency?" find it, while the reader continues to see only the paper's
+own caption and image.
 
 ---
 
@@ -290,8 +296,9 @@ search plus stuffing the document into the context instead of pgvector.
 
 **Why.** The claim being tested: a paper that fits whole in a large-context model does not need
 retrieval. Off by default — only segment S1 (the skip) has landed; the doc's §12 says what must
-land before enabling it. Under the default fast profile the fast path returns before this is ever
-reached, so it matters for `INGEST_PROFILE=full` and never for books.
+land before enabling it. Under the default fast profile the whole-document skip happens before this
+gate, but the separate figure task still runs when enabled; this gate matters for
+`INGEST_PROFILE=full` and never skips books.
 
 ---
 

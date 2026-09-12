@@ -24,6 +24,7 @@ def get_chunks_without_embeddings_sync(
     limit: int | None = 20,
     *,
     include_existing: bool = False,
+    chunk_type: str | None = None,
 ) -> list[dict]:
     """Retrieve chunks that need embedding work synchronously.
 
@@ -35,15 +36,29 @@ def get_chunks_without_embeddings_sync(
     """
     limit_sql = "" if limit is None else "LIMIT :limit"
     missing_sql = "" if include_existing else "AND ce.chunk_id IS NULL"
+    type_sql = "" if chunk_type is None else "AND c.chunk_type = :chunk_type"
     result = session.execute(
         text(f"""
-            SELECT c.id, c.plain_text, c.chunk_type FROM chunks c
+            SELECT c.id, c.plain_text, c.chunk_type,
+                   fd.description_plain AS figure_description
+            FROM chunks c
             LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id
-            WHERE c.document_id = :document_id {missing_sql}
+            LEFT JOIN LATERAL (
+                SELECT description_plain
+                FROM figure_descriptions
+                WHERE chunk_id = c.id
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) fd ON TRUE
+            WHERE c.document_id = :document_id {missing_sql} {type_sql}
             ORDER BY c.sequence_id
             {limit_sql}
         """),
-        {"document_id": document_id, **({"limit": limit} if limit is not None else {})},
+        {
+            "document_id": document_id,
+            **({"limit": limit} if limit is not None else {}),
+            **({"chunk_type": chunk_type} if chunk_type is not None else {}),
+        },
     )
     return [dict(r) for r in result.mappings().all()]
 
@@ -58,6 +73,14 @@ def _embed_text_for_chunk(chunk: dict) -> str:
     txt = (chunk.get("plain_text") or "").strip()
     if not txt:
         txt = f"[{chunk.get('chunk_type') or 'content'}]"
+    # Figure descriptions are retrieval-only metadata. Keep them out of the
+    # chunk row (and therefore out of the reader/API), but include them in the
+    # figure's vector input so a question about what a diagram shows can find
+    # the original image.
+    if chunk.get("chunk_type") == "figure":
+        description = (chunk.get("figure_description") or "").strip()
+        if description:
+            txt = f"{txt}\n\nFigure description:\n{description}"
     return txt[:settings.embed_max_chars]
 
 
@@ -100,6 +123,7 @@ def embed_document_chunks_sync(
     batch_size: int = 20,
     *,
     force: bool = False,
+    chunk_type: str | None = None,
 ) -> int:
     """Generate embeddings for all un-embedded chunks of a document in committed batches.
 
@@ -128,7 +152,8 @@ def embed_document_chunks_sync(
     # would return the same rows forever after each upsert.
     forced_chunks = (
         get_chunks_without_embeddings_sync(
-            session, document_id, limit=None, include_existing=True
+            session, document_id, limit=None, include_existing=True,
+            chunk_type=chunk_type,
         )
         if force
         else None
@@ -138,7 +163,10 @@ def embed_document_chunks_sync(
             chunks = forced_chunks[: batch_size * workers]
             del forced_chunks[: len(chunks)]
         else:
-            chunks = get_chunks_without_embeddings_sync(session, document_id, limit=batch_size * workers)
+            chunks = get_chunks_without_embeddings_sync(
+                session, document_id, limit=batch_size * workers,
+                chunk_type=chunk_type,
+            )
         if not chunks:
             break
 

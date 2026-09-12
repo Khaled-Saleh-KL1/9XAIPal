@@ -24,8 +24,6 @@ import {
   getChunksRange,
   getChunkCount,
   getPaper,
-  getDocumentAssetUrl,
-  getFigureDescriptions,
   triggerReadingOrderReconstruction,
   reextractPaper,
   rechunkPaper,
@@ -33,7 +31,6 @@ import {
   getChapters,
   type ChunkData,
   type PaperMeta,
-  type FigureDescription,
   type Chapter,
 } from '../api';
 
@@ -148,9 +145,6 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
   const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
   const [, setParagraphIndexInCurrent] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  // Rich figure descriptions (generated at ingestion with VLM)
-  const [figureDescriptions, setFigureDescriptions] = useState<Record<string, FigureDescription>>({});
 
   // LLM-corrected reading order for two-column / complex papers
   const [readingOrder, setReadingOrder] = useState<number[] | null>(null);
@@ -573,20 +567,6 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
     // Otherwise we need to fetch the next raw chunk from the backend
     fetchAndAppend();
   }, [pendingUnits, loading, atEnd, fetchAndAppend]);
-
-  // Load rich figure descriptions (for beautiful architecture rendering)
-  useEffect(() => {
-    if (!meta || meta.status !== 'complete') return;
-    getFigureDescriptions(paperId)
-      .then((descs) => {
-        const map: Record<string, FigureDescription> = {};
-        for (const d of descs) {
-          map[d.chunk_id] = d;
-        }
-        setFigureDescriptions(map);
-      })
-      .catch(() => {});
-  }, [paperId, meta?.status]);
 
   // Linear papers: start (or restore) reading as soon as chunks exist, no need
   // to wait for "complete" (embeddings/summaries/figures keep running).
@@ -1045,8 +1025,6 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
                       key={`${unit.sourceChunkId}-${i}`}
                       unit={unit}
                       isLast={i === revealedUnits.length - 1}
-                      figureDescriptions={figureDescriptions}
-                      paperId={paperId}
                     />
                   ))}
                   {loading && (
@@ -1317,13 +1295,9 @@ function MathBlock({ wrapped, imageUrl }: { wrapped: string; imageUrl?: string }
 function GranularUnit({
   unit,
   isLast,
-  figureDescriptions = {},
-  paperId,
 }: {
   unit: RevealedUnit;
   isLast: boolean;
-  figureDescriptions?: Record<string, FigureDescription>;
-  paperId: string;
 }) {
   const baseClass = "transition-opacity duration-300";
   const lastClass = isLast ? "animate-[fadeIn_0.2s_ease]" : "";
@@ -1413,16 +1387,7 @@ function GranularUnit({
   }
 
   if (unit.kind === 'figure') {
-    const richDesc = figureDescriptions?.[unit.sourceChunkId];
-    // Fall back to the VLM description's image_path when chunk_assets didn't
-    // link the extracted image back to this chunk. image_path is stored
-    // relative to images/ (e.g. "<doc_id>/<uuid>.png") and served through
-    // the authenticated paper-asset endpoint.
-    const resolvedImageUrl =
-      unit.imageUrl ||
-      (richDesc?.image_path
-        ? getDocumentAssetUrl(paperId, richDesc.image_path)
-        : undefined);
+    const resolvedImageUrl = unit.imageUrl;
 
     return (
       <div className={`${baseClass} ${lastClass} my-6`}>
@@ -1449,17 +1414,7 @@ function GranularUnit({
             </div>
           )}
 
-          {/* Rich VLM description (high quality, generated at ingestion) */}
-          {richDesc?.description_markdown ? (
-            <div className="mt-4 w-full max-w-[72ch] text-[13.5px] leading-relaxed border-t pt-3" style={{ borderColor: 'var(--border)', color: 'var(--fg)' }}>
-              <div className="uppercase tracking-[1px] text-[10px] mb-1.5" style={{ color: 'var(--muted)' }}>
-                AI Description (from paper diagram)
-              </div>
-              <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MARKDOWN_COMPONENTS}>
-                {richDesc.description_markdown}
-              </ReactMarkdown>
-            </div>
-          ) : unit.caption ? (
+          {unit.caption ? (
             <div className="mt-2 text-[13.5px] italic text-center max-w-[72ch]" style={{ color: 'var(--fg-2)' }}>
               <InlineMd>{unit.caption}</InlineMd>
             </div>

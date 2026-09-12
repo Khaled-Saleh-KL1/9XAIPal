@@ -34,9 +34,9 @@ logger = get_logger(__name__)
 def _mark_document_and_job_complete(session, doc_uuid: UUID) -> None:
     """Mark the document complete and its latest job COMPLETE.
 
-    This is the single place "complete" is set, called only when the full
-    pipeline (extraction → chunking → embedding → summaries → figure
-    descriptions) has finished, so the UI's "complete" is truthful.
+    This is the full-pipeline completion helper. The fast path marks a paper
+    complete in extraction/pipeline_sync.py and may later add retrieval-only
+    figure metadata without changing the document's ready state.
     """
     update_document_status_sync(session, doc_uuid, "complete")
     job_row = session.execute(
@@ -292,8 +292,17 @@ def generate_section_summaries(self, document_id: str) -> dict:
                 try:
                     fig_result = generate_figure_descriptions_sync(session, doc_uuid)
                     result["figure_descriptions"] = fig_result
+                    # Descriptions are retrieval metadata, not reader content.
+                    # Re-embed only figure chunks after they exist so semantic
+                    # figure search can find the original image by what it
+                    # shows, without changing the chunk/API text.
+                    result["figure_embeddings"] = embed_document_chunks_sync(
+                        session, doc_uuid, force=True, chunk_type="figure"
+                    )
                 except Exception:
-                    logger.exception(f"[celery] Figure description generation failed for {document_id} (non-fatal)")
+                    logger.exception(
+                        f"[celery] Figure description/index generation failed for {document_id} (non-fatal)"
+                    )
                     session.rollback()
 
             # This is the true end of the pipeline — NOW the document is complete.
@@ -317,6 +326,40 @@ def generate_section_summaries(self, document_id: str) -> dict:
 
     logger.info(f"[celery] generate_section_summaries done document={document_id} created={result.get('created')}")
     return {"document_id": document_id, **result}
+
+
+@celery_app.task(
+    name="9xaipal.generate_figure_descriptions",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=30,
+    acks_late=True,
+)
+def generate_figure_descriptions(self, document_id: str) -> dict:
+    """Generate retrieval-only figure descriptions for the fast paper path.
+
+    Fast papers intentionally skip whole-document embeddings, but figure
+    questions still need a small semantic index. The descriptions stay in the
+    private figure_descriptions table and are folded only into figure vectors;
+    chunk text and frontend payloads remain unchanged.
+    """
+    logger.info(f"[celery] generate_figure_descriptions start document={document_id}")
+    sync_engine.dispose()
+    doc_uuid = UUID(document_id)
+    try:
+        with sync_session() as session:
+            result = generate_figure_descriptions_sync(session, doc_uuid)
+            embedded = embed_document_chunks_sync(
+                session, doc_uuid, force=True, chunk_type="figure"
+            )
+            result["figure_embeddings"] = embedded
+            return {"document_id": document_id, **result}
+    except Exception as exc:
+        logger.exception(f"[celery] generate_figure_descriptions failed for {document_id}: {exc}")
+        try:
+            raise self.retry(exc=exc)
+        except MaxRetriesExceededError:
+            return {"document_id": document_id, "status": "failed", "error": str(exc)}
 
 
 # ── LLM Reading Order Reconstruction (for two-column / complex papers) ───────
