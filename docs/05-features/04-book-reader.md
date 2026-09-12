@@ -1,9 +1,9 @@
-# Area 4 — The book reader (features 59–65)
+# Area 4 — The book reader (features 59–65, 111)
 
 > Part of the [feature catalogue](README.md). Companion:
 > [frontend.md § BookReadingView / ChatPane](../02-architecture/frontend.md).
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-09-12 (`main`, 4a95536 + book-notes).
 
 [`BookReadingView.tsx`](../../frontend/src/views/BookReadingView.tsx) is the original reader,
 preserved for `doc_kind='book'`: a chapter is revealed one small unit at a time, with
@@ -165,3 +165,44 @@ effect (which deliberately skips while a jump is pending — firing both would r
 starts there. `handledJumpRef` stops the effect re-firing for the same jump when its own
 `setChapters` changes a dependency. A navigation generation counter in `App.tsx` stops an
 in-flight open from landing on top of a paper clicked afterwards.
+
+---
+
+## 111. Notes as movable icons
+
+**What it does.** The reader's own notes on a book. **+ Note** (top-left of the page) opens a
+box anchored at the block currently revealed; save, and the note **minimises to a small note
+icon** that can be dragged anywhere over the page. Click the icon to reopen it, edit it (saved on
+blur or ⌘/Ctrl+Enter), **Go to passage** to reopen the book where it was written, delete it.
+**Drop one icon onto another and they become one icon holding both** — a stack with a count
+badge, ‹ › to switch between the notes inside, and *Take out* to un-stack one. Escape or the –
+button minimises whatever is open.
+
+**Where.** [`views/BookNotes.tsx`](../../frontend/src/views/BookNotes.tsx) (rendered by
+`BookReadingView` over the book pane), [`lib/decks.ts`](../../frontend/src/lib/decks.ts)
+(`stackDecks` / `pruneDecks`, moved out of `ArticleReader` so both readers share the one stacking
+rule), `BookReadingView::jumpToSeq` (shared by the desk's jump-to-sequence and *Go to passage*),
+the existing `personal_notes` / `note_decks` rows and `GET /papers/{id}/personal`,
+`POST/PATCH/DELETE …/personal-notes`, `PUT …/decks`.
+
+**Why icons, not a margin.** The paper reader has a gutter beside the text and its notes live
+there as open cards. The book reader has none: the book takes the left pane, the chat the right,
+and a column of open cards would cost exactly the width the book needs. An icon is the whole card
+folded to 34 px; a stack is N cards folded to one.
+
+**How it works.** Nothing new in the backend: a book note *is* a personal note (`anchor_sequence_id`
+= the last revealed block, `anchor_quote` = its first words) and a stack *is* a deck — the same
+tables, endpoints and `stackDecks` transformation as the paper margin, so a note written in either
+reader is one row and one rule. What differs is presentation and persistence of *where*: the
+icon's spot on the page is a per-device convenience in `localStorage` (`pal:booknotes:<id>:pos`
+— a tablet and a monitor have different pages), while the side it was left on travels via
+`margin_side` so a fresh device puts it on the same edge; a freshly made stack inherits the spot
+of the icon it was dropped on. Drag vs click is a 4 px threshold on pointer events (touch-safe:
+`touch-action: none`); the drop target is hit-tested against the other icons' rectangles and
+highlighted while hovering. The overlay is `pointer-events: none` with solid children, so the
+book underneath keeps receiving clicks and keys.
+
+**See it / verify.** Real Chromium against a throwaway stack (`scratchpad/pw/booknotes*.mjs`):
+two notes → two icons; drag one onto the other → one icon, badge 2, ‹ › switches bodies; reload →
+stack, position and both notes come back from the API; take out → two icons; go to passage from
+the chapter list → the book opens at chapter 3.2 at the anchored block; delete → confirmed, gone.

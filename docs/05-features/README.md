@@ -26,7 +26,7 @@
 | Library & getting documents in | [01-library-and-import.md](01-library-and-import.md) | 1–18, 109 |
 | The extraction pipeline | [02-extraction-pipeline.md](02-extraction-pipeline.md) | 19–32 |
 | The paper / article reader | [03-paper-reader.md](03-paper-reader.md) | 33–58 |
-| The book reader | [04-book-reader.md](04-book-reader.md) | 59–65 |
+| The book reader | [04-book-reader.md](04-book-reader.md) | 59–65, 111 |
 | Asking: the AI answering paths | [05-asking.md](05-asking.md) | 66–75, 108 |
 | The desk: studies, cross-paper chat, notes | [06-desk.md](06-desk.md) | 76–85, 110 |
 | Accounts, safety, capacity | [07-accounts-and-safety.md](07-accounts-and-safety.md) | 86–94 |
@@ -147,6 +147,7 @@
 | 108 | Cross-session memory about the reader | [asking](05-asking.md#108-cross-session-memory-about-the-reader) |
 | 109 | Done Reading: a second shelf, with folders | [library and import](01-library-and-import.md#109-done-reading-a-second-shelf-with-folders) |
 | 110 | Shelved paper lists: the rail and the picker as a file tree | [desk](06-desk.md#110-shelved-paper-lists-the-rail-and-the-picker-as-a-file-tree) |
+| 111 | Notes as movable icons (book reader) | [book reader](04-book-reader.md#111-notes-as-movable-icons) |
 
 ## How each entry is written
 

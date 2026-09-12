@@ -16,6 +16,7 @@ import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { ChatPane } from './ChatPane';
+import { BookNotes } from './BookNotes';
 import { PageMapProvider, useFetchedPageMap } from '../lib/pageMap';
 import {
   getNextChunk,
@@ -608,25 +609,43 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
   // its own deps, so without the ref it would re-fire and double-call
   // startReading for the same jump before onJumped ever clears the prop.
   const handledJumpRef = useRef<number | null>(null);
+  /** Open the book at a sequence: find its chapter, save that as the position,
+   *  start reading there. Shared by the jumpToSequence prop and by a note's
+   *  "Go to passage" (BookNotes). */
+  const jumpToSeq = useCallback(
+    (seq: number, alive: () => boolean = () => true): Promise<void> => {
+      const chaptersPromise = chapters.length > 0
+        ? Promise.resolve(chapters)
+        : getChapters(paperId).then(({ chapters: chs }) => { if (alive()) setChapters(chs); return chs; });
+      return chaptersPromise
+        .then((chs) => {
+          if (!alive()) return;
+          const target = chs.find((c) => seq >= c.start_sequence && seq <= c.end_sequence) ?? null;
+          saveProgress(target?.index ?? null, seq);
+          return startReading(target);
+        })
+        .catch(() => {});
+    },
+    [chapters, paperId, saveProgress, startReading],
+  );
   useEffect(() => {
     if (jumpToSequence == null) { handledJumpRef.current = null; return; }
     if (!isBook || handledJumpRef.current === jumpToSequence) return;
     handledJumpRef.current = jumpToSequence;
     let alive = true;
-    const chaptersPromise = chapters.length > 0
-      ? Promise.resolve(chapters)
-      : getChapters(paperId).then(({ chapters: chs }) => { if (alive) setChapters(chs); return chs; });
-    chaptersPromise
-      .then((chs) => {
-        if (!alive) return;
-        const target = chs.find((c) => jumpToSequence >= c.start_sequence && jumpToSequence <= c.end_sequence) ?? null;
-        saveProgress(target?.index ?? null, jumpToSequence);
-        return startReading(target);
-      })
-      .catch(() => {})
-      .then(() => { if (alive) onJumped?.(); });
+    jumpToSeq(jumpToSequence, () => alive).then(() => { if (alive) onJumped?.(); });
     return () => { alive = false; };
-  }, [isBook, jumpToSequence, chapters, paperId, saveProgress, startReading, onJumped]);
+  }, [isBook, jumpToSequence, jumpToSeq, onJumped]);
+
+  // What a new note anchors to: the block revealed last, and its first words.
+  const currentQuote = useMemo(() => {
+    for (let i = revealedUnits.length - 1; i >= 0; i--) {
+      const u = revealedUnits[i];
+      if (u.kind === 'paragraph' || u.kind === 'heading' || u.kind === 'footnote') return u.text;
+      if (u.kind === 'figure' && u.caption) return u.caption;
+    }
+    return null;
+  }, [revealedUnits]);
 
   // Legacy alias kept for minimal breakage
   const revealNext = revealNextUnit;
@@ -1117,6 +1136,17 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
                 </>
               )}
             </div>
+          )}
+
+          {/* The reader's own notes, as movable icons over the page — see
+              BookNotes for why icons and not a margin here. */}
+          {isBook && (
+            <BookNotes
+              paperId={paperId}
+              currentSeq={maxRevealedSeq}
+              currentQuote={currentQuote}
+              onJump={(seq) => void jumpToSeq(seq)}
+            />
           )}
 
           {/* keyboard reveal cue: only when there's something to reveal */}
