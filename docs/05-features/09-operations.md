@@ -105,6 +105,16 @@ nothing because the host config is hand-installed, and produces a notice instead
 skipped when the lockfile hash matches the last install. Before this, every merge — a README fix
 included — cost five and a half minutes and a short API outage.
 
+**The cleanup step, and the trap in it.** After every deploy the workflow prunes dangling images,
+week-old build cache and this project's dead containers/volumes (label-filtered: the box also
+runs an unrelated `lcms` stack). ⚠ Until 2026-09-12 that step ran `docker builder prune -f`,
+which under the containerd image store reclaims the just-built images' step records — so every
+backend deploy was a cold rebuild (apt-get + uv sync + MinerU models + 130–175 s exporting the
+9 GB worker image ≈ 5 min) whatever had changed; a fully cached api rebuild is 0.6 s. The prune
+now keeps anything used within a week and never touches the uv cache mount. The daemon's own GC
+also caps cache mounts at ~1.3 GiB by default, below the worker's ~1.7 GB uv cache — a
+`daemon.json` change, see `DEPLOYMENT-PRODUCTION.md` §9.
+
 ---
 
 ## 105. nginx same-origin serving
