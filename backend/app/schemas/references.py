@@ -21,6 +21,14 @@ class ReferenceEntry(BaseModel):
     # Present only once resolved; the /add endpoint re-validates this
     # server-side rather than trusting whatever URL a client might send.
     resolved_pdf_url: Optional[str] = None
+    # For the reader's own follow-up when the resolver cannot finish the job:
+    # `search_query` is the title (resolved, or the resolver's own guess) to
+    # paste into a search — never the whole citation string; `s2_url` /
+    # `arxiv_url` are the landing pages when the match exists but has no
+    # fetchable PDF.
+    search_query: Optional[str] = None
+    s2_url: Optional[str] = None
+    arxiv_url: Optional[str] = None
     already_in_library: bool = False
     # Set only when already_in_library — lets the frontend link straight to
     # the existing copy instead of offering "Add" again.

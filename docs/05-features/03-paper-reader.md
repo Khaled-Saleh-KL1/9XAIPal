@@ -360,6 +360,16 @@ Adding calls `POST /add` directly and polls `getPaperProgress` inline — not Ap
 import overlay, which is right for "import what I'm about to read" and wrong for "queue this cited
 paper while I keep reading". The PDF URL is read from the row, never trusted from the client.
 
+⚠ **Where the PDF comes from (2026-09-12).** Semantic Scholar's `openAccessPdf` is empty for most
+arXiv papers — the first three live resolves all matched cleanly and all had `{"url": ""}`, so
+"Add to library" refused every one ("no resolved, fetchable PDF"). The arXiv id in `externalIds`
+*is* the PDF: `_to_match` now uses `arxiv.org/pdf/<id>` when S2 has no link of its own, a
+migration filled it in for already-resolved rows, and the Add button is only shown when a PDF URL
+exists — a match with none says so and links its Semantic Scholar page instead. The manual-search
+fallback for `no_match` used to search Semantic Scholar's site for the **whole citation string**,
+which answers "No Papers Found"; it now searches Google Scholar and Semantic Scholar for the
+**title** (`search_query`: the resolved title, else the resolver's own `title_candidates` guess).
+
 **Why whole-bracket.** A bracket with one unrecognised number stays plain text — a half-clickable
 control is worse than an inert one — and no heuristic beyond "is this number a real reference"
 ever mistakes an index or footnote marker for a citation.

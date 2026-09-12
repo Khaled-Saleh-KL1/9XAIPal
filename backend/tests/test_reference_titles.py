@@ -65,3 +65,59 @@ def test_empty_and_limit():
     assert title_candidates("   ") == []
     many = "A Author. First segment here. Second segment here. Third segment here. 2020."
     assert len(title_candidates(many, limit=2)) == 2
+
+
+# ── What a Semantic Scholar hit turns into ──────────────────────────────────
+# Verified 2026-09-12 on the live box: every arXiv paper the resolver matched
+# came back with `openAccessPdf: null`, so nothing was addable. The arXiv id
+# is the PDF.
+
+def test_arxiv_hit_without_open_access_pdf_still_yields_a_pdf_url():
+    from app.search.semantic_scholar_client import _to_match
+    m = _to_match({
+        "paperId": "abc123",
+        "title": "MoCa: Modality-aware Continual Pre-training",
+        "authors": [{"name": "Haonan Chen"}, {"name": "Hong Liu"}],
+        "year": 2025,
+        "externalIds": {"ArXiv": "2506.23115", "DOI": "10.48550/arXiv.2506.23115"},
+        "openAccessPdf": None,
+    })
+    assert m.pdf_url == "https://arxiv.org/pdf/2506.23115"
+    assert m.arxiv_id == "2506.23115"
+    assert m.s2_paper_id == "abc123"
+    assert m.authors == "Haonan Chen, Hong Liu"
+
+
+def test_semantic_scholars_own_pdf_link_wins_over_arxiv():
+    from app.search.semantic_scholar_client import _to_match
+    m = _to_match({
+        "title": "x", "externalIds": {"ArXiv": "1.2"},
+        "openAccessPdf": {"url": "https://aclanthology.org/x.pdf"},
+    })
+    assert m.pdf_url == "https://aclanthology.org/x.pdf"
+
+
+def test_no_identifier_means_no_pdf():
+    from app.search.semantic_scholar_client import _to_match
+    m = _to_match({"title": "x", "externalIds": {"DOI": "10.1/x"}, "openAccessPdf": None})
+    assert m.pdf_url is None and m.s2_paper_id is None
+
+
+def test_entry_search_query_is_a_title_not_the_whole_citation():
+    from app.api.v1.endpoints.chunks import _entry_out
+    raw = ("Haonan Chen, Hong Liu, Yuping Luo, Liang Wang, Nan Yang, Furu Wei, and Zhicheng Dou. "
+           "MoCa: Modality-aware continual pre-training makes better bidirectional multimodal embeddings. "
+           "arXiv preprint arXiv:2506.23115, 2025.")
+    base = {"ref_number": 21, "raw_text": raw, "added_document_id": None}
+    unresolved = _entry_out({**base, "resolve_status": "no_match", "external_ids": None})
+    assert unresolved.search_query.startswith("MoCa: Modality-aware")
+    assert "Haonan Chen" not in unresolved.search_query
+    assert unresolved.s2_url is None and unresolved.arxiv_url is None
+
+    resolved = _entry_out({
+        **base, "resolve_status": "resolved", "resolved_title": "MoCa: Modality-aware Continual Pre-training",
+        "external_ids": '{"arxiv": "2506.23115", "s2": "abc123"}',
+    })
+    assert resolved.search_query == "MoCa: Modality-aware Continual Pre-training"
+    assert resolved.s2_url == "https://www.semanticscholar.org/paper/abc123"
+    assert resolved.arxiv_url == "https://arxiv.org/abs/2506.23115"

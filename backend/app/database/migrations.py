@@ -204,6 +204,14 @@ async def _ensure_recent_columns() -> None:
         # book/article flipped open while the switch still existed is put
         # back. Idempotent: matches nothing once applied.
         "UPDATE documents SET strict_scope = TRUE WHERE doc_kind IN ('book', 'article') AND strict_scope = FALSE",
+        # References resolved before 2026-09-12 stored no PDF when Semantic
+        # Scholar's openAccessPdf was null, although their arXiv id is one —
+        # see semantic_scholar_client._to_match. Fill the link in once so
+        # "Add to library" works on them without a re-resolve. Idempotent.
+        """UPDATE paper_references
+           SET resolved_pdf_url = 'https://arxiv.org/pdf/' || (external_ids->>'arxiv')
+           WHERE resolve_status = 'resolved' AND resolved_pdf_url IS NULL
+             AND COALESCE(external_ids->>'arxiv', '') <> ''""",
         # The library's "Done reading" shelf and its folders — see the columns'
         # own comments in schema.sql.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ",

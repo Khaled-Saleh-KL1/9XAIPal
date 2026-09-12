@@ -586,6 +586,12 @@ Title. Venue, year.") 404s, so the title is guessed out of the entry first
 (`services/references.py::title_candidates`, up to two guesses, one call each). Before that every
 citation in the corpus was cached as a permanent `no_match`.
 
+Each entry also carries `search_query` (the title to search for by hand — resolved title, else the
+resolver's own guess, never the whole citation), and once resolved `s2_url` / `arxiv_url` (landing
+pages). `resolved_pdf_url` is Semantic Scholar's open-access link, or `arxiv.org/pdf/<id>` when S2
+has none but the match has an arXiv id — which is most arXiv papers; without this, "Add to
+library" had nothing to fetch for any of them.
+
 ### `GET /papers/{paper_id}/references/{ref_number}/resolve/stream`
 
 The same lookup as an SSE stream — what the citation chip actually calls. The box is allowed one
