@@ -21,8 +21,12 @@ depth, figures, math, tables — in the middle of a **three-column grid: margin 
 `index.css` (`.article-*`).
 
 **How it works.** Both margins are real grid columns whether or not they hold a card. Three tiers
-by viewport width: `both` (≥ 1560 px), `right-only` (≥ 1180 px, left column present but empty so
-centring holds), `inline` (below that, cards fall into normal flow under the article). Every block
+by viewport width: `both` (≥ 1280 px; each gutter up to 360 px, shrinking to what is left — about
+240 px at 1280), `right-only` (≥ 1180 px, left column present but empty so centring holds),
+`inline` (below that, cards fall into normal flow under the article). ⚠ `both` began at 1560 px
+until 2026-09-12 — two fixed 360 px gutters — which on every ordinary laptop (1280–1536 wide)
+meant no left margin at all and no ← / → "move to the other margin" button on any card: "I can't
+move notes to the left". The gutters are fluid now, so the threshold could come down. Every block
 carries `data-seq` and `data-chunk-id` — that is how a selection is traced back to a chunk and how
 a card finds the element to sit beside.
 
@@ -496,32 +500,30 @@ own kind of fabrication; a judge failure degrades to "Couldn't verify", never a 
 
 ---
 
-## 52. Strict-scope toggle (research papers only)
+## 52. Document scope: always scoped, no switch
 
-**What it does.** The **Scoped / Open** pill in a research paper's header: whether this paper's
-own chat may answer from outside what the paper says. Not to be confused with **Whole / Stepped**
-beside it (feature 36, the stepped-reading mode — how the text is revealed, nothing to do with the AI).
+**What it does.** The assistant answering inside a reader is scoped to the document — the whole
+of it in **Whole** mode, only what has been revealed in **Stepped** mode (feature 36; the ask
+carries `max_sequence_id`, and the book reader the same via `maxSequenceId`) — and reaches for
+general knowledge or the web only when the *reader's* question asks for it: an explicit "search the
+web for…", or a comparison against something outside the document. That is the user asking, not
+the model wandering.
 
-**Where.** [`components/StrictScopeToggle.tsx`](../../frontend/src/components/StrictScopeToggle.tsx),
-rendered by `ArticleReader.tsx` for `doc_kind = paper` only; `PATCH /papers/{id}/strict-scope`
-(409 for a book or an article), `documents.strict_scope`, a migration that resets any
-book/article flipped open before the switch was removed.
+**Where.** `documents.strict_scope` (always `TRUE`), `chat/orchestrator.py::
+_resolve_strict_scope_decision`, `endpoints/notes.py::_allow_web_for_note`,
+`chat/agent_tools.py::wants_outside_context`; the reveal ceiling in `ArticleReader.tsx`
+(`askCeilingRef`) and `BookReadingView.tsx`.
 
-**Since 2026-09-12: papers only.** Books and articles had the pill too; the reader's call was that
-a book's chat and an article's chat are always scoped to the document, so the pill is gone from
-both readers and the backend refuses to change the flag for them — the UI gate is convenience, the
-refusal is the policy, so nothing can flip a book open behind the UI's back.
+**History (2026-09-12).** There used to be a **Scoped / Open** pill beside Whole / Stepped that could
+flip one document to fully open behaviour. It was removed the same day it was narrowed to research
+papers, on the reader's call that the one control already says everything: Whole = the assistant
+sees the whole paper, Stepped = what has been revealed, the web when a question asks for it. The
+`PATCH /strict-scope` endpoint went with it (nothing can write `FALSE` any more; a migration reset
+any row that had been flipped), the column stays because the policy reads it, and older clients
+still receive `strict_scope: true` on the document.
 
-**How it works.** `TRUE` (default): the assistant stays scoped — it will not silently reach for
-general knowledge or the web because retrieval came up empty. It still can when the *reader's*
-question calls for it: an explicit "search the web for…" or a comparison against something outside
-the document, because that is the user asking, not the model wandering. `FALSE` restores fully open
-behaviour for that one document permanently, rather than relying on catching that phrasing each
-time. The toggle is fetch → optimistic flip → revert on failure.
-
-**Why per document.** Not per user or global: the desk is unaffected either way — reaching across
-every paper in a study is its purpose, not a leak to plug. Shared component rather than two copies
-so "scoped" cannot quietly acquire two definitions.
+**Why per document, still.** The desk is unaffected either way — reaching across every paper in a
+study is its purpose, not a leak to plug.
 
 ---
 
@@ -567,8 +569,9 @@ no diagram, so it is imported lazily on first use.
 
 ## 56. Responsive tiers
 
-**What it does.** Three layouts by width — both margins ≥ 1560 px, right-only ≥ 1180 px, inline
-below; header controls overflow into a horizontal swipe on phones rather than a silent clip.
+**What it does.** Three layouts by width — both margins ≥ 1280 px (fluid gutters, see feature 33),
+right-only ≥ 1180 px, inline below; header controls overflow into a horizontal swipe on phones
+rather than a silent clip.
 
 **Why.** ⚠ Layout regressions here have been WebKit-only twice (multi-column fragmentation of
 notes on the desk wall, `inline-block` not enough in Safari). The doc's standing rule: check

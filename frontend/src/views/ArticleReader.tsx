@@ -8,7 +8,6 @@ import { bestMatchIndex, makeAnchor } from '../lib/textAnchor';
 import { lastReadSequence, saveReadingPosition, shouldRestorePosition } from '../lib/readingPosition';
 import { ArticleBlock } from './ArticleBlock';
 import { ExtractorPill } from './BookReadingView';
-import { StrictScopeToggle } from '../components/StrictScopeToggle';
 import { AskComposer, type ComposerTarget } from './AskComposer';
 import { NoteCardView, PendingNoteCard, type NoteGroup, type PendingNote } from './NoteCard';
 import {
@@ -98,8 +97,17 @@ import {
 const NOTE_GAP = 16;
 /** Below this, neither margin fits: notes fall back to inline cards. */
 const GUTTER_MIN_WIDTH = 1180;
-/** Below this, only one margin fits, so every card goes right. */
-const BOTH_GUTTERS_MIN_WIDTH = 1560;
+/**
+ * Below this, only one margin fits, so every card goes right.
+ *
+ * ⚠ Was 1560 — wide enough for two fixed 360 px gutters — which meant on
+ * every ordinary laptop (1280–1536 wide) the ← / → "move to the other
+ * margin" buttons never appeared and the left gutter sat empty as a spacer:
+ * "I can't move notes to the left" (2026-09-12). Two gutters of ~240 px
+ * are a better use of that width than one of 320 and a blank; the CSS lets
+ * the gutters shrink from 360 px to what is left (.layout-both).
+ */
+const BOTH_GUTTERS_MIN_WIDTH = 1280;
 
 type Layout = 'inline' | 'right-only' | 'both';
 
@@ -2205,18 +2213,12 @@ export function ArticleReader({
             </button>
           )}
 
-          {/* Research papers only. An article is a web page: its chat stays
-              scoped to what the page says, and the reader asked for no switch
-              there; books likewise (BookReadingView has none). The backend
-              refuses the PATCH for both, so this gate is UI, not policy. */}
-          {doc && (doc.doc_kind ?? 'paper') === 'paper' && (
-            <StrictScopeToggle
-              paperId={paperId}
-              strictScope={doc.strict_scope ?? true}
-              onChange={(next) => setDoc((d) => (d ? { ...d, strict_scope: next } : d))}
-            />
-          )}
-
+          {/* No Scoped/Open switch here any more (2026-09-12): the assistant
+              is always scoped to the document — the whole of it in Whole
+              mode, what has been revealed in Stepped mode (askCeilingRef) —
+              and reaches for the web only when the question asks for it.
+              One control, Whole / Stepped, says everything the reader wanted
+              to say. */}
           {/* Papers only — see RevealModeToggle's own note for why not books
               (they already read this way) or articles (a web snapshot). */}
           {revealable && (

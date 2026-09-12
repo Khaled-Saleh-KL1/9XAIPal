@@ -1445,8 +1445,19 @@ body {
   gap: 0 26px;
   justify-content: stretch;
 }
+/* Two gutters from 1280 px up: each takes up to 360 px and shrinks to what
+   is left below that (about 240 px at 1280), the article column never
+   moves. Cards get narrower rather than the text; see BOTH_GUTTERS_MIN_WIDTH
+   in ArticleReader.tsx for why the threshold is where it is. */
 .reader-layout.layout-both {
-  grid-template-columns: 360px 680px 360px;
+  grid-template-columns: minmax(0, 360px) 680px minmax(0, 360px);
+  justify-content: stretch;
+}
+@media (min-width: 1560px) {
+  .reader-layout.layout-both { justify-content: center; }
+}
+@media (max-width: 1559px) {
+  .reader-layout.layout-both { gap: 0 26px; }
 }
 .reader-article { position: relative; min-width: 0; }
 

@@ -36,9 +36,10 @@ class DocumentResponse(BaseModel):
     raw_snapshot_status: Optional[str] = None
     raw_page_count: Optional[int] = None
     # Whether this document's own reading chat may answer from outside what
-    # it itself says (see the column's own comment in schema.sql). Defaults
-    # True; irrelevant to the Desk, which spans every paper in a study by
-    # design.
+    # it itself says (see the column's own comment in schema.sql). Always
+    # True since 2026-09-12 — the reader's switch is gone, the policy stays;
+    # still returned so older clients keep working. Irrelevant to the Desk,
+    # which spans every paper in a study by design.
     strict_scope: bool = True
     # "Done reading": set = shelved in the library's Done area (optionally in
     # a folder), None = still on the reading shelf. See schema.sql.
@@ -54,10 +55,6 @@ class DocumentListResponse(BaseModel):
 class RenameDocumentRequest(BaseModel):
     # None or blank clears the override and restores the filename.
     title: Optional[str] = None
-
-
-class SetStrictScopeRequest(BaseModel):
-    strict_scope: bool
 
 
 class SetDoneRequest(BaseModel):

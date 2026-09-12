@@ -88,7 +88,7 @@
 | 49 | Citation chips with page numbers | [paper reader](03-paper-reader.md#49-citation-chips-with-page-numbers) |
 | 50 | The agent trail | [paper reader](03-paper-reader.md#50-the-agent-trail) |
 | 51 | The evidence panel | [paper reader](03-paper-reader.md#51-the-evidence-panel) |
-| 52 | Strict-scope toggle | [paper reader](03-paper-reader.md#52-strict-scope-toggle) |
+| 52 | Document scope: always scoped, no switch | [paper reader](03-paper-reader.md#52-document-scope-always-scoped-no-switch) |
 | 53 | Per-note model picker | [paper reader](03-paper-reader.md#53-per-note-model-picker) |
 | 54 | Image lightbox | [paper reader](03-paper-reader.md#54-image-lightbox) |
 | 55 | Mermaid diagrams in answers | [paper reader](03-paper-reader.md#55-mermaid-diagrams-in-answers) |

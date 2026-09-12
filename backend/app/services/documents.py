@@ -93,14 +93,6 @@ async def rename_done_folder(
     )
 
 
-async def set_document_strict_scope(
-    session: AsyncSession, document_id: UUID, user_id: UUID, strict_scope: bool
-) -> Optional[dict]:
-    """Set the strict-scope flag and return the document's fresh row, or None
-    if it is gone (or not owned)."""
-    if not await doc_repo.set_document_strict_scope(session, document_id, user_id, strict_scope):
-        return None
-    return await doc_repo.get_document(session, document_id, user_id)
 
 
 async def delete_document(session: AsyncSession, document_id: UUID, user_id: UUID) -> Optional[dict]:
