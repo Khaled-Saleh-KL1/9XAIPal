@@ -332,3 +332,30 @@ async def test_the_endpoint_404s_for_someone_elses_document(client, db_session):
         f"/api/v1/papers/{doc_id}/strict-scope", json={"strict_scope": False}
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("kind", ["book", "article"])
+@pytest.mark.asyncio
+async def test_books_and_articles_have_no_scope_switch(client, db_session, kind):
+    """Research papers only: the flag on a book/article is refused (409) and
+    stays TRUE — a book must never silently answer from the web."""
+    signup = await client.post(
+        "/api/v1/auth/signup",
+        json={"email": f"{uuid4()}@example.com", "password": "correct horse battery"},
+    )
+    assert signup.status_code == 201
+    user_id = signup.json()["id"]
+    doc_id = await _make_doc(db_session, user_id)
+    await db_session.execute(
+        text("UPDATE documents SET doc_kind = :k WHERE id = :id"), {"k": kind, "id": doc_id}
+    )
+    await db_session.commit()
+
+    resp = await client.patch(
+        f"/api/v1/papers/{doc_id}/strict-scope", json={"strict_scope": False}
+    )
+    assert resp.status_code == 409
+    row = await db_session.execute(
+        text("SELECT strict_scope FROM documents WHERE id = :id"), {"id": doc_id}
+    )
+    assert row.scalar_one() is True

@@ -658,6 +658,18 @@ async def set_strict_scope(
     False restores the old, fully open behavior permanently for this one
     document. Never affects the Desk, which is intentionally cross-paper.
     """
+    # Research papers only. A book's chat and an article's chat are always
+    # scoped to the document (the reader's call, 2026-09-12); the switch is
+    # not shown for them and the flag must not be flippable behind the UI's
+    # back either, or a book could silently be answering from the web.
+    existing = await doc_service.get_document(db, paper_id, current_user["id"])
+    if not existing:
+        raise DocumentNotFound(str(paper_id))
+    if (existing.get("doc_kind") or "paper") != "paper":
+        raise HTTPException(
+            status_code=409,
+            detail="Only research papers have a scope switch; books and articles are always scoped.",
+        )
     doc = await doc_service.set_document_strict_scope(
         db, paper_id, current_user["id"], payload.strict_scope
     )

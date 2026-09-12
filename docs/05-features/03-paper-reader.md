@@ -468,13 +468,21 @@ own kind of fabrication; a judge failure degrades to "Couldn't verify", never a 
 
 ---
 
-## 52. Strict-scope toggle
+## 52. Strict-scope toggle (research papers only)
 
-**What it does.** A header pill per document: whether this document's own chat may answer from
-outside what the document says.
+**What it does.** The **Scoped / Open** pill in a research paper's header: whether this paper's
+own chat may answer from outside what the paper says. Not to be confused with **Whole / Stepped**
+beside it (feature 36, the stepped-reading mode — how the text is revealed, nothing to do with the AI).
 
-**Where.** [`components/StrictScopeToggle.tsx`](../../frontend/src/components/StrictScopeToggle.tsx)
-(shared by both readers), `PATCH /papers/{id}/strict-scope`, `documents.strict_scope`.
+**Where.** [`components/StrictScopeToggle.tsx`](../../frontend/src/components/StrictScopeToggle.tsx),
+rendered by `ArticleReader.tsx` for `doc_kind = paper` only; `PATCH /papers/{id}/strict-scope`
+(409 for a book or an article), `documents.strict_scope`, a migration that resets any
+book/article flipped open before the switch was removed.
+
+**Since 2026-09-12: papers only.** Books and articles had the pill too; the reader's call was that
+a book's chat and an article's chat are always scoped to the document, so the pill is gone from
+both readers and the backend refuses to change the flag for them — the UI gate is convenience, the
+refusal is the policy, so nothing can flip a book open behind the UI's back.
 
 **How it works.** `TRUE` (default): the assistant stays scoped — it will not silently reach for
 general knowledge or the web because retrieval came up empty. It still can when the *reader's*
