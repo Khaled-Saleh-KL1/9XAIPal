@@ -5,7 +5,29 @@ from unittest.mock import patch, MagicMock
 from sqlalchemy import text
 from app.core.config import settings
 from app.extraction.chunker import create_chunks_from_markdown
-from app.embeddings.service_sync import embed_document_chunks_sync, get_chunks_without_embeddings_sync
+from app.embeddings.service_sync import (
+    _embed_text_for_chunk,
+    embed_document_chunks_sync,
+    get_chunks_without_embeddings_sync,
+)
+
+
+def test_figure_description_is_embedding_only(monkeypatch):
+    """VLM text enriches figure vectors without changing reader-visible text."""
+    original = "Figure 1: latency by batch size"
+    chunk = {
+        "plain_text": original,
+        "chunk_type": "figure",
+        "figure_description": "A line chart shows latency falling as batch size increases.",
+    }
+
+    monkeypatch.setattr(settings, "embed_max_chars", 3000)
+    embedded = _embed_text_for_chunk(chunk)
+
+    assert original in embedded
+    assert "A line chart shows latency falling as batch size increases." in embedded
+    assert "Figure description:" in embedded
+    assert chunk["plain_text"] == original
 
 
 def test_chunker_sequence_ids_and_types():

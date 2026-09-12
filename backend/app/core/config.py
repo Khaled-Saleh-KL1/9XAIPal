@@ -240,8 +240,9 @@ class Settings(BaseSettings):
 
     # ── Ingest profile ──────────────────────────────────────────────────────
     # "fast" (default): a paper is DONE the moment MinerU has extracted it and
-    # the chunker has run. No embedding pass, no section summaries, no VLM
-    # figure descriptions — nothing between dropping the PDF and reading it.
+    # the chunker has run. No whole-document embedding pass or section
+    # summaries; figure descriptions and figure-only vectors may still be
+    # generated asynchronously when GENERATE_FIGURE_DESCRIPTIONS is enabled.
     # Everything the model needs is derived at question time by
     # app.chat.paper_agent (whole-document stuffing, or full-text SEARCH/READ
     # over chunks when the paper is too large to stuff).

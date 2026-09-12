@@ -404,8 +404,9 @@ async def run_search(
     passage that shares literal words with the query, which is the wrong
     instrument for the question a study actually gets asked — "where do these
     papers disagree about evaluation" names no term any of them uses. It
-    degrades on its own: a document ingested with no chunk embeddings (the
-    fast profile skips them) simply contributes nothing to the vector half,
+    degrades on its own: a document ingested with no whole-document chunk embeddings (the
+    fast profile skips those; figure-only vectors serve the image path) simply contributes nothing
+    to the vector half,
     and fusion falls back to the full-text ranking it already had.
 
     ⚠ The substring leg is not redundant: ``to_tsvector`` drops single Greek

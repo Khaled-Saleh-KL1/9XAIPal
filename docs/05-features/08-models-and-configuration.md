@@ -58,8 +58,9 @@ put two full-size calls in front of every question. The orchestrator also runs g
 router concurrently (`asyncio.gather`), and `GUARDRAIL_SKIP_IN_PAPER=true` short-circuits the
 guardrail while reading — an in-paper question costs one classifier call, not two. The `vlm` row is
 the cost lever: a figure-heavy paper is dozens of vision calls before anyone asks anything, which
-is why `GENERATE_FIGURE_DESCRIPTIONS` is off on the live box. DeepSeek has no vision; with it
-active figures cannot be described.
+is why figure descriptions are generated in the background for retrieval, while remaining private
+and absent from the reader. `GENERATE_FIGURE_DESCRIPTIONS` must use a vision-capable model;
+DeepSeek has no vision, so with it active figures cannot be described.
 
 ---
 

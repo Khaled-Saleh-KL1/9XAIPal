@@ -382,8 +382,10 @@ VLM-generated technical descriptions of figures/diagrams.
 
 `UNIQUE(chunk_id, model)`.
 
-⚠ Only populated under `INGEST_PROFILE=full`. The fast profile never runs the VLM pass, so a
-question about a figure hands the image to the model live instead.
+⚠ Populated by the full chain or, when `GENERATE_FIGURE_DESCRIPTIONS=true`, by the fast profile's
+background figure task. The descriptions are private retrieval metadata: they enrich figure
+embeddings but are not returned in the reader payload; the chat can still embed the original image
+when a relevant figure is retrieved.
 
 ### `paper_notes`
 

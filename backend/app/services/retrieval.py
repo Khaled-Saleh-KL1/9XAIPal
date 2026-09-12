@@ -47,8 +47,9 @@ async def search_chunks(
     # ⚠ Both legs are individually optional, and the vector one has TWO ways
     # to be unavailable that are entirely normal rather than exceptional:
     # the embedding provider can be unreachable (Ollama down, no cloud key),
-    # and a document ingested on the fast profile has no chunk embeddings at
-    # all. Neither may take full-text down with it — this function is what
+    # and a document ingested on the fast profile has no whole-document chunk
+    # embeddings (figure-only vectors are used by image retrieval). Neither may
+    # take full-text down with it — this function is what
     # the agents' SEARCH tool runs, so an Ollama hiccup would otherwise
     # silently reduce every agent search in the app to a substring scan,
     # with nothing in the answer to say retrieval had been crippled.
@@ -174,4 +175,3 @@ async def search_figure_chunks(
         {"chunk": c, "assets": assets_by_chunk.get(c["id"], [])}
         for c in fallback_chunks
     ]
-

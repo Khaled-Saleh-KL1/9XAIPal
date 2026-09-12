@@ -12,6 +12,7 @@ from app.extraction.jobs import JobStatus
 def test_run_pipeline_success(
     db_session_sync,
     tmp_path,
+    monkeypatch,
 ):
     # Setup document and job IDs
     doc_id = uuid4()
@@ -52,6 +53,8 @@ def test_run_pipeline_success(
     img_path.parent.mkdir(parents=True, exist_ok=True)
     img_path.write_text("fake image data")
 
+    monkeypatch.setattr("app.core.config.settings.generate_figure_descriptions", True)
+
     with patch("app.extraction.pipeline_sync.extract_pdf_sync", return_value=(fake_extracted_dir, "mineru")) as mock_extract, \
          patch("app.extraction.pipeline_sync.find_markdown_output", return_value=fake_md) as mock_find_md, \
          patch("app.extraction.pipeline_sync.find_images", return_value=[img_path]) as mock_find_images, \
@@ -61,7 +64,8 @@ def test_run_pipeline_success(
              "mime_type": "image/png",
              "original_name": "fig1.png",
          }) as mock_move_asset, \
-         patch("app.workers.tasks.embed_document.delay") as mock_embed_delay:
+         patch("app.workers.tasks.embed_document.delay") as mock_embed_delay, \
+         patch("app.workers.tasks.generate_figure_descriptions.delay") as mock_figure_delay:
 
         # Run the pipeline
         run_pipeline_sync(
@@ -81,14 +85,14 @@ def test_run_pipeline_success(
         mock_find_md.assert_called_once_with(fake_extracted_dir)
         mock_find_images.assert_called_once_with(fake_extracted_dir)
         mock_move_asset.assert_called_once_with(img_path, document_id=str(doc_id))
-        # Fast profile: nothing downstream is dispatched. The paper is answered
-        # at question time by app.chat.paper_agent, so there is no index to
-        # build and no reason to wake a worker.
+        # Fast profile: whole-document embeddings are still skipped, but the
+        # optional retrieval-only figure index is dispatched in the background.
         mock_embed_delay.assert_not_called()
+        mock_figure_delay.assert_called_once_with(str(doc_id))
 
-    # 1. Under the fast profile extraction IS the pipeline, so the document is
-    # complete the moment its chunks are persisted. Nothing runs afterwards
-    # that could contradict that status.
+    # 1. Under the fast profile extraction IS the readiness pipeline, so the
+    # document is complete the moment its chunks are persisted. The optional
+    # figure task enriches retrieval later without changing readiness.
     res = db_session_sync.execute(
         text("SELECT status FROM documents WHERE id = :id"), {"id": doc_id}
     )

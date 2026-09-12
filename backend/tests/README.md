@@ -48,8 +48,9 @@ EXTERNAL.
 Verifies that MinerU output becomes normalized chunks, images are attached
 correctly, ingestion is transactional, and failed ingestion does not expose
 partial documents. Also pins the profile split: a paper under
-`INGEST_PROFILE=fast` is complete at chunking with nothing dispatched, while a
-book still runs the full embed → summarize chain.
+`INGEST_PROFILE=fast` is ready at chunking; only the optional retrieval-only
+figure task is dispatched, while a book still runs the full embed → summarize
+chain.
 
 ### `test_subthread_conversations.py`
 

@@ -28,15 +28,17 @@ ask grounded questions about it."
 | Extraction + chunking | ✅ | ✅ |
 | Glyph repair | ✅ | ✅ |
 | Assets linked | ✅ | ✅ |
-| Embeddings | ✗ | ✅ (unless paper-only skips them) |
+| Embeddings | ✗ whole-document; ✅ figure-only when enabled | ✅ (unless paper-only skips them) |
 | Section summaries | ✗ | ✅ |
-| VLM figure descriptions | ✗ | ✅ |
+| VLM figure descriptions | background, when enabled | ✅ |
 | Complete after | **chunking** | `generate_section_summaries` |
 
 Under `fast` a paper is readable the moment MinerU and the chunker finish, nothing stands between
 dropping a PDF and reading it. Everything the model needs is derived at question time by
 [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py); see
-[chat-and-ask.md](chat-and-ask.md).
+[chat-and-ask.md](chat-and-ask.md). A separate background task may then generate private VLM figure
+descriptions and embed only figure chunks, so a question about what an image shows can retrieve
+the original image without adding the description to the reader payload.
 
 ⚠ Books never take the fast path. A book cannot be stuffed into a context window, and full-text
 scanning a 700-page volume is not a substitute for vector retrieval, so it still needs the full
@@ -110,7 +112,7 @@ poll continues                            │   embed_document_chunks_sync()    
                               embedding_mode='skipped'             │
                               (reason: fast_ingest)                │
                               documents + job → 'complete'         │
-                              dispatch NOTHING                     │
+                              dispatch optional figure index task  │
    │                                      │                        │
    ▼                                      ▼                        ▼
 status == 'complete'  ◄──────────────────────────────────────────────
@@ -129,7 +131,8 @@ flowchart TD
     CH --> GR["repair_chunks<br/>U+FFFD → LaTeX"]
     GR --> AS["move images<br/>INSERT chunk_assets"]
     AS --> Q{"_is_fast_ingest()<br/>paper + INGEST_PROFILE=fast?"}
-    Q -->|yes| DONE1["embedding_mode='skipped'<br/>documents + job → complete<br/>⚠ dispatch nothing"]
+    Q -->|yes| DONE1["embedding_mode='skipped'<br/>documents + job → complete<br/>dispatch optional figure index"]
+    DONE1 -.-> FIG["background: VLM description<br/>+ figure-only embedding"]
     Q -->|no| SK{"_should_skip_embeddings()"}
     SK -->|embed| EMB["embed_document<br/>→ chunk_embeddings"]
     SK -->|skip| SUM
@@ -146,10 +149,9 @@ flowchart TD
 
 ⚠ **Completion is set in exactly two places**, and they are mutually exclusive:
 `generate_section_summaries` at the end of the full chain, and `run_pipeline_sync` on the fast
-path. The fast path may set it only because it dispatches nothing afterwards: there is no
-downstream task left to contradict it. Adding a dispatch to that branch without moving the
-completion would reintroduce the bug where the UI reported "done" while a worker was still
-running.
+path. The fast path may set it because its optional figure task only adds retrieval metadata and
+does not change document readiness. The task does not contradict completion: the paper is already
+readable and its chunk/API payload is unchanged.
 
 ## Step 1.5: Glyph repair
 
@@ -259,12 +261,13 @@ matching downstream task.
 dispatched. Marking it complete before that was the bug that made the UI report "done" while the
 worker was still embedding and describing figures.
 
-The fast path is the one exception, and only because it dispatches nothing: it sets
-`embedding_mode='skipped'` (reason `fast_ingest`), records `page_count`, marks the document and
-job complete, and returns. Verified by
-`tests/test_ingestion_pipeline.py::test_run_pipeline_success` (nothing dispatched, status
-complete) and `::test_run_pipeline_book_still_runs_full_chain` (book still dispatches
-`embed_document` and stays at `processing`).
+The fast path is the one exception: it sets `embedding_mode='skipped'` (reason `fast_ingest`),
+records `page_count`, marks the document and job complete, dispatches only the optional
+retrieval-only figure task, and returns. Verified by
+`tests/test_ingestion_pipeline.py::test_run_pipeline_success` (whole-document embedding is not
+dispatched, the figure task is, and status is complete) and
+`::test_run_pipeline_book_still_runs_full_chain` (book still dispatches `embed_document` and stays
+at `processing`).
 
 ### Paper-only mode: conditional dispatch
 
@@ -342,8 +345,10 @@ Reached from either branch of Step 5: after embeddings when they run, directly f
 when they are skipped. `generate_section_summaries`:
 
 1. Hierarchical section summarization (level 0 = paper, level 1 = H1, level 2 = H2).
-2. VLM figure descriptions for every `chunk_type='figure'` chunk.
-3. Results stored in `section_summaries` and `figure_descriptions` tables.
+2. VLM figure descriptions for every `chunk_type='figure'` chunk when enabled. On the fast path,
+   this is the separate retrieval-only figure task rather than this chain.
+3. Results stored in `section_summaries` and `figure_descriptions` tables; descriptions are folded
+   into figure embedding input only and are not shown in the reader.
 
 This step is slow (minutes per paper) but doesn't block the user: they
 can start reading and asking questions as soon as `status='complete'`, which, under the default

@@ -108,8 +108,10 @@ WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = '<uuid>');
 
 Then `POST /papers/{id}/rechunk`, which re-queues `embed_document`.
 
-⚠ Under `INGEST_PROFILE=fast` a paper has no embeddings to re-queue and `/rechunk` dispatches
-nothing: it is answered live by the paper agent instead. The response says which happened.
+⚠ Under `INGEST_PROFILE=fast` a paper has no whole-document embeddings to re-queue, but `/rechunk`
+still refreshes the optional private figure index when `GENERATE_FIGURE_DESCRIPTIONS=true`. It is
+answered live by the paper agent for text; figure questions can use the background image index.
+The response says which index work was dispatched.
 
 ### Repair figures or mangled inline math on an existing paper
 
