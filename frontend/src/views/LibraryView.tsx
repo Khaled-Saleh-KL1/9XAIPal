@@ -149,6 +149,19 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     return xs;
   }, [debouncedQuery, sort, kindFilters, papers, semanticIds]);
 
+  // Keep the header honest about the whole library, not just the current
+  // search/filter result. Older rows without doc_kind are papers by schema
+  // default, so they belong in the paper count as well.
+  const libraryCounts = useMemo(() => {
+    const counts = { books: 0, papers: 0, articles: 0 };
+    for (const paper of papers) {
+      if (paper.docKind === 'book') counts.books += 1;
+      else if (paper.docKind === 'article') counts.articles += 1;
+      else counts.papers += 1;
+    }
+    return counts;
+  }, [papers]);
+
   const cycleSorts: SortKey[] = ['recent', 'title', 'pages'];
 
   const KIND_FILTERS: { key: string; label: string }[] = [
@@ -326,7 +339,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           */}
           <div className="ml-auto min-w-0 flex items-center gap-2 overflow-x-auto no-scrollbar hdr-scroll">
             <span className="hidden sm:inline text-[12px]" style={{ color: 'var(--muted)' }}>
-              {papers.length} papers · local
+              {libraryCounts.books} Books · {libraryCounts.papers} Papers · {libraryCounts.articles} Articles
             </span>
             <span className="hidden sm:inline-block mx-2 h-4 w-px" style={{ background: 'var(--border)' }} />
             <button
