@@ -62,7 +62,7 @@ class Unresolved(Enum):
     UNAVAILABLE = "unavailable"
 
 _MATCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search/match"
-_FIELDS = "title,authors,year,externalIds,openAccessPdf"
+_FIELDS = "paperId,title,authors,year,externalIds,openAccessPdf"
 _TIMEOUT = 15.0
 _BREAKER_ID = "semantic_scholar"
 # One line for every caller — citation chips, the export enrichment loop —
@@ -83,7 +83,8 @@ class ReferenceMatch(NamedTuple):
     year: Optional[int]
     arxiv_id: Optional[str]
     doi: Optional[str]
-    pdf_url: Optional[str]  # a direct, fetchable open-access PDF, when one exists
+    pdf_url: Optional[str]  # a direct, fetchable PDF, when one exists (see _to_match)
+    s2_paper_id: Optional[str] = None  # for a "view on Semantic Scholar" link
 
 
 def _headers() -> dict:
@@ -196,11 +197,21 @@ def _to_match(hit: dict) -> ReferenceMatch:
     authors = ", ".join(a.get("name", "") for a in (hit.get("authors") or []) if a.get("name"))
     external = hit.get("externalIds") or {}
     open_pdf = hit.get("openAccessPdf") or {}
+    arxiv_id = external.get("ArXiv") or None
+    # ⚠ `openAccessPdf` is null for most arXiv papers on Semantic Scholar —
+    # verified 2026-09-12: three references resolved cleanly (title, authors,
+    # year, an arXiv id in externalIds) and every one came back without a
+    # PDF, so "Add to library" had nothing to fetch and refused. An arXiv id
+    # IS a fetchable PDF: arxiv.org/pdf/<id> is the canonical open-access
+    # link and the URL import path already handles it. Prefer S2's own link
+    # when it has one, fall back to arXiv, and only then give up.
+    pdf_url = open_pdf.get("url") or (f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else None)
     return ReferenceMatch(
         title=hit.get("title") or "",
         authors=authors,
         year=hit.get("year"),
-        arxiv_id=external.get("ArXiv"),
-        doi=external.get("DOI"),
-        pdf_url=open_pdf.get("url") or None,
+        arxiv_id=arxiv_id,
+        doi=external.get("DOI") or None,
+        pdf_url=pdf_url,
+        s2_paper_id=hit.get("paperId") or None,
     )
