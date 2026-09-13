@@ -23,7 +23,17 @@ chapter you were in auto-resumes; finishing a chapter offers "Continue into *nex
 
 **How it works.** Chapters come from the **PDF's own embedded `/Outlines` tree** — what a reader
 app shows as its bookmarks sidebar: exact titles, exact pages, real nesting — mapped to sequence
-ranges. Restoring a position uses one bulk `GET /chunks/range?after=&limit=` instead of one
+ranges. ⚠ **Only the chapter level of that tree (2026-09-13).** The outline is the whole table of
+contents, and until then every bookmark at every depth became a "chapter": *Generative AI with
+Amazon Bedrock* opened with 179 of them ("Chat playground", "InvokeModel", "Summary"…), the
+O'Reilly agents book with 135. `book_outline.chapter_entries` now picks the chapter level — the
+shallowest level with two or more entries, stepping one level down when that level is mostly
+Parts ("Part I", "I. The Anatomy…"), which are groupings *above* chapters — keeps the shallower
+non-Part entries (a Preface at the Parts' level is a chapter), and folds a Part divider at the
+chapter level into the chapter that follows it. Apparatus with a qualifier ("Copyright and
+Credits", "About the Authors", "Other Books You May Enjoy") now counts as front/end matter. Against
+the three live books this yields exactly their tables of contents: Bedrock 15 entries (front
+matter, Preface, Chapters 1–12, end matter), the agents book 14, *The Culture Map* unchanged. Restoring a position uses one bulk `GET /chunks/range?after=&limit=` instead of one
 `getNextChunk` round trip per chunk (a deep chapter used to cost hundreds of sequential HTTP calls
 just to restore where you left off). Chunks are turned into **units** (`chunkToUnits`): a text
 chunk becomes one unit per paragraph, with display math (`$$…$$`, `\[…\]`, `\begin{equation}`)

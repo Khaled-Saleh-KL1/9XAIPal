@@ -388,8 +388,12 @@ async def list_chapters(
         )
         if len(entries) >= 2:
             page_starts = await chunk_repo.get_page_starts(db, paper_id)
+            # Subtitles merged into their chapter, then only the chapter
+            # level of the tree — see book_outline.chapter_entries for why
+            # the whole outline is not a chapter list.
             candidate = book_outline.outline_to_chapters(
-                book_outline.collapse_outline(entries), page_starts, lo, hi
+                book_outline.chapter_entries(book_outline.collapse_outline(entries)),
+                page_starts, lo, hi,
             )
             # One entry is not a table of contents — it is the title bookmark of
             # a file whose outline was never filled in. Fall through to headings.
