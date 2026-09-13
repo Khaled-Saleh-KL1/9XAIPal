@@ -23,25 +23,18 @@
 import { useState, type ImgHTMLAttributes } from 'react';
 import { getApiMediaUrl } from '../api';
 
-export type LightboxDetail = { src: string; alt?: string };
-
-/**
- * Ask whoever is listening to open this image full-screen.
- *
- * A CustomEvent rather than a prop or a context so the markdown component map
- * can stay at module scope with no React state of its own. The event is
- * `cancelable`: a listener that actually shows an overlay calls
- * `preventDefault()`, and `dispatchEvent` then returns false. That is what
- * lets a surface WITHOUT a lightbox (a margin note, the desk) still do
- * something sensible — open the original in a new tab — instead of the click
- * silently doing nothing.
+/*
+ * ⚠ No click handler here, on purpose. Enlarging is the job of the one
+ * delegated ImageLightbox mounted in main.tsx, which catches a click on ANY
+ * content image — a figure in the article, a book page, a picture in an
+ * answer — and opens the same overlay the structured reader uses. This
+ * component used to dispatch its own `pal:lightbox` event and, when nothing
+ * answered it (a margin note, the desk), open the image in a NEW TAB — while
+ * the delegated listener opened the overlay as well. In the book chat that
+ * meant two overlays; in a margin note it meant a new tab (or a blocked
+ * pop-up) on top of the overlay: "the picture is not clickable to make it
+ * bigger, like in the structured reading" (2026-09-13). One path now.
  */
-export function openLightbox(detail: LightboxDetail): void {
-  const handled = !window.dispatchEvent(
-    new CustomEvent<LightboxDetail>('pal:lightbox', { detail, cancelable: true }),
-  );
-  if (!handled) window.open(detail.src, '_blank', 'noopener,noreferrer');
-}
 
 export const AnswerImage: React.FC<ImgHTMLAttributes<HTMLImageElement>> = ({
   src,
@@ -85,7 +78,6 @@ export const AnswerImage: React.FC<ImgHTMLAttributes<HTMLImageElement>> = ({
         alt={alt || ''}
         loading="lazy"
         referrerPolicy="no-referrer"
-        onClick={() => openLightbox({ src: resolvedSrc, alt: alt || undefined })}
         title="Click to enlarge"
         onError={() => setFailed(true)}
         style={{
