@@ -25,6 +25,7 @@ PyMuPDF's `get_toc()` is 1-based already. Do not "fix" one side of that.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -115,6 +116,78 @@ def collapse_outline(entries: list[dict]) -> list[dict]:
     return out
 
 
+# "Part I", "Part 1:", "I.", "IV —", "Section A" — a grouping above chapters.
+_PART_RE = re.compile(
+    r"^\s*(?:part\s+(?:[ivxlc]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
+    r"|[ivxlc]{1,6}\s*[.:—–-]\s+\S|section\s+[a-z]\b)",
+    re.IGNORECASE,
+)
+
+
+def is_part_title(title: str) -> bool:
+    return bool(_PART_RE.match(title or ""))
+
+
+def chapter_entries(entries: list[dict]) -> list[dict]:
+    """The outline entries that are chapters — not every bookmark in the tree.
+
+    ⚠ A publisher's outline is the whole table of contents: chapters, their
+    sections, the sections' subsections. Handing all of it to the reader as
+    "chapters" gave *Generative AI with Amazon Bedrock* 179 of them and the
+    O'Reilly agents book 135 — "Chat playground", "InvokeModel", "Summary",
+    one after another, with the actual Chapter 2 buried between (2026-09-13:
+    "the blocks are not divided by the chapters, they're divided in a very
+    weird way"). The trade book that shaped the first version had a flat
+    outline, which is why it never showed.
+
+    The chapter level is the shallowest level with two or more entries —
+    the same rule the headings fallback uses — except that a level made
+    mostly of Parts ("Part I", "I. The Anatomy…") is a grouping *above*
+    chapters, so the search steps one level deeper when the next level has
+    entries of its own. What is kept: every entry at the chapter level, plus
+    the shallower non-Part entries (a Preface or Introduction that sits at
+    the Parts' level is a chapter, not a group). A Part is never a chapter of
+    its own: above the chapter level it is dropped, at the chapter level its
+    divider page is folded into the chapter that follows (otherwise "Part 1"
+    would be a "chapter" of eight blocks between real ones).
+    """
+    if not entries:
+        return []
+    from collections import Counter
+    counts = Counter(e["level"] for e in entries)
+    levels = sorted(counts)
+    chapter_level = next((lvl for lvl in levels if counts[lvl] >= 2), levels[0])
+    # Step below a Parts level while there is a populated level beneath it.
+    while True:
+        at = [e for e in entries if e["level"] == chapter_level]
+        parts = sum(1 for e in at if is_part_title(e["title"]))
+        deeper = [lvl for lvl in levels if lvl > chapter_level and counts[lvl] >= 2]
+        if at and parts >= max(2, len(at) * 0.6) and deeper:
+            chapter_level = deeper[0]
+            continue
+        break
+    kept = [
+        dict(e) for e in entries
+        if e["level"] == chapter_level
+        or (e["level"] < chapter_level and not is_part_title(e["title"]))
+    ]
+    # A Part sitting at the chapter level ("Part 1: Foundations" between
+    # Preface and Chapter 1) is a divider page, not a chapter: fold it into
+    # the chapter that follows, which then opens on the divider's page.
+    out: list[dict] = []
+    i = 0
+    while i < len(kept):
+        cur = kept[i]
+        nxt = kept[i + 1] if i + 1 < len(kept) else None
+        if is_part_title(cur["title"]) and nxt and not is_part_title(nxt["title"]):
+            nxt["page"] = min(nxt["page"], cur["page"])
+            i += 1
+            continue
+        out.append(cur)
+        i += 1
+    return out
+
+
 def outline_to_chapters(
     entries: list[dict],
     page_starts: list[tuple[int, Optional[int]]],
@@ -142,7 +215,8 @@ def outline_to_chapters(
         if seq is None or seq in seen:
             continue
         seen.add(seq)
-        starts.append({"title": e["title"], "level": e["level"], "start_sequence": seq})
+        # Outline titles carry the publisher's line breaks ("Chapter 8: …\nAmazon…").
+        starts.append({"title": " ".join(e["title"].split()), "level": e["level"], "start_sequence": seq})
 
     if not starts:
         return []
@@ -178,13 +252,24 @@ _MATTER_TITLES = frozenset({
 })
 
 
+# Apparatus that comes with a qualifier: "Copyright and Credits", "About the
+# Authors", "About Packt", "Other Books You May Enjoy", "Contributors",
+# "Also by Erin Meyer", "Praise for …". A known opening is the same page
+# whatever follows it. ⚠ Nothing here may be the opening of reading content:
+# "About" is safe only because no chapter starts with it.
+_MATTER_PREFIXES = (
+    "also by", "about ", "praise", "copyright", "other books", "contributors",
+    "table of contents", "title page", "half title", "dedication", "acknowledg",
+    "bibliograph", "further reading", "index", "colophon", "imprint", "credits",
+    "permissions", "endnotes",
+)
+
+
 def _is_matter(title: str) -> bool:
     t = (title or "").strip().lower().rstrip(".:")
     if t in _MATTER_TITLES:
         return True
-    # "Also by Erin Meyer", "About the Author, Erin Meyer" — a known prefix
-    # followed by a name is still the same apparatus page.
-    return any(t.startswith(p + " ") for p in ("also by", "about the author", "praise for"))
+    return any(t == p.strip() or t.startswith(p) for p in _MATTER_PREFIXES)
 
 
 def _matter_title(label: str, parts: list[str]) -> str:
