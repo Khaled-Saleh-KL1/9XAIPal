@@ -1,9 +1,9 @@
-# Area 2 — The extraction pipeline (features 19–32)
+# Area 2 — The extraction pipeline (features 19–32, 112)
 
 > Part of the [feature catalogue](README.md). Companion architecture doc:
 > [ingestion-pipeline.md](../02-architecture/ingestion-pipeline.md).
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-09-13 (`main`, e81817c + heading-repair).
 
 The pipeline runs in the Celery worker, not the API: `POST /papers/upload` inserts the rows and
 calls `process_ingestion.delay(...)`; `run_pipeline_sync` does the work with a **sync** SQLAlchemy
@@ -342,3 +342,46 @@ many documents run at once; `EMBEDDING_MAX_CONCURRENCY` bounds batches within on
 **Why.** The alternative — delete all vectors, then re-embed — leaves GLOBAL questions answering
 from nothing for as long as the pass takes. The embedding pin (feature 99) is what forces a model
 swap to be this explicit pass rather than a silent mix of incompatible vectors.
+
+---
+
+## 112. Heading repair
+
+**What it does.** Right after chunking — on fresh ingestion and on re-chunk — MinerU's heading
+decisions are corrected before anything reads them: heading **levels** are taken from the PDF's own
+outline where it has one, and heading chunks that cannot be headings are demoted back to text.
+`heading_path` is rebuilt from the corrected levels. The result is what the chapter list falls
+back to when a PDF has no outline, what retrieval and the section summaries use to say where a
+passage sits, and what the reader renders as `#`/`##`.
+
+**Where.** [`extraction/heading_repair.py`](../../backend/app/extraction/heading_repair.py)
+(`repair_headings`, `is_not_a_heading`, `normalize_title`, `repair_stored_headings`), called from
+`pipeline_sync.run_pipeline_sync` (step 2b′) and `documents.py::rechunk_paper` (reported in the
+response as `headings`); `tests/test_heading_repair.py`.
+
+**What was measured (2026-09-13, the live library, PDF outline as ground truth).** MinerU *finds*
+headings well — 95–100 % of a publisher's outline titles exist as heading chunks — but it
+**flattens levels**: *Generative AI with Amazon Bedrock* came out as 17 level-1 and 403 level-2
+headings, the O'Reilly agents book 3 and 478, every paper's sections at level 2 under a level-1
+title. A book with no embedded outline would get one "chapter" per subsection from that, and
+every `heading_path` was two deep at most. It also marks a few things that are not headings:
+scene-break ornaments (`* * *`), caption fragments (`FIGURE I.1.`), the lowercase tail of a wrapped
+sentence (`documentation.`), a bare chapter number (`12`).
+
+**How it works.** (1) *Match* outline entries to heading chunks on the entry's page (±1) by
+normalized title — numbering in every shape seen live stripped (`Chapter 3:`, `1.`, `IV.`,
+`3.2.1`, the bare `4 Why Self-Attention`), case and punctuation ignored; equal, or one containing
+the other when the shorter is ≥ 3 words. A matched chunk takes the entry's level; an unmatched
+heading is pushed at least one level below the last matched one, so subsections stay under their
+chapter. Without an outline only the unmistakable case moves: a heading that calls itself a
+chapter (`Chapter 3`, `3. Memory`) left below level 1 is promoted. (2) *Demote* — never a chunk
+the outline named — by rules tuned against every false positive the library produced: no
+letters; a caption opener; lowercase start **and** sentence punctuation (a programming book heads
+sections with `add_tool`, `wav2vec 2.0`, `packtpub.com` — lowercase alone is not enough); more
+than 8 words ending in a full stop (questions are headings: *Who Decides, and How?*). (3) Rebuild
+`heading_path` the way the chunker does. After the pass, on the live library: the two technical
+books have their chapters at level 1 and sections/subsections nested (levels 1–4); every paper
+has its numbered sections at level 1 under the title; outline titles matched 22/22, 38/38, 21/21
+on the papers and 214/221, 159/162 on the books (the unmatched are apparatus pages with no
+heading). Embeddings are computed from `plain_text` only, so `repair_stored_headings` can fix a
+library already in the database in seconds without re-embedding.
