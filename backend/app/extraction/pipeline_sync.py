@@ -362,6 +362,18 @@ def run_pipeline_sync(
         except Exception:
             logger.exception("[glyph-repair] failed (non-fatal, chunks kept as-is)")
 
+        # Step 2b': headings — MinerU flattens levels and marks a few things
+        # that are not headings; the PDF's own outline is the ground truth
+        # when there is one. See app/extraction/heading_repair.py. Runs on
+        # re-chunk too, so an existing book is repaired without MinerU.
+        try:
+            from app.extraction.heading_repair import repair_headings
+            from app.services.book_outline import read_pdf_outline
+            report = repair_headings(chunks, read_pdf_outline(pdf_path))
+            logger.info(f"[heading-repair] {document_id}: {report.as_dict()}")
+        except Exception:
+            logger.exception("[heading-repair] failed (non-fatal, chunks kept as-is)")
+
         # Step 2c: A literal code/schema listing's exact whitespace and layout
         # is part of what it is showing, and MinerU never crops one the way
         # it does a table or figure — code_body is OCR text alone. Generate
