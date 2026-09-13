@@ -255,6 +255,17 @@ a deck, and a supplied deck id may only update a deck **of this document** (a fo
 rollback — [docs/issues/003](../issues/003-deck-upsert-can-mutate-another-document.md)); members
 that are not this paper's notes are dropped.
 
+⚠ **Releasing the drag (2026-09-13).** The grip that starts a drag captures the pointer, so the
+pointerup normally reaches it — but a card can re-render while it is being dragged (an answer that
+has just finished streaming swaps its pending chrome for the real one), the grip is replaced, the
+capture dies with it, and the release never ran: the card stayed exactly where it had been dragged,
+with `pointer-events: none` still set — moved and unclickable ("when I move it, I can't press on
+it anymore"). `useCardDrag` now remembers the element being dragged at the press, clears the styles
+on *that* element, and arms window-level `pointerup` / `pointercancel` / Escape listeners for the
+duration of the drag. Reproduced and verified in Chromium by replacing the grip node mid-drag:
+before, the card ended translated 92 px with `pointer-events: none` and no click reached it; after,
+styles cleared and clickable.
+
 **The flip** is a card being turned over, not a crossfade: a two-phase Y rotation on one element,
 content swapped at the midpoint where the card is ~86° to the viewer and unreadable. Mounting two
 faces would double every card's state and leave the hidden one in the tab order. The stage height
@@ -560,6 +571,15 @@ an image inside an answer — to see it full-screen over a blurred page.
 list (the lightbox's own image, covers, thumbnails, controls). Five different components build
 `<img>`s and several from raw markdown — there is no one place to hook, and delegation catches
 images that don't exist yet.
+
+⚠ **One path (2026-09-13).** `AnswerImage` (every picture inside an answer) used to carry its own
+click handler that dispatched a `pal:lightbox` event and — when nothing answered it, i.e. in a
+margin note or on the desk — opened the image in a **new tab**, while this delegated listener
+opened the overlay too; the book chat kept a second lightbox of its own that opened on top. So a
+picture in an answer produced a pop-up (or a blocked one) plus an overlay instead of "bigger, like
+in the structured reading". The handler and the second lightbox are gone; every content image now
+goes through this one listener. Verified in Chromium: click → one overlay, zero new tabs (before:
+one of each).
 
 ---
 

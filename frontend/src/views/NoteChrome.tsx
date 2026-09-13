@@ -70,20 +70,37 @@ export function useCardDrag(drag: CardDrag | null) {
     y: number;
     active: boolean;
     target: { id: string; kind: DragKind } | null;
+    /** The card root as it was when the press began — see release(). */
+    el: HTMLElement | null;
   } | null>(null);
 
   const dragging = !!drag && drag.activeId === drag.id;
   const isDropTarget =
     !!drag && drag.activeId !== null && drag.activeId !== drag.id && drag.hoverId === drag.id;
 
+  /**
+   * ⚠ Ending a drag must not depend on the grip that started it still being
+   * in the DOM. It captured the pointer, so pointerup normally reaches it —
+   * but a card re-renders while it is being dragged (an answer that has just
+   * finished streaming swaps its pending chrome for the real one, a deck
+   * re-keys), the grip is replaced, the capture dies with it, and the
+   * pointerup lands nowhere. The card was then left exactly as the reader
+   * had dragged it, with `pointer-events: none` still set: visibly moved
+   * and impossible to click ("when I move it, I can't press on it anymore",
+   * 2026-09-13). So the element being dragged is remembered at the press,
+   * the styles are cleared on THAT element, and while a drag is in flight
+   * the window itself listens for the release.
+   */
   const release = useCallback(
     (commit: boolean) => {
-      const el = rootRef.current;
-      if (el) {
-        el.style.transform = '';
-        el.style.pointerEvents = '';
+      const g = gesture.current;
+      for (const el of new Set([g?.el ?? null, rootRef.current])) {
+        if (el) {
+          el.style.transform = '';
+          el.style.pointerEvents = '';
+        }
       }
-      const target = gesture.current?.target ?? null;
+      const target = g?.target ?? null;
       gesture.current = null;
       if (commit && target && drag && target.id !== drag.id) {
         drag.onDrop(target.id, target.kind);
@@ -92,12 +109,41 @@ export function useCardDrag(drag: CardDrag | null) {
     },
     [drag],
   );
+  const releaseRef = useRef(release);
+  releaseRef.current = release;
+
+  // The window-level safety net: armed when a drag becomes active, removed
+  // when it ends. Calls the latest release through the ref, since the one
+  // captured at arming time closes over a stale `drag`.
+  const armed = useRef(false);
+  const disarm = useCallback(() => {
+    if (!armed.current) return;
+    armed.current = false;
+    window.removeEventListener('pointerup', onWindowUp, true);
+    window.removeEventListener('pointercancel', onWindowCancel, true);
+    window.removeEventListener('keydown', onWindowKey, true);
+  }, []);
+  function onWindowUp() { if (gesture.current?.active) { disarm(); releaseRef.current(true); } }
+  function onWindowCancel() { if (gesture.current?.active) { disarm(); releaseRef.current(false); } }
+  function onWindowKey(e: KeyboardEvent) { if (e.key === 'Escape' && gesture.current?.active) { disarm(); releaseRef.current(false); } }
+  const arm = useCallback(() => {
+    if (armed.current) return;
+    armed.current = true;
+    window.addEventListener('pointerup', onWindowUp, true);
+    window.addEventListener('pointercancel', onWindowCancel, true);
+    window.addEventListener('keydown', onWindowKey, true);
+  }, []);
+  // Unmounted mid-drag (the whole card went away): nothing to un-style, but
+  // the reader's global "something is being dragged" state must not stick.
+  useLayoutEffect(() => () => {
+    if (gesture.current?.active) { disarm(); releaseRef.current(false); }
+  }, [disarm]);
 
   const onPointerDown = useCallback((e: PointerEvent<HTMLElement>) => {
     if (!drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
-    gesture.current = { x: e.clientX, y: e.clientY, active: false, target: null };
+    gesture.current = { x: e.clientX, y: e.clientY, active: false, target: null, el: rootRef.current };
   }, [drag]);
 
   const onPointerMove = useCallback(
@@ -110,15 +156,18 @@ export function useCardDrag(drag: CardDrag | null) {
       if (!g.active) {
         if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
         g.active = true;
+        g.el = rootRef.current ?? g.el;
         drag.onStart(drag.id, drag.kind);
+        arm();
         // Take the card out of hit-testing so elementFromPoint reports what
         // is *underneath* it rather than the card in your hand.
-        if (rootRef.current) rootRef.current.style.pointerEvents = 'none';
+        if (g.el) g.el.style.pointerEvents = 'none';
       }
 
-      if (rootRef.current) {
+      const moving = g.el ?? rootRef.current;
+      if (moving) {
         const tilt = Math.max(-2.5, Math.min(2.5, dx / 30));
-        rootRef.current.style.transform =
+        moving.style.transform =
           `translate(${dx}px, ${dy}px) rotate(${tilt}deg) scale(1.015)`;
       }
 
@@ -129,18 +178,18 @@ export function useCardDrag(drag: CardDrag | null) {
       g.target = id && id !== drag.id ? { id, kind: hit!.dataset.dragKind as DragKind } : null;
       drag.onHover(g.target?.id ?? null);
     },
-    [drag],
+    [drag, arm],
   );
 
   const onPointerUp = useCallback(() => {
-    if (gesture.current?.active) release(true);
+    if (gesture.current?.active) { disarm(); release(true); }
     else gesture.current = null;
-  }, [release]);
+  }, [release, disarm]);
 
   const onPointerCancel = useCallback(() => {
-    if (gesture.current?.active) release(false);
+    if (gesture.current?.active) { disarm(); release(false); }
     else gesture.current = null;
-  }, [release]);
+  }, [release, disarm]);
 
   // A callback ref rather than the object: the same hook is spread onto a
   // <div> for decks and an <article> for cards, and only a callback is

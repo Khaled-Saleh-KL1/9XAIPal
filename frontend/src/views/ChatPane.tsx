@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, type AnchorHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
-import { type LightboxDetail } from '../components/AnswerImage';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import type { ChatMessage, ChatRef } from '../types';
 import { IconSend, IconSpinner } from '../components/Icons';
@@ -120,8 +119,6 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
   // sending to the backend (Ollama wants raw base64).
   const [attachments, setAttachments] = useState<{ dataUrl: string; name: string }[]>([]);
   const [dragOver, setDragOver] = useState(false);
-  // Lightbox state, opened when any chat image dispatches `pal:lightbox`.
-  const [lightbox, setLightbox] = useState<LightboxDetail | null>(null);
 
   // === Sub-thread (nested tangent) state ===
   // Stack of sub-thread roots the user has navigated into. Length encodes depth:
@@ -137,32 +134,20 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
   const currentDepth = threadStack.length;
   const atMaxDepth = currentDepth >= maxDepth;
 
+  // Images in answers are enlarged by the one delegated ImageLightbox
+  // (main.tsx), the same overlay the structured reader uses; this pane used
+  // to keep a second lightbox of its own, which opened on top of it.
   useEffect(() => {
-    function onOpen(e: Event) {
-      const ce = e as CustomEvent<LightboxDetail>;
-      if (!ce.detail?.src) return;
-      // Tells openLightbox an overlay took it, so it does not also open a
-      // new tab. See AnswerImage.openLightbox.
-      ce.preventDefault();
-      setLightbox(ce.detail);
-    }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        if (lightbox) {
-          setLightbox(null);
-        } else if (threadStack.length > 0) {
-          // ESC pops one sub-thread level (L3 → L2 → L1 → main)
-          popSubThread();
-        }
+      // ⚠ Not while the global lightbox is open: Escape closes that first.
+      if (e.key === 'Escape' && !document.querySelector('.lightbox-backdrop') && threadStack.length > 0) {
+        // ESC pops one sub-thread level (L3 → L2 → L1 → main)
+        popSubThread();
       }
     }
-    window.addEventListener('pal:lightbox', onOpen as EventListener);
     window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pal:lightbox', onOpen as EventListener);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [lightbox, threadStack]);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [threadStack]);
 
   // Read a File as a data URL via FileReader so it survives the React render.
   // Rejects non-image MIME types and files over 8 MB so a stray drop doesn't
@@ -838,111 +823,11 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
         </div>
       </div>
 
-      {/* Fullscreen image lightbox, opens when any chat image is clicked.
-          Click outside the image (or press Esc) to close. */}
-      {lightbox && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setLightbox(null)}
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{
-            background: 'color-mix(in oklch, var(--bg), transparent 25%)',
-            backdropFilter: 'blur(14px)',
-            WebkitBackdropFilter: 'blur(14px)',
-            cursor: 'zoom-out',
-          }}
-        >
-          {/* close button (top-right) */}
-          <button
-            onClick={(e) => { e.stopPropagation(); setLightbox(null); }}
-            title="Close (Esc)"
-            className="absolute top-4 right-5 w-9 h-9 rounded-full flex items-center justify-center text-[18px] leading-none"
-            style={{
-              background: 'rgba(0,0,0,0.55)',
-              color: 'white',
-              border: '1px solid rgba(255,255,255,0.2)',
-            }}
-          >
-            ×
-          </button>
-
-          {/* the image itself: capped to ~92% viewport so it never crops.
-              We also protect the lightbox viewer against hotlinked images. */}
-          <LightboxImage src={lightbox.src} alt={lightbox.alt} />
-
-          {/* caption + "open in tab" link (optional, doesn't dismiss on click) */}
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full flex items-center gap-3 text-[12px] font-mono max-w-[80vw]"
-            style={{
-              background: 'rgba(0,0,0,0.55)',
-              color: 'white',
-              border: '1px solid rgba(255,255,255,0.15)',
-            }}
-          >
-            {lightbox.alt && <span className="truncate">{lightbox.alt}</span>}
-            <a
-              href={lightbox.src}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="underline shrink-0"
-              style={{ color: 'white' }}
-            >
-              open in tab
-            </a>
-          </div>
-        </div>
-      )}
     </aside>
   );
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-
-// Small helper for the lightbox so we can safely handle load failures
-// without violating React hook rules.
-function LightboxImage({ src, alt }: { src: string; alt?: string }) {
-  const [failed, setFailed] = useState(false);
-
-  if (failed) {
-    return (
-      <div
-        className="px-6 py-8 text-center rounded-lg"
-        style={{ background: 'var(--bg-2)', color: 'var(--muted)' }}
-      >
-        <div className="text-[13px] mb-2">Image could not be loaded (blocked by source)</div>
-        <a
-          href={src}
-          target="_blank"
-          rel="noreferrer"
-          className="underline text-[12px]"
-          style={{ color: 'var(--accent)' }}
-        >
-          Open original URL in new tab
-        </a>
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={src}
-      alt={alt || ''}
-      referrerPolicy="no-referrer"
-      onClick={(e) => e.stopPropagation()}
-      onError={() => setFailed(true)}
-      style={{
-        maxWidth: '92vw',
-        maxHeight: '88vh',
-        borderRadius: 8,
-        boxShadow: '0 30px 80px -20px rgba(0,0,0,0.55)',
-        background: 'var(--bg-2)',
-        cursor: 'default',
-      }}
-    />
-  );
-}
 
 // Memoized: bubbles re-render markdown + KaTeX, which is expensive. The
 // parent re-renders on every keystroke in the input box, so without memo a
