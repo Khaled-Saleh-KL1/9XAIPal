@@ -14,6 +14,8 @@ from sqlalchemy import text
 from app.core.celery_app import celery_app
 from app.core.logging import get_logger
 from app.core.paths import documents_dir
+from app.api.errors import InsufficientStorage
+from app.services.ingestion import check_disk_headroom
 from app.database.connection import sync_session, sync_engine
 from app.extraction.pipeline_sync import (
     run_pipeline_sync,
@@ -95,6 +97,17 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dic
         with sync_session() as session:
             update_document_status_sync(session, doc_uuid, "failed", error_message=f"PDF not found: {pdf_path}")
             update_job_status_sync(session, job_uuid, JobStatus.FAILED, error_message=f"PDF not found: {pdf_path}")
+            session.commit()
+        return {"document_id": document_id, "job_id": job_id, "status": "failed"}
+
+    try:
+        check_disk_headroom()
+    except InsufficientStorage as exc:
+        msg = f"Disk {exc.used_percent}% full (limit {exc.limit_percent}%) — not extracting until space is freed"
+        logger.error(f"[celery] {msg}")
+        with sync_session() as session:
+            update_document_status_sync(session, doc_uuid, "failed", error_message=msg)
+            update_job_status_sync(session, job_uuid, JobStatus.FAILED, error_message=msg)
             session.commit()
         return {"document_id": document_id, "job_id": job_id, "status": "failed"}
 

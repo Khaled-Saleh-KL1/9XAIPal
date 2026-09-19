@@ -27,6 +27,16 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     result_expires=60 * 60 * 24,
+    # Redis re-delivers an unacked message once visibility_timeout (default
+    # 1h) expires — with acks_late that means any task longer than an hour
+    # runs again, forever. A 916-page book took 68 min and re-ran 10 times
+    # (2026-09-17), filling the disk. Must exceed the longest task there will
+    # ever be: a 10,000-page book is ~13 h of extraction alone, and its
+    # summarization can run longer. Seven days costs nothing — a worker that
+    # died mid-task hands its messages back on restart (below) rather than
+    # waiting this out — and no task here uses eta/countdown, the one thing
+    # a long timeout breaks.
+    broker_transport_options={"visibility_timeout": 7 * 24 * 60 * 60},
 )
 
 
@@ -37,8 +47,8 @@ celery_app.conf.update(
 # after a hung health check. A task running at that moment — a MinerU
 # extraction is minutes long — dies with the process. The message is
 # `acks_late`, so the broker still holds it, but Redis only re-delivers an
-# unacked message once its visibility timeout (one hour) expires: the
-# document sits at "extracting" for an hour, then starts over. Verified live
+# unacked message once its visibility timeout (7 days, see above) expires: the
+# document sits at "extracting" for hours, then starts over. Verified live
 # 2026-09-12: a book pasted as a URL at 20:48 was killed by the 20:50 deploy
 # and was still "extracting" at 21:08 with the message in `unacked`.
 #
@@ -49,7 +59,16 @@ celery_app.conf.update(
 # second worker's in-flight message would be restored too and run twice,
 # which the pipelines survive (clean_slate_sync) but is wasted work. This
 # box runs one.
-from celery.signals import worker_ready
+from celery.signals import worker_init, worker_ready
+
+
+@worker_init.connect
+def _sweep_extraction_scratch(**_kwargs) -> None:
+    # Before the pool forks, so no extraction is running yet — see
+    # sweep_stale_scratch_dirs for why it must not run from inside a task.
+    from app.extraction.mineru_client import sweep_stale_scratch_dirs
+
+    sweep_stale_scratch_dirs()
 
 
 @worker_ready.connect

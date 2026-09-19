@@ -132,7 +132,9 @@ services:
         - hf_token
     container_name: 9xaipal-celery-worker
     logging: *default-logging
-    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=1
+    # 2 on a 6-core / 11 GB box: each extraction runs its own MinerU server
+    # (~2-3 GB, ~3 cores); a third would starve the API and risk OOM.
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432

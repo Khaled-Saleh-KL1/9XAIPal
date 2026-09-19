@@ -89,7 +89,8 @@ async def test_on_queued_is_told_the_place_only_when_there_is_a_wait():
 
 
 @pytest.mark.asyncio
-async def test_redis_outage_degrades_to_no_pacing(monkeypatch):
+async def test_redis_outage_fails_closed(monkeypatch):
+    """No line, no slot: a Redis blip must never let a caller fire unpaced."""
     import app.core.redis as redis_module
 
     class Broken:
@@ -97,13 +98,28 @@ async def test_redis_outage_degrades_to_no_pacing(monkeypatch):
             raise ConnectionError("redis down")
 
     monkeypatch.setattr(redis_module, "_client", Broken())
-    turn = await pacer.take_turn("t", 1.0)
-    assert turn == pacer.Turn(0.0, 0)
+    with pytest.raises(pacer.PacerUnavailable):
+        await pacer.take_turn("t", 1.0)
+
+
+@pytest.mark.asyncio
+async def test_semantic_scholar_client_does_not_call_out_when_the_line_is_down(monkeypatch):
+    from app.search import semantic_scholar_client as s2
+
+    monkeypatch.setattr(settings, "semantic_scholar_api_key", "k")
+    monkeypatch.setattr(pacer, "wait_turn", AsyncMock(side_effect=pacer.PacerUnavailable("s2")))
+    fired = _s2_transport(monkeypatch)
+    assert await s2.match_reference("Vaswani et al. 2017") is s2.Unresolved.UNAVAILABLE
+    assert not fired
 
 
 def _s2_transport(monkeypatch):
-    """Route the client's httpx.AsyncClient at a canned Semantic Scholar hit."""
+    """Route the client's httpx.AsyncClient at a canned Semantic Scholar hit.
+    Returns the list of requests that reached it."""
+    fired: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        fired.append(request)
         assert request.headers["x-api-key"] == "k"
         return httpx.Response(200, json={"data": [{
             "title": "Attention Is All You Need",
@@ -113,6 +129,7 @@ def _s2_transport(monkeypatch):
         }]})
     real_client = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    return fired
 
 
 @pytest.mark.asyncio
