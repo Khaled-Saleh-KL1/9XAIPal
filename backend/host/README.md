@@ -13,7 +13,7 @@ when one does). Background and the incident that produced them:
 | `disk-watchdog.cron` | `/etc/cron.d/disk-watchdog` | The schedule; logs to `/var/log/disk-watchdog.log`. |
 | `disk-watchdog.env.example` | `/etc/disk-watchdog.env` (0600) | SMTP settings. Copy, fill in `SMTP_PASS` (a Gmail App Password). |
 | `docker-prune.weekly` | `/etc/cron.weekly/docker-prune` | The deploy's own image/build-cache cleanup, for weeks with no deploy. |
-| `docker-daemon.json` | `/etc/docker/daemon.json` | Caps BuildKit's cache at 20 GB (was 40 — it had grown to 42 GB on a 96 GB disk). Needs `systemctl restart docker`, which restarts every container on the box. |
+| `docker-daemon.json` | `/etc/docker/daemon.json` | Bounds BuildKit's cache: **`maxUsedSpace` 28 GB** is the ceiling, `reservedSpace` 18 GB the floor it prunes back to (see §9 — `reservedSpace` alone is *not* a cap). Needs `systemctl restart docker` — `systemctl reload docker` does **not** apply builder GC — and that restarts every container on the box. |
 
 ```bash
 cd backend/host

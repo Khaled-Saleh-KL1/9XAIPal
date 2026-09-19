@@ -418,12 +418,22 @@ merge, whatever changed. Two things throw the cache away:
    and 48 h. The worker's uv download cache (the `--mount=type=cache` in `Dockerfile.mineru`) is
    ~1.7 GB, so BuildKit evicts it on its own shortly after every worker build — the cold `uv sync`
    is the default here, not an accident. This needs root: install `host/docker-daemon.json` as
-   `/etc/docker/daemon.json` (6 GB for the cache mounts, **20 GB** overall — it was 40 GB until
-   2026-09-19, when the cache had reached 42 GB on a 96 GB disk and, together with §10's leak,
-   filled it; 20 GB still holds a warm cache for both images with room to spare), then
-   `sudo systemctl restart docker` (⚠ restarts every container on the box, the lcms stack
-   included — a few seconds, but pick the moment). `docker buildx inspect default` afterwards
-   should show rule #0 at 6 GiB.
+   `/etc/docker/daemon.json`, then `sudo systemctl restart docker` (⚠ restarts every container on
+   the box, the lcms stack included — a few seconds, but pick the moment; `systemctl reload
+   docker` is **not** enough, builder GC is not among the options SIGHUP re-reads — verified
+   2026-09-19: after a reload `buildx inspect` still showed the old numbers).
+
+   ⚠ **`reservedSpace` is a floor, not a ceiling** — the single most misleading thing here, and
+   what made the 40 GB in this file's earlier version useless. It (and its deprecated alias
+   `keepStorage`/`defaultKeepStorage`) says "never prune *below* this", so on its own it bounds
+   nothing: the cache had grown to 41.8 GB under a 40 GB `reservedSpace`, and to 30.3 GB under a
+   20 GB one within a day of 2026-09-19's change. The ceiling is **`maxUsedSpace`**: GC triggers
+   above it and prunes back down to `reservedSpace`. Both are set now — 18 GB floor / 28 GB
+   ceiling overall, 6 GB / 10 GB for the cache mounts. The floor is sized from the measurement
+   below it: a warm cache for both images is ~15.3 GB, so a floor under that would shave the warm
+   set on every GC and hand back the cold rebuild this section exists to avoid. `docker buildx
+   inspect default` afterwards should show rule #0 at 6 GiB reserved / 10 GiB max and rule #1 at
+   18 GiB / 28 GiB; `dockerd --validate --config-file` checks the file before you install it.
 
 ### Do not
 
@@ -464,7 +474,7 @@ What guards the disk now, innermost first:
   `df`, `docker system df`, the big directories and per-container layer sizes in the mail, a
   daily reminder while it stays there, one mail on recovery. Gmail SMTP on 587 (OVH blocks 25);
   install and settings in `host/README.md`.
-- **Nothing accumulates on its own any more**: the 20 GB build-cache cap (§9), the weekly prune
+- **Nothing accumulates on its own any more**: the 28 GB build-cache ceiling (§9), the weekly prune
   (`host/docker-prune.weekly`) for weeks without a deploy, and the scratch sweep above.
 - **One job per document** (`JobAlreadyActive`, HTTP `409`, code `JOB_ACTIVE`), taken under the
   same advisory lock as the queue-capacity check. Required by `--concurrency=2`: a re-extract
