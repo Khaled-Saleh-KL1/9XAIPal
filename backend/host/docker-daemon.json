@@ -1,0 +1,21 @@
+{
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "defaultKeepStorage": "20GB",
+      "policy": [
+        {
+          "reservedSpace": "6GB",
+          "keepDuration": "48h",
+          "filter": [
+            "type=source.local,type=exec.cachemount,type=source.git.checkout"
+          ]
+        },
+        {
+          "reservedSpace": "20GB",
+          "all": true
+        }
+      ]
+    }
+  }
+}

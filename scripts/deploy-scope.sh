@@ -26,7 +26,8 @@
 # deploy should be exercised by a real deploy, not by the next code change
 # that happens along). backend/nginx is NOT included: the host's nginx
 # config is installed by hand with sudo and nothing here can reload it — a
-# change there is announced as a notice by the workflow instead.
+# change there is announced as a notice by the workflow instead. The same
+# goes for backend/host (cron jobs, the disk watchdog, daemon.json).
 set -euo pipefail
 
 deployed="${1:-}"
@@ -44,7 +45,7 @@ frontend=0
 while IFS= read -r path; do
   [ -z "$path" ] && continue
   case "$path" in
-    backend/nginx/*) ;;                                  # hand-installed, see above
+    backend/nginx/*|backend/host/*) ;;                   # hand-installed, see above
     backend/tests/*|backend/pytest.ini|backend/*.md|backend/README*) ;;  # never reaches a container
     backend/*|scripts/deploy-once.sh|scripts/deploy-scope.sh) backend=1 ;;
     frontend/*) frontend=1 ;;

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Weekly: the same cleanup deploy.yml runs after every deploy, for the weeks
+# in which nothing is deployed. Dangling images only and build-cache records
+# unused for a week — never `-a`, and never the uv cache mount (see
+# DEPLOYMENT-PRODUCTION.md §9 "Do not"). Total cache size is bounded
+# separately by docker-daemon.json. Installed as /etc/cron.weekly/docker-prune.
+{
+  echo "== $(date -Is) =="
+  docker image prune -f
+  docker builder prune -f --filter until=168h --filter 'type!=exec.cachemount'
+} >> /var/log/docker-prune.log 2>&1

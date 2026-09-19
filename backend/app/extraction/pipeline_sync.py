@@ -6,6 +6,7 @@ from uuid import UUID
 from typing import Callable, Optional
 
 import re
+import shutil
 
 from sqlalchemy import text, Table, MetaData, Column, String, Integer, JSON, insert
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PG_UUID
@@ -13,13 +14,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.paths import assets_dir, documents_dir, ensure_storage_dirs, extracted_dir
+from app.core.paths import assets_dir, documents_dir, ensure_storage_dirs, extracted_dir, images_dir
 from app.extraction.mineru_client import (
     extract_pdf_sync,
     find_markdown_output,
     find_content_list,
     find_images,
     get_page_count,
+    ExtractionAborted,
     MinerUError,
 )
 from app.extraction.chunker import (
@@ -302,6 +304,20 @@ def resolve_extractor(
     return extract_pdf_sync(pdf_path, output_dir.name, on_progress=on_progress)
 
 
+class DocumentDeleted(ExtractionAborted):
+    """The document row vanished mid-pipeline: the reader deleted the paper.
+    DELETE /{paper_id} removed the rows (the job too, by cascade) and what
+    was on disk at that moment; the task's one remaining duty is to stop and
+    leave nothing behind. Subclasses ExtractionAborted so it can cut an
+    extraction short between page-batches."""
+
+
+def _assert_document_exists(session: Session, document_id: UUID) -> None:
+    row = session.execute(text("SELECT 1 FROM documents WHERE id = :id"), {"id": document_id}).first()
+    if row is None:
+        raise DocumentDeleted(str(document_id))
+
+
 def run_pipeline_sync(
     session: Session,
     *,
@@ -311,11 +327,17 @@ def run_pipeline_sync(
 ) -> None:
     """Full extraction pipeline executed synchronously within a single transaction wrapper."""
     try:
+        # Deleted while it sat in the queue: nothing to do at all.
+        _assert_document_exists(session, document_id)
+
         # Step 1: Extract with the configured extractor (EXTRACTOR_PROVIDER)
         update_job_status_sync(session, job_id, JobStatus.EXTRACTING)
         session.commit()
 
         def _report_extraction_progress(pages_done: int, total_pages: Optional[int]) -> None:
+            # Once per page-batch (~40 s): a paper deleted mid-extraction
+            # stops here instead of running to the end for nobody.
+            _assert_document_exists(session, document_id)
             if not total_pages:
                 return
             update_job_progress_sync(session, job_id, pages_done / total_pages)
@@ -417,6 +439,8 @@ def run_pipeline_sync(
         except Exception:
             logger.exception("[pipeline] title inference failed (non-fatal)")
 
+        # Last look before writing rows for a paper that may be gone.
+        _assert_document_exists(session, document_id)
         _finish_ingestion(
             session,
             document_id=document_id,
@@ -426,6 +450,14 @@ def run_pipeline_sync(
             page_count=page_count,
         )
 
+    except DocumentDeleted:
+        # Nothing to mark failed — the rows are gone. Remove what this run
+        # produced after the delete endpoint did its own cleanup.
+        session.rollback()
+        for leftover in (extracted_dir() / str(document_id), images_dir() / str(document_id)):
+            shutil.rmtree(leftover, ignore_errors=True)
+        logger.info(f"[pipeline] {document_id} was deleted mid-ingestion — stopped and removed its output")
+        return
     except Exception as e:
         _handle_ingestion_failure(session, document_id, job_id, e)
         raise e

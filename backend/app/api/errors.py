@@ -38,6 +38,27 @@ class TooManyQueuedJobs(Exception):
         self.limit = limit
 
 
+class JobAlreadyActive(Exception):
+    """A job for this document is still queued or running — see
+    app.services.ingestion.create_ingestion_job. With the worker at
+    --concurrency > 1 a second job on the same paper would run alongside the
+    first: both writing extracted/<id>/, each wiping the other's chunks."""
+    def __init__(self, document_id: str, status: str):
+        self.document_id = document_id
+        self.status = status
+
+
+class InsufficientStorage(Exception):
+    """The disk under storage_root is at or past
+    app.core.config.ingestion_disk_refuse_percent — see
+    app.services.ingestion.check_disk_headroom. Postgres shares that disk and
+    PANICs on ENOSPC (it did on 2026-09-18), so once it is this full the only
+    safe answer to a new ingestion is no."""
+    def __init__(self, used_percent: int, limit_percent: int):
+        self.used_percent = used_percent
+        self.limit_percent = limit_percent
+
+
 class NotAdmitted(Exception):
     """Logged in, but the site is at its concurrent-active-user cap and this
     session hasn't been admitted yet — see app.core.capacity. Raised by
@@ -78,6 +99,29 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=503,
             content={"detail": f"Model unavailable: {exc.model}", "code": "MODEL_UNAVAILABLE"},
+        )
+
+    @app.exception_handler(JobAlreadyActive)
+    async def job_already_active_handler(request: Request, exc: JobAlreadyActive):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail": f"This paper is already being processed ({exc.status}) — wait for it to finish.",
+                "code": "JOB_ACTIVE",
+                "status": exc.status,
+            },
+        )
+
+    @app.exception_handler(InsufficientStorage)
+    async def insufficient_storage_handler(request: Request, exc: InsufficientStorage):
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": "The server is almost out of disk space — new papers can't be processed until it's freed.",
+                "code": "DISK_FULL",
+                "used_percent": exc.used_percent,
+                "limit_percent": exc.limit_percent,
+            },
         )
 
     @app.exception_handler(TooManyQueuedJobs)

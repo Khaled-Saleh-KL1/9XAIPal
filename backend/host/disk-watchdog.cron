@@ -1,0 +1,2 @@
+# Root-disk watchdog: emails at 80%/90% and on recovery. See /usr/local/sbin/disk-watchdog
+*/15 * * * * root /usr/local/sbin/disk-watchdog >> /var/log/disk-watchdog.log 2>&1
