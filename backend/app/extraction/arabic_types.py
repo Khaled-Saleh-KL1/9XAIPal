@@ -85,3 +85,24 @@ class GeminiKeysExhausted(RuntimeError):
         self.best_partial = best_partial
         self.attempt_usage = tuple(attempt_usage)
         super().__init__(f"Gemini OCR keys exhausted ({final_kind}).")
+
+
+@dataclass(frozen=True)
+class ArabicOcrPage:
+    """One committed page of provider Markdown and its provenance."""
+
+    page_number: int
+    raw_markdown: str
+    markdown: str
+    provider: str
+    model: str
+    repaired: bool = False
+
+
+@dataclass(frozen=True)
+class ParsedPagePrefix:
+    """The valid contiguous prefix parsed from a multi-page OCR response."""
+
+    pages: tuple[ArabicOcrPage, ...]
+    first_uncommitted_page: int | None
+    is_complete: bool
