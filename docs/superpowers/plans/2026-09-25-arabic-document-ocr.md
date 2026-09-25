@@ -409,7 +409,7 @@ git commit -m "feat: persist Arabic routing metadata"
 - Produces:
   `classify_document(pdf_path: Path, vision_call: VisionCall | None = None) -> ClassificationDecision`.
 
-- [ ] **Step 1: Define the domain contract in failing tests**
+- [x] **Step 1: Define the domain contract in failing tests**
 
 ```python
 # backend/tests/test_arabic_classifier.py
@@ -442,7 +442,7 @@ Also add fixtures for English-only, scanned printed Arabic, confident
 handwriting, isolated handwritten signatures on printed forms, and no-readable-
 text images.
 
-- [ ] **Step 2: Run and verify import failure**
+- [x] **Step 2: Run and verify import failure**
 
 ```bash
 cd backend
@@ -451,7 +451,7 @@ POSTGRES_DB=9xaipal_test pytest tests/test_arabic_classifier.py -q
 
 Expected: FAIL because the classifier modules do not exist.
 
-- [ ] **Step 3: Add exact enums and result types**
+- [x] **Step 3: Add exact enums and result types**
 
 ```python
 # backend/app/extraction/arabic_types.py
@@ -483,7 +483,7 @@ class ClassificationDecision:
     votes: tuple[PageStyleVote, ...] = field(default_factory=tuple)
 ```
 
-- [ ] **Step 4: Implement all-page local screening and conservative aggregation**
+- [x] **Step 4: Implement all-page local screening and conservative aggregation**
 
 ```python
 # backend/app/extraction/arabic_classifier.py
@@ -512,7 +512,7 @@ expected object/array. A confident handwritten decision requires all primary-
 content evidence to be non-printed and aggregate confidence at or above
 `ARABIC_HANDWRITTEN_CONFIDENCE_MIN`; otherwise abstain.
 
-- [ ] **Step 5: Pass classifier tests**
+- [x] **Step 5: Pass classifier tests**
 
 ```bash
 cd backend
@@ -521,7 +521,7 @@ POSTGRES_DB=9xaipal_test pytest tests/test_arabic_classifier.py -q
 
 Expected: PASS, including the five Review Focus cases owned by this task.
 
-- [ ] **Step 6: Commit the classifier**
+- [x] **Step 6: Commit the classifier**
 
 ```bash
 git add backend/app/extraction/arabic_types.py \
