@@ -35,7 +35,11 @@ Testing Library, Docker Compose.
   English VLM, book, article, or web-search pipelines.
 - `ARABIC_OCR_ENABLED=false` and `ARABIC_HANDWRITTEN_OCR_ENABLED=false` by
   default.
-- Printed OCR model: `gemini-3.7-flash` with `thinking_level="low"`.
+- Printed OCR model: `gemini-3.7-flash` with `thinking_level="low"`, the
+  lowest supported level. The current Gemini API does not offer a true
+  thinking-off setting for 3.7 Flash, so thought tokens may still be billed;
+  this is the closest supported configuration to the requested no-thinking
+  mode while keeping the selected model.
 - Handwritten model: `gemini-3.1-pro-preview`, configured but never called while
   the handwritten feature flag is false.
 - Local router model: `qwen3-vl:4b-instruct`; Gemma fallback:
@@ -1580,7 +1584,7 @@ git commit -m "test: add Arabic document OCR evaluation harness"
 - Produces: verified feature-flagged branch, evidence report, operator runbook,
   and a pull request; does not deploy to the VPS.
 
-- [ ] **Step 1: Write the operator runbook before live testing**
+- [x] **Step 1: Write the operator runbook before live testing**
 
 Document required local Ollama model installation, memory/version preflight,
 ignored `.env` variable names, safe enable/disable steps, classifier
@@ -1590,7 +1594,7 @@ Pro remains disabled. Include no credential values. Also draft
 `docs/superpowers/plans/2026-09-25-arabic-document-ocr-pr.md` with the PR
 sections listed in Step 8; populate measured sections only after verification.
 
-- [ ] **Step 2: Run the complete automated suite**
+- [x] **Step 2: Run the complete automated suite**
 
 ```bash
 cd backend
@@ -1607,7 +1611,16 @@ Expected: every command exits 0. If the full backend suite has a pre-existing
 failure, record the exact command/output and prove all Arabic and directly
 affected regression tests still pass; do not describe the suite as green.
 
+Verified in the sandbox: full backend suite 831 passed; Arabic-focused suite
+85 passed (including review regression tests); frontend suite 16 passed; frontend production build passed with a
+large-chunk advisory; both Compose configs passed (production config used a
+throwaway value for required interpolation only). The test container used
+`DEBUG=true` and mounted the full repository at its expected root.
+
 - [ ] **Step 3: Run the real frozen sandbox corpus when supplied**
+
+NOT RUN: the private frozen corpus/ground truth is absent from this workspace.
+No live provider calls or accuracy claims were made; this remains a merge gate.
 
 Place credentials only in ignored `backend/.env`, confirm with
 `git check-ignore -v backend/.env`, then run:
@@ -1628,6 +1641,9 @@ correct classifications.
 
 - [ ] **Step 4: Perform visual browser checks against the sandbox**
 
+NOT RUN: the approved PDFs and running browser sandbox were not supplied. Do
+not treat synthetic tests as visual acceptance evidence.
+
 Upload one English, printed Arabic, mixed, uncertain, and handwritten-control
 PDF. Verify English chunks are unchanged/LTR; Arabic and mixed body content is
 RTL; numerals and English spans remain readable; tables/lists/headings work in
@@ -1635,7 +1651,7 @@ light and dark themes; the uncertain action persists across reload; and the
 handwritten message persists with zero chunks. Save screenshots in the
 untracked evaluation run directory, not in the product tree.
 
-- [ ] **Step 5: Audit secrets, scope, and changes**
+- [x] **Step 5: Audit secrets, scope, and changes**
 
 ```bash
 git diff --check main...HEAD
@@ -1659,13 +1675,29 @@ Expected: no whitespace errors, no untracked implementation files, no key
 matches, and the final diff command is empty. `image.png` and the root
 `pyproject.toml` in the original worktree remain untouched.
 
-- [ ] **Step 6: Request code review and resolve findings**
+Verified: whitespace checks pass; code, runbook, PR draft, and branch-history
+scans found no credential values; `backend/.env` is ignored; protected
+MinerU/VLM/article-extraction/web-search paths have an empty diff. The only
+match from an intentionally broader scan was this plan's literal credential-
+detection regex, not a key. The original worktree's `image.png` and root
+`pyproject.toml` remain unmodified by this branch.
+
+- [x] **Step 6: Request code review and resolve findings**
 
 Use `superpowers:requesting-code-review`, review every finding against the
 approved spec, rerun the focused tests after fixes, then rerun Step 2. Do not
 weaken the handwriting abstention or English-isolation tests to make them pass.
 
-- [ ] **Step 7: Commit operations documentation**
+Review found two classifier issues and one documentation mismatch. English
+text-layer PDFs with embedded images now receive local visual language
+screening rather than bypassing the classifier, and uncertain routing with no
+primary-content votes now abstains with zero confidence instead of raising an
+exception. The runbook now correctly documents comma-separated Gemini keys.
+The regressions were verified test-first; follow-up review found no remaining
+findings. Focused Arabic tests: 85 passed (21.07s); the final full backend
+suite rerun: 831 passed (209.95s).
+
+- [x] **Step 7: Commit operations documentation**
 
 ```bash
 git add docs/runbooks/arabic-document-ocr.md \
