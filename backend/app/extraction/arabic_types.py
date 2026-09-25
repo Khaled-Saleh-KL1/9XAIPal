@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Sequence
 
 
@@ -62,6 +63,7 @@ class OcrBatchResult:
     key_index: int | None
     usage: OcrUsage
     latency_ms: int
+    attempt_count: int = 1
 
 
 class GeminiRequestInvalid(RuntimeError):
@@ -80,10 +82,17 @@ class GeminiKeysExhausted(RuntimeError):
         final_kind: str,
         best_partial: OcrBatchResult | None,
         attempt_usage: Sequence[OcrUsage],
+        *,
+        attempt_count: int | None = None,
+        latency_ms: int = 0,
     ) -> None:
         self.final_kind = final_kind
         self.best_partial = best_partial
         self.attempt_usage = tuple(attempt_usage)
+        self.attempt_count = (
+            len(self.attempt_usage) if attempt_count is None else attempt_count
+        )
+        self.latency_ms = latency_ms
         super().__init__(f"Gemini OCR keys exhausted ({final_kind}).")
 
 
@@ -119,7 +128,29 @@ class GemmaRequestInvalid(RuntimeError):
 class GemmaKeysExhausted(RuntimeError):
     """The dedicated Gemma OCR target and its configured keys all failed."""
 
-    def __init__(self, final_kind: str, attempt_usage: Sequence[OcrUsage]) -> None:
+    def __init__(
+        self,
+        final_kind: str,
+        attempt_usage: Sequence[OcrUsage],
+        *,
+        attempt_count: int | None = None,
+        latency_ms: int = 0,
+    ) -> None:
         self.final_kind = final_kind
         self.attempt_usage = tuple(attempt_usage)
+        self.attempt_count = (
+            len(self.attempt_usage) if attempt_count is None else attempt_count
+        )
+        self.latency_ms = latency_ms
         super().__init__(f"Gemma Arabic OCR keys exhausted ({final_kind}).")
+
+
+@dataclass(frozen=True)
+class ArabicExtractionResult:
+    """Published Arabic OCR artifacts and non-secret provenance."""
+
+    output_dir: Path
+    extractor: str
+    pages: tuple[ArabicOcrPage, ...]
+    provider_summary: list[dict]
+    usage: OcrUsage

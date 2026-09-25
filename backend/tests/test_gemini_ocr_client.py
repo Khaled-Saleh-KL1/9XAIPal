@@ -114,6 +114,7 @@ def test_429_rotates_to_next_key_and_never_logs_key_material(fake_clients, caplo
     assert result.key_index == 1
     assert fake_clients["secret-key-1"].models.calls == 1
     assert fake_clients["secret-key-2"].models.calls == 1
+    assert result.attempt_count == 2
     assert "secret-key-1" not in caplog.text
     assert "secret-key-2" not in caplog.text
 
@@ -212,6 +213,7 @@ def test_usage_includes_billed_thought_tokens_and_retries(fake_clients):
     assert result.usage.output_tokens == 34
     assert result.usage.thought_tokens == 8
     assert result.usage.total_tokens == 64
+    assert result.attempt_count == 2
 
 
 def test_no_configured_keys_fails_without_calling_provider(fake_clients):

@@ -111,10 +111,12 @@ class GemmaArabicFallback:
         last_output_error: GemmaOutputInvalid | None = None
         final_kind = "provider_unavailable"
         batch_started = time.monotonic()
+        attempt_count = 0
 
         for key_index, api_key in enumerate(key_slots):
             for attempt_index in range(_MAX_OUTPUT_ATTEMPTS_PER_KEY):
                 started = time.monotonic()
+                attempt_count += 1
                 client = None
                 try:
                     client = self.http_client_factory(api_key)
@@ -207,6 +209,7 @@ class GemmaArabicFallback:
                             key_index=key_index if api_key is not None else None,
                             usage=totals,
                             latency_ms=duration,
+                            attempt_count=attempt_count,
                         )
                     final_kind = "invalid_output"
                     last_output_error = GemmaOutputInvalid(
@@ -224,7 +227,12 @@ class GemmaArabicFallback:
                     continue
                 break
 
-        exhausted = GemmaKeysExhausted(final_kind=final_kind, attempt_usage=usages)
+        exhausted = GemmaKeysExhausted(
+            final_kind=final_kind,
+            attempt_usage=usages,
+            attempt_count=attempt_count,
+            latency_ms=self._elapsed_ms(batch_started),
+        )
         if final_kind == "invalid_output" and last_output_error is not None:
             raise exhausted from last_output_error
         raise exhausted

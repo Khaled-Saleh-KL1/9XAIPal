@@ -127,6 +127,7 @@ class GeminiOcrClient:
         final_kind = "no_keys_configured"
         batch_started = time.monotonic()
         last_output_error: GeminiOutputInvalid | None = None
+        attempt_count = 0
 
         if not keys:
             raise GeminiKeysExhausted(
@@ -138,6 +139,7 @@ class GeminiOcrClient:
         for key_index, api_key in enumerate(keys):
             for attempt_index in range(_MAX_ATTEMPTS_PER_KEY):
                 attempt_started = time.monotonic()
+                attempt_count += 1
                 client = None
                 try:
                     client = self.client_factory(api_key)
@@ -223,11 +225,12 @@ class GeminiOcrClient:
                         )
                         return OcrBatchResult(
                             text=text,
-                            provider="gemini",
+                            provider="gemini_arabic_flash",
                             model=self.settings.arabic_gemini_printed_model,
                             key_index=key_index,
                             usage=_sum_usage(all_usage),
                             latency_ms=duration_ms,
+                            attempt_count=attempt_count,
                         )
                     raise GeminiOutputInvalid(
                         "Gemini returned an incomplete page-bounded OCR response."
@@ -240,11 +243,12 @@ class GeminiOcrClient:
                             best_partial_count = completed_pages
                             best_partial = OcrBatchResult(
                                 text=text,
-                                provider="gemini",
+                                provider="gemini_arabic_flash",
                                 model=self.settings.arabic_gemini_printed_model,
                                 key_index=key_index,
                                 usage=_sum_usage(all_usage),
                                 latency_ms=self._elapsed_ms(batch_started),
+                                attempt_count=attempt_count,
                             )
                     self._log_attempt_failure(
                         key_index,
@@ -261,6 +265,8 @@ class GeminiOcrClient:
             final_kind=final_kind,
             best_partial=best_partial,
             attempt_usage=all_usage,
+            attempt_count=attempt_count,
+            latency_ms=self._elapsed_ms(batch_started),
         )
         if final_kind == "invalid_output" and last_output_error is not None:
             raise exhausted from last_output_error
