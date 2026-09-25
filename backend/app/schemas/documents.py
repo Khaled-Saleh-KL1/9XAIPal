@@ -18,6 +18,9 @@ class DocumentResponse(BaseModel):
     page_count: Optional[int] = None
     status: str
     error_message: Optional[str] = None
+    error_code: Optional[str] = None
+    action_required: Optional[str] = None
+    allowed_actions: list[str] = Field(default_factory=list)
     job_error_code: Optional[str] = None
     job_error_message: Optional[str] = None
     created_at: datetime

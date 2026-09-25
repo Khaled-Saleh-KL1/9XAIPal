@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_current_user
+from app.api.arabic_status import document_error_fields
 from app.core.logging import get_logger
 from app.core.paths import documents_dir, images_dir
 from app.api.errors import ChunkNotFound, DocumentNotFound
@@ -168,8 +169,16 @@ async def get_full_document(
                  or (doc.get("original_filename") or "").rsplit(".", 1)[0],
         "doc_kind": doc.get("doc_kind"),
         "status": doc.get("status"),
+        **document_error_fields(doc),
         "page_count": doc.get("page_count"),
         "extractor": doc.get("extractor"),
+        "detected_language": doc.get("detected_language"),
+        "detected_writing_style": doc.get("detected_writing_style"),
+        "text_direction": doc.get("text_direction"),
+        "classifier_model": doc.get("classifier_model"),
+        "classification_confidence": doc.get("classification_confidence"),
+        "classification_source": doc.get("classification_source"),
+        "ocr_provider_summary": doc.get("ocr_provider_summary"),
         # Where a row that arrived as a URL came from. NULL for anything
         # uploaded as a file. Set on doc_kind='article' (no raw PDF behind
         # it, so /raw has nothing to fall back to) and also on a

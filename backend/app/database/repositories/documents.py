@@ -62,7 +62,21 @@ async def get_document(session: AsyncSession, document_id: UUID, user_id: UUID) 
     confirm the document exists, a 404 doesn't (see docs on the retrofit).
     """
     result = await session.execute(
-        text("SELECT * FROM documents WHERE id = :id AND user_id = :user_id"),
+        text("""
+            SELECT d.*, j.status AS job_status,
+                   j.progress_fraction AS job_progress_fraction,
+                   j.error_code AS job_error_code,
+                   j.error_message AS job_error_message
+            FROM documents d
+            LEFT JOIN LATERAL (
+                SELECT status, progress_fraction, error_code, error_message
+                FROM ingestion_jobs
+                WHERE document_id = d.id
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ) j ON TRUE
+            WHERE d.id = :id AND d.user_id = :user_id
+        """),
         {"id": document_id, "user_id": user_id},
     )
     row = result.mappings().first()
@@ -112,7 +126,7 @@ async def list_documents(
                 SELECT status, progress_fraction, error_code, error_message
                 FROM ingestion_jobs
                 WHERE document_id = d.id
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
             ) j ON TRUE
             LEFT JOIN LATERAL (

@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_settings, get_current_user
+from app.api.arabic_status import document_error_fields
 from app.api.errors import DocumentNotFound, TooManyQueuedJobs
 from app.core.config import Settings, settings
 from app.core.logging import get_logger
@@ -470,7 +471,7 @@ async def list_papers(
     docs = await doc_service.list_documents(db, current_user["id"], limit=limit, offset=offset)
     total = await doc_service.count_documents(db, current_user["id"])
     return DocumentListResponse(
-        documents=[DocumentResponse(**d) for d in docs],
+        documents=[DocumentResponse(**{**d, **document_error_fields(d)}) for d in docs],
         total=total,
     )
 
@@ -501,7 +502,7 @@ async def get_paper(
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
-    return DocumentResponse(**doc)
+    return DocumentResponse(**{**doc, **document_error_fields(doc)})
 
 
 @router.get("/{paper_id}/progress")
@@ -520,13 +521,15 @@ async def get_paper_progress(
     job_status = None
     progress_fraction = None
     queue_position = None
+    job_error_code = doc.get("job_error_code")
+    job_error_message = doc.get("job_error_message")
     try:
         job_row = await db.execute(
             text("""
-                SELECT status, progress_fraction, created_at
+                SELECT status, progress_fraction, created_at, error_code, error_message
                 FROM ingestion_jobs
                 WHERE document_id = :doc_id
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
             """),
             {"doc_id": paper_id},
@@ -535,6 +538,8 @@ async def get_paper_progress(
         if job:
             job_status = job["status"]
             progress_fraction = job["progress_fraction"]
+            job_error_code = job["error_code"]
+            job_error_message = job["error_message"]
             # Celery runs this box's pipeline at --concurrency=1, so while
             # still 'queued' this job's actual position is just how many
             # other still-queued jobs got there first — same table the
@@ -559,10 +564,18 @@ async def get_paper_progress(
         )
         raw_page_count = count_row.scalar_one()
 
+    error_fields = document_error_fields(
+        {
+            **doc,
+            "job_error_code": job_error_code,
+            "job_error_message": job_error_message,
+        }
+    )
     return {
         "paper_id": str(paper_id),
         "status": doc["status"],
         "job_status": job_status or doc["status"],
+        **error_fields,
         # Real progress *within* job_status (e.g. pages extracted / total
         # while extracting) — None when there's nothing finer than the status.
         "progress_fraction": progress_fraction,
@@ -570,8 +583,14 @@ async def get_paper_progress(
         # 'queued' — None once it starts extracting (nothing left to wait on).
         "queue_position": queue_position,
         "page_count": doc.get("page_count"),
-        "error_message": doc.get("error_message"),
         "extractor": doc.get("extractor"),
+        "detected_language": doc.get("detected_language"),
+        "detected_writing_style": doc.get("detected_writing_style"),
+        "text_direction": doc.get("text_direction"),
+        "classifier_model": doc.get("classifier_model"),
+        "classification_confidence": doc.get("classification_confidence"),
+        "classification_source": doc.get("classification_source"),
+        "ocr_provider_summary": doc.get("ocr_provider_summary"),
         # Raw-HTML snapshot crawl (see services/article_crawl.py) — 'none'
         # for anything that isn't doc_kind='article'. Independent of the
         # fields above: a 'failed' or still-'pending' snapshot never means
@@ -631,7 +650,7 @@ async def rename_paper(
     if not doc:
         raise DocumentNotFound(str(paper_id))
     await db.commit()
-    return DocumentResponse(**doc)
+    return DocumentResponse(**{**doc, **document_error_fields(doc)})
 
 
 @router.patch("/{paper_id}/done", response_model=DocumentResponse)
@@ -656,7 +675,7 @@ async def set_done(
     if not doc:
         raise DocumentNotFound(str(paper_id))
     await db.commit()
-    return DocumentResponse(**doc)
+    return DocumentResponse(**{**doc, **document_error_fields(doc)})
 
 
 
