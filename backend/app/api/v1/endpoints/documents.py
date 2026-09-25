@@ -8,14 +8,14 @@ from uuid import UUID, uuid4
 
 import aiofiles
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db, get_settings, get_current_user
 from app.api.errors import DocumentNotFound, TooManyQueuedJobs
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.core.logging import get_logger
 from app.core.paths import documents_dir, assets_dir, extracted_dir, images_dir, raw_snapshots_dir, ensure_storage_dirs
 from app.schemas.documents import (
@@ -26,13 +26,21 @@ from app.schemas.documents import (
     RenameDocumentRequest,
     RenameDoneFolderRequest,
     SetDoneRequest,
+    ArabicWritingStyleConfirmation,
 )
 from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services import library_search
 from app.services.reference_finder import canonical_pdf_url
-from app.services.ingestion import check_queue_capacity, create_ingestion_job, update_job_status as update_job_status_svc
+from app.services.ingestion import (
+    check_queue_capacity,
+    create_ingestion_job,
+    persist_arabic_writing_style_confirmation,
+    requeue_failed_job,
+    update_job_status as update_job_status_svc,
+)
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
+from app.extraction.arabic_types import HandwrittenArabicUnavailable
 from app.workers.tasks import (
     process_ingestion,
     process_article_ingestion,
@@ -995,6 +1003,173 @@ async def rechunk_paper(
             else "Re-chunked from cached extraction. Reopen the paper to read it."
         ),
     }
+
+
+@router.post("/{paper_id}/arabic-writing-style")
+async def confirm_arabic_writing_style(
+    paper_id: UUID,
+    payload: ArabicWritingStyleConfirmation,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Resolve an uncertain Arabic OCR route using the existing failed job.
+
+    A printed choice requeues that same job. A handwritten choice is recorded
+    as user-confirmed but remains failed until a billing-enabled Gemini Pro
+    implementation is available; it never reserves queue capacity or calls a
+    provider.
+    """
+    document_result = await db.execute(
+        text(
+            "SELECT id, filename FROM documents "
+            "WHERE id=:id AND user_id=:user_id FOR UPDATE"
+        ),
+        {"id": paper_id, "user_id": current_user["id"]},
+    )
+    document = document_result.mappings().first()
+    if not document:
+        raise DocumentNotFound(str(paper_id))
+
+    job_result = await db.execute(
+        text(
+            "SELECT id, status, error_code FROM ingestion_jobs "
+            "WHERE document_id=:document_id "
+            "ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE"
+        ),
+        {"document_id": paper_id},
+    )
+    job = job_result.mappings().first()
+    if (
+        not job
+        or job["status"] != "failed"
+        or job["error_code"] != "arabic_style_confirmation_required"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "arabic_confirmation_not_required",
+                "message": "This document is not waiting for Arabic writing-style confirmation.",
+            },
+        )
+
+    if payload.writing_style == "handwritten":
+        await persist_arabic_writing_style_confirmation(
+            db, paper_id, payload.writing_style
+        )
+        unavailable = HandwrittenArabicUnavailable()
+        await update_job_status_svc(
+            db,
+            job["id"],
+            "failed",
+            error_message=unavailable.public_message,
+            error_code=unavailable.error_code,
+        )
+        await update_doc_status_repo(
+            db, paper_id, "failed", error_message=unavailable.public_message
+        )
+        await db.commit()
+        return {
+            "paper_id": str(paper_id),
+            "job_id": str(job["id"]),
+            "status": "failed",
+            "error_code": unavailable.error_code,
+            "message": unavailable.public_message,
+        }
+
+    if not settings.arabic_ocr_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "arabic_ocr_disabled",
+                "message": "Arabic OCR is disabled on this server; no retry was queued.",
+            },
+        )
+
+    try:
+        # Capacity reservation and same-row transition are transactional. Do
+        # this before changing the document so a full queue leaves no partial
+        # manual confirmation behind.
+        queued_job = await requeue_failed_job(db, job["id"])
+    except TooManyQueuedJobs:
+        await db.rollback()
+        raise
+    except ValueError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "arabic_confirmation_not_required",
+                "message": "This ingestion job is no longer eligible for confirmation.",
+            },
+        ) from None
+
+    await persist_arabic_writing_style_confirmation(
+        db, paper_id, payload.writing_style
+    )
+    await db.execute(
+        text(
+            "UPDATE documents SET status='processing', error_message=NULL, "
+            "extractor=NULL, ocr_provider_summary=NULL, updated_at=NOW() WHERE id=:id"
+        ),
+        {"id": paper_id},
+    )
+    await db.commit()
+
+    try:
+        process_ingestion.delay(
+            str(paper_id), str(queued_job["id"]), document["filename"]
+        )  # type: ignore[attr-defined]
+    except Exception as dispatch_exc:
+        logger.error(
+            "Failed to dispatch confirmed Arabic OCR for %s (error type: %s)",
+            paper_id,
+            type(dispatch_exc).__name__,
+        )
+        dispatch_error_code = "arabic_confirmation_dispatch_failed"
+        dispatch_error_message = (
+            "The confirmed Arabic document could not be queued. "
+            "Your original file is preserved; please retry."
+        )
+        try:
+            await update_doc_status_repo(
+                db, paper_id, "failed", error_message=dispatch_error_message
+            )
+            await update_job_status_svc(
+                db,
+                queued_job["id"],
+                "failed",
+                error_message=dispatch_error_message,
+                error_code=dispatch_error_code,
+            )
+            await db.commit()
+        except Exception as persistence_exc:
+            await db.rollback()
+            logger.error(
+                "Could not persist Arabic confirmation dispatch failure for %s "
+                "(error type: %s)",
+                paper_id,
+                type(persistence_exc).__name__,
+            )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "paper_id": str(paper_id),
+                "job_id": str(queued_job["id"]),
+                "status": "failed",
+                "error_code": dispatch_error_code,
+                "message": dispatch_error_message,
+            },
+        )
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "paper_id": str(paper_id),
+            "job_id": str(queued_job["id"]),
+            "status": "arabic_ocr_queued",
+            "message": "Arabic OCR was queued. Poll /progress to monitor processing.",
+        },
+    )
 
 
 @router.post("/{paper_id}/reextract", status_code=202)

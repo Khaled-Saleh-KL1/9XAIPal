@@ -115,6 +115,47 @@ async def requeue_failed_job(session: AsyncSession, job_id: UUID) -> dict:
     return dict(row)
 
 
+async def persist_arabic_writing_style_confirmation(
+    session: AsyncSession,
+    document_id: UUID,
+    writing_style: str,
+) -> None:
+    """Persist a user's Arabic style choice inside the caller's transaction.
+
+    The document row is locked and owner-checked by the endpoint. Preserve a
+    previously verified mixed-language classification; otherwise this Arabic
+    confirmation establishes Arabic as the document language. Human-confirmed
+    metadata must not retain a model confidence score as if the model made the
+    final decision.
+    """
+    if writing_style not in {"printed", "handwritten"}:
+        raise ValueError("writing_style must be printed or handwritten")
+
+    result = await session.execute(
+        text("SELECT detected_language FROM documents WHERE id=:id"),
+        {"id": document_id},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise ValueError("document does not exist")
+    existing_language = str(row.get("detected_language") or "").lower()
+    language = existing_language if existing_language == "mixed" else "arabic"
+
+    await session.execute(
+        text(
+            "UPDATE documents SET detected_language=:language, "
+            "detected_writing_style=:writing_style, text_direction='rtl', "
+            "classifier_model=NULL, classification_confidence=NULL, "
+            "classification_source='user_confirmed', updated_at=NOW() WHERE id=:id"
+        ),
+        {
+            "language": language,
+            "writing_style": writing_style,
+            "id": document_id,
+        },
+    )
+
+
 async def store_chunks(
     session: AsyncSession,
     document_id: UUID,

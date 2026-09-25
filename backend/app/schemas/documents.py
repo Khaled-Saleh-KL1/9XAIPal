@@ -66,6 +66,12 @@ class RenameDocumentRequest(BaseModel):
     title: Optional[str] = None
 
 
+class ArabicWritingStyleConfirmation(BaseModel):
+    """Human choice used only after Arabic style classification abstains."""
+
+    writing_style: Literal["printed", "handwritten"]
+
+
 class SetDoneRequest(BaseModel):
     # True shelves the document as done (in `folder`, or at the top of the
     # Done area when None/blank); False puts it back on the reading shelf and
