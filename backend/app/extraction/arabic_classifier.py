@@ -1,9 +1,10 @@
 """Local-only Arabic document language and writing-style classification.
 
-English documents with a substantial Latin text layer are routed without a
-model call. Other documents are screened page-by-page by local Ollama; only
-ambiguous or handwriting-like pages receive a full-page-plus-region second
-vote. Any unresolved disagreement abstains instead of guessing handwritten.
+Text-only English PDFs with a substantial Latin text layer and no embedded
+images are routed without a model call. PDFs with embedded images, Arabic text,
+or insufficient text are screened page-by-page by local Ollama; only ambiguous
+or handwriting-like pages receive a full-page-plus-region second vote. Any
+unresolved disagreement abstains instead of guessing handwritten.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ class TextPageEvidence:
     page_idx: int
     arabic_chars: int
     latin_chars: int
+    image_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,10 @@ class DocumentTextEvidence:
     @property
     def has_latin_body(self) -> bool:
         return self.latin_char_count >= settings.arabic_min_body_char_count
+
+    @property
+    def has_embedded_images(self) -> bool:
+        return any(page.image_count > 0 for page in self.pages)
 
     @property
     def language(self) -> str:
@@ -132,6 +138,7 @@ def inspect_text_layers(pdf_path: Path) -> DocumentTextEvidence:
                     page_idx=page_idx,
                     arabic_chars=count_arabic_letters(page.get_text("text")),
                     latin_chars=count_latin_letters(page.get_text("text")),
+                    image_count=len(page.get_images(full=True)),
                 )
                 for page_idx, page in enumerate(document, start=1)
             )
@@ -579,8 +586,9 @@ def aggregate_votes(
         route = DocumentRoute.ARABIC_STYLE_UNCERTAIN
         direction = "rtl" if language in {"arabic", "mixed"} else "auto"
 
+    primary_confidences = [vote.confidence for vote in all_votes if vote.primary_content]
     if route == DocumentRoute.ARABIC_STYLE_UNCERTAIN and all_votes:
-        confidence = min(vote.confidence for vote in all_votes if vote.primary_content)
+        confidence = min(primary_confidences) if primary_confidences else 0.0
     elif confidence_votes:
         confidence = min(vote.confidence for vote in confidence_votes)
     elif all_votes:
@@ -604,7 +612,11 @@ def classify_document(
 ) -> ClassificationDecision:
     """Classify every document page, abstaining on unresolved Arabic style."""
     evidence = inspect_text_layers(pdf_path)
-    if evidence.has_latin_body and not evidence.has_arabic_body:
+    if (
+        evidence.has_latin_body
+        and not evidence.has_arabic_body
+        and not evidence.has_embedded_images
+    ):
         return ClassificationDecision(
             route=DocumentRoute.ENGLISH,
             language="english",

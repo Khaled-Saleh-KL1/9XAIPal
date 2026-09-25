@@ -35,6 +35,24 @@ def english_only_pdf(tmp_path):
 
 
 @pytest.fixture
+def english_text_with_embedded_image_pdf(tmp_path):
+    path = tmp_path / "english-text-with-image.pdf"
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 8, 8), False)
+    pixmap.clear_with(255)
+    image_bytes = pixmap.tobytes("png")
+    doc = fitz.open()
+    page = doc.new_page(width=420, height=595)
+    page.insert_text(
+        (32, 60),
+        "English selectable text layer with enough words to be a document body. " * 4,
+    )
+    page.insert_image(fitz.Rect(120, 120, 240, 240), stream=image_bytes)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+@pytest.fixture
 def mixed_text_pdf(tmp_path):
     return _make_pdf(tmp_path, "mixed.pdf", ("A mostly English document with Arabic body.",))
 
@@ -122,6 +140,36 @@ def test_english_text_layer_skips_the_local_vision_model(english_only_pdf):
     assert decision.route is DocumentRoute.ENGLISH
     assert decision.language == "english"
     assert decision.text_direction == "ltr"
+
+
+def test_english_text_layer_with_embedded_image_checks_visual_language(
+    english_text_with_embedded_image_pdf,
+):
+    calls = []
+
+    def screen_images(images, phase):
+        calls.append((phase, [image.page_idx for image in images]))
+        return [
+            PageStyleVote(
+                page_idx=image.page_idx,
+                language="arabic",
+                writing_style="printed",
+                confidence=0.99,
+                region=image.region,
+                primary_content=True,
+            )
+            for image in images
+        ]
+
+    decision = classify_document(
+        english_text_with_embedded_image_pdf,
+        vision_call=screen_images,
+    )
+
+    assert calls == [("page_screen", [1])]
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "mixed"
+    assert decision.text_direction == "rtl"
 
 
 def test_mixed_body_text_uses_arabic_printed_route(mixed_text_pdf, monkeypatch):
@@ -220,6 +268,35 @@ def test_no_readable_text_abstains_instead_of_defaulting_to_english(no_readable_
     assert decision.route is DocumentRoute.ARABIC_STYLE_UNCERTAIN
     assert decision.language == "unknown"
     assert decision.text_direction == "auto"
+
+
+def test_no_primary_votes_abstains_with_zero_confidence(no_readable_text_pdf):
+    screen = _mapping([
+        PageStyleVote(
+            1, "unknown", "unknown", 0.2,
+            region="page", primary_content=False,
+        )
+    ])
+    detail = _detail_votes(
+        "unknown",
+        "unknown",
+        confidence=0.2,
+        overrides={
+            "page": ("unknown", 0.2, False),
+            "top": ("unknown", 0.2, False),
+            "middle": ("unknown", 0.2, False),
+            "bottom": ("unknown", 0.2, False),
+        },
+    )
+
+    decision = classify_document(
+        no_readable_text_pdf,
+        vision_call=_vision(screen, detail),
+    )
+
+    assert decision.route is DocumentRoute.ARABIC_STYLE_UNCERTAIN
+    assert decision.language == "unknown"
+    assert decision.confidence == 0.0
 
 
 def test_english_and_arabic_evidence_on_different_pages_is_mixed():
