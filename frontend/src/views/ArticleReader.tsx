@@ -4,6 +4,7 @@ import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
+import { documentDirection } from '../lib/documentDirection';
 import { bestMatchIndex, makeAnchor } from '../lib/textAnchor';
 import { lastReadSequence, saveReadingPosition, shouldRestorePosition } from '../lib/readingPosition';
 import { ArticleBlock } from './ArticleBlock';
@@ -2306,7 +2307,11 @@ export function ArticleReader({
             </aside>
           )}
 
-          <article className="reader-article" ref={articleRef}>
+          <article
+            className="reader-article"
+            ref={articleRef}
+            dir={documentDirection(doc?.text_direction ?? doc?.detected_language)}
+          >
             {doc && <h1 className="article-title">{doc.title}</h1>}
             {doc && (
               <div className="article-dek">
@@ -2330,6 +2335,7 @@ export function ArticleReader({
               <ArticleBlock
                 key={block.id}
                 block={block}
+                baseDirection={documentDirection(doc?.text_direction ?? doc?.detected_language)}
                 blockTinted={tintedBlocks.has(block.sequence_order)}
                 bookmarkTitle={bookmarkedSeqs.get(block.sequence_order) ?? null}
                 active={

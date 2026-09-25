@@ -2,6 +2,7 @@ import type { UploadingFile, StepState } from '../types';
 import { IconDoc, IconCheck } from '../components/Icons';
 import { useEffect, useState } from 'react';
 import { stageProgress } from '../lib/progress';
+import type { ArabicWritingStyle } from '../api';
 
 /**
  * Backend-driven processing overlay. The visible step states are derived
@@ -121,6 +122,11 @@ interface Props {
   /** Set with `status === 'queue_full'`: how full the server's queue is. */
   queueFull?: { queued: number; limit: number } | null;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | "trafilatura" | null while pending
+  errorCode?: string | null;
+  actionRequired?: string | null;
+  allowedActions?: ArabicWritingStyle[] | null;
+  confirmationPending?: boolean;
+  onConfirmWritingStyle?: (style: 'printed' | 'handwritten') => void;
   /**
    * What the caller believes this is. For a URL import it is a guess, not a
    * fact, until the fetch lands: see `effectiveKind` below. Affects the step
@@ -145,10 +151,31 @@ function extractorLabel(ex: string | null | undefined): { label: string; tone: '
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
-export function ProcessingOverlay({ file, status, progressFraction, queuePosition, errorMessage, queueFull, extractor, kind = 'paper', onClose, onCancel, onRetry }: Props) {
+export function ProcessingOverlay({
+  file,
+  status,
+  progressFraction,
+  queuePosition,
+  errorMessage,
+  queueFull,
+  extractor,
+  errorCode,
+  actionRequired,
+  allowedActions: allowedActionsInput,
+  confirmationPending = false,
+  onConfirmWritingStyle,
+  kind = 'paper',
+  onClose,
+  onCancel,
+  onRetry,
+}: Props) {
   const complete = status === 'complete';
   const failed = status === 'failed';
   const declined = status === 'queue_full';
+  const allowedActions = allowedActionsInput ?? [];
+  const handwrittenUnavailable = errorCode === 'handwritten_arabic_unavailable';
+  const needsWritingStyleConfirmation =
+    actionRequired === 'confirm_arabic_writing_style' && allowedActions.length > 0;
 
   // Automatic retry while the queue is full: a countdown the reader can see,
   // reset on every fresh 429 (the `queueFull` object identity changes when
@@ -199,7 +226,7 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-[12px] font-mono uppercase tracking-wider" style={{ color: 'var(--muted)' }}>
-              {complete ? 'Indexed · ready' : failed ? 'Failed' : declined ? 'HTTP 429 · queue full' : 'Processing'}
+              {complete ? 'Indexed · ready' : handwrittenUnavailable ? 'Handwritten Arabic unavailable' : failed ? 'Failed' : declined ? 'HTTP 429 · queue full' : 'Processing'}
             </div>
             <div className="mt-1 font-serif text-[20px] tracking-tight truncate" style={{ color: 'var(--fg)' }}>
               {file.name}
@@ -242,6 +269,54 @@ export function ProcessingOverlay({ file, status, progressFraction, queuePositio
             />
           </div>
         </div>
+
+        {handwrittenUnavailable && (
+          <div
+            className="mx-7 mb-5 rounded-md px-4 py-3 text-[13px] leading-relaxed"
+            role="alert"
+            style={{ background: 'var(--bg-2)', border: '1px solid var(--border-strong)', color: 'var(--fg)' }}
+          >
+            {errorMessage || 'Handwritten Arabic extraction is unavailable on this deployment.'}
+          </div>
+        )}
+
+        {needsWritingStyleConfirmation && (
+          <div
+            className="mx-7 mb-5 rounded-md px-4 py-3 text-[12.5px] leading-relaxed"
+            role="group"
+            aria-label="Confirm Arabic writing style"
+            aria-busy={confirmationPending}
+            style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--fg)' }}
+          >
+            <div className="font-medium">Confirm the Arabic writing style</div>
+            {errorMessage && <div className="mt-1" style={{ color: 'var(--muted)' }}>{errorMessage}</div>}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {allowedActions.includes('printed') && (
+                <button
+                  type="button"
+                  disabled={confirmationPending || !onConfirmWritingStyle}
+                  onClick={() => onConfirmWritingStyle?.('printed')}
+                  className="text-[12px] px-3 py-1.5 rounded-md disabled:opacity-50"
+                  style={{ background: 'var(--accent)', color: 'var(--accent-fg)', border: '1px solid var(--border)' }}
+                >
+                  Printed
+                </button>
+              )}
+              {allowedActions.includes('handwritten') && (
+                <button
+                  type="button"
+                  disabled={confirmationPending || !onConfirmWritingStyle}
+                  onClick={() => onConfirmWritingStyle?.('handwritten')}
+                  className="text-[12px] px-3 py-1.5 rounded-md disabled:opacity-50"
+                  style={{ background: 'var(--bg)', color: 'var(--fg)', border: '1px solid var(--border)' }}
+                >
+                  Handwritten
+                </button>
+              )}
+              {confirmationPending && <span role="status" className="self-center text-[11px]" style={{ color: 'var(--muted)' }}>Saving choice…</span>}
+            </div>
+          </div>
+        )}
 
         {/* queue full: a decline, not a failure — say what happened, what was
             kept (nothing), and what happens next, with a retry in hand */}

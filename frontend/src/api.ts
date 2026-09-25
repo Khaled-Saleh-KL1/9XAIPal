@@ -41,6 +41,8 @@ export const NO_BACKEND_MESSAGE =
   'No backend connected. This is a UI preview: run 9XAIPal locally, or set ' +
   'VITE_API_BASE_URL to a reachable backend (see the README).';
 
+export type ArabicWritingStyle = 'printed' | 'handwritten';
+
 export interface PaperMeta {
   id: string;
   filename: string;
@@ -51,6 +53,16 @@ export interface PaperMeta {
   page_count: number | null;
   status: string;
   error_message: string | null;
+  error_code?: string | null;
+  action_required?: string | null;
+  allowed_actions?: ArabicWritingStyle[];
+  detected_language?: string | null;
+  detected_writing_style?: string | null;
+  text_direction?: string | null;
+  classifier_model?: string | null;
+  classification_confidence?: number | null;
+  classification_source?: string | null;
+  ocr_provider_summary?: Array<{ provider: string; pages: number[] }> | null;
   created_at: string;
   updated_at: string | null;
   extractor?: string | null;            // "mineru" | "pymupdf_fallback" | "trafilatura" | "tavily-extract"
@@ -200,6 +212,16 @@ export interface ProgressResponse {
   queue_position?: number | null;
   page_count: number | null;
   error_message?: string | null;
+  error_code?: string | null;
+  action_required?: string | null;
+  allowed_actions?: ArabicWritingStyle[];
+  detected_language?: string | null;
+  detected_writing_style?: string | null;
+  text_direction?: string | null;
+  classifier_model?: string | null;
+  classification_confidence?: number | null;
+  classification_source?: string | null;
+  ocr_provider_summary?: Array<{ provider: string; pages: number[] }> | null;
   extractor?: string | null;    // "mineru" | "pymupdf_fallback"
   // Raw HTML snapshot crawl for a doc_kind='article' import (see backend
   // services/article_crawl.py). 'none' for anything that isn't an article.
@@ -327,6 +349,43 @@ export async function getPaperProgress(paperId: string): Promise<ProgressRespons
   return res.json();
 }
 
+export interface ArabicWritingStyleResponse {
+  paper_id: string;
+  job_id: string;
+  status: string;
+  error_code?: string | null;
+  message: string;
+}
+
+export async function confirmArabicWritingStyle(
+  paperId: string,
+  writingStyle: ArabicWritingStyle,
+): Promise<ArabicWritingStyleResponse> {
+  const res = await fetch(`${BASE}/papers/${paperId}/arabic-writing-style`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ writing_style: writingStyle }),
+  });
+  let body: Record<string, unknown> | null = null;
+  try {
+    body = await res.json();
+  } catch {
+    // Keep a status-based message for non-JSON error responses.
+  }
+  if (!res.ok) {
+    const detail = body?.detail;
+    const message = typeof detail === 'string'
+      ? detail
+      : detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+        ? detail.message
+        : typeof body?.message === 'string'
+          ? body.message
+          : `Could not confirm Arabic writing style (${res.status}).`;
+    throw new Error(message);
+  }
+  return body as unknown as ArabicWritingStyleResponse;
+}
+
 // ── Chunks ────────────────────────────────────────────────────────────────────
 
 export async function getChunk(paperId: string, sequenceOrder: number): Promise<ChunkData> {
@@ -392,6 +451,17 @@ export interface FullDocument {
   status: string;
   page_count: number | null;
   extractor: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  action_required?: string | null;
+  allowed_actions?: ArabicWritingStyle[];
+  detected_language?: string | null;
+  detected_writing_style?: string | null;
+  text_direction?: string | null;
+  classifier_model?: string | null;
+  classification_confidence?: number | null;
+  classification_source?: string | null;
+  ocr_provider_summary?: Array<{ provider: string; pages: number[] }> | null;
   /** The page a doc_kind='article' row was imported from. null otherwise. */
   source_url: string | null;
   /** See PaperMeta.strict_scope. */

@@ -1352,6 +1352,7 @@ git commit -m "feat: expose Arabic OCR document status"
 - Modify: `frontend/package-lock.json`
 - Modify: `frontend/vite.config.ts`
 - Modify: `frontend/src/api.ts`
+- Modify: `frontend/src/types.ts`
 - Modify: `frontend/src/App.tsx`
 - Modify: `frontend/src/views/ProcessingOverlay.tsx`
 - Modify: `frontend/src/views/LibraryView.tsx`
@@ -1361,6 +1362,10 @@ git commit -m "feat: expose Arabic OCR document status"
 - Create: `frontend/src/lib/documentDirection.ts`
 - Create: `frontend/src/lib/documentDirection.test.ts`
 - Create: `frontend/src/views/ProcessingOverlay.test.tsx`
+- Create: `frontend/src/views/ArticleBlock.test.tsx`
+- Create: `frontend/src/api.arabic.test.ts`
+- Create: `frontend/src/components/ArabicOcrStatus.tsx`
+- Create: `frontend/src/components/ArabicOcrStatus.test.tsx`
 - Create: `frontend/src/test/setup.ts`
 
 **Interfaces:**
@@ -1369,7 +1374,7 @@ git commit -m "feat: expose Arabic OCR document status"
 - Produces: persistent unsupported/confirmation UI and correct document-content
   direction without changing application chrome.
 
-- [ ] **Step 1: Add the test runner**
+- [x] **Step 1: Add the test runner**
 
 ```bash
 cd frontend
@@ -1381,7 +1386,7 @@ Add `"test": "vitest"` to scripts, `test.environment="jsdom"` and
 `setupFiles=["./src/test/setup.ts"]` to Vite config, and import
 `@testing-library/jest-dom/vitest` in the setup file.
 
-- [ ] **Step 2: Write failing direction and status tests**
+- [x] **Step 2: Write failing direction and status tests**
 
 ```typescript
 // frontend/src/lib/documentDirection.test.ts
@@ -1396,7 +1401,7 @@ In `ProcessingOverlay.test.tsx`, assert the exact handwritten-unavailable
 message remains visible for a failed job and that an uncertain job exposes
 printed/handwritten buttons whose callbacks receive the chosen value.
 
-- [ ] **Step 3: Run and verify failure**
+- [x] **Step 3: Run and verify failure**
 
 ```bash
 cd frontend
@@ -1406,14 +1411,14 @@ npm test -- --run src/lib/documentDirection.test.ts \
 
 Expected: FAIL because the helpers and UI do not exist.
 
-- [ ] **Step 4: Extend typed API clients**
+- [x] **Step 4: Extend typed API clients**
 
 Add optional classification/direction/provider/error/action fields to
 `PaperMeta`, `ProgressResponse`, and `FullDocument`. Add
 `confirmArabicWritingStyle(paperId, writingStyle)` using the Task 9 endpoint.
 Keep all fields optional so cached/older server responses continue rendering.
 
-- [ ] **Step 5: Implement persistent status handling**
+- [x] **Step 5: Implement persistent status handling**
 
 `App.tsx` must stop polling terminal failed jobs but keep their typed status in
 state. `ProcessingOverlay` displays the handwritten message as a blocking
@@ -1422,7 +1427,7 @@ disables them while submitting, resumes polling after printed confirmation,
 and switches to the handwritten unavailable panel after handwritten
 confirmation. `LibraryView` shows a persistent status badge/action on the row.
 
-- [ ] **Step 6: Apply direction only to document content**
+- [x] **Step 6: Apply direction only to document content**
 
 Set a reader content wrapper to the document base direction. Pass it to each
 `ArticleBlock`; set `dir="rtl"` when an RTL document block contains Arabic
@@ -1431,7 +1436,7 @@ letters, `dir="auto"` for Latin-only blocks inside an RTL document, and
 `text-align:start`; give RTL lists/tables the correct flow. Do not put `dir`
 on the app root, navigation, controls, side rails, or modals.
 
-- [ ] **Step 7: Pass frontend tests and production build**
+- [x] **Step 7: Pass frontend tests and production build**
 
 ```bash
 cd frontend
@@ -1447,8 +1452,12 @@ by this change.
 ```bash
 git add frontend/package.json frontend/package-lock.json frontend/vite.config.ts \
   frontend/src/api.ts frontend/src/App.tsx \
+  frontend/src/types.ts frontend/src/api.arabic.test.ts \
   frontend/src/views/ProcessingOverlay.tsx frontend/src/views/LibraryView.tsx \
   frontend/src/views/ArticleReader.tsx frontend/src/views/ArticleBlock.tsx \
+  frontend/src/views/ArticleBlock.test.tsx \
+  frontend/src/components/ArabicOcrStatus.tsx \
+  frontend/src/components/ArabicOcrStatus.test.tsx \
   frontend/src/index.css frontend/src/lib/documentDirection.ts \
   frontend/src/lib/documentDirection.test.ts \
   frontend/src/views/ProcessingOverlay.test.tsx frontend/src/test/setup.ts

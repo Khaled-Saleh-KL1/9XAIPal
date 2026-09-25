@@ -17,7 +17,7 @@ const PdfViewer = lazy(() =>
   import('./views/PdfViewer').then((m) => ({ default: m.PdfViewer })),
 );
 import { RawArticleViewer } from './views/RawArticleViewer';
-import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, pageToSequence, QueueFullError, type PaperMeta, type DocKind } from './api';
+import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, pageToSequence, confirmArabicWritingStyle, QueueFullError, type PaperMeta, type DocKind, type ArabicWritingStyle } from './api';
 import { IconLink } from './components/Icons';
 import { displayTitle } from './lib/titles';
 import { stageProgress } from './lib/progress';
@@ -36,6 +36,14 @@ function metaToPaper(m: PaperMeta): Paper {
     docKind: m.doc_kind ?? null,
     doneAt: m.done_at ?? null,
     doneFolder: m.done_folder ?? null,
+    arabicErrorCode: m.error_code ?? null,
+    arabicErrorMessage: m.error_message ?? null,
+    arabicActionRequired: m.action_required ?? null,
+    arabicAllowedActions: m.allowed_actions ?? [],
+    detectedLanguage: m.detected_language ?? null,
+    detectedWritingStyle: m.detected_writing_style ?? null,
+    textDirection: m.text_direction ?? null,
+    ocrProviderSummary: m.ocr_provider_summary ?? null,
     tags: [],
   };
 }
@@ -105,6 +113,10 @@ export function App() {
     'queued' | 'extracting' | 'chunking' | 'embedding' | 'summarizing' | 'complete' | 'failed' | 'queue_full'
   >('queued');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadErrorCode, setUploadErrorCode] = useState<string | null>(null);
+  const [uploadActionRequired, setUploadActionRequired] = useState<string | null>(null);
+  const [uploadAllowedActions, setUploadAllowedActions] = useState<ArabicWritingStyle[]>([]);
+  const [confirmingArabicStyle, setConfirmingArabicStyle] = useState(false);
   // The server declined the document because its processing queue is at its
   // ceiling (429 QUEUE_FULL). Nothing was stored, and the file (or URL) is
   // still in hand, so the overlay offers a retry instead of a failure —
@@ -207,6 +219,7 @@ export function App() {
   // user clicks "Back to library" themselves. The library list underneath
   // refreshes on its own poll.
   const pollUploadProgress = useCallback((paperId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
       try {
         const progress = await getPaperProgress(paperId);
@@ -218,6 +231,9 @@ export function App() {
         if (progress.error_message) {
           setUploadError(progress.error_message);
         }
+        setUploadErrorCode(progress.error_code ?? null);
+        setUploadActionRequired(progress.action_required ?? null);
+        setUploadAllowedActions(progress.allowed_actions ?? []);
         if (progress.extractor) {
           setUploadExtractor(progress.extractor);
         }
@@ -244,6 +260,9 @@ export function App() {
     });
     setUploadStatus('queued');
     setUploadError(null);
+    setUploadErrorCode(null);
+    setUploadActionRequired(null);
+    setUploadAllowedActions([]);
     setUploadQueueFull(null);
     setUploadExtractor(null);
     setUploadKind(kind);
@@ -282,6 +301,9 @@ export function App() {
     setUploadingFile({ name: url, size: host, pages: 0 });
     setUploadStatus('queued');
     setUploadError(null);
+    setUploadErrorCode(null);
+    setUploadActionRequired(null);
+    setUploadAllowedActions([]);
     setUploadExtractor(null);
     // Optimistic: most links pasted through "Book"/"Research paper" do turn
     // out to be the PDF they look like, so the overlay shows that step list
@@ -402,11 +424,40 @@ export function App() {
     retryRef.current = null;
     setUploadingFile(null);
     setUploadError(null);
+    setUploadErrorCode(null);
+    setUploadActionRequired(null);
+    setUploadAllowedActions([]);
     setUploadQueueFull(null);
     requestLibraryRefresh();
     refreshPapers();
     setRoute('library');
   }, [refreshPapers, requestLibraryRefresh]);
+
+  const confirmWritingStyle = useCallback(async (style: ArabicWritingStyle) => {
+    const paperId = uploadIdRef.current;
+    if (!paperId || confirmingArabicStyle) return;
+    setConfirmingArabicStyle(true);
+    try {
+      const result = await confirmArabicWritingStyle(paperId, style);
+      setUploadError(result.message || null);
+      setUploadErrorCode(result.error_code ?? null);
+      setUploadActionRequired(null);
+      setUploadAllowedActions([]);
+      setUploadStatus(result.status === 'failed' ? 'failed' : 'queued');
+      requestLibraryRefresh();
+      refreshPapers();
+      if (style === 'printed' && result.status !== 'failed') {
+        setUploadError(null);
+        pollUploadProgress(paperId);
+      }
+    } catch (err) {
+      setUploadError((err as Error).message || 'Could not confirm Arabic writing style.');
+      setUploadStatus('failed');
+      refreshPapers();
+    } finally {
+      setConfirmingArabicStyle(false);
+    }
+  }, [confirmingArabicStyle, pollUploadProgress, refreshPapers, requestLibraryRefresh]);
 
   // Cancel actually aborts the upload: stop polling AND delete the document on
   // the backend (rows + on-disk artefacts) so it doesn't keep processing and
@@ -693,6 +744,11 @@ export function App() {
           progressFraction={uploadProgressFraction}
           queuePosition={uploadQueuePosition}
           errorMessage={uploadError}
+          errorCode={uploadErrorCode}
+          actionRequired={uploadActionRequired}
+          allowedActions={uploadAllowedActions}
+          confirmationPending={confirmingArabicStyle}
+          onConfirmWritingStyle={confirmWritingStyle}
           queueFull={uploadQueueFull}
           extractor={uploadExtractor}
           kind={uploadKind}

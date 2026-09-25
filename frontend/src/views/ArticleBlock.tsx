@@ -4,6 +4,7 @@ import type { PluggableList } from 'unified';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_LINK_COMPONENT } from '../lib/markdown';
 import { remarkCitationRefs, makeCitationSpanComponent, EMPTY_REFERENCE_INDEX, type ReferenceIndex } from '../lib/references';
 import type { DocBlock } from '../api';
+import { blockDirection, type TextDirection } from '../lib/documentDirection';
 
 /**
  * One structural block of the paper, rendered as article prose.
@@ -115,6 +116,7 @@ function MathBlock({ wrapped, imageUrl }: { wrapped: string; imageUrl: string | 
 
 interface Props {
   block: DocBlock;
+  baseDirection: TextDirection;
   /** True when a note is anchored here but its quote could not be re-located. */
   blockTinted: boolean;
   /** True when this block is the anchor of the note the reader is focused on. */
@@ -142,6 +144,7 @@ interface Props {
 
 function ArticleBlockImpl({
   block,
+  baseDirection,
   blockTinted,
   active,
   bookmarkTitle,
@@ -155,6 +158,7 @@ function ArticleBlockImpl({
   const seq = block.sequence_order;
   const isBookmarked = bookmarkTitle !== null;
   const common = {
+    dir: blockDirection(baseDirection, block.plain_text || block.content_markdown),
     'data-seq': String(seq),
     'data-chunk-id': block.id,
     id: `blk-${seq}`,

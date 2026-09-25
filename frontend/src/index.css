@@ -815,7 +815,8 @@ body {
   font-size: 0.85em;
   white-space: pre;
 }
-.md-body ul, .md-body ol { padding-left: 1.4em; margin: 0.6em 0; }
+.md-body { text-align: start; }
+.md-body ul, .md-body ol { padding-inline-start: 1.4em; margin: 0.6em 0; }
 /* Videos an article actually contains, recovered by the extractor and
    emitted as raw <video> (see services/article_extraction.py). Sized like
    a figure so one can never overflow the reading column. */
@@ -843,7 +844,7 @@ body {
 .md-body th, .md-body td {
   border: 1px solid var(--border-strong);
   padding: 14px 18px;
-  text-align: left;
+  text-align: start;
   vertical-align: top;
 }
 .md-body th { font-weight: 600; background: var(--bg-2); }
@@ -1717,7 +1718,7 @@ body {
 .article-table .article-table-scroll td {
   border: 1px solid var(--border);
   padding: 10px 14px;
-  text-align: left;
+  text-align: start;
   vertical-align: top;
   /* A cell of prose in a table of numbers would otherwise stretch the table to
      the width of its longest sentence and make every scroll a long one. */
