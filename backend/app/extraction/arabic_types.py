@@ -13,6 +13,46 @@ class DocumentRoute(str, Enum):
     ARABIC_STYLE_UNCERTAIN = "arabic_style_uncertain"
 
 
+class ArabicRoutingError(RuntimeError):
+    """A safe, user-displayable failure raised before Arabic OCR begins."""
+
+    error_code = "arabic_routing_failed"
+    public_message = "Arabic document routing failed. Please try again."
+
+
+class ArabicStyleConfirmationRequired(ArabicRoutingError):
+    """The local classifier abstained because the Arabic style is uncertain."""
+
+    error_code = "arabic_style_confirmation_required"
+    public_message = (
+        "The Arabic writing style could not be identified confidently. "
+        "Confirm whether the document is printed or handwritten, then retry."
+    )
+
+    def __init__(self) -> None:
+        super().__init__(self.public_message)
+
+
+class HandwrittenArabicUnavailable(ArabicRoutingError):
+    """Handwritten Arabic is detected but Gemini Pro billing is unavailable."""
+
+    error_code = "handwritten_arabic_unavailable"
+    public_message = (
+        "Handwritten Arabic extraction is unavailable. This deployment does "
+        "not have a billing-enabled account with Gemini Pro access; printed "
+        "Arabic documents can still be processed."
+    )
+
+    def __init__(self) -> None:
+        super().__init__(self.public_message)
+
+
+class ArabicGeminiProNotConfigured(HandwrittenArabicUnavailable):
+    """The handwritten feature switch cannot enable unconfigured Pro access."""
+
+    error_code = "arabic_gemini_pro_not_configured"
+
+
 @dataclass(frozen=True)
 class PageStyleVote:
     page_idx: int

@@ -1,5 +1,6 @@
 """Synchronous extraction pipeline: PDF -> MinerU -> structural chunks -> assets -> bulk db injection."""
 
+import json
 import uuid
 from pathlib import Path
 from uuid import UUID
@@ -31,6 +32,18 @@ from app.extraction.assets import move_asset_to_storage
 from app.extraction.glyph_repair import repair_chunks
 from app.extraction.jobs import JobStatus
 from app.extraction.vlm_client import extract_via_vlm
+from app.extraction.arabic_classifier import classify_document
+from app.extraction.arabic_fallback import GemmaArabicFallback
+from app.extraction.arabic_ocr import extract_arabic_document
+from app.extraction.arabic_types import (
+    ArabicGeminiProNotConfigured,
+    ArabicRoutingError,
+    ArabicStyleConfirmationRequired,
+    ClassificationDecision,
+    DocumentRoute,
+    HandwrittenArabicUnavailable,
+)
+from app.extraction.gemini_ocr_client import GeminiOcrClient
 
 logger = get_logger(__name__)
 
@@ -38,6 +51,8 @@ logger = get_logger(__name__)
 def _sanitize_error_for_user(exc: Exception) -> str:
     """Turn ugly internal errors into a short, actionable message for the end user."""
     from app.services.article_extraction import ArticleExtractionError
+    if isinstance(exc, ArabicRoutingError):
+        return exc.public_message
     if isinstance(exc, ArticleExtractionError):
         # Already written to be shown directly — "couldn't fetch", "requires
         # a login", "too large" — not an internal detail to hide.
@@ -311,6 +326,96 @@ def resolve_extractor(
     return extract_pdf_sync(pdf_path, output_dir.name, on_progress=on_progress)
 
 
+def _classification_from_user_confirmation(row) -> ClassificationDecision | None:
+    """Rebuild a saved user-confirmed route without another classifier call."""
+    if not row or row.get("classification_source") != "user_confirmed":
+        return None
+
+    language = str(row.get("detected_language") or "unknown").strip().lower()
+    writing_style = str(row.get("detected_writing_style") or "unknown").strip().lower()
+    if language == "english":
+        route = DocumentRoute.ENGLISH
+        direction = "ltr"
+    elif language in {"arabic", "mixed"} and writing_style == "printed":
+        route = DocumentRoute.ARABIC_PRINTED
+        direction = "rtl"
+    elif language in {"arabic", "mixed"} and writing_style == "handwritten":
+        route = DocumentRoute.ARABIC_HANDWRITTEN
+        direction = "rtl"
+    else:
+        language = language if language in {"arabic", "mixed", "unknown"} else "unknown"
+        writing_style = (
+            writing_style
+            if writing_style in {"printed", "handwritten", "mixed", "unknown"}
+            else "unknown"
+        )
+        route = DocumentRoute.ARABIC_STYLE_UNCERTAIN
+        direction = "rtl" if language in {"arabic", "mixed"} else "auto"
+
+    try:
+        confidence = float(row.get("classification_confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if not 0.0 <= confidence <= 1.0:
+        confidence = 0.0
+
+    return ClassificationDecision(
+        route=route,
+        language=language,
+        writing_style=writing_style,
+        text_direction=direction,
+        confidence=confidence,
+        # This is a human confirmation, not an inference from a model.
+        classifier_model="",
+    )
+
+
+def _get_arabic_classification(
+    session: Session, document_id: UUID, pdf_path: Path
+) -> ClassificationDecision:
+    row = session.execute(
+        text(
+            "SELECT detected_language, detected_writing_style, text_direction, "
+            "classifier_model, classification_confidence, classification_source "
+            "FROM documents WHERE id = :id"
+        ),
+        {"id": document_id},
+    ).mappings().first()
+    confirmed = _classification_from_user_confirmation(row)
+    return confirmed if confirmed is not None else classify_document(pdf_path)
+
+
+def _persist_arabic_classification(
+    session: Session,
+    document_id: UUID,
+    classification: ClassificationDecision,
+) -> None:
+    row = session.execute(
+        text("SELECT classification_source FROM documents WHERE id = :id"),
+        {"id": document_id},
+    ).mappings().first()
+    source = "user_confirmed" if row and row.get("classification_source") == "user_confirmed" else "automatic"
+    session.execute(
+        text(
+            "UPDATE documents SET detected_language = :language, "
+            "detected_writing_style = :writing_style, text_direction = :direction, "
+            "classifier_model = :classifier_model, "
+            "classification_confidence = :confidence, classification_source = :source, "
+            "updated_at = NOW() WHERE id = :id"
+        ),
+        {
+            "language": classification.language,
+            "writing_style": classification.writing_style,
+            "direction": classification.text_direction,
+            "classifier_model": classification.classifier_model or None,
+            "confidence": classification.confidence,
+            "source": source,
+            "id": document_id,
+        },
+    )
+    session.commit()
+
+
 def run_pipeline_sync(
     session: Session,
     *,
@@ -331,7 +436,48 @@ def run_pipeline_sync(
             session.commit()
 
         output_dir = extracted_dir() / str(document_id)
-        output_dir, extractor = resolve_extractor(pdf_path, output_dir, on_progress=_report_extraction_progress)
+        classification = None
+        provider_summary = None
+        if settings.arabic_ocr_enabled:
+            classification = _get_arabic_classification(session, document_id, pdf_path)
+            _persist_arabic_classification(session, document_id, classification)
+
+            if classification.route == DocumentRoute.ENGLISH:
+                output_dir, extractor = resolve_extractor(
+                    pdf_path, output_dir, on_progress=_report_extraction_progress
+                )
+            elif classification.route == DocumentRoute.ARABIC_PRINTED:
+                if (
+                    classification.language not in {"arabic", "mixed"}
+                    or classification.writing_style != "printed"
+                ):
+                    raise ArabicStyleConfirmationRequired()
+                extraction = extract_arabic_document(
+                    pdf_path=pdf_path,
+                    output_dir=output_dir,
+                    classification=classification,
+                    gemini_client=GeminiOcrClient(),
+                    gemma_client=GemmaArabicFallback(),
+                    settings=settings,
+                    progress_callback=_report_extraction_progress,
+                )
+                output_dir = extraction.output_dir
+                extractor = extraction.extractor
+                provider_summary = extraction.provider_summary
+            elif classification.route == DocumentRoute.ARABIC_HANDWRITTEN:
+                if settings.arabic_handwritten_ocr_enabled:
+                    # The feature flag reserves the route, but cannot grant the
+                    # Gemini Pro billing access required to execute it.
+                    raise ArabicGeminiProNotConfigured()
+                raise HandwrittenArabicUnavailable()
+            else:
+                raise ArabicStyleConfirmationRequired()
+        else:
+            # Keep the existing English/MinerU/VLM behavior byte-for-byte on
+            # the default, feature-disabled path.
+            output_dir, extractor = resolve_extractor(
+                pdf_path, output_dir, on_progress=_report_extraction_progress
+            )
         # Persist which extractor produced the artifacts so the UI can label
         # the document (e.g. "Processed by MinerU" vs "Processed by PyMuPDF (fallback)").
         try:
@@ -339,6 +485,17 @@ def run_pipeline_sync(
                 text("UPDATE documents SET extractor = :ex WHERE id = :id"),
                 {"ex": extractor, "id": document_id},
             )
+            if provider_summary is not None:
+                session.execute(
+                    text(
+                        "UPDATE documents SET ocr_provider_summary = "
+                        "CAST(:summary AS JSONB) WHERE id = :id"
+                    ),
+                    {
+                        "summary": json.dumps(provider_summary, ensure_ascii=True),
+                        "id": document_id,
+                    },
+                )
             session.commit()
         except Exception as e:
             logger.warning(f"Could not persist extractor='{extractor}' for {document_id}: {e}")
@@ -366,10 +523,11 @@ def run_pipeline_sync(
         # U+FFFD wherever the paper used a Mathematical Alphanumeric Symbol
         # (𝑛, 𝑚, 𝑇 …); the PDF still knows, so we read it back.
         # See app/extraction/glyph_repair.py.
-        try:
-            repair_chunks(chunks, pdf_path)
-        except Exception:
-            logger.exception("[glyph-repair] failed (non-fatal, chunks kept as-is)")
+        if extractor != "arabic_ocr":
+            try:
+                repair_chunks(chunks, pdf_path)
+            except Exception:
+                logger.exception("[glyph-repair] failed (non-fatal, chunks kept as-is)")
 
         # Step 2c: A literal code/schema listing's exact whitespace and layout
         # is part of what it is showing, and MinerU never crops one the way
@@ -605,7 +763,13 @@ def _handle_ingestion_failure(session: Session, document_id: UUID, job_id: UUID,
     # Never leak raw SQLAlchemy / DB parameter dumps to the user.
     safe_error = _sanitize_error_for_user(exc)
     try:
-        update_job_status_sync(session, job_id, JobStatus.FAILED, error_message=safe_error)
+        update_job_status_sync(
+            session,
+            job_id,
+            JobStatus.FAILED,
+            error_message=safe_error,
+            error_code=getattr(exc, "error_code", None),
+        )
         update_document_status_sync(session, document_id, "failed", error_message=safe_error)
         session.commit()
     except Exception as status_err:
