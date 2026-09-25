@@ -106,3 +106,20 @@ class ParsedPagePrefix:
     pages: tuple[ArabicOcrPage, ...]
     first_uncommitted_page: int | None
     is_complete: bool
+
+
+class GemmaOutputInvalid(GeminiOutputInvalid):
+    """Gemma returned empty, malformed, incomplete, or looping OCR output."""
+
+
+class GemmaRequestInvalid(RuntimeError):
+    """The direct Ollama request is invalid and key rotation cannot fix it."""
+
+
+class GemmaKeysExhausted(RuntimeError):
+    """The dedicated Gemma OCR target and its configured keys all failed."""
+
+    def __init__(self, final_kind: str, attempt_usage: Sequence[OcrUsage]) -> None:
+        self.final_kind = final_kind
+        self.attempt_usage = tuple(attempt_usage)
+        super().__init__(f"Gemma Arabic OCR keys exhausted ({final_kind}).")

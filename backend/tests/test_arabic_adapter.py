@@ -151,6 +151,15 @@ def test_html_table_caption_is_preserved_as_text():
     assert "<caption>" not in blocks[1]["table_body"]
 
 
+def test_nested_list_text_is_not_lost():
+    blocks = pages_to_content_list(
+        [ocr_page(1, "- عنصر رئيسي\n  - عنصر فرعي\n- العنصر الأخير")]
+    )
+
+    assert blocks[0]["type"] == "list"
+    assert blocks[0]["list_items"] == ["عنصر رئيسي", "عنصر فرعي", "العنصر الأخير"]
+
+
 def test_fenced_display_math_maps_to_equation():
     blocks = pages_to_content_list(
         [ocr_page(1, "```math\n\\alpha + \\beta = 1\n```")]

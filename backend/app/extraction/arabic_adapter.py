@@ -242,21 +242,11 @@ def _html_blocks(content: str) -> list[dict[str, Any]]:
 
 def _list_items(tokens: Sequence[Any]) -> list[str]:
     items: list[str] = []
-    current: list[str] | None = None
     for token in tokens:
-        if token.type == "list_item_open":
-            current = []
-        elif token.type == "inline" and current is not None and token.content.strip():
-            current.append(token.content.strip())
-        elif token.type == "list_item_close" and current is not None:
-            item = " ".join(part for part in current if part).strip()
-            if item:
-                items.append(item)
-            current = None
-    if current:
-        item = " ".join(part for part in current if part).strip()
-        if item:
-            items.append(item)
+        if token.type == "inline" and token.content.strip():
+            # Flatten nested list items instead of losing a parent's text when
+            # a nested list opens inside it. The order remains the source order.
+            items.append(token.content.strip())
     return items
 
 
