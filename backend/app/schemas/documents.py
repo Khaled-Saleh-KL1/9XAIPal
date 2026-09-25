@@ -1,6 +1,6 @@
 """Document schemas."""
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -18,10 +18,19 @@ class DocumentResponse(BaseModel):
     page_count: Optional[int] = None
     status: str
     error_message: Optional[str] = None
+    job_error_code: Optional[str] = None
+    job_error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     extractor: Optional[str] = None  # "mineru", "pymupdf_fallback", "trafilatura", or "tavily-extract"
     doc_kind: Optional[str] = None  # "book" (chapter navigation), "paper" (linear), or "article"
+    detected_language: Optional[str] = None
+    detected_writing_style: Optional[str] = None
+    text_direction: Optional[str] = None
+    classifier_model: Optional[str] = None
+    classification_confidence: Optional[float] = None
+    classification_source: Optional[str] = None
+    ocr_provider_summary: Optional[list[dict[str, Any]]] = None
     # The page a doc_kind='article' row was imported from; None otherwise.
     source_url: Optional[str] = None
     # Fine-grained processing stage from the most-recent ingestion job
@@ -88,4 +97,3 @@ class DocumentUploadResponse(BaseModel):
     filename: str
     status: str
     message: str
-

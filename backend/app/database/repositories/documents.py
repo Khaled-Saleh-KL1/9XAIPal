@@ -105,10 +105,11 @@ async def list_documents(
     result = await session.execute(
         text("""
             SELECT d.*, j.status AS job_status, j.progress_fraction AS job_progress_fraction,
+                   j.error_code AS job_error_code, j.error_message AS job_error_message,
                    COALESCE(r.raw_page_count, 0) AS raw_page_count
             FROM documents d
             LEFT JOIN LATERAL (
-                SELECT status, progress_fraction
+                SELECT status, progress_fraction, error_code, error_message
                 FROM ingestion_jobs
                 WHERE document_id = d.id
                 ORDER BY created_at DESC

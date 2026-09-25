@@ -96,7 +96,13 @@ chunk_assets_table = Table(
 )
 
 
-def update_job_status_sync(session: Session, job_id: UUID, status: str, error_message: Optional[str] = None) -> None:
+def update_job_status_sync(
+    session: Session,
+    job_id: UUID,
+    status: str,
+    error_message: Optional[str] = None,
+    error_code: Optional[str] = None,
+) -> None:
     """Update ingestion job status synchronously."""
     # progress_fraction only means something within the CURRENT status (e.g.
     # pages extracted / total while status='extracting') — clear it on every
@@ -104,13 +110,16 @@ def update_job_status_sync(session: Session, job_id: UUID, status: str, error_me
     sets = ["status = :status", "progress_fraction = NULL"]
     params = {"id": job_id, "status": status}
 
-    if status in ("extracting", "chunking", "embedding") and error_message is None:
+    if status in ("extracting", "chunking", "embedding", "summarizing"):
         sets.append("started_at = COALESCE(started_at, NOW())")
     if status in ("complete", "failed"):
         sets.append("completed_at = NOW()")
-    if error_message:
-        sets.append("error_message = :error")
-        params["error"] = error_message
+    if status == "failed":
+        sets.extend(["error_message = :error_message", "error_code = :error_code"])
+        params["error_message"] = error_message
+        params["error_code"] = error_code
+    else:
+        sets.extend(["error_message = NULL", "error_code = NULL"])
 
     session.execute(
         text(f"UPDATE ingestion_jobs SET {', '.join(sets)} WHERE id = :id"),

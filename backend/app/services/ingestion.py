@@ -75,23 +75,44 @@ async def update_job_status(
     status: str,
     *,
     error_message: Optional[str] = None,
+    error_code: Optional[str] = None,
 ) -> None:
     """Update ingestion job status."""
     sets = ["status = :status"]
     params: dict = {"id": job_id, "status": status}
 
-    if status in ("extracting", "chunking", "embedding") and error_message is None:
+    if status in ("extracting", "chunking", "embedding", "summarizing"):
         sets.append("started_at = COALESCE(started_at, NOW())")
     if status in ("complete", "failed"):
         sets.append("completed_at = NOW()")
-    if error_message:
-        sets.append("error_message = :error")
-        params["error"] = error_message
+    if status == "failed":
+        sets.extend(["error_message = :error_message", "error_code = :error_code"])
+        params["error_message"] = error_message
+        params["error_code"] = error_code
+    else:
+        sets.extend(["error_message = NULL", "error_code = NULL"])
 
     await session.execute(
         text(f"UPDATE ingestion_jobs SET {', '.join(sets)} WHERE id = :id"),
         params,
     )
+
+
+async def requeue_failed_job(session: AsyncSession, job_id: UUID) -> dict:
+    """Requeue one failed job, reusing its document and clearing stale errors."""
+    await _reserve_queue_capacity(session)
+    result = await session.execute(text("""
+        UPDATE ingestion_jobs
+        SET status='queued', error_code=NULL, error_message=NULL,
+            started_at=NULL, completed_at=NULL, progress_fraction=NULL,
+            created_at=NOW()
+        WHERE id=:id AND status='failed'
+        RETURNING id, document_id, status, created_at
+    """), {"id": job_id})
+    row = result.mappings().first()
+    if not row:
+        raise ValueError("only a failed ingestion job can be requeued")
+    return dict(row)
 
 
 async def store_chunks(

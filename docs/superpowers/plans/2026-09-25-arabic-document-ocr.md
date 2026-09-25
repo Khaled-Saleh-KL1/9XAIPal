@@ -288,7 +288,7 @@ git commit -m "feat: add Arabic OCR configuration"
   `requeue_failed_job(session, job_id) -> dict`, and status writers that set or
   clear both error fields.
 
-- [ ] **Step 1: Write failing migration and job-state tests**
+- [x] **Step 1: Write failing migration and job-state tests**
 
 ```python
 # backend/tests/test_arabic_persistence.py
@@ -322,7 +322,7 @@ async def test_requeue_clears_failure_fields(db_session, failed_job_id):
     }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 ```bash
 cd backend
@@ -331,7 +331,7 @@ POSTGRES_DB=9xaipal_test pytest tests/test_arabic_persistence.py -q
 
 Expected: FAIL on missing columns and function.
 
-- [ ] **Step 3: Add idempotent schema and migration columns**
+- [x] **Step 3: Add idempotent schema and migration columns**
 
 ```sql
 -- documents
@@ -352,7 +352,7 @@ Mirror each column with `ADD COLUMN IF NOT EXISTS` in `critical_alters`. Extend
 `job_error_code`/`job_error_message`. Extend the list query's lateral job
 selection to expose those aliases.
 
-- [ ] **Step 4: Make job failures typed and reusable**
+- [x] **Step 4: Make job failures typed and reusable**
 
 ```python
 # backend/app/services/ingestion.py
@@ -376,7 +376,7 @@ Add `error_code: Optional[str] = None` to async and sync status writers. When
 entering an active state, explicitly clear both error fields. When failing,
 persist both. Keep all current callers source-compatible through defaults.
 
-- [ ] **Step 5: Pass focused and existing ingestion tests**
+- [x] **Step 5: Pass focused and existing ingestion tests**
 
 ```bash
 cd backend
@@ -386,7 +386,7 @@ POSTGRES_DB=9xaipal_test pytest tests/test_arabic_persistence.py \
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit persistence plumbing**
+- [x] **Step 6: Commit persistence plumbing**
 
 ```bash
 git add backend/app/database backend/app/schemas/documents.py \

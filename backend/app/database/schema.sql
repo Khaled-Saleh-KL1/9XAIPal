@@ -48,11 +48,22 @@ CREATE TABLE IF NOT EXISTS documents (
     reading_order_model TEXT,
     reading_order_updated_at TIMESTAMPTZ,
 
-    -- Which extractor produced this document's chunks ("mineru" or "pymupdf_fallback").
+    -- Which extractor produced this document's chunks (e.g. MinerU, fallback,
+    -- or one of the Arabic Gemini/Gemma routes).
     -- Surfaced in the UI so users can see whether they got high-fidelity MinerU
     -- output (typed equations, page_footnotes, table structure) or the degraded
     -- text-only fallback.
     extractor TEXT,
+
+    -- Arabic-only routing and OCR provenance. NULL keeps pre-feature and
+    -- non-Arabic documents unchanged.
+    detected_language TEXT,
+    detected_writing_style TEXT,
+    text_direction TEXT,
+    classifier_model TEXT,
+    classification_confidence REAL,
+    classification_source TEXT,
+    ocr_provider_summary JSONB,
 
     -- Whether this document is a "book" (chapter-by-chapter reading navigation),
     -- a "paper" (linear reading), or an "article" (an imported web page --
@@ -396,6 +407,7 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     -- extracted in a single pass with nothing to checkpoint mid-way).
     progress_fraction REAL,
     error_message TEXT,
+    error_code TEXT,
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
