@@ -23,7 +23,8 @@ accuracy, cost, recovery, and rendering acceptance criteria.
 1. English documents continue through the current MinerU pipeline.
 2. Arabic routing is automatic; users do not have to choose an OCR engine.
 3. Classification happens locally so it consumes no Gemini quota.
-4. Printed Arabic uses Gemini Flash with thinking disabled.
+4. Printed Arabic uses `gemini-3.7-flash` with its lowest supported thinking
+   level, `low`. This model cannot disable thinking completely.
 5. Handwritten Arabic uses Gemini Pro.
 6. Gemini credentials form an ordered cascade. A failed, invalid,
    rate-limited, or quota-exhausted key falls through according to the error
@@ -234,15 +235,15 @@ environment change rather than a code change.
 | Purpose | Initial model | Thinking |
 | --- | --- | --- |
 | Local routing | `qwen3-vl:4b-instruct` | instruct mode; no reasoning requirement |
-| Printed Arabic OCR | `gemini-2.5-flash` | `thinking_budget=0` |
+| Printed Arabic OCR | `gemini-3.7-flash` | `thinking_level=low` |
 | Handwritten Arabic OCR | `gemini-2.5-pro` | dynamic thinking; recorded in metrics |
 | Printed fallback OCR | `gemma4:31b-cloud` through existing Ollama Cloud | disabled where supported |
 
-The strict no-thinking requirement is why printed OCR starts with Gemini 2.5
-Flash: Google's current documentation permits `thinking_budget=0` for that
-model. Gemini 3 Flash exposes a `minimal` thinking level, but Google explicitly
-states that `minimal` does not guarantee zero thinking. It is therefore not an
-automatic substitute.
+Printed OCR uses Gemini 3.7 Flash as explicitly selected by the user. Google's
+current documentation says this model always uses thinking and supports only
+`low`, `medium`, and `high`; `minimal` is unsupported. The client therefore
+sets `thinking_level=low`, captures thought-token usage, and includes those
+tokens in cost metrics. The pipeline does not claim that thinking is disabled.
 
 The handwritten route starts with Gemini 2.5 Pro because the current pricing
 page lists a free tier for it, while Gemini 3.1 Pro Preview has no free API
@@ -251,8 +252,8 @@ projects, so neither access nor quota is assumed. Before the live corpus runs,
 a capability preflight tests every supplied key against the configured model
 with the smallest valid request and records only success/failure metadata. If
 none of the keys can access the required model, implementation stops with an
-actionable report; it does not silently enable billing, select a paid-only
-model, or switch to a thinking-enabled printed model.
+actionable report; it does not silently enable billing or select a different
+model.
 
 All external model names remain settings, so an explicitly approved provider
 change requires an environment update rather than a code change. A startup
@@ -415,7 +416,8 @@ containers where required:
 ARABIC_OCR_ENABLED=false
 ARABIC_ROUTER_MODEL=qwen3-vl:4b-instruct
 GEMINI_API_KEYS=
-ARABIC_GEMINI_PRINTED_MODEL=gemini-2.5-flash
+ARABIC_GEMINI_PRINTED_MODEL=gemini-3.7-flash
+ARABIC_GEMINI_PRINTED_THINKING_LEVEL=low
 ARABIC_GEMINI_HANDWRITTEN_MODEL=gemini-2.5-pro
 ARABIC_GEMMA_FALLBACK_MODEL=gemma4:31b-cloud
 ARABIC_OCR_DPI=200
@@ -473,9 +475,9 @@ Arabic variants, but stored and rendered OCR remains untouched.
 3. Printed-versus-handwritten routing accuracy is at least 95%; ambiguous
    Arabic routes to Pro.
 4. No successful Arabic job loses or duplicates a page.
-5. Gemini Flash thinking-token usage is zero. A configured model that cannot
-   disable thinking does not satisfy the approved printed-OCR route and blocks
-   release until the user explicitly changes that requirement.
+5. Gemini 3.7 Flash requests explicitly use `thinking_level=low`; thought-token
+   usage is captured and included in the true per-page cost. Any higher or
+   default thinking level fails the configuration test.
 6. Exhausting all Gemini keys causes a clean whole-document Gemma rerun for
    printed Arabic.
 7. Exhausting all Gemini keys for handwritten Arabic produces the specified
@@ -533,7 +535,9 @@ on the handwritten subset with a paired per-document comparison.
 - Google Gemini API keys:
   <https://ai.google.dev/gemini-api/docs/api-key>
 - Google Gemini thinking controls:
-  <https://ai.google.dev/gemini-api/docs/generate-content/thinking>
+  <https://ai.google.dev/gemini-api/docs/thinking>
+- Google Gemini 3.7 Flash model details:
+  <https://ai.google.dev/gemini-api/docs/models/gemini-3.7-flash>
 - Google Gemini 3 thinking-level limitations:
   <https://ai.google.dev/gemini-api/docs/gemini-3>
 - Google Gemini image understanding and media resolution:
