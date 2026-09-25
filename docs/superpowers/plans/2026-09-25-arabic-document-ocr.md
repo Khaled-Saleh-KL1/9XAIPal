@@ -160,7 +160,7 @@ Testing Library, Docker Compose.
 - Produces: `settings.gemini_api_keys: list[str]` and all `arabic_*` settings
   used by Tasks 3–9.
 
-- [ ] **Step 1: Create the isolated execution worktree**
+- [x] **Step 1: Create the isolated execution worktree**
 
 ```bash
 git status --short
@@ -171,7 +171,7 @@ cd ../9XAIPal_VPS-arabic-ocr
 Expected: the new worktree starts at the approved plan commit. Do not copy the
 untracked root `image.png` or `pyproject.toml` into it.
 
-- [ ] **Step 2: Run the unchanged baseline**
+- [x] **Step 2: Run the unchanged baseline**
 
 ```bash
 cd backend
@@ -183,7 +183,7 @@ npm run build
 Expected: all selected backend tests pass and the frontend production build
 finishes successfully. If not, stop and report the pre-existing failure.
 
-- [ ] **Step 3: Write failing settings tests**
+- [x] **Step 3: Write failing settings tests**
 
 ```python
 # backend/tests/test_arabic_config.py
@@ -204,7 +204,7 @@ def test_arabic_features_are_safe_by_default():
     assert cfg.arabic_gemini_handwritten_model == "gemini-3.1-pro-preview"
 ```
 
-- [ ] **Step 4: Run the settings tests and verify failure**
+- [x] **Step 4: Run the settings tests and verify failure**
 
 ```bash
 cd backend
@@ -213,7 +213,7 @@ POSTGRES_DB=9xaipal_test pytest tests/test_arabic_config.py -q
 
 Expected: FAIL because the Arabic settings do not exist.
 
-- [ ] **Step 5: Add the exact settings and dependency**
+- [x] **Step 5: Add the exact settings and dependency**
 
 ```python
 # backend/app/core/config.py — add beside extractor settings
@@ -247,7 +247,7 @@ in both Compose files. Set the worker's default
 `ARABIC_ROUTER_BASE_URL=http://host.docker.internal:11434`. Never add key
 values to a tracked file.
 
-- [ ] **Step 6: Lock dependencies and pass the settings tests**
+- [x] **Step 6: Lock dependencies and pass the settings tests**
 
 ```bash
 cd backend
@@ -257,7 +257,7 @@ POSTGRES_DB=9xaipal_test pytest tests/test_arabic_config.py -q
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit the foundation**
+- [x] **Step 7: Commit the foundation**
 
 ```bash
 git add backend/pyproject.toml backend/uv.lock backend/app/core/config.py \

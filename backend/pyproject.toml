@@ -15,6 +15,9 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings",
 
+    # Gemini multimodal OCR client (Arabic-only feature-flagged route).
+    "google-genai",
+
     # HTTP client (Ollama / cloud LLM APIs)
     "httpx",
     # Explicit because the SSRF-safe transport pins validated DNS addresses
