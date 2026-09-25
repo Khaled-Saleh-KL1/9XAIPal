@@ -21,23 +21,25 @@ accuracy, cost, recovery, and rendering acceptance criteria.
 ## 2. Agreed product rules
 
 1. English documents continue through the current MinerU pipeline.
-2. Arabic routing is automatic; users do not have to choose an OCR engine.
+2. Arabic routing is automatic when confidence meets the evaluated threshold.
+   An uncertain printed/handwritten decision asks the user for confirmation
+   instead of guessing.
 3. Classification happens locally so it consumes no Gemini quota.
 4. Printed Arabic uses `gemini-3.7-flash` with its lowest supported thinking
    level, `low`. This model cannot disable thinking completely.
-5. Handwritten Arabic uses Gemini Pro.
+5. The handwritten route is designed for `gemini-3.1-pro-preview`, but live
+   handwritten extraction is disabled until the operator supplies a
+   billing-enabled Gemini project.
 6. Gemini credentials form an ordered cascade. A failed, invalid,
    rate-limited, or quota-exhausted key falls through according to the error
    policy in section 8.
-7. If every Gemini key is unavailable for a printed Arabic document, discard
-   all partial Gemini output and re-extract the entire document with Ollama
-   Cloud `gemma4:31b-cloud`.
-8. If every Gemini key is unavailable for a handwritten Arabic document,
-   discard all partial output and mark ingestion failed with a retryable
-   message explaining that the daily quota is exhausted and may take up to 24
-   hours to reset.
-9. Arabic OCR repair runs only when the complete document was extracted by
-   Gemma 4. Gemini output is stored without textual correction.
+7. If every Gemini key becomes unavailable during printed extraction, retain
+   fully validated Gemini pages and continue from the first uncommitted page
+   with Ollama Cloud `gemma4:31b-cloud`.
+8. Repair only blocks extracted by Gemma. Gemini blocks are stored without
+   textual correction, including inside a hybrid document.
+9. English-only documents are LTR. Arabic and substantive Arabic/English mixed
+   documents use the Arabic extraction route and are RTL.
 10. No API key is committed, logged, returned by an endpoint, or stored in a
     database row. The user-supplied keys are placed only in the ignored local
     environment during sandbox execution.
@@ -50,11 +52,14 @@ accuracy, cost, recovery, and rendering acceptance criteria.
   Arabic, or ambiguous.
 - Arabic PDFs with or without a usable embedded text layer.
 - Automatic provider routing and Gemini key fallback.
-- Adaptive page batching and atomic document fallback.
+- Adaptive page batching, resumable provider fallback, and atomic final
+  persistence.
 - MinerU-compatible extraction artifacts for the existing chunker.
 - Conditional Arabic rendering direction in the paper reader.
 - Provider provenance, progress, user-facing errors, retry, and evaluation.
-- A conservative repair framework for Gemma-only Arabic output.
+- A conservative repair framework applied only to Gemma-origin output.
+- A non-executable handwritten route with a clear availability message and a
+  future billing-enabled activation flag.
 
 ### Deferred
 
@@ -79,22 +84,18 @@ local document classifier
    |                                          |
    |                                          | all keys unavailable
    |                                          v
-   |                                    discard partial output
+   |                                  keep validated pages
    |                                          |
    |                                          v
-   |                                    Gemma 4 full rerun
+   |                              Gemma 4 from first unfinished page
    |                                          |
    |                                          v
-   |                                    Gemma-only repair
+   |                              repair Gemma-origin blocks only
    |
-   |-- handwritten/ambiguous Arabic ----> Gemini Pro cascade
-                                              |
-                                              | all keys unavailable
-                                              v
-                                        discard partial output
-                                              |
-                                              v
-                                      retryable quota failure
+   |-- handwritten Arabic --------------> clear unsupported message
+   |                                      (Pro route disabled)
+   |
+   |-- uncertain Arabic style ----------> request user confirmation
 
 successful Arabic extraction
    |
@@ -116,28 +117,35 @@ shared after that point.
 ## 5. Local classification
 
 Classification has two stages and returns one document-level route:
-`english`, `arabic_printed`, or `arabic_handwritten`. Uncertain Arabic is
-treated as handwritten because losing handwriting is more damaging than using
-the more capable model on a printed page.
+`english`, `arabic_printed`, `arabic_handwritten`, or
+`arabic_style_uncertain`. The classifier must abstain when confidence is below
+the evaluated threshold. It must never convert uncertainty into a handwritten
+decision, because that would incorrectly block a printed document.
 
 ### 5.1 Text-layer fast path
 
-PyMuPDF reads text from up to five evenly distributed non-empty pages,
-including the first, middle, and last pages when they exist. The classifier
-counts Unicode Arabic-script letters and Latin letters after excluding digits,
-punctuation, URLs, and isolated formula symbols.
+PyMuPDF inspects the text layer of every page because this is local and cheap.
+It counts Unicode Arabic-script letters and Latin letters after excluding
+digits, punctuation, URLs, and isolated formula symbols.
 
-- A clear Arabic majority routes to the Arabic style classifier.
-- A clear Latin majority routes to the unchanged English pipeline.
-- Missing, sparse, or mixed text routes to visual classification.
+- Any substantive, verified Arabic body text routes to the Arabic style
+  classifier, including Arabic/English mixed documents.
+- A document with clear Latin body text and no verified Arabic body text routes
+  to the unchanged English pipeline.
+- Missing, sparse, or uncertain text-layer evidence routes to visual language
+  classification.
 
 Thresholds are configuration values fixed by the sandbox corpus, then frozen
 in tests. The code must not infer handwriting from the text layer.
 
 ### 5.2 Visual classifier
 
-Sampled pages are rendered as native RGB images. A local Ollama vision model
-returns strict JSON with:
+Every page receives a local, low-resolution visual style screen in page-order
+batches. Pages marked suspicious, conflicting, or low-confidence are rendered
+again at higher resolution and classified individually; a one-page document
+also receives full-page and region-level views. This costs local compute but no
+Gemini quota and reduces the chance that a sampled subset hides a different
+writing style. The local Ollama vision model returns strict JSON with:
 
 ```json
 {
@@ -157,18 +165,32 @@ vision model through the same interface without changing routing code.
 The deployment checklist must also verify the Ollama version and available VPS
 memory required by the chosen model rather than assuming local compatibility.
 
-Document aggregation rules:
+Document aggregation is deliberately conservative:
 
-- Any sampled page whose primary readable content is handwritten makes the
-  document `arabic_handwritten`.
-- `mixed` Arabic handwriting/print is `arabic_handwritten`.
-- Arabic with isolated signatures, stamps, or short annotations remains
-  `arabic_printed` when the primary document content is printed.
-- Arabic/English bilingual printed documents are `arabic_printed` when Arabic
-  is a primary language.
-- Visual `unknown` after a sparse text result is `arabic_handwritten` only when
-  Arabic script is visible; otherwise the upload fails classification with a
-  clear retry/manual-report message instead of being silently sent to MinerU.
+- A document becomes `arabic_handwritten` only when the evaluated
+  high-confidence threshold is met across multiple independent page views and
+  no sampled primary-content page is confidently printed.
+- A one-page document must obtain consistent handwritten decisions from the
+  full page and independently rendered content regions before it can be marked
+  handwritten.
+- `mixed` handwriting/print, conflicting page votes, `unknown`, and confidence
+  below threshold become `arabic_style_uncertain`; they are not auto-routed.
+- Arabic with isolated signatures, stamps, or short handwritten annotations
+  remains `arabic_printed` when the primary body content is printed.
+- Arabic/English bilingual documents set `detected_language=mixed`, use the
+  Arabic route, and are classified separately for printed versus handwritten
+  style.
+- Any verified Arabic body content is sufficient for the mixed-language route;
+  isolated OCR noise or an unreadable decorative mark is not.
+
+For `arabic_style_uncertain`, the UI asks the user to identify the document as
+printed or handwritten. Selecting printed continues through Gemini Flash;
+selecting handwritten shows the unsupported message. This abstention path is
+required because a 100% guarantee on unseen documents is not technically
+possible. The existing job state becomes `failed` with error code
+`arabic_style_confirmation_required`; after confirmation, the existing
+`failed -> queued` retry transition restarts the job with the recorded manual
+classification and does not run the classifier again.
 
 Classification results are stored as document metadata for auditability.
 
@@ -200,7 +222,8 @@ The extractor minimizes API requests while keeping failures recoverable:
 - Each response must contain explicit page boundaries. Missing, duplicated, or
   out-of-order pages invalidate the batch and trigger a bounded retry.
 
-The complete document is committed only after every batch validates.
+The complete document is committed only after every page validates. Provider
+batches are transport units, not persistence boundaries.
 
 ### 6.3 OCR output
 
@@ -236,7 +259,7 @@ environment change rather than a code change.
 | --- | --- | --- |
 | Local routing | `qwen3-vl:4b-instruct` | instruct mode; no reasoning requirement |
 | Printed Arabic OCR | `gemini-3.7-flash` | `thinking_level=low` |
-| Handwritten Arabic OCR | `gemini-2.5-pro` | dynamic thinking; recorded in metrics |
+| Handwritten Arabic OCR, disabled | `gemini-3.1-pro-preview` | provider default when later enabled |
 | Printed fallback OCR | `gemma4:31b-cloud` through existing Ollama Cloud | disabled where supported |
 
 Printed OCR uses Gemini 3.7 Flash as explicitly selected by the user. Google's
@@ -245,20 +268,24 @@ current documentation says this model always uses thinking and supports only
 sets `thinking_level=low`, captures thought-token usage, and includes those
 tokens in cost metrics. The pipeline does not claim that thinking is disabled.
 
-The handwritten route starts with Gemini 2.5 Pro because the current pricing
-page lists a free tier for it, while Gemini 3.1 Pro Preview has no free API
-tier. Google also states that 2.5-model access is restricted for some new
-projects, so neither access nor quota is assumed. Before the live corpus runs,
-a capability preflight tests every supplied key against the configured model
-with the smallest valid request and records only success/failure metadata. If
-none of the keys can access the required model, implementation stops with an
-actionable report; it does not silently enable billing or select a different
-model.
+The handwritten route is configured for `gemini-3.1-pro-preview`, which is not
+included in the Gemini API free tier. `ARABIC_HANDWRITTEN_OCR_ENABLED` therefore
+defaults to `false`, and the current release must stop before making a Pro API
+call. The route, model interface, status handling, and mocked tests are built
+so it can be enabled later with an explicit configuration change after a
+billing account is available.
+
+Before the printed live corpus runs, a capability preflight tests every
+supplied key against Gemini 3.7 Flash with the smallest valid request and
+records only success/failure metadata. If none of the keys can access it,
+implementation stops with an actionable report; it does not silently enable
+billing or select a different model.
 
 All external model names remain settings, so an explicitly approved provider
 change requires an environment update rather than a code change. A startup
-capability probe must fail with an actionable configuration error if a
-configured model is no longer available.
+capability probe must fail with an actionable configuration error if an
+enabled model is no longer available. It must not probe or call the disabled
+handwritten Pro model.
 
 ## 8. Gemini credential cascade
 
@@ -284,63 +311,69 @@ Error handling:
   current key, then try the next key.
 
 Gemini quotas are enforced per Google project rather than per key, and daily
-request quotas reset at midnight Pacific time. Key rotation therefore provides
-separate quota only when the keys belong to separate projects; it still
-provides credential-failure isolation when they do not. The implementation
-does not assume that a daily quota error will always require a full 24-hour
-wait.
+request quotas reset at midnight Pacific time. The user confirms that the
+supplied keys come from separate accounts; the preflight treats them as
+independent targets and runtime responses remain the authority for their
+actual project quotas. The implementation does not assume that a daily quota
+error will always require a full 24-hour wait.
 
-## 9. Whole-document fallback semantics
-
-The Arabic pipeline never persists a mixture of Gemini and Gemma OCR.
+## 9. Printed fallback and handwritten availability
 
 ### Printed Arabic
 
 If all Gemini targets become unavailable during any batch:
 
-1. Delete the temporary Gemini extraction directory for that attempt.
-2. Start a clean extraction directory.
-3. Re-run every page through `gemma4:31b-cloud` using the same batching,
-   prompt contract, and adapter.
-4. Set the document extractor to `gemma4_arabic_fallback`.
-5. Run the Gemma-only Arabic repair pass.
-6. Persist the resulting chunks atomically.
+1. Keep every contiguous Gemini page that independently passed page-boundary,
+   ordering, completeness, and output validation, including complete pages in
+   a truncated final batch when the provider returned usable partial text.
+2. Discard only the first incomplete/invalid page and everything after it in
+   that response.
+3. Start `gemma4:31b-cloud` at the first uncommitted page and use Gemma for all
+   remaining pages.
+4. Preserve per-page and per-block provider provenance.
+5. Run Arabic repair only on Gemma-origin Markdown or blocks.
+6. Validate the combined page sequence for gaps and duplicates.
+7. Persist the complete document atomically only after every page is valid.
+
+The adapter gives Gemini and Gemma output the same canonical block structure,
+so provider switching does not require discarding valid text. Batch boundaries
+are not the recovery boundary; validated page boundaries are. The pipeline
+never splices providers inside a page or at an unvalidated text offset.
 
 ### Handwritten Arabic
 
-If all Gemini targets report daily quota exhaustion:
+When classification resolves to handwritten and
+`ARABIC_HANDWRITTEN_OCR_ENABLED=false`:
 
-1. Delete temporary partial OCR artifacts.
-2. Mark the document and ingestion job failed.
-3. Store this user-facing message:
+1. Make no Gemini or Gemma OCR request.
+2. Store no extracted chunks.
+3. Keep the original PDF.
+4. Mark the ingestion result with a dedicated
+   `handwritten_arabic_unavailable` error code.
+5. Show this user-facing message prominently:
 
-   > Handwritten Arabic OCR is temporarily unavailable because today's Gemini
-   > quota is exhausted. Try again after the quota resets, which may take up to
-   > 24 hours.
+   > Handwritten Arabic extraction is not currently available because it
+   > requires Gemini Pro with a billing-enabled account. No text was extracted,
+   > and your original file has been kept.
 
-4. Keep the original PDF so the existing retry action can restart ingestion.
+The message appears in a persistent blocking status panel on the document,
+not only as a transient notification.
 
-Gemma is never used for handwritten Arabic.
+Gemma is never used for handwritten Arabic. Enabling the Pro route later is a
+separate, explicit operational decision.
 
-If the keys instead fail because of authentication, permissions, model access,
-invalid configuration, a shorter-window rate limit, or a provider outage, the
-job still stores no partial chunks but reports that specific failure category.
-It must not mislabel those failures as daily quota exhaustion. When the
-provider returns only a generic `429` and the reset window cannot be proven,
-the message says that the quota or rate limit was reached and recommends
-retrying later, possibly after the next daily reset; it does not claim a known
-24-hour lockout.
+## 10. Gemma-origin Arabic repair
 
-## 10. Gemma-only Arabic repair
-
-The repair pass is gated by extractor provenance:
+The repair pass is gated by block/page provenance:
 
 ```python
-if extractor == "gemma4_arabic_fallback":
-    repair_arabic_gemma_chunks(chunks, pdf_path)
+for page in extracted_pages:
+    if page.provider == "gemma4_arabic_fallback":
+        repair_arabic_gemma_page(page, pdf_path)
 ```
 
-Gemini-produced Arabic bypasses the repair function completely.
+Gemini-produced pages and blocks bypass the repair function completely, even
+when later pages in the same document came from Gemma.
 
 The repair system follows the same epistemic rule as the existing MinerU glyph
 repair: change text only when the source document or a measured, deterministic
@@ -375,24 +408,35 @@ Add nullable document metadata:
 - `classifier_model`: the local model that selected the route.
 - `classification_confidence`: numeric confidence when the classifier supplies
   one.
+- `classification_source`: `automatic` or `user_confirmed`.
+- `ocr_provider_summary`: ordered provider/page ranges for completed Arabic
+  extraction.
 
 Existing `documents.extractor` records the final whole-document extractor:
 
 - `mineru` / existing values for English,
 - `gemini_arabic_flash`,
-- `gemini_arabic_pro`, or
-- `gemma4_arabic_fallback`.
+- `gemma4_arabic_fallback`,
+- `gemini_gemma_arabic_hybrid`, or
+- reserved `gemini_arabic_pro` after handwritten extraction is enabled.
+
+The temporary Arabic artifact carries a provider marker for each page/block.
+The document stores a compact provider summary with page ranges so support and
+evaluation can distinguish Gemini-only, Gemma-only, and hybrid results without
+storing credentials or model responses.
 
 The upload response remains compatible. Document detail and progress responses
-gain optional metadata fields. Older clients continue to work.
-
-No per-chunk provider field is needed because mixed Gemini/Gemma persistence is
-forbidden.
+gain optional metadata fields. An uncertain style returns an
+`action_required=confirm_arabic_writing_style` state with printed and
+handwritten choices. Add a nullable `error_code` to ingestion jobs so clients
+do not parse human-readable messages. Older clients continue to work and see
+the job as failed rather than incorrectly completed.
 
 ## 12. Reader behavior
 
-Arabic documents continue to use the paper/article reader surface during this
-phase. When `text_direction == "rtl"`:
+Direction is deterministic: `english` uses `ltr`; `arabic` and `mixed` use
+`rtl`. Arabic documents continue to use the paper/article reader surface during
+this phase. When `text_direction == "rtl"`:
 
 - content blocks use `dir="rtl"` or `dir="auto"` at the smallest practical
   block boundary,
@@ -403,9 +447,11 @@ phase. When `text_direction == "rtl"`:
   natural bidirectional behavior, and
 - application chrome remains in the existing interface direction.
 
-English documents receive no new direction attribute and retain current styles.
-This follows W3C guidance to establish the correct base direction in markup and
-let the Unicode Bidirectional Algorithm handle mixed directional runs.
+English documents retain current LTR styles. Mixed Arabic/English documents use
+an RTL base direction while embedded English text and numerals rely on block
+`dir="auto"` and the Unicode Bidirectional Algorithm. This follows W3C guidance
+to establish the correct base direction in markup and let the algorithm handle
+mixed directional runs.
 
 ## 13. Configuration
 
@@ -418,14 +464,16 @@ ARABIC_ROUTER_MODEL=qwen3-vl:4b-instruct
 GEMINI_API_KEYS=
 ARABIC_GEMINI_PRINTED_MODEL=gemini-3.7-flash
 ARABIC_GEMINI_PRINTED_THINKING_LEVEL=low
-ARABIC_GEMINI_HANDWRITTEN_MODEL=gemini-2.5-pro
+ARABIC_GEMINI_HANDWRITTEN_MODEL=gemini-3.1-pro-preview
+ARABIC_HANDWRITTEN_OCR_ENABLED=false
 ARABIC_GEMMA_FALLBACK_MODEL=gemma4:31b-cloud
 ARABIC_OCR_DPI=200
 ARABIC_GEMINI_MEDIA_RESOLUTION=HIGH
 ARABIC_OCR_SINGLE_REQUEST_MAX_PAGES=4
 ARABIC_OCR_BATCH_PAGES=4
-ARABIC_SCRIPT_RATIO_THRESHOLD=0.70
+ARABIC_MIN_BODY_CHAR_COUNT=20
 ARABIC_CLASSIFIER_CONFIDENCE_MIN=0.80
+ARABIC_HANDWRITTEN_CONFIDENCE_MIN=0.97
 ```
 
 The feature defaults off until the sandbox evaluation passes. Enabling it does
@@ -446,16 +494,18 @@ The frozen first-phase corpus contains:
 - at least 5 bilingual Arabic/English PDFs,
 - at least 5 English controls, and
 - documents with tables, numerals, stamps, signatures, multi-column layouts,
-  weak scans, and more than four pages.
+  weak scans, handwriting-like fonts, sparse typed forms, handwritten notes on
+  printed pages, and more than four pages.
 
 The user-provided prompt screenshot is not an OCR sample and is excluded. Real
 Arabic sample documents must be supplied before live accuracy evaluation.
 
 ### Metrics
 
-- Raw and normalized CER/WER for Arabic OCR.
+- Raw and normalized CER/WER for printed Arabic OCR.
 - Structural block retention and reading-order correctness.
-- Classifier confusion matrix for English/printed/handwritten.
+- Classifier confusion matrix for English/printed/handwritten, including the
+  abstention rate and accuracy among auto-routed documents.
 - Provider and key-attempt counts.
 - Requests, input/output/thinking tokens, and cost per page.
 - Batch retry and fallback frequency.
@@ -470,32 +520,43 @@ Arabic variants, but stored and rendered OCR remains untouched.
 
 1. All English control PDFs take the existing MinerU path and produce
    byte-equivalent chunk payloads, excluding newly nullable document metadata.
-2. Language routing accuracy is at least 98% on the frozen corpus, with zero
-   English controls entering the Arabic extractor.
-3. Printed-versus-handwritten routing accuracy is at least 95%; ambiguous
-   Arabic routes to Pro.
+2. English controls remain in MinerU, while every document with verified,
+   substantive Arabic body text, including Arabic/English mixed text, enters
+   the Arabic route.
+3. On a held-out classifier set, zero printed documents may be auto-labeled
+   handwritten and zero handwritten documents may be auto-labeled printed.
+   Documents that cannot meet both conditions must abstain as
+   `arabic_style_uncertain`; classifier coverage is reported separately and is
+   never hidden inside the accuracy number. This is a finite test-set release
+   criterion, not a claim of 100% accuracy on future unseen documents.
 4. No successful Arabic job loses or duplicates a page.
 5. Gemini 3.7 Flash requests explicitly use `thinking_level=low`; thought-token
    usage is captured and included in the true per-page cost. Any higher or
    default thinking level fails the configuration test.
-6. Exhausting all Gemini keys causes a clean whole-document Gemma rerun for
-   printed Arabic.
-7. Exhausting all Gemini keys for handwritten Arabic produces the specified
-   retryable message and no partial chunks.
-8. Gemma repair runs on Gemma-only artifacts and never on Gemini artifacts.
+6. Exhausting all Gemini keys keeps every independently validated Gemini page,
+   restarts at the first uncommitted page with Gemma, and produces a gap-free,
+   duplicate-free hybrid result.
+7. A handwritten decision produces the specified unsupported message, makes
+   no OCR provider call, and stores no partial chunks while the feature flag is
+   disabled.
+8. Gemma repair touches only Gemma-origin pages/blocks and never changes a
+   Gemini-origin block in the same document.
 9. No credential appears in git history, logs, API output, or database rows.
-10. Arabic paragraphs, tables, lists, numerals, and mixed English spans display
-    correctly in both light and dark themes.
+10. English renders LTR; Arabic and mixed Arabic/English render with an RTL base
+    direction. Paragraphs, tables, lists, numerals, and mixed English spans
+    display correctly in both light and dark themes.
 
 Accuracy thresholds for CER/WER are recorded as baseline and improvement
 results rather than invented in advance. The first release requires the chosen
-configuration to beat the Gemma-only printed baseline and for Pro to beat Flash
-on the handwritten subset with a paired per-document comparison.
+configuration to beat the Gemma-only printed baseline. Handwritten documents
+participate only in classifier evaluation until the billing-enabled Pro route
+is explicitly activated.
 
 ## 15. Error handling and observability
 
-- Classifier, extractor, model, key index, batch/page range, retry count,
-  latency, and token usage are logged without document text or credentials.
+- Classifier, extractor, model, key index, batch/page range, per-page provider,
+  retry count, latency, and token usage are logged without document text or
+  credentials.
 - Extraction progress reports pages completed over total pages.
 - Temporary output is written under an attempt-specific directory and promoted
   only after validation.
@@ -512,8 +573,10 @@ on the handwritten subset with a paired per-document comparison.
    `ARABIC_OCR_ENABLED=false`.
 3. Implement artifact validation, adaptive batching, and the existing chunker
    handoff.
-4. Implement whole-document Gemma fallback and Gemma-only repair gating.
-5. Add document metadata and conditional RTL rendering.
+4. Implement continuation from the first uncommitted batch, provider-scoped
+   Gemma repair, and hybrid provenance.
+5. Add the disabled handwritten route, uncertain-style confirmation, document
+   metadata, and deterministic LTR/RTL rendering.
 6. Run mocked failure tests and the frozen live sandbox corpus.
 7. Freeze configuration values, update operational documentation, and prepare a
    pull request for review.
