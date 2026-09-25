@@ -1447,7 +1447,7 @@ npm run build
 Expected: all tests pass and TypeScript/Vite complete without warnings caused
 by this change.
 
-- [ ] **Step 8: Commit the frontend**
+- [x] **Step 8: Commit the frontend**
 
 ```bash
 git add frontend/package.json frontend/package-lock.json frontend/vite.config.ts \
@@ -1484,7 +1484,7 @@ git commit -m "feat: show Arabic OCR state and direction"
 - Produces: immutable JSONL records and a Markdown/JSON report with split
   metrics, routing confusion, costs, latency, and paired provider results.
 
-- [ ] **Step 1: Write failing deterministic scoring tests**
+- [x] **Step 1: Write failing deterministic scoring tests**
 
 ```python
 # backend/tests/test_arabic_scoring.py
@@ -1507,7 +1507,7 @@ def test_classifier_report_counts_abstention_separately():
 Add exact CER, WER, token-F1, micro/per-document aggregation, cost including
 thought tokens, p50/p95 latency, page gap/duplicate, and provider-range tests.
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 ```bash
 cd backend
@@ -1516,7 +1516,7 @@ POSTGRES_DB=9xaipal_test pytest tests/test_arabic_scoring.py -q
 
 Expected: FAIL because scoring does not exist.
 
-- [ ] **Step 3: Implement offline scoring and immutable run records**
+- [x] **Step 3: Implement offline scoring and immutable run records**
 
 Normalization for metrics may remove harakat/tatweel, standardize configured
 Alef/ya/ta-marbuta variants, strip Markdown, and collapse whitespace. It must
@@ -1525,7 +1525,7 @@ record includes a config hash, git SHA, route/ground truth, provider ranges,
 request attempts, token categories including thoughts, latency, raw/normalized
 scores, and no credentials or full prompts.
 
-- [ ] **Step 4: Implement safe preflight and live opt-in**
+- [x] **Step 4: Implement safe preflight and live opt-in**
 
 `run_eval.py` defaults to classifier-only/offline operation. Live OCR requires
 an explicit `--live` flag and reads keys only from the environment. Before the
@@ -1534,7 +1534,7 @@ record only key index, accessible/unavailable, status category, model, token
 counts, and latency. Never probe the disabled Pro model. Exit with an
 actionable error if no key can access `gemini-3.7-flash`.
 
-- [ ] **Step 5: Document and freeze the corpus contract**
+- [x] **Step 5: Document and freeze the corpus contract**
 
 The README requires at least 10 digital printed Arabic, 10 scanned printed
 Arabic, 10 handwritten, 5 mixed Arabic/English, and 5 English controls, plus
@@ -1544,7 +1544,7 @@ real corpus directory and generated run directories to `.gitignore` because
 documents may be private. Hash each source and ground-truth file so a reported
 run cannot silently change its benchmark.
 
-- [ ] **Step 6: Pass scoring tests and run mocked end-to-end evaluation**
+- [x] **Step 6: Pass scoring tests and run mocked end-to-end evaluation**
 
 ```bash
 cd backend
@@ -1557,7 +1557,7 @@ Expected: tests pass and the mock run writes a report without network access.
 Do not claim live accuracy until the real frozen corpus has been supplied and
 run.
 
-- [ ] **Step 7: Commit the harness**
+- [x] **Step 7: Commit the harness**
 
 ```bash
 git add backend/eval/__init__.py backend/eval/arabic_documents \

@@ -11,5 +11,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
-
+eval/arabic_documents/corpus/
+eval/arabic_documents/runs/
 

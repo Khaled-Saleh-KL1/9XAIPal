@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "normalization": {
+    "strip_markdown": true,
+    "normalize_alef": true,
+    "normalize_ya": false,
+    "normalize_ta_marbuta_ha": false
+  },
+  "pricing": {
+    "by_model": {}
+  },
+  "documents": [
+    {
+      "doc_id": "synthetic-printed-arabic",
+      "split": "synthetic_mock_only",
+      "expected_route": "printed",
+      "source_pdf": null,
+      "ground_truth_text": "مثال نص عربي مطبوع اصطناعي",
+      "mock_prediction_text": "مثال نص عربي مطبوع اصطناعي",
+      "mock_page_count": 1
+    },
+    {
+      "doc_id": "synthetic-handwritten-arabic",
+      "split": "synthetic_mock_only",
+      "expected_route": "handwritten",
+      "source_pdf": null,
+      "ground_truth_text": "مثال نص عربي مكتوب بخط اليد اصطناعي",
+      "mock_page_count": 1
+    },
+    {
+      "doc_id": "synthetic-english-control",
+      "split": "synthetic_mock_only",
+      "expected_route": "english",
+      "source_pdf": null,
+      "ground_truth_text": "Synthetic English control document.",
+      "mock_page_count": 1
+    }
+  ]
+}
