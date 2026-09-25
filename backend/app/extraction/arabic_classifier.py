@@ -1,10 +1,11 @@
 """Local-only Arabic document language and writing-style classification.
 
-Text-only English PDFs with a substantial Latin text layer and no embedded
-images are routed without a model call. PDFs with embedded images, Arabic text,
-or insufficient text are screened page-by-page by local Ollama; only ambiguous
-or handwriting-like pages receive a full-page-plus-region second vote. Any
-unresolved disagreement abstains instead of guessing handwritten.
+Pages with a substantial English text layer and no substantive Arabic text are
+authoritatively English for language routing. Pages with Arabic body text still
+receive local style classification; only pages with missing or sparse text
+need visual language classification. Sparse-page Arabic votes require a
+high-confidence detail confirmation. Any unresolved style disagreement
+abstains instead of guessing handwritten.
 """
 
 from __future__ import annotations
@@ -50,7 +51,18 @@ class TextPageEvidence:
     page_idx: int
     arabic_chars: int
     latin_chars: int
-    image_count: int = 0
+
+    @property
+    def has_substantive_arabic_body(self) -> bool:
+        return self.arabic_chars >= settings.arabic_min_body_char_count
+
+    @property
+    def has_substantive_latin_body(self) -> bool:
+        return self.latin_chars >= settings.arabic_min_body_char_count
+
+    @property
+    def has_clear_english_body(self) -> bool:
+        return self.has_substantive_latin_body and self.arabic_chars == 0
 
 
 @dataclass(frozen=True)
@@ -67,15 +79,15 @@ class DocumentTextEvidence:
 
     @property
     def has_arabic_body(self) -> bool:
-        return self.arabic_char_count >= settings.arabic_min_body_char_count
+        return any(page.has_substantive_arabic_body for page in self.pages)
 
     @property
     def has_latin_body(self) -> bool:
-        return self.latin_char_count >= settings.arabic_min_body_char_count
+        return any(page.has_substantive_latin_body for page in self.pages)
 
     @property
-    def has_embedded_images(self) -> bool:
-        return any(page.image_count > 0 for page in self.pages)
+    def all_pages_are_clear_english(self) -> bool:
+        return all(page.has_clear_english_body for page in self.pages)
 
     @property
     def language(self) -> str:
@@ -138,7 +150,6 @@ def inspect_text_layers(pdf_path: Path) -> DocumentTextEvidence:
                     page_idx=page_idx,
                     arabic_chars=count_arabic_letters(page.get_text("text")),
                     latin_chars=count_latin_letters(page.get_text("text")),
-                    image_count=len(page.get_images(full=True)),
                 )
                 for page_idx, page in enumerate(document, start=1)
             )
@@ -469,15 +480,21 @@ def call_in_batches(
 
 def _derive_language(
     evidence: DocumentTextEvidence,
-    votes: Sequence[PageStyleVote],
+    confirmed_visual_languages: dict[int, str],
 ) -> str:
-    has_arabic = evidence.has_arabic_body
-    has_latin = evidence.has_latin_body
-    for vote in votes:
-        if not vote.primary_content:
-            continue
-        has_arabic = has_arabic or vote.language in {"arabic", "mixed"}
-        has_latin = has_latin or vote.language in {"english", "mixed"}
+    page_languages: list[str] = []
+    for page in evidence.pages:
+        if page.has_substantive_arabic_body:
+            page_languages.append(
+                "mixed" if page.has_substantive_latin_body else "arabic"
+            )
+        elif page.has_clear_english_body:
+            page_languages.append("english")
+        elif page.page_idx in confirmed_visual_languages:
+            page_languages.append(confirmed_visual_languages[page.page_idx])
+
+    has_arabic = any(language in {"arabic", "mixed"} for language in page_languages)
+    has_latin = any(language in {"english", "mixed"} for language in page_languages)
     if has_arabic and has_latin:
         return "mixed"
     if has_arabic:
@@ -487,14 +504,95 @@ def _derive_language(
     return "unknown"
 
 
+def _confirmed_visual_languages(
+    evidence: DocumentTextEvidence,
+    screen_votes: Sequence[PageStyleVote],
+    detail_votes: Sequence[PageStyleVote],
+) -> dict[int, str]:
+    """Use visual language votes only for pages without authoritative text."""
+    screen_by_page = {
+        vote.page_idx: vote
+        for vote in screen_votes
+        if vote.region == "page"
+    }
+    detail_by_page: dict[int, list[PageStyleVote]] = {}
+    for vote in detail_votes:
+        detail_by_page.setdefault(vote.page_idx, []).append(vote)
+
+    confirmed: dict[int, str] = {}
+    min_confidence = settings.arabic_classifier_confidence_min
+    for page in evidence.pages:
+        if page.has_clear_english_body or page.has_substantive_arabic_body:
+            continue
+        screen = screen_by_page.get(page.page_idx)
+        if screen is None or screen.confidence < min_confidence:
+            continue
+        details = detail_by_page.get(page.page_idx, [])
+        detail_page = next((vote for vote in details if vote.region == "page"), None)
+        primary_regions = [
+            vote for vote in details
+            if vote.region != "page" and vote.primary_content
+        ]
+        if (
+            detail_page is None
+            or not detail_page.primary_content
+            or detail_page.confidence < min_confidence
+        ):
+            continue
+
+        if screen.language in {"arabic", "mixed"}:
+            matching_regions = [
+                vote for vote in primary_regions
+                if vote.language in {"arabic", "mixed"}
+                and vote.confidence >= min_confidence
+            ]
+            if (
+                detail_page.language not in {"arabic", "mixed"}
+                or not matching_regions
+            ):
+                continue
+            confirmed[page.page_idx] = (
+                "mixed"
+                if detail_page.language == "mixed"
+                or any(vote.language == "mixed" for vote in matching_regions)
+                else "arabic"
+            )
+        elif screen.language in {"english", "mixed"}:
+            matching_regions = [
+                vote for vote in primary_regions
+                if vote.language in {"english", "mixed"}
+                and vote.confidence >= min_confidence
+            ]
+            if (
+                detail_page.language not in {"english", "mixed"}
+                or not matching_regions
+            ):
+                continue
+            confirmed[page.page_idx] = (
+                "mixed"
+                if detail_page.language == "mixed"
+                or any(vote.language == "mixed" for vote in matching_regions)
+                else "english"
+            )
+    return confirmed
+
+
 def aggregate_votes(
     evidence: DocumentTextEvidence,
     screen_votes: Sequence[PageStyleVote],
     detail_votes: Sequence[PageStyleVote],
+    *,
+    style_page_indices: Iterable[int] | None = None,
 ) -> ClassificationDecision:
     all_votes = tuple([*screen_votes, *detail_votes])
-    language = _derive_language(evidence, all_votes)
+    confirmed_languages = _confirmed_visual_languages(
+        evidence, screen_votes, detail_votes
+    )
+    language = _derive_language(evidence, confirmed_languages)
     page_ids = {page.page_idx for page in evidence.pages}
+    style_page_ids = (
+        page_ids if style_page_indices is None else set(style_page_indices)
+    )
     screen_by_page = {vote.page_idx: vote for vote in screen_votes if vote.region == "page"}
     detail_by_page: dict[int, list[PageStyleVote]] = {}
     for vote in detail_votes:
@@ -504,7 +602,7 @@ def aggregate_votes(
     confidence_votes: list[PageStyleVote] = []
     handwritten_consensus = True
     uncertain = False
-    for page_idx in sorted(page_ids):
+    for page_idx in sorted(style_page_ids):
         screen = screen_by_page.get(page_idx)
         if screen is None:
             uncertain = True
@@ -564,7 +662,11 @@ def aggregate_votes(
     distinct_styles = set(resolved_styles)
     if len(distinct_styles) > 1:
         uncertain = True
-    style = next(iter(distinct_styles)) if len(distinct_styles) == 1 else "mixed"
+    style = (
+        next(iter(distinct_styles))
+        if len(distinct_styles) == 1
+        else "mixed" if distinct_styles else "unknown"
+    )
     if style == "printed" and any(
         vote.confidence < settings.arabic_classifier_confidence_min
         for vote in confidence_votes
@@ -612,11 +714,7 @@ def classify_document(
 ) -> ClassificationDecision:
     """Classify every document page, abstaining on unresolved Arabic style."""
     evidence = inspect_text_layers(pdf_path)
-    if (
-        evidence.has_latin_body
-        and not evidence.has_arabic_body
-        and not evidence.has_embedded_images
-    ):
+    if evidence.all_pages_are_clear_english:
         return ClassificationDecision(
             route=DocumentRoute.ENGLISH,
             language="english",
@@ -627,7 +725,11 @@ def classify_document(
         )
 
     call = vision_call or call_local_router
-    page_indices = [page.page_idx for page in evidence.pages]
+    page_indices = [
+        page.page_idx
+        for page in evidence.pages
+        if not page.has_clear_english_body
+    ]
     screen_votes: list[PageStyleVote] = []
     for start in range(0, len(page_indices), settings.arabic_classifier_batch_pages):
         batch_pages = page_indices[start:start + settings.arabic_classifier_batch_pages]
@@ -638,14 +740,49 @@ def classify_document(
 
     arabic_text_pages = [
         page.page_idx for page in evidence.pages
-        if page.arabic_chars >= settings.arabic_min_body_char_count
+        if page.has_substantive_arabic_body
     ]
+    sparse_arabic_pages = [
+        vote.page_idx
+        for vote in screen_votes
+        if vote.region == "page"
+        and vote.language in {"arabic", "mixed"}
+        and vote.page_idx not in arabic_text_pages
+    ]
+    force_detail_pages = [*arabic_text_pages, *sparse_arabic_pages]
+    if len(evidence.pages) == 1 and page_indices:
+        force_detail_pages.append(page_indices[0])
     detail_votes: list[PageStyleVote] = []
     for page_idx in _suspicious_page_indices(
-        screen_votes, force_pages=arabic_text_pages
+        screen_votes, force_pages=force_detail_pages
     ):
         detail_images = render_page_images(
             pdf_path, [page_idx], include_regions=True
         )
         detail_votes.extend(call_in_batches(detail_images, 1, call, "detail"))
-    return aggregate_votes(evidence, screen_votes, detail_votes)
+    confirmed_languages = _confirmed_visual_languages(
+        evidence, screen_votes, detail_votes
+    )
+    document_language = _derive_language(evidence, confirmed_languages)
+    style_pages = set(arabic_text_pages) | {
+        page_idx
+        for page_idx, language in confirmed_languages.items()
+        if language in {"arabic", "mixed"}
+    }
+    if document_language in {"arabic", "mixed"}:
+        style_pages.update(
+            vote.page_idx
+            for vote in screen_votes
+            if vote.region == "page"
+            and vote.primary_content
+            and vote.language in {"arabic", "mixed"}
+            and not next(
+                page for page in evidence.pages if page.page_idx == vote.page_idx
+            ).has_clear_english_body
+        )
+    return aggregate_votes(
+        evidence,
+        screen_votes,
+        detail_votes,
+        style_page_indices=style_pages,
+    )

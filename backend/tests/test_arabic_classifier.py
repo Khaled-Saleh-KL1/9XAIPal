@@ -53,6 +53,25 @@ def english_text_with_embedded_image_pdf(tmp_path):
 
 
 @pytest.fixture
+def english_cover_with_scanned_page_pdf(tmp_path):
+    path = tmp_path / "english-cover-with-scanned-page.pdf"
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 8, 8), False)
+    pixmap.clear_with(255)
+    image_bytes = pixmap.tobytes("png")
+    doc = fitz.open()
+    cover = doc.new_page(width=420, height=595)
+    cover.insert_text(
+        (32, 60),
+        "English cover page with enough selectable body text to identify the language.",
+    )
+    scan = doc.new_page(width=420, height=595)
+    scan.insert_image(fitz.Rect(24, 24, 396, 571), stream=image_bytes)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+@pytest.fixture
 def mixed_text_pdf(tmp_path):
     return _make_pdf(tmp_path, "mixed.pdf", ("A mostly English document with Arabic body.",))
 
@@ -142,7 +161,7 @@ def test_english_text_layer_skips_the_local_vision_model(english_only_pdf):
     assert decision.text_direction == "ltr"
 
 
-def test_english_text_layer_with_embedded_image_checks_visual_language(
+def test_clear_english_text_layer_ignores_embedded_image_language_vote(
     english_text_with_embedded_image_pdf,
 ):
     calls = []
@@ -161,15 +180,46 @@ def test_english_text_layer_with_embedded_image_checks_visual_language(
             for image in images
         ]
 
+    decision = classify_document(english_text_with_embedded_image_pdf, vision_call=screen_images)
+
+    assert calls == []
+    assert decision.route is DocumentRoute.ENGLISH
+    assert decision.language == "english"
+    assert decision.text_direction == "ltr"
+
+
+def test_english_cover_does_not_hide_an_arabic_scanned_page(
+    english_cover_with_scanned_page_pdf,
+):
+    calls = []
+
+    def classify_sparse_page(images, phase):
+        calls.append((phase, [(image.page_idx, image.region) for image in images]))
+        return [
+            PageStyleVote(
+                page_idx=image.page_idx,
+                language="arabic",
+                writing_style="printed",
+                confidence=0.99,
+                region=image.region,
+                primary_content=True,
+            )
+            for image in images
+        ]
+
     decision = classify_document(
-        english_text_with_embedded_image_pdf,
-        vision_call=screen_images,
+        english_cover_with_scanned_page_pdf,
+        vision_call=classify_sparse_page,
     )
 
-    assert calls == [("page_screen", [1])]
     assert decision.route is DocumentRoute.ARABIC_PRINTED
     assert decision.language == "mixed"
     assert decision.text_direction == "rtl"
+    assert calls[0] == ("page_screen", [(2, "page")])
+    assert calls[1] == (
+        "detail",
+        [(2, "page"), (2, "top"), (2, "middle"), (2, "bottom")],
+    )
 
 
 def test_mixed_body_text_uses_arabic_printed_route(mixed_text_pdf, monkeypatch):
@@ -194,11 +244,11 @@ def test_mixed_body_text_uses_arabic_printed_route(mixed_text_pdf, monkeypatch):
 def test_scanned_printed_arabic_is_not_blocked_as_handwritten(scanned_arabic_pdf):
     vision = _vision(_mapping([
         PageStyleVote(1, "arabic", "printed", 0.94, region="page")
-    ]))
+    ]), _detail_votes("arabic", "printed"))
     decision = classify_document(scanned_arabic_pdf, vision_call=vision)
     assert decision.route is DocumentRoute.ARABIC_PRINTED
     assert decision.writing_style == "printed"
-    assert [phase for phase, _ in vision.calls] == ["page_screen"]
+    assert [phase for phase, _ in vision.calls] == ["page_screen", "detail"]
 
 
 def test_handwriting_like_print_with_conflicting_votes_abstains(decorative_printed_pdf):
@@ -244,7 +294,7 @@ def test_isolated_handwritten_signature_does_not_change_printed_body_style(
     printed_form_with_signature_pdf,
 ):
     screen = _mapping([
-        PageStyleVote(1, "arabic", "printed", 0.70, region="page")
+        PageStyleVote(1, "arabic", "printed", 0.85, region="page")
     ])
     detail = _detail_votes(
         "arabic",
