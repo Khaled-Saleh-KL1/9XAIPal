@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Sequence
 
 
 class DocumentRoute(str, Enum):
@@ -31,3 +32,56 @@ class ClassificationDecision:
     confidence: float
     classifier_model: str
     votes: tuple[PageStyleVote, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class RenderedPage:
+    """A rendered, absolute-numbered page ready for a vision OCR request."""
+
+    page_number: int
+    png: bytes
+
+
+@dataclass(frozen=True)
+class OcrUsage:
+    """Token usage reported by one or more OCR provider attempts."""
+
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    thought_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass(frozen=True)
+class OcrBatchResult:
+    """One complete or best-effort partial provider response."""
+
+    text: str
+    provider: str
+    model: str
+    key_index: int | None
+    usage: OcrUsage
+    latency_ms: int
+
+
+class GeminiRequestInvalid(RuntimeError):
+    """The Gemini request is invalid and retrying another key cannot help."""
+
+
+class GeminiOutputInvalid(RuntimeError):
+    """Gemini returned text without the requested complete page structure."""
+
+
+class GeminiKeysExhausted(RuntimeError):
+    """All configured Gemini keys failed; includes safe partial output/usage."""
+
+    def __init__(
+        self,
+        final_kind: str,
+        best_partial: OcrBatchResult | None,
+        attempt_usage: Sequence[OcrUsage],
+    ) -> None:
+        self.final_kind = final_kind
+        self.best_partial = best_partial
+        self.attempt_usage = tuple(attempt_usage)
+        super().__init__(f"Gemini OCR keys exhausted ({final_kind}).")
