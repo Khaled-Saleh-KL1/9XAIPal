@@ -34,7 +34,15 @@ def article_output(result: Any) -> Any:
     import dataclasses
     if dataclasses.is_dataclass(result):
         data = dataclasses.asdict(result)
-        images = data.get("images") or data.get("image_urls") or []
-        tracing.set_attributes(**{"article.images": len(images) if isinstance(images, list) else None})
-        return {k: (v if not isinstance(v, str) or len(v) < 2000 else f"<{len(v)} chars>") for k, v in data.items()}
+        asset_map = data.get("asset_map")
+        is_map = isinstance(asset_map, dict)
+        image_names = list(asset_map.keys())[:20] if is_map else []
+        tracing.set_attributes(**{
+            "article.images": len(asset_map) if is_map else 0,
+            "article.image_names": tracing.to_text(image_names),
+        })
+        summary = {k: (v if not isinstance(v, str) or len(v) < 2000 else f"<{len(v)} chars>") for k, v in data.items()}
+        if is_map:
+            summary["asset_map"] = {"count": len(asset_map)}
+        return summary
     return result
