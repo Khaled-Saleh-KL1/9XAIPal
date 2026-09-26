@@ -6,7 +6,8 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-from google.genai import types
+import httpx
+from google.genai import errors, types
 
 from app.core.config import Settings, settings
 from app.core.logging import get_logger
@@ -19,14 +20,36 @@ class ArabicGeminiCapabilityError(RuntimeError):
     """No configured key can access the printed Flash model."""
 
 
+def _probe_status(error: Exception) -> str:
+    """"unavailable" only for answers that prove this key cannot use the model.
+
+    Rate limits, spent daily quota, provider 5xx, timeouts and network errors
+    say nothing about configuration. Treating them as fatal would stop the API
+    and worker — English ingestion included — on a restart during an outage.
+    """
+    if isinstance(error, errors.APIError):
+        code = getattr(error, "code", None)
+        # 401/403: bad key or no model access; 404: model retired. An invalid
+        # key comes back as 400 API_KEY_INVALID, and any other 400 means the
+        # minimal probe request itself no longer fits the model.
+        if code in (400, 401, 403, 404):
+            return "unavailable"
+        return "unconfirmed"
+    if isinstance(error, (httpx.TimeoutException, httpx.TransportError, TimeoutError, ConnectionError)):
+        return "unconfirmed"
+    return "unavailable"
+
+
 def probe_printed_flash(
     config: Settings = settings,
     *,
     client_factory: Callable[[str], Any] | None = None,
-) -> list[dict[str, int | bool]]:
+) -> list[dict[str, int | bool | str]]:
     """Check every key with a minimal Flash request; never call Gemini Pro.
 
-    The result and logs contain only key indices and success flags. Actual
+    Startup fails only when every key definitively cannot use the model; a key
+    that could not be checked (rate limit, outage, network) does not block.
+    The result and logs contain only key indices and statuses. Actual
     credentials and provider error payloads are deliberately discarded.
     """
     if not config.arabic_ocr_enabled:
@@ -43,10 +66,10 @@ def probe_printed_flash(
             key, min(config.arabic_gemini_timeout_seconds, 10.0)
         )
     )
-    outcomes: list[dict[str, int | bool]] = []
+    outcomes: list[dict[str, int | bool | str]] = []
     for key_index, key in enumerate(keys):
         client = None
-        success = False
+        status = "available"
         try:
             client = factory(key)
             client.models.generate_content(
@@ -59,17 +82,22 @@ def probe_printed_flash(
                     ),
                 ),
             )
-            success = True
-        except Exception:
-            # Provider messages can echo request content or credentials.
-            pass
+        except Exception as error:
+            # Provider messages can echo request content or credentials:
+            # keep only the classification, never the error text.
+            status = _probe_status(error)
         finally:
             if client is not None:
                 _safe_close(client)
-        outcomes.append({"key_index": key_index, "success": success})
-        logger.info("Arabic printed Flash probe key_index=%d success=%s", key_index, success)
+        outcomes.append({
+            "key_index": key_index,
+            "success": status == "available",
+            "status": status,
+        })
+        log = logger.warning if status == "unconfirmed" else logger.info
+        log("Arabic printed Flash probe key_index=%d status=%s", key_index, status)
 
-    if not any(outcome["success"] for outcome in outcomes):
+    if all(outcome["status"] == "unavailable" for outcome in outcomes):
         raise ArabicGeminiCapabilityError(
             "Arabic OCR is enabled, but no configured Gemini key can access "
             f"the printed Flash model {config.arabic_gemini_printed_model}. "
