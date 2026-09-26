@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 
 class DocumentRoute(str, Enum):
@@ -117,6 +117,7 @@ class OcrBatchResult:
     usage: OcrUsage
     latency_ms: int
     attempt_count: int = 1
+    attempt_metadata: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
 class GeminiRequestInvalid(RuntimeError):
@@ -138,6 +139,7 @@ class GeminiKeysExhausted(RuntimeError):
         *,
         attempt_count: int | None = None,
         latency_ms: int = 0,
+        attempt_metadata: Sequence[dict[str, Any]] = (),
     ) -> None:
         self.final_kind = final_kind
         self.best_partial = best_partial
@@ -146,6 +148,7 @@ class GeminiKeysExhausted(RuntimeError):
             len(self.attempt_usage) if attempt_count is None else attempt_count
         )
         self.latency_ms = latency_ms
+        self.attempt_metadata = tuple(attempt_metadata)
         super().__init__(f"Gemini OCR keys exhausted ({final_kind}).")
 
 

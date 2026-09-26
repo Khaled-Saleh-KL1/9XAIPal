@@ -16,7 +16,7 @@ dependencies = [
     "pydantic-settings",
 
     # Gemini multimodal OCR client (Arabic-only feature-flagged route).
-    "google-genai",
+    "google-genai>=2.25.0",
 
     # HTTP client (Ollama / cloud LLM APIs)
     "httpx",

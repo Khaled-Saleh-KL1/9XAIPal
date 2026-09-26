@@ -197,6 +197,7 @@ def extract_arabic_document(
                         latency_ms=error.latency_ms,
                         usage=_sum_usage(attempt_usage),
                         failure_kind=error.final_kind,
+                        attempt_metadata=error.attempt_metadata,
                     )
                 )
                 if error.final_kind not in _GEMINI_FALLBACK_KINDS:
@@ -236,6 +237,7 @@ def extract_arabic_document(
                     attempt_count=result.attempt_count,
                     latency_ms=result.latency_ms,
                     usage=result_usage,
+                    attempt_metadata=result.attempt_metadata,
                     retry_count=1 if no_progress_retries else 0,
                     failure_kind=None if parsed.is_complete else "invalid_output",
                 )
@@ -458,6 +460,7 @@ def _provider_run(
     usage: OcrUsage,
     retry_count: int | None = None,
     failure_kind: str | None = None,
+    attempt_metadata: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     attempts = max(0, attempt_count)
     run = {
@@ -474,6 +477,8 @@ def _provider_run(
     }
     if failure_kind:
         run["failure_kind"] = failure_kind
+    if attempt_metadata:
+        run["attempt_metadata"] = list(attempt_metadata)
     return run
 
 

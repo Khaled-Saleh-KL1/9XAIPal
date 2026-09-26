@@ -63,7 +63,7 @@ requires-dist = [
     { name = "ddgs" },
     { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", extras = ["standard"] },
-    { name = "google-genai" },
+    { name = "google-genai", specifier = ">=2.25.0" },
     { name = "httpcore", specifier = ">=1.0,<2" },
     { name = "httpx" },
     { name = "lxml-html-clean", specifier = "==0.4.5" },

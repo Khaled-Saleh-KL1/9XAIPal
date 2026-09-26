@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import random
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -27,9 +29,9 @@ logger = get_logger(__name__)
 Validator = Callable[[str, Sequence[int]], int]
 ClientFactory = Callable[[str], Any]
 
-_MAX_ATTEMPTS_PER_KEY = 2
-_RETRY_DELAY_MIN_SEC = 0.1
-_RETRY_DELAY_MAX_SEC = 0.5
+_MAX_ATTEMPTS_PER_KEY = 3
+_RETRY_DELAY_BASE_SEC = 0.25
+_RETRY_DELAY_MAX_SEC = 4.0
 
 
 def batch_prompt(_pages: Sequence[RenderedPage]) -> str:
@@ -47,12 +49,13 @@ def batch_prompt(_pages: Sequence[RenderedPage]) -> str:
     )
 
 
-def _default_client_factory(api_key: str) -> genai.Client:
+def _default_client_factory(api_key: str, timeout_seconds: float) -> genai.Client:
     """Create an isolated SDK client and disable its implicit retry multiplier."""
 
     return genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(
+            timeout=round(timeout_seconds * 1000),
             retry_options=types.HttpRetryOptions(attempts=1)
         ),
     )
@@ -97,6 +100,71 @@ def _safe_close(client: Any) -> None:
             pass
 
 
+def _error_details(error: errors.APIError) -> list[dict[str, Any]]:
+    payload = getattr(error, "details", None)
+    if not isinstance(payload, dict):
+        return []
+    body = payload.get("error", payload)
+    if not isinstance(body, dict):
+        return []
+    details = body.get("details", [])
+    return [detail for detail in details if isinstance(detail, dict)] if isinstance(details, list) else []
+
+
+def _has_error_reason(error: errors.APIError, reason: str) -> bool:
+    return any(detail.get("reason") == reason for detail in _error_details(error))
+
+
+def _quota_metadata(error: errors.APIError) -> dict[str, Any]:
+    for detail in _error_details(error):
+        if not str(detail.get("@type", "")).endswith("QuotaFailure"):
+            continue
+        violations = detail.get("violations", [])
+        if not isinstance(violations, list):
+            continue
+        for violation in violations:
+            if not isinstance(violation, dict):
+                continue
+            quota_id = str(violation.get("quotaId") or "")
+            quota_metric = str(violation.get("quotaMetric") or "")
+            clue = f"{quota_id} {quota_metric}".lower()
+            if any(word in clue for word in ("perday", "per_day", "daily", "rpd")):
+                scope = "daily"
+            elif any(word in clue for word in ("perminute", "per_minute", "minute", "rpm", "tpm")):
+                scope = "minute"
+            else:
+                scope = "unknown"
+            # These are quota identifiers, not human error messages. Never
+            # retain the full API payload, which could contain request data.
+            return {
+                "quota_scope": scope,
+                "quota_id": quota_id[:160],
+                "quota_metric": quota_metric[:160],
+            }
+    return {"quota_scope": "unknown"}
+
+
+def _retry_after_seconds(error: errors.APIError) -> float | None:
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(value)
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            seconds = (when - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return max(0.0, seconds)
+
+
 class GeminiOcrClient:
     """Call Gemini Flash with bounded retries and rotate credentials safely."""
 
@@ -104,14 +172,19 @@ class GeminiOcrClient:
         self,
         *,
         settings: Settings = settings,
-        client_factory: ClientFactory = _default_client_factory,
+        client_factory: ClientFactory | None = None,
         sleep: Callable[[float], None] = time.sleep,
         jitter: Callable[[float, float], float] = random.uniform,
     ) -> None:
         self.settings = settings
-        self.client_factory = client_factory
+        self.client_factory = client_factory or (
+            lambda api_key: _default_client_factory(
+                api_key, self.settings.arabic_gemini_timeout_seconds
+            )
+        )
         self.sleep = sleep
         self.jitter = jitter
+        self._blocked_keys: dict[int, str] = {}
 
     def generate_batch(
         self,
@@ -128,6 +201,7 @@ class GeminiOcrClient:
         batch_started = time.monotonic()
         last_output_error: GeminiOutputInvalid | None = None
         attempt_count = 0
+        attempt_metadata: list[dict[str, Any]] = []
 
         if not keys:
             raise GeminiKeysExhausted(
@@ -137,6 +211,10 @@ class GeminiOcrClient:
             )
 
         for key_index, api_key in enumerate(keys):
+            if key_index in self._blocked_keys:
+                final_kind = self._blocked_keys[key_index]
+                continue
+            rate_retry_used = False
             for attempt_index in range(_MAX_ATTEMPTS_PER_KEY):
                 attempt_started = time.monotonic()
                 attempt_count += 1
@@ -152,7 +230,16 @@ class GeminiOcrClient:
                     _safe_close(client)
                     duration_ms = self._elapsed_ms(attempt_started)
                     code = _token_count(getattr(error, "code", 0))
-                    final_kind = self._api_failure_kind(code)
+                    quota = _quota_metadata(error) if code == 429 else {}
+                    final_kind = self._api_failure_kind(code, error, quota)
+                    retry_after = _retry_after_seconds(error) if code == 429 else None
+                    attempt_metadata.append({
+                        "key_index": key_index,
+                        "status_code": code,
+                        "failure_kind": final_kind,
+                        **quota,
+                        **({"retry_after_seconds": retry_after} if retry_after is not None else {}),
+                    })
                     self._log_attempt_failure(
                         key_index, page_numbers, final_kind, duration_ms
                     )
@@ -161,25 +248,64 @@ class GeminiOcrClient:
                         raise GeminiRequestInvalid(
                             f"Gemini rejected the OCR request (HTTP {code})."
                         ) from None
-                    if final_kind == "transient_http" and attempt_index == 0:
-                        self._bounded_retry_delay()
+                    if final_kind in {"authentication", "daily_quota"}:
+                        self._blocked_keys[key_index] = final_kind
+                        break
+                    if (
+                        code == 429
+                        and not rate_retry_used
+                        and retry_after is not None
+                        and retry_after <= self.settings.arabic_gemini_retry_after_max_seconds
+                        and attempt_index + 1 < _MAX_ATTEMPTS_PER_KEY
+                    ):
+                        rate_retry_used = True
+                        self.sleep(retry_after)
+                        continue
+                    if final_kind in {"timeout", "transient_http"} and attempt_index + 1 < _MAX_ATTEMPTS_PER_KEY:
+                        self._bounded_retry_delay(attempt_index)
                         continue
                     break
-                except (httpx.TransportError, TimeoutError, ConnectionError):
+                except (httpx.TimeoutException, TimeoutError):
                     _safe_close(client)
                     duration_ms = self._elapsed_ms(attempt_started)
-                    final_kind = "network_error"
+                    final_kind = "timeout"
+                    attempt_metadata.append({
+                        "key_index": key_index,
+                        "status_code": 408,
+                        "failure_kind": final_kind,
+                    })
                     self._log_attempt_failure(
                         key_index, page_numbers, final_kind, duration_ms
                     )
-                    if attempt_index == 0:
-                        self._bounded_retry_delay()
+                    if attempt_index + 1 < _MAX_ATTEMPTS_PER_KEY:
+                        self._bounded_retry_delay(attempt_index)
+                        continue
+                    break
+                except (httpx.TransportError, ConnectionError):
+                    _safe_close(client)
+                    duration_ms = self._elapsed_ms(attempt_started)
+                    final_kind = "network_error"
+                    attempt_metadata.append({
+                        "key_index": key_index,
+                        "status_code": None,
+                        "failure_kind": final_kind,
+                    })
+                    self._log_attempt_failure(
+                        key_index, page_numbers, final_kind, duration_ms
+                    )
+                    if attempt_index + 1 < _MAX_ATTEMPTS_PER_KEY:
+                        self._bounded_retry_delay(attempt_index)
                         continue
                     break
                 except Exception:
                     _safe_close(client)
                     # SDK/configuration/programming errors are not quota
                     # failures; never spray the same invalid request at every key.
+                    attempt_metadata.append({
+                        "key_index": key_index,
+                        "status_code": None,
+                        "failure_kind": "client_error",
+                    })
                     self._log_attempt_failure(
                         key_index,
                         page_numbers,
@@ -216,6 +342,11 @@ class GeminiOcrClient:
                         )
                     completed_pages = reported_pages
                     if completed_pages == len(page_numbers):
+                        attempt_metadata.append({
+                            "key_index": key_index,
+                            "status_code": 200,
+                            "failure_kind": None,
+                        })
                         duration_ms = self._elapsed_ms(batch_started)
                         self._log_attempt_success(
                             key_index,
@@ -231,6 +362,7 @@ class GeminiOcrClient:
                             usage=_sum_usage(all_usage),
                             latency_ms=duration_ms,
                             attempt_count=attempt_count,
+                            attempt_metadata=tuple(attempt_metadata),
                         )
                     raise GeminiOutputInvalid(
                         "Gemini returned an incomplete page-bounded OCR response."
@@ -238,6 +370,11 @@ class GeminiOcrClient:
                 except GeminiOutputInvalid as output_error:
                     final_kind = "invalid_output"
                     last_output_error = output_error
+                    attempt_metadata.append({
+                        "key_index": key_index,
+                        "status_code": 200,
+                        "failure_kind": final_kind,
+                    })
                     if 0 < completed_pages < len(page_numbers):
                         if completed_pages > best_partial_count:
                             best_partial_count = completed_pages
@@ -249,6 +386,7 @@ class GeminiOcrClient:
                                 usage=_sum_usage(all_usage),
                                 latency_ms=self._elapsed_ms(batch_started),
                                 attempt_count=attempt_count,
+                                attempt_metadata=tuple(attempt_metadata),
                             )
                     self._log_attempt_failure(
                         key_index,
@@ -267,32 +405,35 @@ class GeminiOcrClient:
             attempt_usage=all_usage,
             attempt_count=attempt_count,
             latency_ms=self._elapsed_ms(batch_started),
+            attempt_metadata=attempt_metadata,
         )
         if final_kind == "invalid_output" and last_output_error is not None:
             raise exhausted from last_output_error
         raise exhausted
 
     def _request_config(self) -> types.GenerateContentConfig:
-        media_resolution = getattr(
-            types.MediaResolution,
-            f"MEDIA_RESOLUTION_{self.settings.arabic_gemini_media_resolution}",
-        )
         return types.GenerateContentConfig(
             max_output_tokens=self.settings.arabic_ocr_max_output_tokens,
-            media_resolution=media_resolution,
             thinking_config=types.ThinkingConfig(
                 thinking_level=self.settings.arabic_gemini_printed_thinking_level
             ),
         )
 
-    @staticmethod
-    def _contents(pages: Sequence[RenderedPage]) -> list[types.Part]:
+    def _contents(self, pages: Sequence[RenderedPage]) -> list[types.Part]:
         contents = [types.Part.from_text(text=batch_prompt(pages))]
+        media_resolution = getattr(
+            types.PartMediaResolutionLevel,
+            f"MEDIA_RESOLUTION_{self.settings.arabic_gemini_media_resolution}",
+        )
         for page in pages:
             contents.extend(
                 [
                     types.Part.from_text(text=f"PAGE {page.page_number}"),
-                    types.Part.from_bytes(data=page.png, mime_type="image/png"),
+                    types.Part.from_bytes(
+                        data=page.png,
+                        mime_type="image/png",
+                        media_resolution=media_resolution,
+                    ),
                 ]
             )
         return contents
@@ -310,17 +451,26 @@ class GeminiOcrClient:
         if any(not page.png for page in pages):
             raise GeminiRequestInvalid("Rendered pages must contain PNG bytes.")
 
-    def _bounded_retry_delay(self) -> None:
-        delay = self.jitter(_RETRY_DELAY_MIN_SEC, _RETRY_DELAY_MAX_SEC)
-        self.sleep(min(max(delay, _RETRY_DELAY_MIN_SEC), _RETRY_DELAY_MAX_SEC))
+    def _bounded_retry_delay(self, attempt_index: int) -> None:
+        base = min(_RETRY_DELAY_BASE_SEC * (2 ** attempt_index), _RETRY_DELAY_MAX_SEC)
+        delay = self.jitter(base, min(base * 1.5, _RETRY_DELAY_MAX_SEC))
+        self.sleep(min(max(delay, base), _RETRY_DELAY_MAX_SEC))
 
     @staticmethod
-    def _api_failure_kind(code: int) -> str:
+    def _api_failure_kind(
+        code: int,
+        error: errors.APIError,
+        quota: dict[str, Any],
+    ) -> str:
         if code == 429:
-            return "rate_limited"
+            return "daily_quota" if quota.get("quota_scope") == "daily" else "rate_limited"
+        if code == 400 and _has_error_reason(error, "API_KEY_INVALID"):
+            return "authentication"
         if code in (401, 403):
             return "authentication"
-        if code == 408 or code >= 500:
+        if code == 408:
+            return "timeout"
+        if code >= 500:
             return "transient_http"
         return "invalid_request"
 

@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     )
     arabic_gemini_printed_model: str = "gemini-3.7-flash"
     arabic_gemini_printed_thinking_level: Literal["low"] = "low"
+    arabic_gemini_timeout_seconds: float = Field(default=120.0, gt=0)
+    arabic_gemini_retry_after_max_seconds: float = Field(default=10.0, ge=0, le=60)
     arabic_gemini_handwritten_model: str = "gemini-3.1-pro-preview"
     arabic_gemma_fallback_model: str = "gemma4:31b-cloud"
     arabic_gemma_base_url: str = "https://ollama.com"
