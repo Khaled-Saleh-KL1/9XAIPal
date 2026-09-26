@@ -1611,11 +1611,12 @@ Expected: every command exits 0. If the full backend suite has a pre-existing
 failure, record the exact command/output and prove all Arabic and directly
 affected regression tests still pass; do not describe the suite as green.
 
-Verified in the sandbox: full backend suite 831 passed; Arabic-focused suite
-85 passed (including review regression tests); frontend suite 16 passed; frontend production build passed with a
+Final verification after the `main` merge and all review fixes: full backend
+suite 912 passed (340.52s); frontend suite 20 passed and the production build
+(`tsc && vite build`) passed, both in `node:22-alpine`, with the existing
 large-chunk advisory; both Compose configs passed (production config used a
-throwaway value for required interpolation only). The test container used
-`DEBUG=true` and mounted the full repository at its expected root.
+throwaway value for required interpolation only); the synthetic `--mock`
+evaluation exited 0. The test container used `DEBUG=true`.
 
 - [ ] **Step 3: Run the real frozen sandbox corpus when supplied**
 
@@ -1688,14 +1689,19 @@ Use `superpowers:requesting-code-review`, review every finding against the
 approved spec, rerun the focused tests after fixes, then rerun Step 2. Do not
 weaken the handwriting abstention or English-isolation tests to make them pass.
 
-Review found two classifier issues and one documentation mismatch. English
-text-layer PDFs with embedded images now receive local visual language
-screening rather than bypassing the classifier, and uncertain routing with no
-primary-content votes now abstains with zero confidence instead of raising an
-exception. The runbook now correctly documents comma-separated Gemini keys.
-The regressions were verified test-first; follow-up review found no remaining
-findings. Focused Arabic tests: 85 passed (21.07s); the final full backend
-suite rerun: 831 passed (209.95s).
+The initial review was incomplete. A later independent review identified
+English MinerU isolation, classifier-failure, Gemma repair, Gemini retry,
+prompt/adapter, persistence/API, classifier-policy, frontend, and evaluator
+defects. Groups 1–8 were fixed in separate commits with test-first regression
+coverage. In particular, clear English text-layer pages with embedded images
+now bypass visual language screening; sparse scanned pages still reach it.
+Follow-up fixes after the `main` merge: the classifier-outage English fallback
+(which previously only covered documents that never needed the classifier),
+a startup probe that no longer blocks on transient provider errors, MinerU
+glyph/heading repair kept off Arabic OCR output at ingestion and re-chunk,
+display-math prose handling, the Node 22 deploy build, and unchanged English
+margin marks. Final full backend suite: 912 passed. The earlier 831-test run
+is superseded. Live corpus accuracy remains unmeasured.
 
 - [x] **Step 7: Commit operations documentation**
 

@@ -33,19 +33,58 @@
 - Feature flags remain off by default. This pull request does not deploy to
   the VPS.
 
+## Independent-review fixes
+
+The follow-up review found defects; the original statement that it found no
+remaining findings was incorrect. The fixes are separate commits by group:
+
+- Clear English text-layer pages, including pages with embedded figures, stay
+  on MinerU without visual language screening. Sparse scanned pages still get
+  language confirmation. During a local classifier outage, a document with no
+  substantive Arabic text and at least
+  `ARABIC_CLASSIFIER_OUTAGE_ENGLISH_PAGE_SHARE` (0.80) clear English pages
+  stays on MinerU, so a blank or figure-only page does not block an English
+  paper; mostly-scanned documents fail with `arabic_classifier_unavailable`.
+- Gemma-only repair preserves Markdown structure and non-Arabic Unicode;
+  invalid repair output is retried as a typed batch failure.
+- Gemini calls now have a bounded timeout/retry policy, short `Retry-After`
+  handling, job-scoped key state, invalid-key classification, and per-image
+  media resolution. Both provider prompts constrain reading order and verbatim
+  transcription; the adapter preserves display math and table captions.
+- Per-page provider provenance is stored. Startup checks only the printed
+  Flash capability when Arabic OCR is enabled, and blocks only when every key
+  is definitively unavailable (HTTP 400/401/403/404); a rate limit, spent
+  quota, outage, or network error at boot is logged and does not stop the API
+  or worker. Handwritten remains disabled.
+  Confirmation, re-extraction, error messages, and frontend blocking states
+  were corrected.
+- Routing now uses substantive Arabic body text and primary-content style
+  votes, with one-page detail views for non-English candidates. The evaluator
+  gates held-out printed/handwritten misroutes, counts failed OCR comparisons,
+  reports attempts/fallbacks, and preflights at configured DPI.
+- Legacy documents remain LTR. English margin marks keep their original rules;
+  RTL documents get mirrored bookmark and note-tint marks, and footnotes and
+  lists use logical CSS. The compose frontend build, `scripts/deploy-once.sh`,
+  CI, and deployment docs all use Node 22, matching the test dependencies.
+- Prose between two display equations stays a text block; display
+  environments may still contain nested environments.
+
+The branch also integrates the newer `main` (#156–#159): document-deletion
+safeguards, heading repair, and the two-worker production setting. Both
+MinerU-specific repairs (glyph and heading) are skipped for Arabic OCR output
+at ingestion and on re-chunk, because Gemini output is stored uncorrected
+(spec §2.8). No merge to `main` or deployment occurred.
+
 ## Automated verification
 
 Passed in the isolated sandbox:
 
-- Full backend suite: **831 passed** (209.95s), using the disposable test
-  database and `DEBUG=true` for the HTTP test client. The full repository was
-  mounted at its expected root in the test container.
-- Arabic-focused adapter/classifier/fallback/API tests: **85 passed**
-  (21.07s), including regression tests for mixed scanned content and the
-  no-primary-vote abstention case.
-- Frontend tests: **16 passed** across 5 files.
-- `npm run build`: passed. Vite reports the existing large-chunk advisory
-  (the main bundle is about 1.09 MB); this is not a build failure.
+- Full backend suite after the `main` merge and all review fixes: **912
+  passed** (340.52s), using the disposable test database and `DEBUG=true` for
+  the HTTP test client.
+- Frontend tests: **20 passed** across 5 files, and `npm run build`
+  (`tsc && vite build`) passed, both inside `node:22-alpine`. Vite reports the
+  existing large-chunk advisory; this is not a build failure.
 - Both development and production Compose configurations validated. Production
   config used a throwaway placeholder only to satisfy required-variable
   interpolation; it was not a credential and no services were started.
@@ -70,8 +109,8 @@ must be populated from an approved live run before this PR is ready to merge.
 
 The passing backend suite includes `test_arabic_ocr_fallback.py` coverage for
 continuing at the first incomplete page, preserving complete Gemini pages,
-provider provenance, and repair boundaries. The focused Arabic run passed all
-85 tests. No live provider fallback was exercised in this implementation run.
+provider provenance, and repair boundaries. No live provider fallback was
+exercised in this implementation run.
 
 ## Visual evidence
 
@@ -91,4 +130,8 @@ acceptance.
 - No accuracy claim can be derived from the committed synthetic manifest.
 - The requested zero-thinking behavior cannot be guaranteed with Gemini 3.7
   Flash; see Google's [official thinking-level table](https://ai.google.dev/gemini-api/docs/generate-content/thinking).
+- The evaluator does not yet score spec §14 structural block retention or
+  reading-order correctness; add them before the frozen-corpus run.
+- With two workers, two Arabic jobs can render 200 DPI pages and call the local
+  classifier at once; include that in the VPS memory check the spec requires.
 - Merge only after human review and the frozen-corpus/browser acceptance gate.

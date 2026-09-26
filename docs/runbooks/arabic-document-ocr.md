@@ -103,7 +103,7 @@ Relevant variable names (no values are included here):
 - `ARABIC_OCR_DPI`, `ARABIC_GEMINI_MEDIA_RESOLUTION`,
   `ARABIC_OCR_SINGLE_REQUEST_MAX_PAGES`, `ARABIC_OCR_BATCH_PAGES`,
   `ARABIC_OCR_MAX_OUTPUT_TOKENS`, `ARABIC_MIN_BODY_CHAR_COUNT`,
-  `ARABIC_MIN_BODY_LETTER_SHARE`,
+  `ARABIC_MIN_BODY_LETTER_SHARE`, `ARABIC_CLASSIFIER_OUTAGE_ENGLISH_PAGE_SHARE`,
   `ARABIC_CLASSIFIER_CONFIDENCE_MIN`,
   `ARABIC_HANDWRITTEN_CONFIDENCE_MIN`, and
   `ARABIC_CLASSIFIER_BATCH_PAGES` — runtime controls with safe defaults in
@@ -141,10 +141,14 @@ config` command before restarting services.
    API and worker services so they read the same settings. Keep
    `ARABIC_HANDWRITTEN_OCR_ENABLED=false`.
    Both services probe every configured printed Flash key at startup with a
-   small request. They record only key index and success/failure. If no key
-   works, startup fails with a configuration error; check key access, model
-   availability, and quota before retrying. The disabled Pro model is never
-   probed. Startup probing consumes one Flash request per key per service.
+   small request. They record only key index and a status: `available`,
+   `unavailable` (HTTP 400/401/403/404 — bad key, no model access, or retired
+   model), or `unconfirmed` (rate limit, spent quota, provider 5xx, timeout,
+   network error; logged as a warning). Startup fails with a configuration
+   error only when every key is `unavailable`; an outage or quota exhaustion
+   at boot never takes the API or worker — and so English ingestion — down.
+   The disabled Pro model is never probed. Startup probing consumes one Flash
+   request per key per service.
 5. Upload the English, printed Arabic, mixed, uncertain, and handwritten
    controls from the approved sandbox set. Check route/status metadata,
    reading order/direction, page completeness, and error persistence. Do not
@@ -162,8 +166,17 @@ config` command before restarting services.
   confirmation records the choice and leaves the job unavailable, with no
   Gemini Pro call and no chunks.
 - `arabic_classifier_unavailable` means the local Ollama classifier could not
-  route a page without a clear English text layer. Start Ollama, check the
-  configured vision model, and retry. Clear English pages continue to MinerU.
+  route a document that needs a visual check. Start Ollama, check the
+  configured vision model, and retry. While the classifier is down, a
+  document with no substantive Arabic text still continues to MinerU when at
+  least `ARABIC_CLASSIFIER_OUTAGE_ENGLISH_PAGE_SHARE` (default 0.80) of its
+  pages have a clear English text layer — an English paper with a blank or
+  figure-only page is not blocked. Mostly-scanned documents fail with this
+  code instead of being guessed English.
+- Arabic OCR output (`gemini_arabic_flash`, `gemma4_arabic_fallback`,
+  `gemini_gemma_arabic_hybrid`) never goes through the MinerU glyph or
+  heading repair, at ingestion or on re-chunk; Gemma pages get only their own
+  provenance-gated repair.
 - `handwritten_arabic_unavailable` is the explicit user-facing handwritten
   state. `arabic_gemini_pro_not_configured` is the internal typed state if an
   operator tries to enable handwritten processing without billing access.
