@@ -14,6 +14,7 @@ from typing import Optional
 from app.llm import client as llm_client
 from app.chat.prompts import ROUTER_SYSTEM_PROMPT
 from app.core.logging import get_logger
+from app.core import tracing
 
 
 logger = get_logger(__name__)
@@ -89,6 +90,7 @@ _OVERVIEW_KEYWORDS = [
 ]
 
 
+@tracing.traced("route", tracing.CHAIN)
 async def route_prompt(
     prompt: str,
     *,

@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.database.repositories import chunks as chunk_repo
+from app.core import tracing
+from app.chat.tracing_hooks import context_output
 
 
 async def get_section_summaries(
@@ -53,6 +55,7 @@ async def get_section_summaries(
     return rows
 
 
+@tracing.traced("build_context.overview", tracing.RETRIEVER, output=context_output)
 async def build_overview_context(
     session: AsyncSession,
     *,

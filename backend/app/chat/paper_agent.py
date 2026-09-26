@@ -90,6 +90,7 @@ from app.chat.memory import format_memories, recall_memories, write_memory, writ
 from app.chat.prompts import READING_COMPANION_INSTRUCTIONS
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core import tracing
 from app.database.repositories import chunks as chunk_repo
 from app.llm import client as llm_client
 from app.llm.multimodal import build_multimodal_messages
@@ -819,6 +820,7 @@ def cited_sequences(answer: str) -> list[int]:
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+@tracing.traced("agent.paper", tracing.CHAIN)
 async def answer_paper_question(
     session: AsyncSession,
     *,

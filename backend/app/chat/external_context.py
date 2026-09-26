@@ -11,6 +11,8 @@ from typing import Optional
 
 from app.search.web import search, search_images
 from app.search.ranking import rank_results
+from app.core import tracing
+from app.chat.tracing_hooks import context_output
 
 # Words in the user query that strongly suggest they want a picture.
 # When present, we fetch more images and bump them in the prompt so the
@@ -69,6 +71,7 @@ def rewrite_query_for_papers(
     )
 
 
+@tracing.traced("build_context.web", tracing.RETRIEVER, output=context_output)
 async def build_external_context(
     query: str,
     *,

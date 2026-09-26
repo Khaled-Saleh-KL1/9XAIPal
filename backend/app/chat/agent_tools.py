@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core import tracing
 from app.services.retrieval import search_chunks
 from app.database.repositories import assets as asset_repo
 from app.database.repositories import chunks as chunk_repo
@@ -337,6 +338,7 @@ def section_range(
 # READ
 # ─────────────────────────────────────────────────────────────────────────────
 
+@tracing.traced("tool:read_range", tracing.TOOL)
 async def read_range(
     session: AsyncSession,
     document_id: UUID,
@@ -382,6 +384,7 @@ async def read_range(
 # SEARCH
 # ─────────────────────────────────────────────────────────────────────────────
 
+@tracing.traced("tool:search", tracing.TOOL)
 async def run_search(
     session: AsyncSession,
     document_scope: Union[UUID, list[UUID]],
@@ -512,6 +515,7 @@ def format_search_results(
 # WEB
 # ─────────────────────────────────────────────────────────────────────────────
 
+@tracing.traced("tool:image", tracing.TOOL)
 async def run_image(query: str, *, limit: Optional[int] = None) -> tuple[str, list[dict]]:
     """Search the web for a picture; return the observation and the sources.
 

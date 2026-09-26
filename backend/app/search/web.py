@@ -55,6 +55,7 @@ provider's internal ranking blind.
 from typing import Optional
 
 from app.core import circuit_breaker
+from app.core import tracing
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.search.errors import ProviderError
@@ -141,6 +142,7 @@ def configured_providers() -> list[str]:
     return [name for name, _ in _cascade()]
 
 
+@tracing.traced("web_search", tracing.TOOL)
 async def search(
     query: str,
     *,
@@ -180,6 +182,7 @@ async def search(
     return []
 
 
+@tracing.traced("web_search.images", tracing.TOOL)
 async def search_images(query: str, *, limit: int = 4) -> list[dict]:
     """Image results as ``{img_url, thumbnail, title, source_url, source_engine}``.
 

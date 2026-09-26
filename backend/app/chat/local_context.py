@@ -8,8 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import assets as asset_repo
 from app.core.config import settings
+from app.core import tracing
+from app.chat.tracing_hooks import context_output
 
 
+@tracing.traced("build_context.local", tracing.RETRIEVER, output=context_output)
 async def build_local_context(
     session: AsyncSession,
     *,
