@@ -284,11 +284,23 @@ def set_attributes(**values: Any) -> None:
 
 
 def record_input(value: Any) -> None:
-    set_attributes(**{"input.value": _safe_text(value), "input.mime_type": _mime(value)})
+    try:
+        current = _current()
+        if current is None:
+            return
+        _set_on(current, {"input.value": _safe_text(value), "input.mime_type": _mime(value)})
+    except Exception as exc:  # noqa: BLE001
+        _warn("record_input failed", exc)
 
 
 def record_output(value: Any) -> None:
-    set_attributes(**{"output.value": _safe_text(value), "output.mime_type": _mime(value)})
+    try:
+        current = _current()
+        if current is None:
+            return
+        _set_on(current, {"output.value": _safe_text(value), "output.mime_type": _mime(value)})
+    except Exception as exc:  # noqa: BLE001
+        _warn("record_output failed", exc)
 
 
 def add_event(name: str, **values: Any) -> None:

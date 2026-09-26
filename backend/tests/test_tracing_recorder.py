@@ -126,6 +126,34 @@ def test_traced_async_generator_close_marks_cancelled(spans):
     assert s.attributes["status"] == "cancelled"
 
 
+def test_traced_sync_generator_forwards_events_unchanged(spans):
+    events = [{"type": "token", "text": "Hel"}, {"type": "token", "text": "lo"}, {"type": "done", "content": "Hello"}]
+
+    @tracing.traced("sync_stream", output=lambda collected: "".join(e.get("text", "") for e in collected))
+    def stream():
+        for event in events:
+            yield event
+
+    received = list(stream())
+    assert received == events
+    assert all(a is b for a, b in zip(received, events))
+    assert _by_name(spans, "sync_stream").attributes["output.value"] == "Hello"
+
+
+def test_traced_sync_generator_close_marks_cancelled(spans):
+    @tracing.traced("sync_cut")
+    def stream():
+        yield 1
+        yield 2
+
+    gen = stream()
+    assert next(gen) == 1
+    gen.close()
+
+    s = _by_name(spans, "sync_cut")
+    assert s.attributes["status"] == "cancelled"
+
+
 def test_arguments_that_are_iterators_are_not_consumed(spans):
     @tracing.traced("take")
     def take(items):
@@ -233,3 +261,48 @@ def test_retrieval_attributes_cap_chunk_text():
     assert attrs["retrieval.documents.0.document.id"] == "c1"
     assert len(attrs["retrieval.documents.0.document.content"]) <= 2020
     assert attrs["retrieval.documents.0.document.score"] == 0.9
+
+
+def test_record_input_output_are_free_when_tracing_is_off(monkeypatch):
+    tracing.reset_for_tests()
+    monkeypatch.setattr(tracing.settings, "trace_enabled", False)
+
+    calls = []
+
+    def watch(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("to_text must not be called when there is no recording span")
+
+    monkeypatch.setattr(tracing, "to_text", watch)
+
+    tracing.record_input({"a": 1})
+    tracing.record_output({"b": 2})
+
+    assert calls == []
+
+
+def test_record_input_output_are_free_outside_a_span(spans, monkeypatch):
+    calls = []
+
+    def watch(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("to_text must not be called with no current span")
+
+    monkeypatch.setattr(tracing, "to_text", watch)
+
+    tracing.record_input({"a": 1})
+    tracing.record_output({"b": 2})
+
+    assert calls == []
+
+
+def test_record_input_output_set_value_and_mime_type_inside_a_span(spans):
+    with tracing.span("recorded") as current:
+        tracing.record_input({"a": 1})
+        tracing.record_output("done")
+
+    s = _by_name(spans, "recorded")
+    assert '"a": 1' in s.attributes["input.value"]
+    assert s.attributes["input.mime_type"] == "application/json"
+    assert s.attributes["output.value"] == "done"
+    assert s.attributes["output.mime_type"] == "text/plain"
