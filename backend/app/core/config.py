@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     arabic_ocr_batch_pages: int = 4
     arabic_ocr_max_output_tokens: int = 32768
     arabic_min_body_char_count: int = 20
+    arabic_min_body_letter_share: float = Field(default=0.10, ge=0, le=1)
     arabic_classifier_confidence_min: float = Field(default=0.80, ge=0, le=1)
     arabic_handwritten_confidence_min: float = Field(default=0.97, ge=0, le=1)
     arabic_classifier_batch_pages: int = 8

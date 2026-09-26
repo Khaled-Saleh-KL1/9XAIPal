@@ -54,7 +54,12 @@ class TextPageEvidence:
 
     @property
     def has_substantive_arabic_body(self) -> bool:
-        return self.arabic_chars >= settings.arabic_min_body_char_count
+        letters = self.arabic_chars + self.latin_chars
+        return (
+            self.arabic_chars >= settings.arabic_min_body_char_count
+            and letters > 0
+            and self.arabic_chars / letters >= settings.arabic_min_body_letter_share
+        )
 
     @property
     def has_substantive_latin_body(self) -> bool:
@@ -62,7 +67,7 @@ class TextPageEvidence:
 
     @property
     def has_clear_english_body(self) -> bool:
-        return self.has_substantive_latin_body and self.arabic_chars == 0
+        return self.has_substantive_latin_body and not self.has_substantive_arabic_body
 
 
 @dataclass(frozen=True)
@@ -764,7 +769,11 @@ def classify_document(
         evidence, screen_votes, detail_votes
     )
     document_language = _derive_language(evidence, confirmed_languages)
-    style_pages = set(arabic_text_pages) | {
+    screen_by_page = {vote.page_idx: vote for vote in screen_votes if vote.region == "page"}
+    style_pages = {
+        page_idx for page_idx in arabic_text_pages
+        if page_idx in screen_by_page and screen_by_page[page_idx].primary_content
+    } | {
         page_idx
         for page_idx, language in confirmed_languages.items()
         if language in {"arabic", "mixed"}

@@ -52,6 +52,8 @@ def test_arabic_gemma_accepts_the_existing_ollama_cloud_key(monkeypatch):
 def test_classifier_thresholds_are_bounded():
     with pytest.raises(ValidationError):
         Settings(arabic_classifier_confidence_min=1.1, _env_file=None)
+    with pytest.raises(ValidationError):
+        Settings(arabic_min_body_letter_share=1.1, _env_file=None)
 
 
 @pytest.mark.parametrize("invalid", ["medium", "high", "minimal", ""])

@@ -249,6 +249,106 @@ def test_scanned_printed_arabic_is_not_blocked_as_handwritten(scanned_arabic_pdf
     assert decision.route is DocumentRoute.ARABIC_PRINTED
     assert decision.writing_style == "printed"
     assert [phase for phase, _ in vision.calls] == ["page_screen", "detail"]
+    assert vision.calls[1][1] == (
+        (1, "page"), (1, "top"), (1, "middle"), (1, "bottom")
+    )
+
+
+def test_english_paper_with_one_arabic_citation_stays_english_without_vision(
+    english_only_pdf, monkeypatch
+):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((TextPageEvidence(1, 25, 400),)),
+    )
+
+    def should_not_call(_images, _phase):
+        raise AssertionError("an isolated Arabic citation is not body text")
+
+    decision = classify_document(english_only_pdf, vision_call=should_not_call)
+
+    assert decision.route is DocumentRoute.ENGLISH
+    assert decision.language == "english"
+
+
+def test_arabic_body_with_english_abstract_uses_mixed_arabic_route(
+    two_page_scan, monkeypatch
+):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 80, 0),
+            TextPageEvidence(2, 0, 300),
+        )),
+    )
+    vision = _vision(
+        _mapping([PageStyleVote(1, "arabic", "printed", 0.99, region="page")]),
+        _detail_votes("arabic", "printed", page_idx=1),
+    )
+
+    decision = classify_document(two_page_scan, vision_call=vision)
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "mixed"
+    assert [page for phase, images in vision.calls for page, _ in images if phase == "page_screen"] == [1]
+
+
+def test_blank_cover_unknown_vote_does_not_force_printed_body_to_uncertain(
+    two_page_scan, monkeypatch
+):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 0, 0),
+            TextPageEvidence(2, 80, 0),
+        )),
+    )
+    screen = _mapping([
+        PageStyleVote(1, "unknown", "unknown", 0.2, region="page", primary_content=False),
+        PageStyleVote(2, "arabic", "printed", 0.99, region="page", primary_content=True),
+    ])
+    detail = {}
+    detail.update(_detail_votes(
+        "unknown", "unknown", confidence=0.2, page_idx=1,
+        overrides={region: ("unknown", 0.2, False) for region in ("page", "top", "middle", "bottom")},
+    ))
+    detail.update(_detail_votes("arabic", "printed", page_idx=2))
+
+    decision = classify_document(two_page_scan, vision_call=_vision(screen, detail))
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "arabic"
+
+
+def test_nonprimary_arabic_cover_does_not_decide_document_style(
+    two_page_scan, monkeypatch
+):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 35, 0),
+            TextPageEvidence(2, 80, 0),
+        )),
+    )
+    screen = _mapping([
+        PageStyleVote(1, "arabic", "unknown", 0.5, region="page", primary_content=False),
+        PageStyleVote(2, "arabic", "printed", 0.99, region="page", primary_content=True),
+    ])
+    detail = {}
+    detail.update(_detail_votes(
+        "arabic", "unknown", confidence=0.5, page_idx=1,
+        overrides={region: ("unknown", 0.5, False) for region in ("page", "top", "middle", "bottom")},
+    ))
+    detail.update(_detail_votes("arabic", "printed", page_idx=2))
+
+    decision = classify_document(two_page_scan, vision_call=_vision(screen, detail))
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.writing_style == "printed"
 
 
 def test_handwriting_like_print_with_conflicting_votes_abstains(decorative_printed_pdf):
