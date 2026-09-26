@@ -1,0 +1,22 @@
+{
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "policy": [
+        {
+          "reservedSpace": "6GB",
+          "maxUsedSpace": "10GB",
+          "keepDuration": "48h",
+          "filter": [
+            "type=source.local,type=exec.cachemount,type=source.git.checkout"
+          ]
+        },
+        {
+          "reservedSpace": "18GB",
+          "maxUsedSpace": "28GB",
+          "all": true
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,148 @@
+#!/usr/bin/python3
+"""Root-disk watchdog: email when usage crosses 80% / 90%, once when it recovers.
+
+Runs from /etc/cron.d/disk-watchdog every 15 min. Config in /etc/disk-watchdog.env
+(KEY=VALUE, root-only). State in /var/lib/disk-watchdog/state.json.
+
+    disk-watchdog            normal cron run
+    disk-watchdog --status   print usage/level, send nothing
+    disk-watchdog --test     send a test email now (checks SMTP settings)
+
+Added 2026-09-19 after the disk filled and Postgres PANICked on ENOSPC —
+see backend/DEPLOYMENT-PRODUCTION.md §10. Source of truth: backend/host/.
+"""
+import json, os, shutil, smtplib, socket, subprocess, sys, time
+from email.message import EmailMessage
+
+CONF = "/etc/disk-watchdog.env"
+STATE = "/var/lib/disk-watchdog/state.json"
+REMIND_AFTER = 24 * 3600  # re-send a still-active alert once a day
+
+
+def load_conf():
+    conf = {"SMTP_HOST": "smtp.gmail.com", "SMTP_PORT": "587", "MOUNT": "/",
+            "WARN_PERCENT": "80", "CRIT_PERCENT": "90"}
+    try:
+        with open(CONF) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip().strip('"').strip("'")
+    except FileNotFoundError:
+        pass
+    return conf
+
+
+def run(cmd):
+    try:
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120).stdout.strip()
+    except Exception as e:
+        return f"({cmd!r} failed: {e})"
+
+
+def usage_percent(mount):
+    u = shutil.disk_usage(mount)
+    return round(u.used * 100 / u.total), u
+
+
+def level_for(pct, conf):
+    if pct >= int(conf["CRIT_PERCENT"]):
+        return "critical"
+    if pct >= int(conf["WARN_PERCENT"]):
+        return "warning"
+    return "ok"
+
+
+def report(conf, pct, u):
+    gb = 1024 ** 3
+    lines = [
+        f"Host:  {socket.gethostname()}",
+        f"Disk:  {conf['MOUNT']}  {pct}% used  ({u.used / gb:.1f} GB of {u.total / gb:.1f} GB, {u.free / gb:.1f} GB free)",
+        f"Time:  {time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        "",
+        "Ingestions are refused by the app at 90% (ingestion_disk_refuse_percent).",
+        "",
+        "== df -h ==", run("df -h " + conf["MOUNT"]),
+        "", "== docker system df ==", run("docker system df"),
+        "", "== big directories ==",
+        run("du -xsh /var/lib/containerd /var/lib/docker /home/kl1/apps/9xaipal/backend/app/storage /var/log 2>/dev/null | sort -rh"),
+        "", "== containers (writable layer size) ==", run("docker ps -a -s --format '{{.Names}}\t{{.Status}}\t{{.Size}}'"),
+        "",
+        "Usual fixes: docker builder prune -af ; docker image prune -af ; journalctl --vacuum-size=200M",
+        "Background: backend/DEPLOYMENT-PRODUCTION.md section 10 (the 2026-09 disk-full incident).",
+    ]
+    return "\n".join(lines)
+
+
+def send(conf, subject, body):
+    missing = [k for k in ("SMTP_USER", "SMTP_PASS", "ALERT_TO") if not conf.get(k)]
+    if missing:
+        raise RuntimeError(f"{CONF}: missing {', '.join(missing)} — cannot send email")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = conf.get("ALERT_FROM") or conf["SMTP_USER"]
+    msg["To"] = conf["ALERT_TO"]
+    msg.set_content(body)
+    with smtplib.SMTP(conf["SMTP_HOST"], int(conf["SMTP_PORT"]), timeout=30) as s:
+        s.starttls()
+        s.login(conf["SMTP_USER"], conf["SMTP_PASS"])
+        s.send_message(msg)
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {"level": "ok", "last_sent": 0}
+
+
+def save_state(state):
+    # Best effort: on a 100%-full disk this write fails, and the alert must
+    # still have gone out — so never let a state write abort the run.
+    try:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+        with open(STATE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"warning: could not write {STATE}: {e}")
+
+
+def main():
+    conf = load_conf()
+    pct, u = usage_percent(conf["MOUNT"])
+    level = level_for(pct, conf)
+    host = socket.gethostname()
+
+    if "--status" in sys.argv:
+        print(f"{conf['MOUNT']} {pct}% used -> {level} (warn {conf['WARN_PERCENT']}%, crit {conf['CRIT_PERCENT']}%)")
+        return
+    if "--test" in sys.argv:
+        send(conf, f"[disk-watchdog] test from {host} — disk {pct}% ({level})", report(conf, pct, u))
+        print(f"test email sent to {conf.get('ALERT_TO')}")
+        return
+
+    state = load_state()
+    prev = state.get("level", "ok")
+    now = time.time()
+    order = {"ok": 0, "warning": 1, "critical": 2}
+    subject = None
+    if order[level] > order[prev]:
+        subject = f"[disk-watchdog] {level.upper()}: {host} disk {pct}% full"
+    elif level != "ok" and now - state.get("last_sent", 0) >= REMIND_AFTER:
+        subject = f"[disk-watchdog] still {level}: {host} disk {pct}% full"
+    elif level == "ok" and prev != "ok":
+        subject = f"[disk-watchdog] recovered: {host} disk back to {pct}%"
+
+    if subject:
+        send(conf, subject, report(conf, pct, u))
+        state = {"level": level, "last_sent": now}
+        print(f"{time.strftime('%F %T')} {pct}% {level}: sent '{subject}'")
+    elif level != prev:
+        state["level"] = level  # de-escalation crit->warn: remember, no mail
+    save_state(state)
+
+
+if __name__ == "__main__":
+    main()

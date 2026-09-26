@@ -858,12 +858,22 @@ async def rechunk_paper(
         # with a re-chunk instead of a full re-extraction.
         glyphs_repaired = 0
         code_blocks_cropped = 0
+        headings_report: dict = {}
         source_pdf = documents_dir() / (doc.get("filename") or "")
         if source_pdf.exists():
             try:
                 glyphs_repaired = repair_chunks(chunks, source_pdf)
             except Exception:
                 logger.exception("[glyph-repair] failed during rechunk (non-fatal)")
+            # Headings: levels from the PDF's outline, non-headings demoted —
+            # see extraction/heading_repair.py. Here as well as in the
+            # pipeline so a book already on disk is repaired by a re-chunk.
+            try:
+                from app.extraction.heading_repair import repair_headings
+                from app.services.book_outline import read_pdf_outline
+                headings_report = repair_headings(chunks, read_pdf_outline(source_pdf)).as_dict()
+            except Exception:
+                logger.exception("[heading-repair] failed during rechunk (non-fatal)")
             # Only meaningful for the content_list.json path — MinerU never
             # crops literal code/schema listings itself, so bbox_json is what
             # crop_code_blocks needs, and only create_chunks_from_content_list
@@ -1014,6 +1024,7 @@ async def rechunk_paper(
         "chunks_total": len(chunks),
         "chunks_by_type": counts,
         "glyphs_repaired": glyphs_repaired,
+        "headings": headings_report,
         "code_blocks_cropped": code_blocks_cropped,
         "message": (
             "Re-chunked from cached extraction. Indexes are regenerating in the "

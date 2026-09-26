@@ -130,3 +130,83 @@ def test_a_single_boilerplate_entry_keeps_its_own_name():
 def test_an_all_boilerplate_document_is_left_alone():
     src = [_ch("Contents", 1, 5), _ch("Index", 6, 20)]
     assert group_matter(src) == src
+
+
+# ── Which outline entries are chapters ──────────────────────────────────────
+# A publisher's outline is the whole table of contents. Verified 2026-09-13
+# on two live books: fed whole, it produced 179 and 135 "chapters".
+
+from app.services.book_outline import chapter_entries, is_part_title, _is_matter
+
+
+def _e(level, title, page):
+    return {"level": level, "title": title, "page": page}
+
+
+def test_only_the_chapter_level_of_a_nested_outline_is_kept():
+    entries = [
+        _e(1, "Preface", 14),
+        _e(1, "Chapter 1: Exploring", 22),
+        _e(2, "What are FMs?", 24),
+        _e(3, "Amazon Titan", 28),
+        _e(2, "Summary", 45),
+        _e(1, "Chapter 2: Accessing", 48),
+        _e(2, "Chat playground", 51),
+        _e(1, "Index", 380),
+    ]
+    assert [e["title"] for e in chapter_entries(entries)] == ["Preface", "Chapter 1: Exploring", "Chapter 2: Accessing", "Index"]
+
+
+def test_a_part_at_the_chapter_level_is_folded_into_the_chapter_after_it():
+    entries = [
+        _e(1, "Preface", 14),
+        _e(1, "Part 1: \nFoundations", 20),
+        _e(1, "Chapter 1: Exploring", 22),
+        _e(2, "What are FMs?", 24),
+        _e(1, "I. The Anatomy of an AI Agent", 30),
+        _e(1, "2. Introduction", 31),
+    ]
+    kept = chapter_entries(entries)
+    assert [e["title"] for e in kept] == ["Preface", "Chapter 1: Exploring", "2. Introduction"]
+    assert kept[1]["page"] == 20     # opens on the part's divider page
+    assert kept[2]["page"] == 30
+
+
+def test_a_parts_only_top_level_steps_down_to_the_chapters():
+    entries = [
+        _e(1, "Introduction", 5),
+        _e(1, "Part I", 10),
+        _e(2, "1. First", 11),
+        _e(3, "1.1 Detail", 12),
+        _e(2, "2. Second", 30),
+        _e(1, "Part II", 50),
+        _e(2, "3. Third", 51),
+        _e(2, "4. Fourth", 70),
+    ]
+    assert [e["title"] for e in chapter_entries(entries)] == ["Introduction", "1. First", "2. Second", "3. Third", "4. Fourth"]
+
+
+def test_a_single_root_with_the_chapters_beneath_it():
+    entries = [_e(1, "The Book", 1), _e(2, "One", 3), _e(2, "Two", 30), _e(3, "Two point one", 31)]
+    assert [e["title"] for e in chapter_entries(entries)] == ["The Book", "One", "Two"]
+
+
+def test_a_flat_outline_is_unchanged():
+    entries = [_e(1, "1. Listening", 20), _e(1, "2. Polite", 50), _e(1, "Epilogue", 300)]
+    assert chapter_entries(entries) == entries
+    assert chapter_entries([]) == []
+
+
+def test_part_titles():
+    for t in ("Part 1: Foundations", "Part I", "PART TWO", "I. The Anatomy of an AI Agent", "IV — Later", "Section A"):
+        assert is_part_title(t), t
+    for t in ("1. Introduction", "Chapter 1: Exploring", "Preface", "Index", "Ivan's Story"):
+        assert not is_part_title(t), t
+
+
+def test_apparatus_with_a_qualifier_is_still_apparatus():
+    for t in ("Copyright and Credits", "About the Authors", "About Packt", "Other Books You May Enjoy",
+              "Contributors", "Acknowledgements", "Index", "Also by Erin Meyer"):
+        assert _is_matter(t), t
+    for t in ("Introduction", "Afterword", "Preface", "Chapter 1: Exploring", "Epilogue: Putting it to work"):
+        assert not _is_matter(t), t

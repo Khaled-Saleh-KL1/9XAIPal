@@ -1,12 +1,13 @@
 """Ingestion service: transactional document + chunk persistence."""
 
+import shutil
 from uuid import UUID
 from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.errors import TooManyQueuedJobs
+from app.api.errors import InsufficientStorage, JobAlreadyActive, TooManyQueuedJobs
 from app.core.config import settings
 from app.database.repositories import documents as doc_repo
 from app.database.repositories import chunks as chunk_repo
@@ -14,6 +15,23 @@ from app.database.repositories import assets as asset_repo
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def check_disk_headroom() -> None:
+    """Raise InsufficientStorage if the disk under storage_root is at or past
+    settings.ingestion_disk_refuse_percent.
+
+    An extraction writes gigabytes (page images, MinerU scratch) onto the
+    same disk as Postgres, which PANICs on ENOSPC — that is how the box went
+    down on 2026-09-18. Called from check_queue_capacity (so every accept
+    path is covered) and again by the worker before it starts, because a
+    job accepted at 85% can be reached after the one before it filled the
+    disk.
+    """
+    usage = shutil.disk_usage(settings.storage_root)
+    used_percent = round(usage.used * 100 / usage.total)
+    if used_percent >= settings.ingestion_disk_refuse_percent:
+        raise InsufficientStorage(used_percent, settings.ingestion_disk_refuse_percent)
 
 
 async def check_queue_capacity(session: AsyncSession) -> None:
@@ -28,6 +46,7 @@ async def check_queue_capacity(session: AsyncSession) -> None:
     thing in the request" would leave a half-done upload or a wiped paper
     behind on rejection.
     """
+    check_disk_headroom()
     result = await session.execute(
         text("""
             SELECT COUNT(*) FROM ingestion_jobs
@@ -58,6 +77,19 @@ async def create_ingestion_job(session: AsyncSession, document_id: UUID) -> dict
     advisory lock stays held until then, covering both the count and insert.
     """
     await _reserve_queue_capacity(session)
+    # Same lock: two re-extract clicks cannot both see "no active job".
+    active = (
+        await session.execute(
+            text("""
+                SELECT status FROM ingestion_jobs
+                WHERE document_id = :id AND status NOT IN ('complete', 'failed')
+                LIMIT 1
+            """),
+            {"id": document_id},
+        )
+    ).scalar_one_or_none()
+    if active is not None:
+        raise JobAlreadyActive(str(document_id), active)
     result = await session.execute(
         text("""
             INSERT INTO ingestion_jobs (document_id, status)

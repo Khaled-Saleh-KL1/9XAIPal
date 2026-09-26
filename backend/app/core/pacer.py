@@ -21,11 +21,12 @@ interval of idle provider time, which is the right trade: the alternative
 — releasing slots — needs a lock held across the sleep and reintroduces
 the race this exists to remove.
 
-Redis unreachable degrades to "no pacing" with a warning rather than to a
-hard failure: a missing turnstile makes a 429 likelier (which the caller's
-circuit breaker already handles), while an exception here would make every
-citation lookup fail outright for an infrastructure blip that has nothing
-to do with the lookup.
+Redis unreachable **fails closed**: ``take_turn`` raises ``PacerUnavailable``
+and the caller must not fire. It used to degrade to "no pacing" with a
+warning, on the theory that a 429 is survivable — but the provider's answer
+to a burst from a keyed client is not a 429, it is the key. Losing a few
+citation lookups during a Redis blip is nothing; losing the key is not
+(changed 2026-09-19).
 """
 
 import asyncio
@@ -53,6 +54,12 @@ return {next_at - now_ms, now_ms}
 """
 
 
+class PacerUnavailable(Exception):
+    """The shared line (Redis) cannot be reached — do not fire unpaced."""
+    def __init__(self, name: str):
+        self.name = name
+
+
 class Turn(NamedTuple):
     """The caller's place in the line: how long until its slot, and how
     many reserved slots are ahead of it (0 = fire now)."""
@@ -61,15 +68,16 @@ class Turn(NamedTuple):
 
 
 async def take_turn(name: str, interval_seconds: float) -> Turn:
-    """Reserve the next free slot in the `name` line. Never raises."""
+    """Reserve the next free slot in the `name` line. Raises PacerUnavailable
+    — and only that — when Redis cannot hand one out."""
     interval_ms = max(1, int(round(interval_seconds * 1000)))
     try:
         r = get_redis()
         wait_ms, _now = await r.eval(_TAKE_TURN, 1, f"pacer:{name}", interval_ms)
         wait_ms = max(0, int(wait_ms))
     except Exception as e:  # noqa: BLE001 — see module docstring
-        logger.warning("pacer %s: Redis unavailable, not pacing (%s)", name, e)
-        return Turn(0.0, 0)
+        logger.warning("pacer %s: Redis unavailable — refusing to fire unpaced (%s)", name, e)
+        raise PacerUnavailable(name) from e
     return Turn(wait_ms / 1000.0, math.ceil(wait_ms / interval_ms) if wait_ms else 0)
 
 

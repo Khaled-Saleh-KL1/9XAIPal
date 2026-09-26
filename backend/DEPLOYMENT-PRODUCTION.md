@@ -208,15 +208,29 @@ sudo systemctl restart nginx actions.runner.Khaled-Saleh-KL1-9XAIPal.ovh-server.
 Every backend deploy recreates the worker (`up -d --build api celery_worker`), and so does
 autoheal after a hung health check. A task running at that moment — a MinerU extraction is
 minutes long — dies with the process. Its message is `acks_late`, so Redis still holds it, but
-Redis only re-delivers an unacked message after the visibility timeout (one hour): the document
-sat at "extracting" for an hour, then started over (verified live 2026-09-12: a book pasted at
-20:48, killed by the 20:50 deploy, still "extracting" at 21:08 with its message in `unacked`).
-`core/celery_app.py::_restore_interrupted_tasks` now runs on `worker_ready` and hands every
-unacked message straight back to the queue — the same thing kombu does on a warm shutdown, which
-a container stop never gets for a long task. The interrupted document starts over within seconds
-of the new worker coming up; the reader sees its progress bar restart, nothing else. Assumes the
-single worker this box runs (with several, another worker's in-flight task would be restored too
-and run twice — the pipelines survive that, it is only wasted work).
+Redis only re-delivers an unacked message after the visibility timeout (Celery's default: one
+hour): the document sat at "extracting" for an hour, then started over (verified live
+2026-09-12: a book pasted at 20:48, killed by the 20:50 deploy, still "extracting" at 21:08 with
+its message in `unacked`). `core/celery_app.py::_restore_interrupted_tasks` now runs on
+`worker_ready` and hands every unacked message straight back to the queue — the same thing kombu
+does on a warm shutdown, which a container stop never gets for a long task. The interrupted
+document starts over within seconds of the new worker coming up; the reader sees its progress bar
+restart, nothing else. Assumes the single worker *container* this box runs (with several, another
+worker's in-flight task would be restored too and run twice — the pipelines survive that, it is
+only wasted work); `--concurrency=2` inside that one container is fine, the restore happens in the
+main process before either pool child takes anything.
+
+**The visibility timeout is now 7 days, and there are no task time limits — on purpose.** The
+same one-hour re-delivery bit the other way on 2026-09-17: a 916-page book takes ~68 min to
+extract, so at the 60-minute mark Redis handed the *still-running* task's message out again, and
+with one worker at `--concurrency=1` the duplicate started the moment the first finished — the
+same task id, ten times in a row, until the disk was full (§10). Anything longer than the longest
+task there will ever be is the only correct value: a 10,000-page book is ~13 h of extraction
+alone, its summaries longer. Seven days costs nothing, because a *dead* worker's messages come
+back through the restore above rather than by waiting the timeout out, and no task here uses
+`eta`/`countdown` (the one thing a long timeout breaks). A `task_time_limit` high enough not to
+kill that book would be days — useless against a hang — so there is none; a hung worker is
+autoheal's job (§4), a full disk the watchdog's (§10).
 
 ## 5. CI/CD: self-hosted runner, no secrets over the wire, gated on CI, self-healing on failure
 
@@ -386,7 +400,8 @@ merge, whatever changed. Two things throw the cache away:
    the build has finished, so plain `-f` reclaims them all (verified: prune, rebuild the unchanged
    api image → 0 of 6 steps cached, 54 s; skip the prune → 6 of 6 cached, 0.6 s). Every backend
    deploy since the step was added had been a cold rebuild. The step now prunes only records unused
-   for a week and never cache mounts:
+   for a week and never cache mounts (`host/docker-prune.weekly` runs the same two commands from
+   `/etc/cron.weekly` for the weeks in which nothing is deployed):
 
    ```bash
    docker image prune -f
@@ -402,26 +417,23 @@ merge, whatever changed. Two things throw the cache away:
    `/etc/docker/daemon.json`, BuildKit caps `exec.cachemount` + `source.local` records at ~1.3 GiB
    and 48 h. The worker's uv download cache (the `--mount=type=cache` in `Dockerfile.mineru`) is
    ~1.7 GB, so BuildKit evicts it on its own shortly after every worker build — the cold `uv sync`
-   is the default here, not an accident. This needs root. Create `/etc/docker/daemon.json`:
+   is the default here, not an accident. This needs root: install `host/docker-daemon.json` as
+   `/etc/docker/daemon.json`, then `sudo systemctl restart docker` (⚠ restarts every container on
+   the box, the lcms stack included — a few seconds, but pick the moment; `systemctl reload
+   docker` is **not** enough, builder GC is not among the options SIGHUP re-reads — verified
+   2026-09-19: after a reload `buildx inspect` still showed the old numbers).
 
-   ```json
-   {
-     "builder": {
-       "gc": {
-         "enabled": true,
-         "defaultKeepStorage": "40GB",
-         "policy": [
-           { "keepStorage": "6GB",  "filter": ["type==source.local", "type==exec.cachemount", "type==source.git.checkout"] },
-           { "keepStorage": "40GB", "all": true }
-         ]
-       }
-     }
-   }
-   ```
-
-   then `sudo systemctl restart docker` (⚠ restarts every container on the box, the lcms stack
-   included — a few seconds, but pick the moment). `docker buildx inspect default` afterwards
-   should show rule #0 at 6 GiB.
+   ⚠ **`reservedSpace` is a floor, not a ceiling** — the single most misleading thing here, and
+   what made the 40 GB in this file's earlier version useless. It (and its deprecated alias
+   `keepStorage`/`defaultKeepStorage`) says "never prune *below* this", so on its own it bounds
+   nothing: the cache had grown to 41.8 GB under a 40 GB `reservedSpace`, and to 30.3 GB under a
+   20 GB one within a day of 2026-09-19's change. The ceiling is **`maxUsedSpace`**: GC triggers
+   above it and prunes back down to `reservedSpace`. Both are set now — 18 GB floor / 28 GB
+   ceiling overall, 6 GB / 10 GB for the cache mounts. The floor is sized from the measurement
+   below it: a warm cache for both images is ~15.3 GB, so a floor under that would shave the warm
+   set on every GC and hand back the cold rebuild this section exists to avoid. `docker buildx
+   inspect default` afterwards should show rule #0 at 6 GiB reserved / 10 GiB max and rule #1 at
+   18 GiB / 28 GiB; `dockerd --validate --config-file` checks the file before you install it.
 
 ### Do not
 
@@ -430,3 +442,56 @@ the images the deploy pulls (`node:22-alpine`, `ghcr.io/astral-sh/uv`, `pgvector
 every cache record including the uv mount, and the next deploy re-downloads all of it (this
 happened on 2026-09-10 and 2026-09-12). `docker system df -v` shows what is left; the row of type
 `exec.cachemount` is the one to keep.
+
+## 10. The disk filling up: what happened on 2026-09-18, and what stops it now
+
+The root disk hit 0 bytes free at 07:12 on 2026-09-18. Postgres PANICked on ENOSPC two minutes
+later and stayed down; the worker died with it; rsyslogd and journald sat at 65 % CPU trying to
+write. `df` said `/var/lib/containerd` was 78 of 96 GB — the containerd image store holds
+*everything* Docker (§9), so `docker system df` is the map: build cache 41.8 GB, container
+writable layers **32.6 GB**, images 16 GB. The 32.6 GB was one container, `9xaipal-celery-worker`,
+and inside it `/app/output/<uuid>/` × 1,114 — each a copy of the same 28 MB PDF. Two bugs
+compounding:
+
+1. **Re-delivery loop.** The 916-page book above ran ten times back to back because its 68-minute
+   task outlived the one-hour visibility timeout (§4, "now 7 days").
+2. **MinerU's own copy of every request.** The MinerU API server keeps each upload and result
+   under `MINERU_API_OUTPUT_ROOT`, default `./output` — `/app/output` in the worker, the
+   container's writable layer, on no mount and cleaned by nothing. 115 page-batches per pass ×
+   28 MB × 10 passes. The server now gets a scratch dir under `/data/storage/extracted/
+   .mineru-api-*` and `_stop_mineru_api_server` removes it; `sweep_stale_scratch_dirs` removes
+   any such dir (and `.<id>_batches`) still present when the worker starts, which is what a
+   SIGKILL — deploy, autoheal, OOM — leaves behind (three were found on the first run).
+
+What guards the disk now, innermost first:
+
+- **The app refuses at 90 %.** `services/ingestion.py::check_disk_headroom` runs inside
+  `check_queue_capacity` (so every accept path — upload, import, re-extract — gets it) and again
+  at the top of `process_ingestion`, because a job accepted at 85 % can start after the one
+  before it filled the disk. HTTP `507`, code `DISK_FULL`; in the worker the document is marked
+  failed with the percentage in the message. Threshold: `ingestion_disk_refuse_percent`.
+- **The host emails at 80 % and 90 %** — `host/disk-watchdog`, every 15 minutes from cron, with
+  `df`, `docker system df`, the big directories and per-container layer sizes in the mail, a
+  daily reminder while it stays there, one mail on recovery. Gmail SMTP on 587 (OVH blocks 25);
+  install and settings in `host/README.md`.
+- **Nothing accumulates on its own any more**: the 28 GB build-cache ceiling (§9), the weekly prune
+  (`host/docker-prune.weekly`) for weeks without a deploy, and the scratch sweep above.
+- **One job per document** (`JobAlreadyActive`, HTTP `409`, code `JOB_ACTIVE`), taken under the
+  same advisory lock as the queue-capacity check. Required by `--concurrency=2`: a re-extract
+  during an extraction would otherwise run both pipelines on the same `extracted/<id>/`, each
+  wiping the other's chunks.
+- **A deleted paper stops its own ingestion.** `DELETE /{paper_id}` removes the rows (job
+  included, by cascade) and the files present at that moment, but until 2026-09-19 the running
+  task carried on for up to an hour and re-created `extracted/<id>/` and `images/<id>/` for a
+  paper that no longer existed. `pipeline_sync.run_pipeline_sync` now checks the row is still
+  there before starting, after every page-batch (~40 s, through the progress callback:
+  `ExtractionAborted` is the one exception `extract_pdf_sync` lets that callback raise) and before
+  writing chunks; on `DocumentDeleted` it stops, the MinerU server's `finally` runs, and the task
+  removes its own output.
+
+Cleaning up by hand, if it ever comes to that: `journalctl --vacuum-size=200M` first (700 MB, and
+it gives the daemons room to write again), then `docker builder prune -af` (this is the one time
+`-a` is right: the disk is full and the next deploy being cold is the smaller problem), then find
+the writable layer with `docker ps -s`. Postgres data is on a named volume and recovers on
+`docker start`; the worker needs `docker compose up -d celery_worker` after Docker itself is
+restarted, since dockerd's state is stale once it cannot write.

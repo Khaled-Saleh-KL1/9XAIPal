@@ -494,6 +494,11 @@ class Settings(BaseSettings):
     # instead of silently queuing forever.
     max_queued_ingestion_jobs: int = 50
 
+    # Refuse to accept or start an ingestion once the disk under storage_root
+    # is this full — see app.services.ingestion.check_disk_headroom. The
+    # host's disk-watchdog cron emails at 80%, so this is the backstop.
+    ingestion_disk_refuse_percent: int = 90
+
     # Max characters of a chunk's text sent to the embedder. Ollama's
     # /api/embed hard-400s when inputs exceed the model context window (dense
     # tables tokenize heavily — ~3000 chars is a safe ceiling for local

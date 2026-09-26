@@ -24,7 +24,7 @@
 | Area | File | Features |
 | --- | --- | --- |
 | Library & getting documents in | [01-library-and-import.md](01-library-and-import.md) | 1–18, 109 |
-| The extraction pipeline | [02-extraction-pipeline.md](02-extraction-pipeline.md) | 19–32 |
+| The extraction pipeline | [02-extraction-pipeline.md](02-extraction-pipeline.md) | 19–32, 112 |
 | The paper / article reader | [03-paper-reader.md](03-paper-reader.md) | 33–58 |
 | The book reader | [04-book-reader.md](04-book-reader.md) | 59–65, 111 |
 | Asking: the AI answering paths | [05-asking.md](05-asking.md) | 66–75, 108 |
@@ -148,6 +148,7 @@
 | 109 | Done Reading: a second shelf, with folders | [library and import](01-library-and-import.md#109-done-reading-a-second-shelf-with-folders) |
 | 110 | Shelved paper lists: the rail and the picker as a file tree | [desk](06-desk.md#110-shelved-paper-lists-the-rail-and-the-picker-as-a-file-tree) |
 | 111 | Notes as movable icons (book reader) | [book reader](04-book-reader.md#111-notes-as-movable-icons) |
+| 112 | Heading repair (levels from the PDF outline, non-headings demoted) | [extraction pipeline](02-extraction-pipeline.md#112-heading-repair) |
 
 ## How each entry is written
 

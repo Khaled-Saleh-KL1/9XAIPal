@@ -99,6 +99,9 @@ jobs:
           if [ -n "$DEPLOYED" ] && ! git diff --quiet "$DEPLOYED" "${{ github.event.workflow_run.head_sha }}" -- backend/nginx; then
             echo "::notice::backend/nginx/ changed in this deploy. The host's /etc/nginx/sites-enabled/9xaipal.conf is installed by hand and was NOT updated — diff it against backend/nginx/9xaipal.conf and reload nginx with sudo."
           fi
+          if [ -n "$DEPLOYED" ] && ! git diff --quiet "$DEPLOYED" "${{ github.event.workflow_run.head_sha }}" -- backend/host; then
+            echo "::notice::backend/host/ changed in this deploy. Those files (cron jobs, disk watchdog, daemon.json) are installed by hand and were NOT updated — see backend/host/README.md."
+          fi
 
       # frontend/node_modules is untracked (so absent from the checkout) and
       # would be deleted by --delete on every run, forcing a full `npm ci`

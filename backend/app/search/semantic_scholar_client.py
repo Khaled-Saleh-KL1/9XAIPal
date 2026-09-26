@@ -145,7 +145,13 @@ async def _match_title(
         # missing key or an open breaker never burns a slot someone else
         # could have used. On a retry, back off by an extra interval per
         # attempt on top of the slot — the 429s come in bursts.
-        await pacer.wait_turn(_PACER_LINE, interval, on_queued=on_queued)
+        try:
+            await pacer.wait_turn(_PACER_LINE, interval, on_queued=on_queued)
+        except pacer.PacerUnavailable:
+            # No line means no call — a keyed client that bursts loses its
+            # key, not just this lookup. Not a provider failure: the breaker
+            # stays as it is.
+            return Unresolved.UNAVAILABLE
         if attempt > 1:
             await asyncio.sleep(interval * (attempt - 1))
 
