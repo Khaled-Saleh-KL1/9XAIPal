@@ -147,3 +147,51 @@ def test_pipeline_run_produces_the_ingestion_tree(db_session_sync, tmp_path, mon
         assert all(s.context.trace_id == root.context.trace_id for s in exporter.get_finished_spans())
     finally:
         tracing.reset_for_tests()
+
+
+def test_article_output_traces_images_from_asset_map():
+    """Test that article_output records article image count and names from asset_map,
+    renders it as {count: N} in the summary, and leaves the original unchanged."""
+    from app.services.article_extraction import ArticleExtraction
+    from app.extraction.tracing_hooks import article_output
+
+    exporter = tracing.use_in_memory_exporter()
+    try:
+        # Create an ArticleExtraction with 2 images in asset_map
+        original_asset_map = {
+            "fig1.png": "https://example.com/fig1.png",
+            "fig2.jpg": "https://example.com/fig2.jpg",
+        }
+        article = ArticleExtraction(
+            title="Test Article",
+            markdown="# Test\n![Fig1](fig1.png)\n![Fig2](fig2.jpg)",
+            asset_map=original_asset_map.copy(),
+        )
+
+        # Call article_output inside a span
+        with tracing.span("article.fetch"):
+            summary = article_output(article)
+
+        # Get the finished span
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.name == "article.fetch"
+
+        # Check that the span recorded the image count and names
+        assert span.attributes.get("article.images") == 2
+        image_names = span.attributes.get("article.image_names")
+        assert image_names is not None
+        # image_names is a stringified version of the list, should contain both filenames
+        assert "fig1.png" in image_names
+        assert "fig2.jpg" in image_names
+
+        # Check that the returned summary has asset_map rendered as {count: 2}
+        assert summary["asset_map"] == {"count": 2}
+        assert summary["title"] == "Test Article"
+        assert summary["markdown"] == "# Test\n![Fig1](fig1.png)\n![Fig2](fig2.jpg)"
+
+        # Check that the original ArticleExtraction's asset_map is unchanged
+        assert article.asset_map == original_asset_map
+    finally:
+        tracing.reset_for_tests()
