@@ -95,7 +95,7 @@ would deploy with zero verification. One deploy target, so runs queue instead of
 (never kill a deploy mid-rebuild). The workflow rsyncs tracked files one-way into `~/apps/9xaipal`
 (untracked files like `.env` and `.last-good-sha` are excluded — which is why the deploy target is
 *not* a checkout and edits there are reverted on the next deploy), then `deploy-once.sh`: build the
-frontend in a `node:20-alpine` container with `VITE_API_BASE_URL` set, copy `dist/` into
+frontend in a `node:22-alpine` container with `VITE_API_BASE_URL` set, copy `dist/` into
 `backend/frontend-dist`, `docker compose up -d --build`, poll `/api/v1/health` for 60 s. On success
 the commit is written to `.last-good-sha`; on failure the workflow checks out that sha into a
 worktree and runs **the exact same script** again — one script, one place a deploy bug can hide.

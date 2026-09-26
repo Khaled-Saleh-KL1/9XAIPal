@@ -317,7 +317,7 @@ services:
   # nothing at "/" — the UI only appeared if you happened to know to pass
   # `--profile server`.
   frontend-build:
-    image: node:20-alpine
+    image: node:22-alpine
     container_name: 9xaipal-frontend-build
     working_dir: /src
     volumes:

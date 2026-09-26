@@ -136,6 +136,81 @@ def test_paired_run_comparison_joins_documents_by_id():
     assert comparison["mean_cer_improvement"] == 0.1
 
 
+def test_paired_run_comparison_counts_failed_ocr_as_loss():
+    comparison = _scoring().compare_paired_runs(
+        candidate=[
+            {"doc_id": "failed", "ocr_status": "failed", "ocr_scores": None},
+            {"doc_id": "good", "ocr_status": "complete", "ocr_scores": {"normalized": {"cer": 0.1}}},
+            {"doc_id": "english", "ocr_status": "not_run_for_route", "ocr_scores": None},
+        ],
+        baseline=[
+            {"doc_id": "failed", "ocr_status": "complete", "ocr_scores": {"normalized": {"cer": 0.3}}},
+            {"doc_id": "good", "ocr_status": "complete", "ocr_scores": {"normalized": {"cer": 0.2}}},
+            {"doc_id": "english", "ocr_status": "not_run_for_route", "ocr_scores": None},
+        ],
+    )
+    assert comparison["paired_documents"] == 2
+    assert comparison["scored_documents"] == 1
+    assert comparison["candidate_failures"] == 1
+    assert comparison["baseline_wins"] == 1
+    assert {row["doc_id"] for row in comparison["per_document"]} == {"failed", "good"}
+
+
+def test_held_out_misroute_fails_mock_run_after_writing_report(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    run_dir = tmp_path / "held-out-run"
+    manifest.write_text(json.dumps({
+        "schema_version": 1,
+        "held_out_splits": ["held_out"],
+        "documents": [{
+            "doc_id": "printed-misroute", "split": "held_out", "expected_route": "printed",
+            "ground_truth_text": "نص عربي", "mock_prediction_route": "handwritten",
+        }],
+    }), encoding="utf-8")
+    assert _runner().main(["--manifest", str(manifest), "--mock", "--run-dir", str(run_dir)]) == 1
+    report = json.loads((run_dir / "score.json").read_text(encoding="utf-8"))
+    assert report["route_metrics"]["held_out"]["printed_as_handwritten"] == 1
+
+
+def test_live_handwritten_route_stays_disabled_without_provider_call(tmp_path):
+    runner = _runner()
+    classified = [{
+        "doc_id": "handwritten", "classification_status": "complete",
+        "predicted_route": "arabic_handwritten", "ocr_status": "not_run",
+    }]
+    records, pairs = runner._run_live_ocr(
+        classified, [], {}, SimpleNamespace(), "config", "git", tmp_path, "hybrid",
+    )
+    assert records[0]["ocr_status"] == "disabled_handwritten"
+    assert pairs == []
+
+
+def test_report_aggregates_provider_attempts_retries_and_fallbacks():
+    runner = _runner()
+    record = {
+        "doc_id": "printed-1", "split": "held_out", "expected_route": "printed",
+        "predicted_route": "arabic_printed", "classification_status": "complete",
+        "ocr_status": "complete", "ocr_attempted": True, "ocr_scores": None,
+        "page_count": 1, "page_coverage": {"actual_pages": [1]},
+        "provider_range_validation": {"complete": True}, "latency_ms": 0,
+        "ocr_latency_ms": 0, "cost_usd": 0, "cost_usd_tracker_basis": 0,
+        "provider_runs": [
+            {"provider": "gemini_arabic_flash", "attempt_count": 2, "retry_count": 1,
+             "attempt_metadata": [{"key_index": 0}, {"key_index": 1}], "usage": {}},
+            {"provider": "gemma4_arabic_fallback", "attempt_count": 1, "retry_count": 0, "usage": {}},
+        ],
+        "token_usage": {}, "request_attempt_count": 3, "provider_page_scores": {},
+    }
+    report = runner._build_report(
+        "live", "hybrid", [record], [], {"normalization": {}, "pricing": {"by_model": {}},
+        "held_out_splits": ["held_out"]}, "config", "git", "manifest", [], None,
+    )
+    assert report["provider_attempts"]["by_provider"]["gemini_arabic_flash"] == 2
+    assert report["provider_attempts"]["by_key_index"]["0"] == 1
+    assert report["provider_attempts"]["retries"] == 1
+    assert report["provider_attempts"]["fallback_documents"] == 1
+
+
 def test_mock_run_writes_hashes_scores_and_text_free_immutable_records(tmp_path):
     manifest = tmp_path / "manifest.json"
     run_dir = tmp_path / "run-1"
@@ -169,6 +244,21 @@ def test_mock_run_writes_hashes_scores_and_text_free_immutable_records(tmp_path)
     assert _runner().main([
         "--manifest", str(manifest), "--mock", "--run-dir", str(run_dir),
     ]) == 2
+
+
+def test_non_mock_manifest_requires_held_out_split(tmp_path):
+    runner = _runner()
+    source = tmp_path / "source.pdf"
+    gold = tmp_path / "gold.txt"
+    source.write_bytes(b"placeholder")
+    gold.write_text("gold", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"schema_version": 1, "documents": [{
+        "doc_id": "doc", "split": "printed", "expected_route": "printed",
+        "source_pdf": str(source), "ground_truth_file": str(gold),
+    }]}), encoding="utf-8")
+    with pytest.raises(runner.EvaluationError, match="held_out_splits"):
+        runner._load_manifest(manifest, allow_inline=False)
 
 
 def test_gemini_preflight_resolves_a_document_without_persisting_paths():
@@ -403,6 +493,7 @@ def test_default_runner_mode_stays_classifier_only(tmp_path, monkeypatch):
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({
         "schema_version": 1,
+        "held_out_splits": ["printed_digital"],
         "documents": [{
             "doc_id": "printed-1",
             "split": "printed_digital",
@@ -477,10 +568,12 @@ def test_live_preflight_probes_each_flash_key_without_serializing_credentials(tm
         pdf.new_page(width=72, height=72)
         pdf.save(source)
     observed_keys = []
+    observed_sizes = []
 
     class RuntimeSettings:
         gemini_api_keys = ["secret-key-one", "secret-key-two"]
         arabic_gemini_printed_model = "gemini-3.7-flash"
+        arabic_ocr_dpi = 200
 
         def model_copy(self, *, update):
             return SimpleNamespace(gemini_api_keys=[update["gemini_api_keys_raw"]])
@@ -491,6 +584,11 @@ def test_live_preflight_probes_each_flash_key_without_serializing_credentials(tm
 
         def generate_batch(self, _pages, validator):
             assert callable(validator)
+            image_bytes = _pages[0].png
+            observed_sizes.append((
+                int.from_bytes(image_bytes[16:20], "big"),
+                int.from_bytes(image_bytes[20:24], "big"),
+            ))
             return SimpleNamespace(
                 attempt_count=1,
                 latency_ms=7,
@@ -510,6 +608,7 @@ def test_live_preflight_probes_each_flash_key_without_serializing_credentials(tm
     )
 
     assert observed_keys == ["secret-key-one", "secret-key-two"]
+    assert all(width >= 199 and height >= 199 for width, height in observed_sizes)
     assert [result["key_index"] for result in results] == [0, 1]
     assert all(result["status"] == "available" for result in results)
     assert all(result["model"] == "gemini-3.7-flash" for result in results)

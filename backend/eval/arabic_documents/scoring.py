@@ -419,20 +419,52 @@ def compare_paired_runs(
     candidate_by_id = _records_by_id(candidate)
     baseline_by_id = _records_by_id(baseline)
     paired: list[dict[str, Any]] = []
+    candidate_failures = baseline_failures = candidate_wins = baseline_wins = ties = 0
     for doc_id in sorted(candidate_by_id.keys() & baseline_by_id.keys()):
+        if not any(
+            record.get("ocr_attempted") is True or record.get("ocr_scores") is not None
+            for record in (candidate_by_id[doc_id], baseline_by_id[doc_id])
+        ):
+            continue
         candidate_cer = _record_cer(candidate_by_id[doc_id])
         baseline_cer = _record_cer(baseline_by_id[doc_id])
-        if candidate_cer is None or baseline_cer is None:
-            continue
+        candidate_failed = candidate_by_id[doc_id].get("ocr_status") == "failed" or candidate_cer is None
+        baseline_failed = baseline_by_id[doc_id].get("ocr_status") == "failed" or baseline_cer is None
+        candidate_failures += int(candidate_failed)
+        baseline_failures += int(baseline_failed)
+        if candidate_failed and baseline_failed:
+            outcome = "both_failed"
+        elif candidate_failed:
+            outcome = "baseline_win"
+            baseline_wins += 1
+        elif baseline_failed:
+            outcome = "candidate_win"
+            candidate_wins += 1
+        elif candidate_cer < baseline_cer:
+            outcome = "candidate_win"
+            candidate_wins += 1
+        elif candidate_cer > baseline_cer:
+            outcome = "baseline_win"
+            baseline_wins += 1
+        else:
+            outcome = "tie"
+            ties += 1
         paired.append({
             "doc_id": doc_id,
             "candidate_cer": candidate_cer,
             "baseline_cer": baseline_cer,
-            "cer_improvement": baseline_cer - candidate_cer,
+            "cer_improvement": baseline_cer - candidate_cer if not candidate_failed and not baseline_failed else None,
+            "outcome": outcome,
         })
-    improvements = [row["cer_improvement"] for row in paired]
+    improvements = [row["cer_improvement"] for row in paired if row["cer_improvement"] is not None]
     return {
         "paired_documents": len(paired),
+        "scored_documents": len(improvements),
+        "candidate_failures": candidate_failures,
+        "baseline_failures": baseline_failures,
+        "candidate_wins": candidate_wins,
+        "baseline_wins": baseline_wins,
+        "ties": ties,
         "unpaired_candidate_documents": len(candidate_by_id.keys() - baseline_by_id.keys()),
         "unpaired_baseline_documents": len(baseline_by_id.keys() - candidate_by_id.keys()),
         "mean_cer_improvement": (

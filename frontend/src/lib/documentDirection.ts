@@ -11,7 +11,7 @@ export function documentDirection(language: string | null | undefined): TextDire
     case 'rtl':
       return 'rtl';
     default:
-      return 'auto';
+      return 'ltr';
   }
 }
 

@@ -28,6 +28,7 @@ manifest references paths relative to itself or absolute paths:
 ```json
 {
   "schema_version": 1,
+  "held_out_splits": ["printed_digital"],
   "normalization": {
     "strip_markdown": true,
     "normalize_alef": true,
@@ -56,6 +57,9 @@ rate, its cost is reported as unknown, not zero. Page ground truth
 is optional and uses either `{"1": "page text"}` or an array of
 `{"page_number": 1, "text": "page text"}` entries. Its SHA-256 is recorded
 separately from the whole-document ground-truth hash.
+The `held_out_splits` list is required for real runs; it names frozen splits
+whose printed↔handwritten misroutes make the CLI exit non-zero after writing
+the report. The synthetic example uses its sole mock split for harness checks.
 
 The committed `manifest.example.json` contains only synthetic strings and
 `source_pdf: null`; run it only with `--mock`. It is deliberately not a corpus.
@@ -121,7 +125,9 @@ percentage, calculated as `(all-in cost - candidates-only cost) / all-in cost
 per-model rates under `pricing.by_model`; otherwise cost is explicitly
 unknown. Cost and end-to-end/OCR latency are split by corpus subset; latency
 uses nearest-rank p50/p95 and includes attempted OCRs that failed. Optional
-`--compare-run-dir` computes paired normalized-CER changes by document ID.
+`--compare-run-dir` computes paired normalized-CER changes by document ID and
+counts failed OCRs as losses instead of dropping them. Provider/key attempts,
+retries and hybrid fallback frequency are aggregated without recording keys.
 
 This tool does not certify classifier or OCR quality from synthetic data.
 Live accuracy claims require the complete frozen corpus, human-verified gold,

@@ -11,8 +11,9 @@ describe('documentDirection', () => {
     expect(documentDirection('mixed')).toBe('rtl');
   });
 
-  it('leaves unknown document language to automatic direction', () => {
-    expect(documentDirection(null)).toBe('auto');
+  it('keeps legacy and unknown documents left-to-right', () => {
+    expect(documentDirection(null)).toBe('ltr');
+    expect(documentDirection('unknown')).toBe('ltr');
   });
 });
 

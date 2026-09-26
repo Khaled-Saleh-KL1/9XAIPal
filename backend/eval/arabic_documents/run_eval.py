@@ -135,6 +135,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         _write_run_outputs(run_dir, records, report)
         print(f"Arabic OCR evaluation ({mode}) wrote a text-free report to {run_dir}")
+        held_out = report["route_metrics"]["held_out"]
+        if held_out["printed_as_handwritten"] or held_out["handwritten_as_printed"]:
+            print("Held-out printed/handwritten misroute detected; see score.json.", file=sys.stderr)
+            return 1
         return 0
     except (EvaluationError, OSError, ValueError, json.JSONDecodeError) as error:
         print(f"Arabic OCR evaluation failed: {error}", file=sys.stderr)
@@ -151,6 +155,13 @@ def _load_manifest(path: Path, *, allow_inline: bool) -> dict[str, Any]:
     documents = manifest.get("documents")
     if not isinstance(documents, list):
         raise EvaluationError("The evaluation manifest must contain a documents array.")
+    held_out_splits = manifest.get("held_out_splits", [])
+    if (not isinstance(held_out_splits, list) or any(
+        not isinstance(split, str) or not split.strip() for split in held_out_splits
+    ) or len(set(held_out_splits)) != len(held_out_splits)):
+        raise EvaluationError("held_out_splits must be a list of unique, non-empty split labels.")
+    if not allow_inline and not held_out_splits:
+        raise EvaluationError("Real evaluation requires held_out_splits in the manifest.")
     normalization = manifest.get("normalization", {})
     if not isinstance(normalization, dict) or set(normalization) - _NORMALIZATION_OPTIONS:
         raise EvaluationError("The manifest contains unsupported normalization options.")
@@ -220,6 +231,9 @@ def _load_manifest(path: Path, *, allow_inline: bool) -> dict[str, Any]:
             "ground_truth_path": ground_truth_file,
             "ground_truth_pages_path": pages_file,
         })
+    unknown_held_out = set(held_out_splits) - {document["split"] for document in result}
+    if unknown_held_out:
+        raise EvaluationError("held_out_splits must refer to at least one manifest document each.")
     return {**manifest, "documents": result}
 
 
@@ -451,9 +465,8 @@ def _classify_all(
 
     records: list[dict[str, Any]] = []
     pairs: list[dict[str, str]] = []
-    normalization = manifest.get("normalization", {})
     for document in documents:
-        reference, reference_hash, page_gt, page_hash = _read_ground_truth(document)
+        _, reference_hash, _, page_hash = _read_ground_truth(document)
         record = _base_record(document, mode, arm, config_sha256, git_sha, reference_hash, page_hash)
         started = time.monotonic()
         try:
@@ -587,10 +600,6 @@ def _mock_run(
     return records, pairs
 
 
-def _classify_all_unused_placeholder():
-    """Kept out of command flow; declared nowhere in runtime behavior."""
-
-
 def _preflight_sample(
     records: list[dict[str, Any]],
     documents: list[dict[str, Any]],
@@ -617,7 +626,8 @@ def _preflight_gemini(document: dict[str, Any], runtime_settings: Any) -> list[d
         if pdf.page_count < 1:
             raise EvaluationError("The Gemini preflight PDF has no pages.")
         page = pdf.load_page(0)
-        pixmap = page.get_pixmap(matrix=fitz.Matrix(1, 1), colorspace=fitz.csRGB, alpha=False)
+        scale = runtime_settings.arabic_ocr_dpi / 72
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False)
         rendered = RenderedPage(page_number=1, png=pixmap.tobytes("png"))
     keys = runtime_settings.gemini_api_keys
     results: list[dict[str, Any]] = []
@@ -699,7 +709,7 @@ def _run_live_ocr(
     pairs: list[dict[str, str]] = []
     for record in records:
         if record.get("classification_status") != "complete" or record.get("predicted_route") != "arabic_printed":
-            if record.get("predicted_route") == "handwritten":
+            if record.get("predicted_route") == "arabic_handwritten":
                 record["ocr_status"] = "disabled_handwritten"
             else:
                 record["ocr_status"] = "not_run_for_route"
@@ -866,6 +876,14 @@ def _build_report(
     route_all["classification_failures"] = sum(record.get("classification_status") == "failed" for record in records)
     route_all["documents_requested"] = len(records)
     route_all["coverage"] = route_all["auto_routed"] / len(records) if records else None
+    held_out_splits = set(manifest.get("held_out_splits", []))
+    held_out_rows = [
+        {"truth": record["expected_route"], "prediction": record["predicted_route"]}
+        for record in records
+        if record["split"] in held_out_splits
+        and record.get("classification_status") == "complete"
+        and record.get("predicted_route") is not None
+    ]
     parse_failures_by_split = {
         split: sum(
             run.get("failure_kind") == "invalid_output"
@@ -899,6 +917,7 @@ def _build_report(
         "route_metrics": {
             "all": route_all,
             "by_split": route_metrics_by_split,
+            "held_out": score_routes(held_out_rows),
         },
         "ocr_metrics": {
             "all": aggregate_text_scores(pairs, manifest.get("normalization", {})),
@@ -966,6 +985,7 @@ def _build_report(
         },
         "tokens": _sum_usage_dicts([record.get("token_usage", {}) for record in records]),
         "request_attempt_count": sum(int(record.get("request_attempt_count", 0)) for record in records),
+        "provider_attempts": _provider_attempt_summary(records),
         "parse_failure_count": sum(parse_failures_by_split.values()),
         "parse_failure_count_by_split": parse_failures_by_split,
         "ocr_failure_count": sum(record.get("ocr_status") == "failed" for record in records),
@@ -989,6 +1009,34 @@ def _aggregate_provider_page_scores(records: list[dict[str, Any]]) -> dict[str, 
             "per_document": rows,
         }
         for provider, rows in sorted(pairs.items())
+    }
+
+
+def _provider_attempt_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    by_provider: dict[str, int] = defaultdict(int)
+    by_key_index: dict[str, int] = defaultdict(int)
+    retries = fallback_documents = 0
+    attempted_documents = sum(record.get("ocr_attempted") is True for record in records)
+    for record in records:
+        runs = record.get("provider_runs", [])
+        if any(run.get("provider") == "gemma4_arabic_fallback" for run in runs) and any(
+            run.get("provider") == "gemini_arabic_flash" and int(run.get("attempt_count", 0)) > 0
+            for run in runs
+        ):
+            fallback_documents += 1
+        for run in runs:
+            by_provider[str(run.get("provider"))] += int(run.get("attempt_count", 0))
+            retries += int(run.get("retry_count", 0))
+            for attempt in run.get("attempt_metadata", []):
+                key_index = attempt.get("key_index")
+                if isinstance(key_index, int) and key_index >= 0:
+                    by_key_index[str(key_index)] += 1
+    return {
+        "by_provider": dict(sorted(by_provider.items())),
+        "by_key_index": dict(sorted(by_key_index.items(), key=lambda item: int(item[0]))),
+        "retries": retries,
+        "fallback_documents": fallback_documents,
+        "fallback_frequency": fallback_documents / attempted_documents if attempted_documents else None,
     }
 
 

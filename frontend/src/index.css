@@ -1506,11 +1506,11 @@ body {
   /* A stripe plus a faint green wash: the bookmark is the one mark in the
      reader guaranteed to mean something on a return visit, so it should be
      findable at a glance, not only on careful reading. */
-  box-shadow: inset 3px 0 0 0 var(--ok);
+  border-inline-start: 3px solid var(--ok);
   background: color-mix(in oklab, var(--ok), transparent 94%);
   border-radius: 4px;
-  padding-left: 14px;
-  margin-left: -14px;
+  padding-inline-start: 14px;
+  margin-inline-start: -14px;
 }
 /* The ribbon is the shape half of that job: a wash is easy to scroll past,
    a silhouette in the margin is not. It is also the control that lifts the
@@ -1808,8 +1808,9 @@ body {
   font-size: 14px;
   line-height: 1.6;
   color: var(--muted);
-  border-left: 2px solid var(--border-strong);
-  padding: 2px 0 2px 14px;
+  border-inline-start: 2px solid var(--border-strong);
+  padding-block: 2px;
+  padding-inline-start: 14px;
 }
 .article-end {
   margin: 60px 0 0;

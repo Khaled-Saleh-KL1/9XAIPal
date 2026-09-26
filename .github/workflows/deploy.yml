@@ -210,8 +210,8 @@ jobs:
       # ⚠ `docker image prune` deliberately stays WITHOUT `-a`: `-a`
       # removes every image not backing a *running* container, and
       # deploy-once.sh's frontend build is a transient `docker run --rm
-      # node:20-alpine` that holds no container between deploys. `-a` would
-      # therefore delete node:20-alpine (and the pinned uv image, and
+      # node:22-alpine` that holds no container between deploys. `-a` would
+      # therefore delete node:22-alpine (and the pinned uv image, and
       # pgvector) right after every deploy used it, forcing a re-pull on the
       # next one. Measured: that is what happened when a manual `-a` prune
       # was run on this box on 2026-09-10 (and again on 2026-09-12).

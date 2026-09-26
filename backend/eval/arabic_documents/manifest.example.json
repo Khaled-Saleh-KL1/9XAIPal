@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "held_out_splits": ["synthetic_mock_only"],
   "normalization": {
     "strip_markdown": true,
     "normalize_alef": true,
