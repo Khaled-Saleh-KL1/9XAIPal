@@ -22,6 +22,8 @@ import { IconLink } from './components/Icons';
 import { displayTitle } from './lib/titles';
 import { stageProgress } from './lib/progress';
 
+const NO_WRITING_STYLE_ACTIONS: ArabicWritingStyle[] = [];
+
 function metaToPaper(m: PaperMeta): Paper {
   return {
     id: m.id,
@@ -115,7 +117,7 @@ export function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadErrorCode, setUploadErrorCode] = useState<string | null>(null);
   const [uploadActionRequired, setUploadActionRequired] = useState<string | null>(null);
-  const [uploadAllowedActions, setUploadAllowedActions] = useState<ArabicWritingStyle[]>([]);
+  const [uploadAllowedActions, setUploadAllowedActions] = useState<ArabicWritingStyle[]>(NO_WRITING_STYLE_ACTIONS);
   const [confirmingArabicStyle, setConfirmingArabicStyle] = useState(false);
   // The server declined the document because its processing queue is at its
   // ceiling (429 QUEUE_FULL). Nothing was stored, and the file (or URL) is
@@ -233,7 +235,11 @@ export function App() {
         }
         setUploadErrorCode(progress.error_code ?? null);
         setUploadActionRequired(progress.action_required ?? null);
-        setUploadAllowedActions(progress.allowed_actions ?? []);
+        // A shared empty array keeps React's bail-out: a poll with no Arabic
+        // choice to offer must not re-render the app every second.
+        setUploadAllowedActions(
+          progress.allowed_actions?.length ? progress.allowed_actions : NO_WRITING_STYLE_ACTIONS
+        );
         if (progress.extractor) {
           setUploadExtractor(progress.extractor);
         }
@@ -262,7 +268,7 @@ export function App() {
     setUploadError(null);
     setUploadErrorCode(null);
     setUploadActionRequired(null);
-    setUploadAllowedActions([]);
+    setUploadAllowedActions(NO_WRITING_STYLE_ACTIONS);
     setUploadQueueFull(null);
     setUploadExtractor(null);
     setUploadKind(kind);
@@ -303,7 +309,7 @@ export function App() {
     setUploadError(null);
     setUploadErrorCode(null);
     setUploadActionRequired(null);
-    setUploadAllowedActions([]);
+    setUploadAllowedActions(NO_WRITING_STYLE_ACTIONS);
     setUploadExtractor(null);
     // Optimistic: most links pasted through "Book"/"Research paper" do turn
     // out to be the PDF they look like, so the overlay shows that step list
@@ -426,7 +432,7 @@ export function App() {
     setUploadError(null);
     setUploadErrorCode(null);
     setUploadActionRequired(null);
-    setUploadAllowedActions([]);
+    setUploadAllowedActions(NO_WRITING_STYLE_ACTIONS);
     setUploadQueueFull(null);
     requestLibraryRefresh();
     refreshPapers();
@@ -442,7 +448,7 @@ export function App() {
       setUploadError(result.message || null);
       setUploadErrorCode(result.error_code ?? null);
       setUploadActionRequired(null);
-      setUploadAllowedActions([]);
+      setUploadAllowedActions(NO_WRITING_STYLE_ACTIONS);
       setUploadStatus(result.status === 'failed' ? 'failed' : 'queued');
       requestLibraryRefresh();
       refreshPapers();
