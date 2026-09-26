@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 import fitz
 import httpx
 
+from app.core import tracing
 from app.core.config import settings
 from app.extraction.arabic_types import (
     ClassificationDecision,
@@ -374,6 +375,7 @@ def _parse_votes(content: object, images: Sequence[ClassificationImage]) -> list
     return parsed
 
 
+@tracing.traced("classify.vision", tracing.LLM, record_args=False)
 def call_local_router(
     images: Sequence[ClassificationImage],
     phase: str,
@@ -729,6 +731,7 @@ def aggregate_votes(
     )
 
 
+@tracing.traced("classify.document", tracing.CHAIN)
 def classify_document(
     pdf_path: Path,
     vision_call: VisionCall | None = None,

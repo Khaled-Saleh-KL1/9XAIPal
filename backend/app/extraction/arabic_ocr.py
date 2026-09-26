@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import fitz
 
+from app.core import tracing
 from app.core.config import Settings, settings
 from app.core.logging import get_logger
 from app.extraction.arabic_adapter import (
@@ -81,6 +82,7 @@ class ArabicOcrBatchInvalid(ArabicExtractionFailed):
         super().__init__(f"Gemma Arabic OCR page {page_number} failed output validation.")
 
 
+@tracing.traced("extract.arabic", tracing.CHAIN)
 def extract_arabic_document(
     *,
     pdf_path: Path,

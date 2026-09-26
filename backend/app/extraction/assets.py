@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 from typing import Optional
 
+from app.core import tracing
 from app.core.paths import images_dir
 from app.core.logging import get_logger
 
@@ -35,6 +36,8 @@ def move_asset_to_storage(
 
     shutil.copy2(source_path, dest_path)
     logger.info(f"Stored asset: {dest_path}")
+
+    tracing.add_event("asset_moved", source=source_path.name, stored=relative_path)
 
     return {
         "asset_type": asset_type,

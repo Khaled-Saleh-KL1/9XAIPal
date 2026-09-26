@@ -18,7 +18,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
+from app.core import tracing
 from app.core.logging import get_logger
+from app.extraction.tracing_hooks import chunks_output
 from app.extraction.normalizer import (
     degrade_inline_math,
     estimate_tokens,
@@ -985,6 +987,7 @@ def _split_equation_fences(raw: str) -> tuple[str, str]:
     return s[2:close].strip(), s[close + 2:].strip()
 
 
+@tracing.traced("chunk", tracing.CHAIN, output=chunks_output)
 def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
     """Build typed chunks from MinerU's content_list.json.
 
@@ -1279,6 +1282,7 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
     return _scrub_chunks(_renumber_sequences(chunks))
 
 
+@tracing.traced("chunk.markdown", tracing.CHAIN, record_args=False, output=chunks_output)
 def create_chunks_from_markdown(markdown_content: str) -> list[dict]:
     """Fallback chunker for when content_list.json is unavailable.
 
@@ -1583,6 +1587,7 @@ def _snap_to_drawn_box(page, base):
     return grown
 
 
+@tracing.traced("code_crops", tracing.CHAIN, record_args=False)
 def crop_code_blocks(chunks: list[dict], pdf_path: Path, images_dir: Path) -> int:
     """Generate a page-crop image for every literal-code chunk, so the
     reader can see the listing exactly as the page printed it.

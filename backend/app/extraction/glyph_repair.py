@@ -60,6 +60,7 @@ import unicodedata
 from pathlib import Path
 from typing import Optional
 
+from app.core import tracing
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -440,6 +441,7 @@ def repair_merged_words(text: str, pdftext: str, genuine: set) -> tuple[str, int
     return _WORD_RE.sub(sub, text), count
 
 
+@tracing.traced("glyph_repair", tracing.CHAIN, record_args=False)
 def repair_chunks(chunks: list[dict], pdf_path: Path) -> int:
     """Repair every damaged chunk in place. Returns the characters recovered.
 

@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from app.core import tracing
 from app.core.config import Settings, settings
 from app.core.logging import get_logger
 from app.extraction.arabic_adapter import parse_complete_page_prefix
@@ -86,6 +87,7 @@ class GemmaArabicFallback:
         self.settings = settings
         self.http_client_factory = http_client_factory
 
+    @tracing.traced("llm.gemma_ocr", tracing.LLM, record_args=False)
     def generate_page(
         self,
         page: RenderedPage,

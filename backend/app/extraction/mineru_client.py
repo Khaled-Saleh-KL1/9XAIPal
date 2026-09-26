@@ -33,9 +33,11 @@ from typing import Callable, Optional
 
 import fitz  # PyMuPDF (only used by the degraded fallback)
 
+from app.core import tracing
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.paths import extracted_dir, logs_dir
+from app.extraction.tracing_hooks import images_output
 
 logger = get_logger(__name__)
 
@@ -60,6 +62,7 @@ EXTRACTOR_MINERU = "mineru"
 EXTRACTOR_PYMUPDF = "pymupdf_fallback"
 
 
+@tracing.traced("extract.mineru", tracing.CHAIN)
 def extract_pdf_sync(
     pdf_path: Path,
     document_id: str,
@@ -533,6 +536,7 @@ def find_content_list(output_dir: Path) -> Optional[Path]:
     return max(candidates, key=lambda f: f.stat().st_size)
 
 
+@tracing.traced("assets.find", tracing.CHAIN, output=images_output)
 def find_images(output_dir: Path) -> list[Path]:
     """Find all extracted figure/table images in MinerU's output."""
     exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}

@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core import tracing
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.paths import images_dir
@@ -133,6 +134,7 @@ def _get_surrounding_text(session: Session, document_id: UUID, center_seq: int, 
     return "\n\n".join(texts)[:4000]
 
 
+@tracing.traced("figure_descriptions", tracing.CHAIN)
 def generate_figure_descriptions_sync(
     session: Session,
     document_id: UUID,

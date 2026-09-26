@@ -57,8 +57,9 @@ import httpx
 import trafilatura
 from lxml import html as lxml_html
 
-from app.core import circuit_breaker
+from app.core import circuit_breaker, tracing
 from app.core.logging import get_logger
+from app.extraction.tracing_hooks import article_output
 from app.core.net_safety import (
     TooManyRedirectsError,
     UnsafeRedirectError,
@@ -624,6 +625,7 @@ def try_tavily_extract_fallback(url: str) -> Optional[ArticleExtraction]:
     return ArticleExtraction(title=title, markdown=markdown, asset_map=asset_map)
 
 
+@tracing.traced("article.fetch", tracing.TOOL, output=article_output)
 def extract_article(url: str) -> ArticleExtraction:
     """Fetch `url` and extract its readable content.
 
@@ -815,6 +817,7 @@ def splice_videos_into_markdown(markdown: str, html: str) -> str:
     return markdown
 
 
+@tracing.traced("article.extract", tracing.CHAIN, input=lambda html, url: {"url": url, "html_chars": len(html)}, output=article_output)
 def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     """Extract readable content from already-fetched HTML."""
     # Before anything reads the HTML: point every <img> at the real image
