@@ -39,10 +39,12 @@ def batch_prompt(_pages: Sequence[RenderedPage]) -> str:
 
     return (
         "Transcribe every visible page verbatim in its original language. "
-        "Preserve reading order, paragraphs, headings, and tables in Markdown. "
-        "For Arabic or mixed Arabic/English pages, preserve logical RTL reading order; "
+        "Output paragraphs, headings, lists, tables, displayed equations, and captions in Markdown. "
+        "For Arabic or mixed Arabic/English pages, read the rightmost column top to bottom, "
+        "then each column to the left through the leftmost column, each top to bottom; "
         "keep English spans and numerals in their original order. "
-        "Do not translate, summarize, infer, or repair text. "
+        "Do not translate, summarize, infer, perform spelling correction, invent diacritics, "
+        "or modernize historical spelling. "
         "Mark illegible text as [غير واضح]. "
         "Wrap each page exactly with <!-- PAGE:n --> and <!-- END_PAGE:n --> "
         "markers, replacing n with that page's number shown before its image."

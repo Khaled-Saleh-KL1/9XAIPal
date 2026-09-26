@@ -22,6 +22,10 @@ _DISPLAY_MATH_RE = re.compile(
     r"\\begin\{(?:equation\*?|align\*?|gather\*?|displaymath)\}"
     r"[\s\S]+?\\end\{(?:equation\*?|align\*?|gather\*?|displaymath)\}",
 )
+_EQUATION_ENV_RE = re.compile(
+    r"\\begin\{(equation\*?|align\*?|gather\*?|displaymath)\}"
+    r"([\s\S]+?)\\end\{\1\}\Z"
+)
 _MATH_FENCE_LANGUAGES = {"math", "latex", "tex", "equation", "display-math"}
 _MARKDOWN = MarkdownIt("gfm-like", {"html": True, "linkify": False})
 
@@ -175,10 +179,9 @@ def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
         if token.type == "fence":
             content = token.content.strip()
             language = token.info.strip().split(maxsplit=1)[0].lower() if token.info.strip() else ""
-            if content and (
-                language in _MATH_FENCE_LANGUAGES or _DISPLAY_MATH_RE.search(content)
-            ):
-                result.append({"type": "equation", "text": content})
+            normalized_math = _canonical_display_math(content)
+            if content and (language in _MATH_FENCE_LANGUAGES or normalized_math):
+                result.append({"type": "equation", "text": normalized_math or content})
             else:
                 raw = _source_for_token(token.map, source_lines)
                 if raw:
@@ -208,9 +211,26 @@ def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
 
 
 def _paragraph_blocks(content: str) -> list[dict[str, Any]]:
-    if _DISPLAY_MATH_RE.search(content):
-        return [{"type": "equation", "text": content}]
+    normalized_math = _canonical_display_math(content)
+    if normalized_math is not None:
+        return [{"type": "equation", "text": normalized_math}]
     return [{"type": "text", "text": content}] if content else []
+
+
+def _canonical_display_math(content: str) -> str | None:
+    text = content.strip()
+    if not _DISPLAY_MATH_RE.fullmatch(text):
+        return None
+    if text.startswith("$$"):
+        return text
+    if text.startswith(r"\["):
+        body = text[2:-2].strip()
+    else:
+        match = _EQUATION_ENV_RE.fullmatch(text)
+        if match is None:
+            return None
+        body = match.group(2).strip()
+    return f"$$\n{body}\n$$"
 
 
 def _html_blocks(content: str) -> list[dict[str, Any]]:
@@ -227,12 +247,17 @@ def _html_blocks(content: str) -> list[dict[str, Any]]:
             blocks.append({"type": "text", "text": before})
         table_html = match.group(0).strip()
         captions = _CAPTION_RE.findall(table_html)
-        for caption in captions:
-            text = unescape(_HTML_TAG_RE.sub("", caption)).strip()
-            if text:
-                blocks.append({"type": "text", "text": text})
+        caption_texts = [
+            text
+            for caption in captions
+            if (text := unescape(_HTML_TAG_RE.sub("", caption)).strip())
+        ]
         table_body = _CAPTION_RE.sub("", table_html).strip()
-        blocks.append({"type": "table", "table_body": table_body})
+        blocks.append({
+            "type": "table",
+            "table_body": table_body,
+            "table_caption": caption_texts,
+        })
         cursor = match.end()
     after = unescape(content[cursor:].strip())
     if after:

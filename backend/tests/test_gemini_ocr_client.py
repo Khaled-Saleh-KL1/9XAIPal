@@ -233,11 +233,14 @@ def test_request_uses_low_thinking_high_resolution_and_page_image_parts(fake_cli
     assert models.last_config.max_output_tokens == 1234
     assert models.last_config.thinking_config.thinking_level == types.ThinkingLevel.LOW
     assert models.last_config.media_resolution is None
-    assert [part.text for part in models.last_contents if part.text] == [
-        "Transcribe every visible page verbatim in its original language. Preserve reading order, paragraphs, headings, and tables in Markdown. For Arabic or mixed Arabic/English pages, preserve logical RTL reading order; keep English spans and numerals in their original order. Do not translate, summarize, infer, or repair text. Mark illegible text as [غير واضح]. Wrap each page exactly with <!-- PAGE:n --> and <!-- END_PAGE:n --> markers, replacing n with that page's number shown before its image.",
-        "PAGE 1",
-        "PAGE 2",
-    ]
+    prompt = models.last_contents[0].text
+    assert [part.text for part in models.last_contents[1:] if part.text] == ["PAGE 1", "PAGE 2"]
+    for instruction in (
+        "rightmost column", "top to bottom", "leftmost", "Do not translate",
+        "summarize", "spelling correction", "diacritics", "historical spelling",
+        "headings", "lists", "tables", "displayed equations", "captions", "[غير واضح]",
+    ):
+        assert instruction in prompt
     image_parts = [part for part in models.last_contents if part.inline_data]
     assert len(image_parts) == 2
     assert all(part.inline_data.mime_type == "image/png" for part in image_parts)

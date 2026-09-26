@@ -146,6 +146,13 @@ def test_fallback_request_is_direct_ollama_chat_with_absolute_page_and_png():
     assert payload["options"]["temperature"] == 0
     assert payload["options"]["num_predict"] == 1234
     assert "PAGE:12" in payload["messages"][0]["content"]
+    prompt = payload["messages"][0]["content"]
+    for instruction in (
+        "rightmost column", "top to bottom", "leftmost", "Do not translate",
+        "summarize", "spelling correction", "diacritics", "historical spelling",
+        "headings", "lists", "tables", "displayed equations", "captions", "[غير واضح]",
+    ):
+        assert instruction in prompt
     assert payload["messages"][0]["images"] == [base64.b64encode(b"png-bytes").decode()]
     assert result.text == page_section(12, "عنوان")
     assert result.usage.prompt_tokens == 7

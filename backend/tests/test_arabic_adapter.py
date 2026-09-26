@@ -141,14 +141,34 @@ def test_html_table_is_kept_as_table_body():
     assert blocks[0]["table_body"] == html
 
 
-def test_html_table_caption_is_preserved_as_text():
+def test_html_table_caption_is_attached_to_table_for_chunker():
     html = "<table><caption>جدول النتائج</caption><tr><td>قيمة</td></tr></table>"
 
     blocks = pages_to_content_list([ocr_page(1, html)])
 
-    assert [block["type"] for block in blocks] == ["text", "table"]
-    assert blocks[0]["text"] == "جدول النتائج"
-    assert "<caption>" not in blocks[1]["table_body"]
+    assert [block["type"] for block in blocks] == ["table"]
+    assert blocks[0]["table_caption"] == ["جدول النتائج"]
+    assert "<caption>" not in blocks[0]["table_body"]
+
+
+def test_inline_display_math_does_not_swallow_surrounding_arabic_prose():
+    blocks = pages_to_content_list([
+        ocr_page(1, "هذا نص عربي قبل المعادلة $$x=1$$ ثم يستمر النص العربي بعدها.")
+    ])
+
+    assert [block["type"] for block in blocks] == ["text"]
+    assert blocks[0]["text"] == "هذا نص عربي قبل المعادلة $$x=1$$ ثم يستمر النص العربي بعدها."
+
+
+@pytest.mark.parametrize(
+    "source",
+    [r"\[x=1\]", r"\begin{equation}x=1\end{equation}"],
+)
+def test_display_math_delimiters_are_normalized_for_chunker(source):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+
+    assert [block["type"] for block in blocks] == ["equation"]
+    assert blocks[0]["text"] == "$$\nx=1\n$$"
 
 
 def test_nested_list_text_is_not_lost():
