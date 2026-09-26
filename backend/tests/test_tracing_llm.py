@@ -38,8 +38,7 @@ def test_sync_attempt_records_model_messages_answer_and_tokens(spans, monkeypatc
     assert s.attributes["llm.provider"] == "ollama"
     assert s.attributes["llm.input_messages.0.message.content"] == "q?"
     assert s.attributes["llm.output_messages.0.message.content"] == "answer"
-    # Token counts are recorded in the span (attributes are set), though tracing module redacts them as a security measure
-    assert "llm.token_count.prompt" in s.attributes
+    assert s.attributes["llm.token_count.prompt"] == 12
     assert "llm.token_count.completion" in s.attributes
     assert "nvapi-secret" not in " ".join(str(v) for v in s.attributes.values())
 
@@ -61,5 +60,4 @@ def test_stream_attempt_forwards_every_event_and_records_the_answer(spans, monke
     assert [e.get("text") for e in events[:2]] == ["He", "llo"]
     s = [s for s in spans.get_finished_spans() if s.name == "llm.chat"][0]
     assert s.attributes["llm.output_messages.0.message.content"] == "Hello"
-    # Token counts are recorded in the span (attributes are set), though tracing module redacts them as a security measure
-    assert "llm.token_count.completion" in s.attributes
+    assert s.attributes["llm.token_count.completion"] == 2

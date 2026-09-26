@@ -33,7 +33,12 @@ EMBEDDING = "EMBEDDING"
 
 _MAX_ITEMS = 20
 _CHUNK_TEXT_CHARS = 2000
-_REDACT = ("authorization", "api_key", "apikey", "password", "secret", "token", "cookie")
+# Whole-segment redaction: a key is split on '.', '_', '-', ' ' and redacted
+# when a segment matches one of these outright, or two consecutive segments
+# spell "api key", or the LAST segment is exactly "token" (so `hf_token` and
+# `access_token` redact, but `token_count`, `max_tokens`, `prompt_tokens` —
+# whose last segment is "count"/"tokens", not "token" — do not).
+_REDACT_SEGMENTS = frozenset({"authorization", "password", "passwd", "secret", "cookie", "apikey"})
 _SKIP_ARGS = {"self", "cls", "session", "db", "request"}
 _TRUNCATED = "…[truncated]"
 
@@ -132,7 +137,14 @@ def _tracer():
 
 def _redacted(key: Any) -> bool:
     lowered = str(key).lower()
-    return any(marker in lowered for marker in _REDACT)
+    for sep in (".", "-", " "):
+        lowered = lowered.replace(sep, "_")
+    segments = [s for s in lowered.split("_") if s]
+    if any(segment in _REDACT_SEGMENTS for segment in segments):
+        return True
+    if any(a == "api" and b == "key" for a, b in zip(segments, segments[1:])):
+        return True
+    return bool(segments) and segments[-1] == "token"
 
 
 def jsonable(value: Any, _depth: int = 0) -> Any:

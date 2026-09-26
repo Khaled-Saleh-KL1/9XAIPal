@@ -196,6 +196,37 @@ def test_redaction_reaches_nested_values(spans):
     assert "[redacted]" in exported
 
 
+def test_token_count_keys_are_not_redacted_and_keep_integer_values(spans):
+    with tracing.span("usage"):
+        tracing.set_attributes(**{
+            "llm.token_count.prompt": 12,
+            "llm.token_count.completion": 2,
+            "max_tokens": 4096,
+            "prompt_tokens": 12,
+        })
+
+    s = _by_name(spans, "usage")
+    assert s.attributes["llm.token_count.prompt"] == 12
+    assert s.attributes["llm.token_count.completion"] == 2
+    assert s.attributes["max_tokens"] == 4096
+    assert s.attributes["prompt_tokens"] == 12
+
+
+def test_token_like_secret_keys_are_still_redacted(spans):
+    with tracing.span("secrets"):
+        tracing.set_attributes(**{
+            "hf_token": "hf_abc123",
+            "access_token": "abc123",
+            "OLLAMA_API_KEY": "sk-abc",
+            "x-api-key": "sk-def",
+            "Cookie": "session=abc",
+        })
+
+    s = _by_name(spans, "secrets")
+    for key in ("hf_token", "access_token", "OLLAMA_API_KEY", "x-api-key", "Cookie"):
+        assert s.attributes[key] == "[redacted]"
+
+
 def test_bytes_and_images_are_never_recorded(spans):
     @tracing.traced("image")
     def image(png):
