@@ -1506,11 +1506,23 @@ body {
   /* A stripe plus a faint green wash: the bookmark is the one mark in the
      reader guaranteed to mean something on a return visit, so it should be
      findable at a glance, not only on careful reading. */
-  border-inline-start: 3px solid var(--ok);
+  box-shadow: inset 3px 0 0 0 var(--ok);
   background: color-mix(in oklab, var(--ok), transparent 94%);
   border-radius: 4px;
-  padding-inline-start: 14px;
-  margin-inline-start: -14px;
+  padding-left: 14px;
+  margin-left: -14px;
+}
+/* An RTL document mirrors both margin marks to the right-hand side. The LTR
+   rules above stay as they were, so English renders pixel-identically. */
+[dir="rtl"] .article-block.is-tinted {
+  box-shadow: 14px 0 0 -12px var(--accent);
+}
+[dir="rtl"] .article-block.is-bookmarked {
+  box-shadow: inset -3px 0 0 0 var(--ok);
+  padding-left: 0;
+  margin-left: 0;
+  padding-right: 14px;
+  margin-right: -14px;
 }
 /* The ribbon is the shape half of that job: a wash is easy to scroll past,
    a silhouette in the margin is not. It is also the control that lifts the
