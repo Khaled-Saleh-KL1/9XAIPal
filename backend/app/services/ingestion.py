@@ -113,16 +113,18 @@ async def update_job_status(
     sets = ["status = :status"]
     params: dict = {"id": job_id, "status": status}
 
-    if status in ("extracting", "chunking", "embedding", "summarizing"):
+    if status in ("extracting", "chunking", "embedding") and error_message is None:
         sets.append("started_at = COALESCE(started_at, NOW())")
     if status in ("complete", "failed"):
         sets.append("completed_at = NOW()")
-    if status == "failed":
-        sets.extend(["error_message = :error_message", "error_code = :error_code"])
-        params["error_message"] = error_message
+    if error_message:
+        sets.append("error_message = :error")
+        params["error"] = error_message
+    # Only a typed Arabic failure names the column; every other update is the
+    # statement main issues, so it never depends on the Arabic migration.
+    if error_code:
+        sets.append("error_code = :error_code")
         params["error_code"] = error_code
-    else:
-        sets.extend(["error_message = NULL", "error_code = NULL"])
 
     await session.execute(
         text(f"UPDATE ingestion_jobs SET {', '.join(sets)} WHERE id = :id"),

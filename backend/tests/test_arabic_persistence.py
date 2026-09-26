@@ -95,7 +95,7 @@ async def test_requeue_rejects_a_nonfailed_job(db_session):
 
 
 @pytest.mark.asyncio
-async def test_async_status_writer_sets_and_clears_typed_failure(db_session):
+async def test_async_status_writer_sets_typed_failure_and_requeue_clears_it(db_session):
     job_id = await _insert_job_async(db_session)
     await update_job_status(
         db_session, job_id, "failed", error_message="Quota exhausted",
@@ -109,7 +109,9 @@ async def test_async_status_writer_sets_and_clears_typed_failure(db_session):
         "error_message": "Quota exhausted",
     }
 
-    await update_job_status(db_session, job_id, "extracting")
+    # A typed failure leaves "failed" only through requeue_failed_job, which
+    # clears it; the shared status writer itself keeps main's semantics.
+    await requeue_failed_job(db_session, job_id)
     active = (await db_session.execute(text(
         "SELECT error_code, error_message FROM ingestion_jobs WHERE id=:id"
     ), {"id": job_id})).mappings().one()
@@ -158,7 +160,7 @@ async def test_document_list_exposes_arabic_metadata_and_latest_job_error(db_ses
     assert response.job_error_message == "Not available"
 
 
-def test_sync_status_writer_sets_and_clears_typed_failure(db_session_sync):
+def test_sync_status_writer_sets_typed_failure(db_session_sync):
     job_id = _insert_job_sync(db_session_sync)
     update_job_status_sync(
         db_session_sync, job_id, "failed", error_message="Quota exhausted",
@@ -171,9 +173,3 @@ def test_sync_status_writer_sets_and_clears_typed_failure(db_session_sync):
         "error_code": "OCR_QUOTA_EXHAUSTED",
         "error_message": "Quota exhausted",
     }
-
-    update_job_status_sync(db_session_sync, job_id, "extracting")
-    active = db_session_sync.execute(text(
-        "SELECT error_code, error_message FROM ingestion_jobs WHERE id=:id"
-    ), {"id": job_id}).mappings().one()
-    assert dict(active) == {"error_code": None, "error_message": None}

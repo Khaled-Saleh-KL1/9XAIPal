@@ -135,16 +135,18 @@ def update_job_status_sync(
     sets = ["status = :status", "progress_fraction = NULL"]
     params = {"id": job_id, "status": status}
 
-    if status in ("extracting", "chunking", "embedding", "summarizing"):
+    if status in ("extracting", "chunking", "embedding") and error_message is None:
         sets.append("started_at = COALESCE(started_at, NOW())")
     if status in ("complete", "failed"):
         sets.append("completed_at = NOW()")
-    if status == "failed":
-        sets.extend(["error_message = :error_message", "error_code = :error_code"])
-        params["error_message"] = error_message
+    if error_message:
+        sets.append("error_message = :error")
+        params["error"] = error_message
+    # Only a typed Arabic failure names the column; every other update is the
+    # statement main issues, so it never depends on the Arabic migration.
+    if error_code:
+        sets.append("error_code = :error_code")
         params["error_code"] = error_code
-    else:
-        sets.extend(["error_message = NULL", "error_code = NULL"])
 
     session.execute(
         text(f"UPDATE ingestion_jobs SET {', '.join(sets)} WHERE id = :id"),
@@ -852,7 +854,7 @@ def _handle_ingestion_failure(session: Session, document_id: UUID, job_id: UUID,
             job_id,
             JobStatus.FAILED,
             error_message=safe_error,
-            error_code=getattr(exc, "error_code", None),
+            error_code=exc.error_code if isinstance(exc, ArabicRoutingError) else None,
         )
         update_document_status_sync(session, document_id, "failed", error_message=safe_error)
         session.commit()

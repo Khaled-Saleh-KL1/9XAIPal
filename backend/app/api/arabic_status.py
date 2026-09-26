@@ -25,10 +25,12 @@ def document_error_fields(document: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "error_code": error_code,
+        # Arabic states carry their message on the job; everything else keeps
+        # main's field, the document's own error_message, unchanged.
         "error_message": (
             document.get("job_error_message") or document.get("error_message")
             if error_code in _ARABIC_ERROR_CODES
-            else document.get("error_message") or document.get("job_error_message")
+            else document.get("error_message")
         ),
         "action_required": action_required,
         "allowed_actions": allowed_actions,
