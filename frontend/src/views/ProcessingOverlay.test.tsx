@@ -7,6 +7,18 @@ const file = { name: 'arabic.pdf', size: '1.2 MB', pages: 0 };
 const noop = () => {};
 
 describe('ProcessingOverlay Arabic states', () => {
+  it('shows local classifier failure as an actionable alert', () => {
+    render(
+      <ProcessingOverlay
+        file={file}
+        status="failed"
+        errorCode="arabic_classifier_unavailable"
+        onClose={noop}
+        onCancel={noop}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Start Ollama');
+  });
   it('keeps the full handwritten-unavailable message in a blocking alert', () => {
     const message =
       'Handwritten Arabic extraction is unavailable. This deployment does not have a billing-enabled account with Gemini Pro access; printed Arabic documents can still be processed.';

@@ -3,12 +3,19 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+import fitz
 from sqlalchemy import text
 from unittest.mock import MagicMock
 
 from app.extraction import pipeline_sync
+from app.extraction.arabic_classifier import (
+    ArabicClassifierInputError,
+    ArabicClassifierResponseInvalid,
+    ArabicClassifierUnavailable,
+)
 from app.extraction.arabic_types import (
     ArabicOcrPage,
+    ArabicRoutingError,
     ArabicStyleConfirmationRequired,
     ClassificationDecision,
     DocumentRoute,
@@ -127,6 +134,16 @@ def _run(session, tmp_path, monkeypatch, document_id, job_id):
     return pdf_path
 
 
+def _write_pdf_with_text(path, content):
+    document = fitz.open()
+    page = document.new_page()
+    if content:
+        page.insert_text((72, 72), content)
+    document.save(path)
+    document.close()
+    return path
+
+
 def _stored_document(session, document_id):
     return session.execute(
         text(
@@ -177,6 +194,99 @@ def test_english_route_calls_existing_resolver_only(db_session_sync, tmp_path, m
     assert stored["detected_language"] == "english"
     assert stored["text_direction"] == "ltr"
     assert stored["classification_source"] == "automatic"
+
+
+def test_classifier_failure_on_clear_english_text_layer_continues_to_mineru(
+    db_session_sync, tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    classifier = MagicMock(
+        side_effect=ArabicClassifierUnavailable("secret document text from model")
+    )
+    monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_with_text(tmp_path / "english.pdf", "This is a clear English article with enough text.")
+
+    pipeline_sync.run_pipeline_sync(
+        db_session_sync,
+        document_id=document_id,
+        job_id=job_id,
+        pdf_path=pdf_path,
+    )
+
+    classifier.assert_called_once()
+    mocks.resolver.assert_called_once()
+    mocks.arabic_extractor.assert_not_called()
+    assert "secret document text" not in caplog.text
+    stored = _stored_document(db_session_sync, document_id)
+    assert stored["detected_language"] == "english"
+    assert stored["text_direction"] == "ltr"
+
+
+@pytest.mark.parametrize(
+    "classifier_error",
+    [
+        ArabicClassifierUnavailable("local classifier unavailable"),
+        ArabicClassifierResponseInvalid("bad local response"),
+        ArabicClassifierInputError("unreadable classifier input"),
+    ],
+)
+def test_classifier_failure_on_scanned_document_is_typed_and_actionable(
+    db_session_sync, tmp_path, monkeypatch, classifier_error
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    classifier = MagicMock(side_effect=classifier_error)
+    monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_with_text(tmp_path / "scan.pdf", "")
+
+    with pytest.raises(ArabicRoutingError) as raised:
+        pipeline_sync.run_pipeline_sync(
+            db_session_sync,
+            document_id=document_id,
+            job_id=job_id,
+            pdf_path=pdf_path,
+        )
+
+    assert raised.value.error_code == "arabic_classifier_unavailable"
+    assert "Ollama" in raised.value.public_message
+    assert "model" in raised.value.public_message.lower()
+    mocks.resolver.assert_not_called()
+    mocks.arabic_extractor.assert_not_called()
+    job = db_session_sync.execute(
+        text("SELECT error_code, error_message FROM ingestion_jobs WHERE id=:id"),
+        {"id": job_id},
+    ).mappings().one()
+    assert job["error_code"] == "arabic_classifier_unavailable"
+    assert "Ollama" in job["error_message"]
+
+
+def test_classification_read_transaction_is_closed_before_classifier_call(
+    db_session_sync, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    transaction_states = []
+
+    def classify(_pdf_path):
+        transaction_states.append(db_session_sync.in_transaction())
+        return _decision(DocumentRoute.ENGLISH, "english", "unknown", "ltr", 1.0)
+
+    monkeypatch.setattr(pipeline_sync, "classify_document", classify)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_with_text(tmp_path / "english.pdf", "This is a clear English article with enough text.")
+
+    pipeline_sync.run_pipeline_sync(
+        db_session_sync,
+        document_id=document_id,
+        job_id=job_id,
+        pdf_path=pdf_path,
+    )
+
+    assert transaction_states == [False]
+    mocks.resolver.assert_called_once()
 
 
 @pytest.mark.parametrize("language", ["arabic", "mixed"])

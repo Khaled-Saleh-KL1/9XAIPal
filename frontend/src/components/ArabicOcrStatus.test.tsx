@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { ArabicOcrStatus } from './ArabicOcrStatus';
 
 describe('ArabicOcrStatus', () => {
+  it('shows local classifier failure as an actionable alert', () => {
+    render(<ArabicOcrStatus errorCode="arabic_classifier_unavailable" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Start Ollama');
+  });
   it('keeps handwritten unavailability visible in the library', () => {
     render(
       <ArabicOcrStatus

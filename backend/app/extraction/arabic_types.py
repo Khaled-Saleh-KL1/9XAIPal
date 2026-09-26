@@ -33,6 +33,19 @@ class ArabicStyleConfirmationRequired(ArabicRoutingError):
         super().__init__(self.public_message)
 
 
+class ArabicClassifierUnavailableError(ArabicRoutingError):
+    """The local language/style classifier could not safely route the file."""
+
+    error_code = "arabic_classifier_unavailable"
+    public_message = (
+        "The local document classifier could not identify this file. "
+        "Start Ollama and make sure the configured vision model is available, then retry."
+    )
+
+    def __init__(self) -> None:
+        super().__init__(self.public_message)
+
+
 class HandwrittenArabicUnavailable(ArabicRoutingError):
     """Handwritten Arabic is detected but Gemini Pro billing is unavailable."""
 

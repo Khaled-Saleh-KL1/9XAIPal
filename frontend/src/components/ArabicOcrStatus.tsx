@@ -17,14 +17,16 @@ export function ArabicOcrStatus({
   confirmationPending = false,
   onConfirmWritingStyle,
 }: Props) {
-  if (errorCode === 'handwritten_arabic_unavailable') {
+  if (errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_classifier_unavailable') {
     return (
       <div
         className="mx-3 mb-3 rounded-md px-3 py-2 text-[12px] leading-relaxed sm:mx-4"
         role="alert"
         style={{ background: 'var(--bg-2)', border: '1px solid var(--border-strong)', color: 'var(--fg)' }}
       >
-        {errorMessage || 'Handwritten Arabic extraction is unavailable on this deployment.'}
+        {errorMessage || (errorCode === 'arabic_classifier_unavailable'
+          ? 'Start Ollama and make sure the configured vision model is available, then retry.'
+          : 'Handwritten Arabic extraction is unavailable on this deployment.')}
       </div>
     );
   }

@@ -174,6 +174,7 @@ export function ProcessingOverlay({
   const declined = status === 'queue_full';
   const allowedActions = allowedActionsInput ?? [];
   const handwrittenUnavailable = errorCode === 'handwritten_arabic_unavailable';
+  const classifierUnavailable = errorCode === 'arabic_classifier_unavailable';
   const needsWritingStyleConfirmation =
     actionRequired === 'confirm_arabic_writing_style' && allowedActions.length > 0;
 
@@ -270,13 +271,15 @@ export function ProcessingOverlay({
           </div>
         </div>
 
-        {handwrittenUnavailable && (
+        {(handwrittenUnavailable || classifierUnavailable) && (
           <div
             className="mx-7 mb-5 rounded-md px-4 py-3 text-[13px] leading-relaxed"
             role="alert"
             style={{ background: 'var(--bg-2)', border: '1px solid var(--border-strong)', color: 'var(--fg)' }}
           >
-            {errorMessage || 'Handwritten Arabic extraction is unavailable on this deployment.'}
+            {errorMessage || (classifierUnavailable
+              ? 'Start Ollama and make sure the configured vision model is available, then retry.'
+              : 'Handwritten Arabic extraction is unavailable on this deployment.')}
           </div>
         )}
 

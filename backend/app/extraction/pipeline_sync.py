@@ -32,10 +32,17 @@ from app.extraction.assets import move_asset_to_storage
 from app.extraction.glyph_repair import repair_chunks
 from app.extraction.jobs import JobStatus
 from app.extraction.vlm_client import extract_via_vlm
-from app.extraction.arabic_classifier import classify_document
+from app.extraction.arabic_classifier import (
+    ArabicClassifierInputError,
+    ArabicClassifierResponseInvalid,
+    ArabicClassifierUnavailable,
+    classify_document,
+    inspect_text_layers,
+)
 from app.extraction.arabic_fallback import GemmaArabicFallback
 from app.extraction.arabic_ocr import extract_arabic_document
 from app.extraction.arabic_types import (
+    ArabicClassifierUnavailableError,
     ArabicGeminiProNotConfigured,
     ArabicRoutingError,
     ArabicStyleConfirmationRequired,
@@ -382,7 +389,37 @@ def _get_arabic_classification(
         {"id": document_id},
     ).mappings().first()
     confirmed = _classification_from_user_confirmation(row)
-    return confirmed if confirmed is not None else classify_document(pdf_path)
+    # SELECT opens a transaction. Release the connection before local vision
+    # inference, which can take many seconds or fail while Ollama is down.
+    session.commit()
+    if confirmed is not None:
+        return confirmed
+    try:
+        return classify_document(pdf_path)
+    except (
+        ArabicClassifierUnavailable,
+        ArabicClassifierResponseInvalid,
+        ArabicClassifierInputError,
+    ) as exc:
+        # A readable English text layer remains authoritative even when the
+        # local vision classifier fails. Do not log the exception text: model
+        # responses may contain document content.
+        try:
+            evidence = inspect_text_layers(pdf_path)
+        except ArabicClassifierInputError:
+            evidence = None
+        if evidence is not None and evidence.all_pages_are_clear_english:
+            logger.warning("Local document classifier failed; using clear English text layer (%s)", type(exc).__name__)
+            return ClassificationDecision(
+                route=DocumentRoute.ENGLISH,
+                language="english",
+                writing_style="unknown",
+                text_direction="ltr",
+                confidence=1.0,
+                classifier_model="text_layer",
+            )
+        logger.warning("Local document classifier failed for a document requiring vision (%s)", type(exc).__name__)
+        raise ArabicClassifierUnavailableError() from exc
 
 
 def _persist_arabic_classification(
