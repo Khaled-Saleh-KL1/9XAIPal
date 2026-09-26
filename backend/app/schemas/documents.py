@@ -1,6 +1,6 @@
 """Document schemas."""
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -18,10 +18,22 @@ class DocumentResponse(BaseModel):
     page_count: Optional[int] = None
     status: str
     error_message: Optional[str] = None
+    error_code: Optional[str] = None
+    action_required: Optional[str] = None
+    allowed_actions: list[str] = Field(default_factory=list)
+    job_error_code: Optional[str] = None
+    job_error_message: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     extractor: Optional[str] = None  # "mineru", "pymupdf_fallback", "trafilatura", or "tavily-extract"
     doc_kind: Optional[str] = None  # "book" (chapter navigation), "paper" (linear), or "article"
+    detected_language: Optional[str] = None
+    detected_writing_style: Optional[str] = None
+    text_direction: Optional[str] = None
+    classifier_model: Optional[str] = None
+    classification_confidence: Optional[float] = None
+    classification_source: Optional[str] = None
+    ocr_provider_summary: Optional[list[dict[str, Any]]] = None
     # The page a doc_kind='article' row was imported from; None otherwise.
     source_url: Optional[str] = None
     # Fine-grained processing stage from the most-recent ingestion job
@@ -57,6 +69,12 @@ class RenameDocumentRequest(BaseModel):
     title: Optional[str] = None
 
 
+class ArabicWritingStyleConfirmation(BaseModel):
+    """Human choice used only after Arabic style classification abstains."""
+
+    writing_style: Literal["printed", "handwritten"]
+
+
 class SetDoneRequest(BaseModel):
     # True shelves the document as done (in `folder`, or at the top of the
     # Done area when None/blank); False puts it back on the reading shelf and
@@ -88,4 +106,3 @@ class DocumentUploadResponse(BaseModel):
     filename: str
     status: str
     message: str
-

@@ -815,7 +815,8 @@ body {
   font-size: 0.85em;
   white-space: pre;
 }
-.md-body ul, .md-body ol { padding-left: 1.4em; margin: 0.6em 0; }
+.md-body { text-align: start; }
+.md-body ul, .md-body ol { padding-inline-start: 1.4em; margin: 0.6em 0; }
 /* Videos an article actually contains, recovered by the extractor and
    emitted as raw <video> (see services/article_extraction.py). Sized like
    a figure so one can never overflow the reading column. */
@@ -843,7 +844,7 @@ body {
 .md-body th, .md-body td {
   border: 1px solid var(--border-strong);
   padding: 14px 18px;
-  text-align: left;
+  text-align: start;
   vertical-align: top;
 }
 .md-body th { font-weight: 600; background: var(--bg-2); }
@@ -1511,6 +1512,18 @@ body {
   padding-left: 14px;
   margin-left: -14px;
 }
+/* An RTL document mirrors both margin marks to the right-hand side. The LTR
+   rules above stay as they were, so English renders pixel-identically. */
+[dir="rtl"] .article-block.is-tinted {
+  box-shadow: 14px 0 0 -12px var(--accent);
+}
+[dir="rtl"] .article-block.is-bookmarked {
+  box-shadow: inset -3px 0 0 0 var(--ok);
+  padding-left: 0;
+  margin-left: 0;
+  padding-right: 14px;
+  margin-right: -14px;
+}
 /* The ribbon is the shape half of that job: a wash is easy to scroll past,
    a silhouette in the margin is not. It is also the control that lifts the
    mark, which is where you would reach for it anyway. */
@@ -1717,7 +1730,7 @@ body {
 .article-table .article-table-scroll td {
   border: 1px solid var(--border);
   padding: 10px 14px;
-  text-align: left;
+  text-align: start;
   vertical-align: top;
   /* A cell of prose in a table of numbers would otherwise stretch the table to
      the width of its longest sentence and make every scroll a long one. */
@@ -1807,8 +1820,9 @@ body {
   font-size: 14px;
   line-height: 1.6;
   color: var(--muted);
-  border-left: 2px solid var(--border-strong);
-  padding: 2px 0 2px 14px;
+  border-inline-start: 2px solid var(--border-strong);
+  padding-block: 2px;
+  padding-inline-start: 14px;
 }
 .article-end {
   margin: 60px 0 0;

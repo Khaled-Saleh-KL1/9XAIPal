@@ -293,7 +293,7 @@ nginx config is installed by hand — a change there produces a `::notice::` in 
 `--delete` so it survives between runs). Measured: a frontend-only deploy is ~30 s; a docs-only
 one is the health check.
 
-The deploy job also builds the frontend in a throwaway `node:20-alpine` container with
+The deploy job also builds the frontend in a throwaway `node:22-alpine` container with
 `--user "$(id -u):$(id -g)"`: without it, files written by the containerized build come out
 root-owned on the host, which then blocks the *next* run's `actions/checkout` cleanup (and any
 manual `rm -rf`) with a permission error.
@@ -438,7 +438,7 @@ merge, whatever changed. Two things throw the cache away:
 ### Do not
 
 `docker system prune -a` / `docker builder prune -a` / `docker image prune -a`: `-a` also removes
-the images the deploy pulls (`node:20-alpine`, `ghcr.io/astral-sh/uv`, `pgvector/pgvector`, …) and
+the images the deploy pulls (`node:22-alpine`, `ghcr.io/astral-sh/uv`, `pgvector/pgvector`, …) and
 every cache record including the uv mount, and the next deploy re-downloads all of it (this
 happened on 2026-09-10 and 2026-09-12). `docker system df -v` shows what is left; the row of type
 `exec.cachemount` is the one to keep.

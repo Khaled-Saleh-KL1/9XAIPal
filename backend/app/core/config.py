@@ -2,6 +2,7 @@
 
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,6 +63,53 @@ class Settings(BaseSettings):
     extractor_vlm_dpi: int = 180
     extractor_vlm_max_pages: int = 0        # 0 = unlimited; guardrail for credit use
     extractor_vlm_concurrency: int = 3      # bounded to respect Ollama Cloud rate limits
+
+    # ── Arabic document OCR (feature-flagged; separate from English extractors) ──
+    arabic_ocr_enabled: bool = False
+    arabic_handwritten_ocr_enabled: bool = False
+    arabic_router_model: str = "qwen3-vl:4b-instruct"
+    arabic_router_base_url: str = "http://localhost:11434"
+    gemini_api_keys_raw: str = Field(
+        default="",
+        validation_alias=AliasChoices("GEMINI_API_KEYS", "gemini_api_keys_raw"),
+    )
+    arabic_gemini_printed_model: str = "gemini-3.7-flash"
+    arabic_gemini_printed_thinking_level: Literal["low"] = "low"
+    arabic_gemini_timeout_seconds: float = Field(default=120.0, gt=0)
+    arabic_gemini_retry_after_max_seconds: float = Field(default=10.0, ge=0, le=60)
+    arabic_gemini_handwritten_model: str = "gemini-3.1-pro-preview"
+    arabic_gemma_fallback_model: str = "gemma4:31b-cloud"
+    arabic_gemma_base_url: str = "https://ollama.com"
+    arabic_gemma_api_keys_raw: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ARABIC_GEMMA_API_KEYS",
+            "OLLAMA_API_KEY",
+            "arabic_gemma_api_keys_raw",
+        ),
+    )
+    arabic_ocr_dpi: int = 200
+    arabic_gemini_media_resolution: Literal["HIGH"] = "HIGH"
+    arabic_ocr_single_request_max_pages: int = 4
+    arabic_ocr_batch_pages: int = 4
+    arabic_ocr_max_output_tokens: int = 32768
+    arabic_min_body_char_count: int = 20
+    arabic_min_body_letter_share: float = Field(default=0.10, ge=0, le=1)
+    # With the local classifier down, a document with no substantive Arabic
+    # text still goes to MinerU when at least this share of its pages has a
+    # clear English text layer (the rest being blank, figure, or scan pages).
+    arabic_classifier_outage_english_page_share: float = Field(default=0.80, gt=0, le=1)
+    arabic_classifier_confidence_min: float = Field(default=0.80, ge=0, le=1)
+    arabic_handwritten_confidence_min: float = Field(default=0.97, ge=0, le=1)
+    arabic_classifier_batch_pages: int = 8
+
+    @property
+    def gemini_api_keys(self) -> list[str]:
+        return self._split_keys(self.gemini_api_keys_raw)
+
+    @property
+    def arabic_gemma_api_keys(self) -> list[str]:
+        return self._split_keys(self.arabic_gemma_api_keys_raw)
 
     # ── LLM provider ────────────────────────────────────────────────────────
     # Which API answers questions. "auto" (default): use Ollama when it is

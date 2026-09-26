@@ -30,6 +30,14 @@ export interface Paper {
   // folder it sits in (null = the top of the Done area). See PaperMeta.
   doneAt: string | null;
   doneFolder: string | null;
+  arabicErrorCode?: string | null;
+  arabicErrorMessage?: string | null;
+  arabicActionRequired?: string | null;
+  arabicAllowedActions?: Array<'printed' | 'handwritten'>;
+  detectedLanguage?: string | null;
+  detectedWritingStyle?: string | null;
+  textDirection?: string | null;
+  ocrProviderSummary?: Array<{ provider: string; pages: number[] }> | null;
 }
 
 /**

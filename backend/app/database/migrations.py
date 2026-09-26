@@ -98,6 +98,14 @@ async def _ensure_recent_columns() -> None:
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_updated_at TIMESTAMPTZ",
         # Extractor provenance ("mineru" / "pymupdf_fallback") shown in the UI.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS extractor TEXT",
+        # Arabic routing, writing-style, direction, and OCR provenance.
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS detected_language TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS detected_writing_style TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS text_direction TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS classifier_model TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS classification_confidence REAL",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS classification_source TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS ocr_provider_summary JSONB",
         # Book vs. research-paper reading mode (chosen at upload). 'article' is
         # a third value, for an imported web page.
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_kind TEXT NOT NULL DEFAULT 'paper'",
@@ -173,6 +181,8 @@ async def _ensure_recent_columns() -> None:
         # Fraction (0-1) of progress within the current job status, e.g. pages
         # extracted so far / total pages while status='extracting'.
         "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_fraction REAL",
+        # Stable machine-readable failure codes, separate from display text.
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS error_code TEXT",
         # Raw HTML snapshot status for doc_kind='article' rows (see
         # raw_snapshot_pages below). Never affects `status` — a queued/failed
         # snapshot crawl doesn't block reading or chatting with the article.

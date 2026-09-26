@@ -1,0 +1,55 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import { ArabicOcrStatus } from './ArabicOcrStatus';
+
+describe('ArabicOcrStatus', () => {
+  it('shows local classifier failure as an actionable alert', () => {
+    render(<ArabicOcrStatus errorCode="arabic_classifier_unavailable" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Start Ollama');
+  });
+  it('keeps handwritten unavailability visible in the library', () => {
+    render(
+      <ArabicOcrStatus
+        errorCode="handwritten_arabic_unavailable"
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.');
+  });
+
+  it('also blocks the Pro-not-configured state', () => {
+    render(<ArabicOcrStatus errorCode="arabic_gemini_pro_not_configured" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('No text was extracted');
+  });
+
+  it('sends the selected writing style', async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <ArabicOcrStatus
+        errorCode="arabic_style_confirmation_required"
+        actionRequired="confirm_arabic_writing_style"
+        allowedActions={['printed', 'handwritten']}
+        onConfirmWritingStyle={onConfirm}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Printed' }));
+    expect(onConfirm).toHaveBeenCalledWith('printed');
+  });
+
+  it('disables the style choices while the library action is pending', () => {
+    render(
+      <ArabicOcrStatus
+        actionRequired="confirm_arabic_writing_style"
+        allowedActions={['printed', 'handwritten']}
+        confirmationPending
+        onConfirmWritingStyle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Printed' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Handwritten' })).toBeDisabled();
+  });
+});

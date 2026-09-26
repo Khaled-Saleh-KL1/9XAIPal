@@ -95,4 +95,4 @@ RUN MINERU_API_CLIENT=$(python -c "import mineru.cli.api_client, os; print(os.pa
 COPY app ./app
 
 # Compose overrides this, but default to the worker so the image is self-describing.
-CMD ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info"]
+CMD ["sh", "-c", "python -m app.extraction.arabic_capability && exec celery -A app.core.celery_app worker --loglevel=info"]

@@ -14,7 +14,8 @@ import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
 import { stageProgress } from '../lib/progress';
-import { listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type PaperMeta } from '../api';
+import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
+import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -48,6 +49,14 @@ function metaToPaper(m: PaperMeta): Paper {
     docKind: m.doc_kind ?? null,
     doneAt: m.done_at ?? null,
     doneFolder: m.done_folder ?? null,
+    arabicErrorCode: m.error_code ?? null,
+    arabicErrorMessage: m.error_message ?? null,
+    arabicActionRequired: m.action_required ?? null,
+    arabicAllowedActions: m.allowed_actions ?? [],
+    detectedLanguage: m.detected_language ?? null,
+    detectedWritingStyle: m.detected_writing_style ?? null,
+    textDirection: m.text_direction ?? null,
+    ocrProviderSummary: m.ocr_provider_summary ?? null,
     tags: [],
   };
 }
@@ -65,6 +74,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const [loadError, setLoadError] = useState<string | null>(null);
   /** The paper whose title is being edited inline, if any. */
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [arabicConfirmationPendingId, setArabicConfirmationPendingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // A confirmation ("… is done — filed under X") is read once and should
   // then get out of the way: it clears itself after 3 s. Errors do not — a
@@ -323,6 +333,25 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     }
   };
 
+  const confirmWritingStyle = async (paper: Paper, style: ArabicWritingStyle) => {
+    if (arabicConfirmationPendingId) return;
+    setArabicConfirmationPendingId(paper.id);
+    try {
+      const result = await confirmArabicWritingStyle(paper.id, style);
+      setNotice(result.message);
+      const metas = await listPapers();
+      setPapers(metas.map(metaToPaper));
+    } catch (error) {
+      const message = (error as Error).message || 'Could not confirm Arabic writing style.';
+      setPapers((previous) => previous.map((item) => item.id === paper.id
+        ? { ...item, arabicErrorMessage: message }
+        : item));
+      setNotice(message);
+    } finally {
+      setArabicConfirmationPendingId(null);
+    }
+  };
+
   /** Rename a Done-area folder on every paper in it, optimistically. */
   const commitFolderRename = async (from: string, next: string) => {
     setFolderRenaming(null);
@@ -425,6 +454,8 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     area,
     onShelve: () => setShelving(p),
     onUnshelve: () => void shelve(p, false, null),
+    onConfirmWritingStyle: (style: ArabicWritingStyle) => void confirmWritingStyle(p, style),
+    confirmationPending: arabicConfirmationPendingId === p.id,
   });
 
   return (
@@ -801,6 +832,8 @@ interface CardProps {
   onShelve: () => void;
   /** Done area only: straight back to the reading shelf, no panel. */
   onUnshelve: () => void;
+  onConfirmWritingStyle: (style: ArabicWritingStyle) => void;
+  confirmationPending: boolean;
 }
 
 /** The hover-revealed rename / shelf / delete set, shared by both layouts. */
@@ -883,6 +916,8 @@ function PaperCard({
   area,
   onShelve,
   onUnshelve,
+  onConfirmWritingStyle,
+  confirmationPending,
 }: CardProps) {
   const processing = isProcessing(paper);
   return (
@@ -942,6 +977,15 @@ function PaperCard({
           </div>
         </div>
       </div>
+
+      <ArabicOcrStatus
+        errorCode={paper.arabicErrorCode}
+        errorMessage={paper.arabicErrorMessage}
+        actionRequired={paper.arabicActionRequired}
+        allowedActions={paper.arabicAllowedActions}
+        confirmationPending={confirmationPending}
+        onConfirmWritingStyle={onConfirmWritingStyle}
+      />
 
       {!renaming && <CardActions area={area} onStartRename={onStartRename} onShelve={onShelve} onUnshelve={onUnshelve} onDelete={onDelete} />}
     </article>
@@ -1028,6 +1072,8 @@ function PaperRow({
   area,
   onShelve,
   onUnshelve,
+  onConfirmWritingStyle,
+  confirmationPending,
 }: CardProps) {
   const processing = isProcessing(paper);
   return (
@@ -1055,6 +1101,14 @@ function PaperRow({
             <span key={t} className="paper-tag">{t}</span>
           ))}
         </div>
+        <ArabicOcrStatus
+          errorCode={paper.arabicErrorCode}
+          errorMessage={paper.arabicErrorMessage}
+          actionRequired={paper.arabicActionRequired}
+          allowedActions={paper.arabicAllowedActions}
+          confirmationPending={confirmationPending}
+          onConfirmWritingStyle={onConfirmWritingStyle}
+        />
       </div>
       <div className="w-28 hidden sm:flex items-center gap-2">
         <ProgressBar paper={paper} />

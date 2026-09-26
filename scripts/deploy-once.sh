@@ -41,7 +41,7 @@ build_frontend() {
     -v "$DEPLOY_DIR/frontend:/src" \
     -v "$DEPLOY_DIR/backend/frontend-dist:/dist" \
     -w /src \
-    node:20-alpine \
+    node:22-alpine \
     sh -c '
       set -e
       lock_hash=$(sha256sum package-lock.json | cut -c1-64)
