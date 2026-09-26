@@ -93,6 +93,22 @@ def test_article_ingestion_task_span_records_job_id(spans):
     assert task_span.attributes["job.id"] == job
 
 
+def test_retried_task_span_records_retry_reason(spans):
+    task = _task()
+    tracing_celery._start(task_id="tRetry", task=task, args=(), kwargs={})
+    tracing_celery._retry(
+        sender=None,
+        request=SimpleNamespace(id="tRetry"),
+        reason=ValueError("temporary backend failure"),
+        einfo=None,
+    )
+    tracing_celery._end(task_id="tRetry", state="RETRY")
+
+    s = [s for s in spans.get_finished_spans() if s.name == "task:process_ingestion"][0]
+    assert s.attributes["celery.retried"] is True
+    assert "temporary backend failure" in s.attributes["celery.retry_reason"]
+
+
 def test_task_without_trace_header_starts_its_own_trace(spans):
     tracing_celery._start(task_id="t3", task=_task(headers={}), args=(), kwargs={})
     tracing_celery._end(task_id="t3", state="SUCCESS")

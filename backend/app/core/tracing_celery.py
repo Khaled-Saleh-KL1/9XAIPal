@@ -12,6 +12,7 @@ from celery.signals import (
     task_failure,
     task_postrun,
     task_prerun,
+    task_retry,
     task_revoked,
     worker_process_init,
 )
@@ -86,6 +87,26 @@ def _fail(task_id: str | None = None, exception: BaseException | None = None, **
             _open[task_id] = (manager, exception)
     except Exception as exc:  # noqa: BLE001
         tracing._warn("could not record task failure", exc)
+
+
+@task_retry.connect
+def _retry(request: Any = None, reason: Any = None, **_: Any) -> None:
+    """A retried task calls ``self.retry()`` and raises ``Retry``, which
+    ``task_failure`` does not fire for — so without this, a retried task's
+    span would close (via ``task_postrun``) looking exactly like success.
+    Tag the still-open span instead; its status still comes from ``_finish``
+    in ``tracing.span`` as usual, this only adds a marker + the reason.
+    """
+    try:
+        task_id = getattr(request, "id", None)
+        if task_id not in _open:
+            return
+        reason_text = str(reason)
+        if len(reason_text) > 2000:
+            reason_text = reason_text[:2000] + "…[truncated]"
+        tracing.set_attributes(**{"celery.retried": True, "celery.retry_reason": reason_text})
+    except Exception as exc:  # noqa: BLE001
+        tracing._warn("could not record task retry", exc)
 
 
 @task_postrun.connect
