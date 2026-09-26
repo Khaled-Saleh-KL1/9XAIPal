@@ -221,7 +221,7 @@ def generate_figure_descriptions_sync(
     )
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(_describe, jobs))
+        results = list(pool.map(tracing.carry_context(_describe), jobs))
     logger.info(
         f"[figure-describer] All {len(jobs)} VLM call(s) finished in "
         f"{time.time() - t0:.1f}s (concurrency={workers})"

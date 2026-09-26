@@ -489,3 +489,41 @@ def context_from_carrier(carrier: Any) -> Any:
     except Exception as exc:  # noqa: BLE001
         _warn("could not extract context", exc)
         return None
+
+
+def carry_context(fn: Callable) -> Callable:
+    """Wrap ``fn`` so a ``ThreadPoolExecutor`` worker inherits the calling
+    thread's current OTel context (pool threads do not inherit it on their
+    own, so a traced call made from one otherwise starts a new root trace).
+
+    When tracing is off, returns ``fn`` itself — the very same object — so
+    the disabled path is byte-identical to not wrapping at all.
+    """
+    if _tracer() is None:
+        return fn
+    try:
+        from opentelemetry import context as otel_context
+    except Exception as exc:  # noqa: BLE001
+        _warn("could not import context for carry_context", exc)
+        return fn
+
+    captured = otel_context.get_current()
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        token = None
+        try:
+            token = otel_context.attach(captured)
+        except Exception as exc:  # noqa: BLE001
+            _warn("could not attach carried context", exc)
+            token = None
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            if token is not None:
+                try:
+                    otel_context.detach(token)
+                except Exception as exc:  # noqa: BLE001
+                    _warn("could not detach carried context", exc)
+
+    return wrapper

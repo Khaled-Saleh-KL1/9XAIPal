@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -337,3 +338,46 @@ def test_record_input_output_set_value_and_mime_type_inside_a_span(spans):
     assert s.attributes["input.mime_type"] == "application/json"
     assert s.attributes["output.value"] == "done"
     assert s.attributes["output.mime_type"] == "text/plain"
+
+
+# --- carry_context: propagating context into a ThreadPoolExecutor -----------
+
+def test_carry_context_returns_same_function_when_tracing_disabled(monkeypatch):
+    tracing.reset_for_tests()
+    monkeypatch.setattr(tracing.settings, "trace_enabled", False)
+
+    def f(x):
+        return x
+
+    assert tracing.carry_context(f) is f
+
+
+def test_carry_context_nests_pool_spans_under_the_outer_span(spans):
+    @tracing.traced("child_call", kind=tracing.TOOL)
+    def work(x):
+        return x * 2
+
+    with tracing.span("outer") as outer:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            results = list(pool.map(tracing.carry_context(work), [1, 2, 3]))
+
+    assert results == [2, 4, 6]
+    children = [s for s in spans.get_finished_spans() if s.name == "child_call"]
+    assert len(children) == 3
+    for child in children:
+        assert child.context.trace_id == outer.get_span_context().trace_id
+        assert child.parent.span_id == outer.get_span_context().span_id
+
+
+def test_carry_context_propagates_exceptions_unchanged(spans):
+    class Boom(ValueError):
+        pass
+
+    def blow_up(x):
+        raise Boom("nope")
+
+    with tracing.span("outer"):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(tracing.carry_context(blow_up), 1)
+            with pytest.raises(Boom, match="nope"):
+                future.result()
