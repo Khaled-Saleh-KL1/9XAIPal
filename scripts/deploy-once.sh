@@ -71,7 +71,7 @@ case "$SCOPE" in
   full)
     echo "Building and restarting every container..."
     (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build)
-    ensure_phoenix
+    ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
     ;;
   both|backend)
     # Only the two services built from this repo. postgres, redis and
@@ -80,9 +80,13 @@ case "$SCOPE" in
     # intent explicit and the output short.
     echo "Rebuilding and restarting api + celery_worker..."
     (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build api celery_worker)
-    ensure_phoenix
+    ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
     ;;
-  frontend|none)
+  frontend)
+    echo "Building frontend..."
+    ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
+    ;;
+  none)
     echo "No container rebuilt or restarted (scope: $SCOPE)."
     ;;
   *)

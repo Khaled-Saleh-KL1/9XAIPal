@@ -164,4 +164,4 @@ docker stats 9xaipal-phoenix
 
 ## Verification
 
-Pending Task 7 results.
+Verified 2026-09-27 by running the real PDF ingestion pipeline from `main` and from this branch on 15 recorded MinerU outputs with their source PDFs (17,559 chunks, 4,203 image assets, one MinerU-failure case), replacing only the MinerU subprocess. Persisted chunks, assets, document and job rows, stored files and dispatched tasks were identical to `main` (random stored image filenames normalized) with tracing off, with tracing on (99 spans recorded to an in-memory exporter: ingest.pdf, chunk, glyph_repair, heading_repair, code_crops, assets.find, persist), and on the book (full-embedding) path.
