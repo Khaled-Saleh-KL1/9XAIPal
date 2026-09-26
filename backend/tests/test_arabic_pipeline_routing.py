@@ -263,6 +263,119 @@ def test_classifier_failure_on_scanned_document_is_typed_and_actionable(
     assert "Ollama" in job["error_message"]
 
 
+def _write_pdf_pages(path, pages):
+    document = fitz.open()
+    for content in pages:
+        page = document.new_page()
+        if content:
+            page.insert_text((72, 72), content)
+    document.save(path)
+    document.close()
+    return path
+
+
+_ENGLISH_PAGE = "This is a clear English article page with enough selectable body text."
+
+
+def _local_router_down(monkeypatch):
+    from app.extraction import arabic_classifier
+
+    def unavailable(*_args, **_kwargs):
+        raise ArabicClassifierUnavailable("local classifier unavailable")
+
+    monkeypatch.setattr(arabic_classifier, "call_local_router", unavailable)
+
+
+def test_classifier_outage_keeps_english_paper_with_a_blank_page_on_mineru(
+    db_session_sync, tmp_path, monkeypatch
+):
+    # The blank page has no text layer, so the real classifier must ask the
+    # local vision model about it. That call fails; the four clear English
+    # pages still make this an English paper.
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    _local_router_down(monkeypatch)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_pages(
+        tmp_path / "english-with-blank.pdf",
+        [_ENGLISH_PAGE, _ENGLISH_PAGE, "", _ENGLISH_PAGE, _ENGLISH_PAGE],
+    )
+
+    pipeline_sync.run_pipeline_sync(
+        db_session_sync,
+        document_id=document_id,
+        job_id=job_id,
+        pdf_path=pdf_path,
+    )
+
+    mocks.resolver.assert_called_once()
+    mocks.arabic_extractor.assert_not_called()
+    stored = _stored_document(db_session_sync, document_id)
+    assert stored["detected_language"] == "english"
+    assert stored["text_direction"] == "ltr"
+
+
+def test_classifier_outage_on_mostly_scanned_document_with_english_cover_is_typed(
+    db_session_sync, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    _local_router_down(monkeypatch)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_pages(
+        tmp_path / "cover-and-scans.pdf",
+        [_ENGLISH_PAGE, "", "", ""],
+    )
+
+    with pytest.raises(ArabicRoutingError) as raised:
+        pipeline_sync.run_pipeline_sync(
+            db_session_sync,
+            document_id=document_id,
+            job_id=job_id,
+            pdf_path=pdf_path,
+        )
+
+    assert raised.value.error_code == "arabic_classifier_unavailable"
+    mocks.resolver.assert_not_called()
+    mocks.arabic_extractor.assert_not_called()
+
+
+def test_classifier_outage_never_falls_back_to_english_with_substantive_arabic(
+    db_session_sync, tmp_path, monkeypatch
+):
+    # insert_text cannot draw Arabic glyphs, so inject the text-layer evidence.
+    from app.extraction.arabic_classifier import (
+        DocumentTextEvidence,
+        TextPageEvidence,
+    )
+
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        pipeline_sync,
+        "classify_document",
+        MagicMock(side_effect=ArabicClassifierUnavailable("down")),
+    )
+    evidence = DocumentTextEvidence(tuple(
+        TextPageEvidence(page_idx=index, arabic_chars=0, latin_chars=400)
+        for index in range(1, 10)
+    ) + (TextPageEvidence(page_idx=10, arabic_chars=400, latin_chars=0),))
+    monkeypatch.setattr(pipeline_sync, "inspect_text_layers", lambda _path: evidence)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_pages(tmp_path / "mostly-english.pdf", [_ENGLISH_PAGE])
+
+    with pytest.raises(ArabicRoutingError) as raised:
+        pipeline_sync.run_pipeline_sync(
+            db_session_sync,
+            document_id=document_id,
+            job_id=job_id,
+            pdf_path=pdf_path,
+        )
+
+    assert raised.value.error_code == "arabic_classifier_unavailable"
+    mocks.resolver.assert_not_called()
+
+
 def test_classification_read_transaction_is_closed_before_classifier_call(
     db_session_sync, tmp_path, monkeypatch
 ):
@@ -301,6 +414,10 @@ def test_printed_arabic_and_mixed_use_new_route_and_persist_summary(
         )
     )
     monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
+    from app.extraction import heading_repair
+
+    heading_spy = MagicMock()
+    monkeypatch.setattr(heading_repair, "repair_headings", heading_spy)
     document_id, job_id = _seed(db_session_sync)
 
     _run(db_session_sync, tmp_path, monkeypatch, document_id, job_id)
@@ -310,7 +427,9 @@ def test_printed_arabic_and_mixed_use_new_route_and_persist_summary(
     assert mocks.arabic_extractor.call_args.kwargs["classification"].language == language
     mocks.gemini_factory.assert_called_once()
     mocks.gemma_factory.assert_called_once()
+    # Both MinerU-specific repairs stay off Gemini/Gemma output (spec §2.8).
     mocks.repair.assert_not_called()
+    heading_spy.assert_not_called()
     stored = _stored_document(db_session_sync, document_id)
     assert stored["extractor"] == "gemini_arabic_flash"
     assert stored["detected_language"] == language

@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     arabic_ocr_max_output_tokens: int = 32768
     arabic_min_body_char_count: int = 20
     arabic_min_body_letter_share: float = Field(default=0.10, ge=0, le=1)
+    # With the local classifier down, a document with no substantive Arabic
+    # text still goes to MinerU when at least this share of its pages has a
+    # clear English text layer (the rest being blank, figure, or scan pages).
+    arabic_classifier_outage_english_page_share: float = Field(default=0.80, gt=0, le=1)
     arabic_classifier_confidence_min: float = Field(default=0.80, ge=0, le=1)
     arabic_handwritten_confidence_min: float = Field(default=0.97, ge=0, le=1)
     arabic_classifier_batch_pages: int = 8

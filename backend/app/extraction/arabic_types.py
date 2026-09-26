@@ -13,6 +13,25 @@ class DocumentRoute(str, Enum):
     ARABIC_STYLE_UNCERTAIN = "arabic_style_uncertain"
 
 
+# Whole-document `documents.extractor` values written by the Arabic route
+# (spec §11), including the reserved handwritten Pro value.
+ARABIC_OCR_EXTRACTORS = frozenset({
+    "gemini_arabic_flash",
+    "gemma4_arabic_fallback",
+    "gemini_gemma_arabic_hybrid",
+    "gemini_arabic_pro",
+})
+
+
+def mineru_repairs_apply(extractor: str | None) -> bool:
+    """Whether MinerU-specific glyph and heading repair may touch the chunks.
+
+    Gemini output is stored without correction and Gemma output has its own
+    provenance-gated repair (spec §2.8, §10), so neither goes through them.
+    """
+    return extractor not in ARABIC_OCR_EXTRACTORS
+
+
 class ArabicRoutingError(RuntimeError):
     """A safe, user-displayable failure raised before Arabic OCR begins."""
 

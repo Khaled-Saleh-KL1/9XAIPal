@@ -95,6 +95,22 @@ class DocumentTextEvidence:
         return all(page.has_clear_english_body for page in self.pages)
 
     @property
+    def is_english_without_vision(self) -> bool:
+        """English by text layer alone, for when the local classifier is down.
+
+        No page may carry substantive Arabic, and clear English pages must be
+        the configured share of the document; the remainder (blank, figure, or
+        scanned pages) cannot hide enough content to change the route.
+        """
+        if not self.pages or self.has_arabic_body:
+            return False
+        english_pages = sum(page.has_clear_english_body for page in self.pages)
+        return (
+            english_pages / len(self.pages)
+            >= settings.arabic_classifier_outage_english_page_share
+        )
+
+    @property
     def language(self) -> str:
         if self.has_arabic_body and self.has_latin_body:
             return "mixed"

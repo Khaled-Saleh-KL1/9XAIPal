@@ -41,7 +41,7 @@ from app.services.ingestion import (
     update_job_status as update_job_status_svc,
 )
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
-from app.extraction.arabic_types import HandwrittenArabicUnavailable
+from app.extraction.arabic_types import HandwrittenArabicUnavailable, mineru_repairs_apply
 from app.workers.tasks import (
     process_ingestion,
     process_article_ingestion,
@@ -860,7 +860,9 @@ async def rechunk_paper(
         code_blocks_cropped = 0
         headings_report: dict = {}
         source_pdf = documents_dir() / (doc.get("filename") or "")
-        if source_pdf.exists():
+        # Arabic OCR output is never put through the MinerU repairs — the
+        # same rule the ingestion pipeline applies (spec §2.8).
+        if source_pdf.exists() and mineru_repairs_apply(doc.get("extractor")):
             try:
                 glyphs_repaired = repair_chunks(chunks, source_pdf)
             except Exception:

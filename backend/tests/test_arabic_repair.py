@@ -148,3 +148,21 @@ def test_repetition_loop_is_rejected_not_deleted():
 
     with pytest.raises(GemmaOutputInvalid):
         repair_gemma_page(original, source_text="")
+
+
+@pytest.mark.parametrize(
+    ("extractor", "applies"),
+    [
+        ("mineru", True),
+        ("vlm", True),
+        (None, True),
+        ("gemini_arabic_flash", False),
+        ("gemma4_arabic_fallback", False),
+        ("gemini_gemma_arabic_hybrid", False),
+        ("gemini_arabic_pro", False),
+    ],
+)
+def test_mineru_repairs_apply_only_to_non_arabic_extractors(extractor, applies):
+    from app.extraction.arabic_types import mineru_repairs_apply
+
+    assert mineru_repairs_apply(extractor) is applies

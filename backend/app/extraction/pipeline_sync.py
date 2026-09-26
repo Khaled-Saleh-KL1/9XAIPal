@@ -51,6 +51,7 @@ from app.extraction.arabic_types import (
     ClassificationDecision,
     DocumentRoute,
     HandwrittenArabicUnavailable,
+    mineru_repairs_apply,
 )
 from app.extraction.gemini_ocr_client import GeminiOcrClient
 
@@ -410,7 +411,7 @@ def _get_arabic_classification(
             evidence = inspect_text_layers(pdf_path)
         except ArabicClassifierInputError:
             evidence = None
-        if evidence is not None and evidence.all_pages_are_clear_english:
+        if evidence is not None and evidence.is_english_without_vision:
             logger.warning("Local document classifier failed; using clear English text layer (%s)", type(exc).__name__)
             return ClassificationDecision(
                 route=DocumentRoute.ENGLISH,
@@ -582,11 +583,7 @@ def run_pipeline_sync(
         # U+FFFD wherever the paper used a Mathematical Alphanumeric Symbol
         # (𝑛, 𝑚, 𝑇 …); the PDF still knows, so we read it back.
         # See app/extraction/glyph_repair.py.
-        if extractor not in {
-            "gemini_arabic_flash",
-            "gemma4_arabic_fallback",
-            "gemini_gemma_arabic_hybrid",
-        }:
+        if mineru_repairs_apply(extractor):
             try:
                 repair_chunks(chunks, pdf_path)
             except Exception:
@@ -596,13 +593,15 @@ def run_pipeline_sync(
         # that are not headings; the PDF's own outline is the ground truth
         # when there is one. See app/extraction/heading_repair.py. Runs on
         # re-chunk too, so an existing book is repaired without MinerU.
-        try:
-            from app.extraction.heading_repair import repair_headings
-            from app.services.book_outline import read_pdf_outline
-            report = repair_headings(chunks, read_pdf_outline(pdf_path))
-            logger.info(f"[heading-repair] {document_id}: {report.as_dict()}")
-        except Exception:
-            logger.exception("[heading-repair] failed (non-fatal, chunks kept as-is)")
+        # Arabic OCR output keeps the headings the model wrote (spec §2.8).
+        if mineru_repairs_apply(extractor):
+            try:
+                from app.extraction.heading_repair import repair_headings
+                from app.services.book_outline import read_pdf_outline
+                report = repair_headings(chunks, read_pdf_outline(pdf_path))
+                logger.info(f"[heading-repair] {document_id}: {report.as_dict()}")
+            except Exception:
+                logger.exception("[heading-repair] failed (non-fatal, chunks kept as-is)")
 
         # Step 2c: A literal code/schema listing's exact whitespace and layout
         # is part of what it is showing, and MinerU never crops one the way
