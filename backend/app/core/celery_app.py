@@ -90,3 +90,7 @@ def _restore_interrupted_tasks(**_kwargs) -> None:
                 )
     except Exception as exc:  # never keep a worker from starting over this
         logger.exception(f"[celery] could not restore interrupted tasks: {exc}")
+
+
+# Trace propagation into tasks (no-op unless TRACE_ENABLED).
+import app.core.tracing_celery  # noqa: E402,F401
