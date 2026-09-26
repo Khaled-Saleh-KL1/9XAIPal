@@ -69,7 +69,7 @@ def _start(task_id: str | None = None, task: Any = None, args: tuple = (), kwarg
         args = tuple(args or ())
         if args:
             attributes["document.id"] = _uuid_or_none(args[0])
-        if short == "process_ingestion" and len(args) > 1:
+        if short in ("process_ingestion", "process_article_ingestion") and len(args) > 1:
             attributes["job.id"] = _uuid_or_none(args[1])
         manager = tracing.span(f"task:{short}", tracing.CHAIN, context=context, **attributes)
         manager.__enter__()

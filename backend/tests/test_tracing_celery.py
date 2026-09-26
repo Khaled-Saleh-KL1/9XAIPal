@@ -81,6 +81,18 @@ def test_revoked_task_closes_its_span_as_cancelled(spans):
     assert "tR" not in tracing_celery._open
 
 
+def test_article_ingestion_task_span_records_job_id(spans):
+    doc = "5ffce224-80ab-5d5a-b53f-462e57021237"
+    job = "7c3a9a9e-0000-4000-8000-000000000001"
+    task = _task(name="9xaipal.process_article_ingestion")
+
+    tracing_celery._start(task_id="task-1", task=task, args=(doc, job, "https://x"), kwargs={})
+    tracing_celery._end(task_id="task-1", state="SUCCESS")
+
+    task_span = [s for s in spans.get_finished_spans() if s.name == "task:process_article_ingestion"][0]
+    assert task_span.attributes["job.id"] == job
+
+
 def test_task_without_trace_header_starts_its_own_trace(spans):
     tracing_celery._start(task_id="t3", task=_task(headers={}), args=(), kwargs={})
     tracing_celery._end(task_id="t3", state="SUCCESS")
