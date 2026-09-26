@@ -69,11 +69,34 @@ remaining findings was incorrect. The fixes are separate commits by group:
 - Prose between two display equations stays a text block; display
   environments may still contain nested environments.
 
+- The evaluator scores spec §14 structural block retention (overall and per
+  block type, with type mismatches) and reading-order correctness (pairwise
+  order and longest in-order run) against an optional human-verified
+  `ground_truth_blocks_file`, using the same content list the chunker reads.
+
 The branch also integrates the newer `main` (#156–#159): document-deletion
 safeguards, heading repair, and the two-worker production setting. Both
 MinerU-specific repairs (glyph and heading) are skipped for Arabic OCR output
 at ingestion and on re-chunk, because Gemini output is stored uncorrected
 (spec §2.8). No merge to `main` or deployment occurred.
+
+## English pipeline isolation
+
+With `ARABIC_OCR_ENABLED=false` the English path issues the same statements as
+`main`: the shared job-status helpers keep main's rules and only name the new
+`error_code` column for a typed Arabic failure (so a worker that starts before
+the API's migration cannot fail an English job), `get_document` adds only the
+Arabic error columns, and `error_message` for non-Arabic documents is the
+document's own message as before. The only existing dependency whose locked
+version changed is `websockets` (17.1 → 16.1.1, required by `google-genai`;
+used only by uvicorn's optional WebSocket support, which the app does not use).
+
+Differential check: the real PDF pipeline was run by `main` and by this branch
+on 15 recorded MinerU outputs with their source PDFs (17,559 chunks, 4,203
+image assets, one MinerU-failure case), replacing only the MinerU subprocess.
+Persisted chunks, assets, document and job rows, stored files, and dispatched
+tasks were identical to `main` (random stored image filenames normalized) with
+the feature off, with it on, and on the book/full-embedding path.
 
 ## Automated verification
 
@@ -130,8 +153,6 @@ acceptance.
 - No accuracy claim can be derived from the committed synthetic manifest.
 - The requested zero-thinking behavior cannot be guaranteed with Gemini 3.7
   Flash; see Google's [official thinking-level table](https://ai.google.dev/gemini-api/docs/generate-content/thinking).
-- The evaluator does not yet score spec §14 structural block retention or
-  reading-order correctness; add them before the frozen-corpus run.
 - With two workers, two Arabic jobs can render 200 DPI pages and call the local
   classifier at once; include that in the VPS memory check the spec requires.
 - Merge only after human review and the frozen-corpus/browser acceptance gate.
