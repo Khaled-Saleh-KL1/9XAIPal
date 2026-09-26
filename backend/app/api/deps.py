@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.connection import async_session_factory
 from app.core.config import Settings, settings
+from app.core import tracing
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:
@@ -50,6 +51,11 @@ async def _resolve_session_user(request: Request, db: AsyncSession) -> dict | No
     return await user_repo.get_user_by_id(db, user_id)
 
 
+def _trace_user(user: dict) -> None:
+    """Tag the current request's trace with who made it (id only)."""
+    tracing.set_attributes(**{"user.id": str(user.get("id"))})
+
+
 async def get_current_user(
     request: Request, db: AsyncSession = Depends(get_db)
 ) -> dict:
@@ -76,6 +82,7 @@ async def get_current_user(
     if not admitted:
         raise NotAdmitted(queue_position)
 
+    _trace_user(user)
     return user
 
 

@@ -116,6 +116,32 @@ services:
       autoheal: "true"
 
   # ------------------------------------------------------------------
+  # Phoenix — pipeline trace viewer (docs/runbooks/pipeline-tracing.md).
+  # Loopback only; host nginx serves it at https://9xaipal-trace.kl1.site.
+  # ------------------------------------------------------------------
+  phoenix:
+    image: arizephoenix/phoenix:version-20.16.0-nonroot
+    container_name: 9xaipal-phoenix
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:6006:6006"
+    environment:
+      PHOENIX_SQL_DATABASE_URL: postgresql://${POSTGRES_USER:-9xaipal}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/phoenix
+      PHOENIX_ENABLE_AUTH: "true"
+      PHOENIX_SECRET: ${PHOENIX_SECRET:-}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:-}
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: ${PHOENIX_DEFAULT_RETENTION_POLICY_DAYS:-14}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  # ------------------------------------------------------------------
   # Celery worker — runs the ingestion pipeline. Builds from Dockerfile.mineru
   # for real local extraction (full table/equation/figure fidelity), same as
   # local dev.
@@ -142,6 +168,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
+      TRACE_ENABLED: ${TRACE_ENABLED:-false}
+      TRACE_MAX_TEXT_CHARS: ${TRACE_MAX_TEXT_CHARS:-8000}
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
        # ── AI: chat/vision on Ollama Cloud, embeddings on this host's Ollama ──
       OLLAMA_BASE_URL: https://ollama.com
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:?set OLLAMA_API_KEY in .env}
@@ -305,6 +335,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       REDIS_URL: redis://redis:6379/0
+      TRACE_ENABLED: ${TRACE_ENABLED:-false}
+      TRACE_MAX_TEXT_CHARS: ${TRACE_MAX_TEXT_CHARS:-8000}
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
        # ── AI: chat/vision on Ollama Cloud, embeddings on this host's Ollama ──
       OLLAMA_BASE_URL: https://ollama.com
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:?set OLLAMA_API_KEY in .env}

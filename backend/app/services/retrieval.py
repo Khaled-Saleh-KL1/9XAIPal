@@ -7,6 +7,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.core import tracing
+from app.chat.tracing_hooks import retrieval_output
 from app.database.repositories import embeddings as emb_repo
 from app.database.repositories import assets as asset_repo
 from app.database.pgvector import search_chunks_fulltext
@@ -19,6 +21,7 @@ logger = get_logger(__name__)
 _RRF_K = 60
 
 
+@tracing.traced("retrieve", tracing.RETRIEVER, output=retrieval_output)
 async def search_chunks(
     session: AsyncSession,
     query: str,
@@ -99,6 +102,7 @@ async def search_chunks(
     return results
 
 
+@tracing.traced("retrieve.figures", tracing.RETRIEVER, output=retrieval_output)
 async def search_figure_chunks(
     session: AsyncSession,
     query: str,

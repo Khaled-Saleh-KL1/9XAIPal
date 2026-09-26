@@ -13,6 +13,8 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core import tracing
+from app.chat.tracing_hooks import ask_stream_output
 from app.chat.router import route_prompt, RouterDecision
 from app.chat.guardrail import is_topic_allowed
 from app.chat.agent_tools import wants_outside_context
@@ -83,6 +85,7 @@ class _AskPrep:
     agent_steps: list[dict] = field(default_factory=list)
 
 
+@tracing.traced("prepare", tracing.CHAIN, output=lambda p: {"route": p.decision.context_type, "reason": p.decision.reason})
 async def _prepare_ask(
     session: AsyncSession,
     *,
@@ -479,6 +482,7 @@ async def _handle_blocked(session: AsyncSession, prep: _AskPrep) -> AskResponse:
     )
 
 
+@tracing.traced("research", tracing.CHAIN)
 async def _run_research_safely(prep: _AskPrep) -> Optional[dict]:
     """Run the iterative research agent; never raises."""
     try:
@@ -534,6 +538,7 @@ def _absorb_research(prep: _AskPrep, research_result: dict, answer: str) -> tupl
     return answer, f"Studied {src_count} sources across {iters} research iteration(s)"
 
 
+@tracing.traced("persist", tracing.CHAIN)
 async def _finalize_ask(
     session: AsyncSession,
     prep: _AskPrep,
@@ -639,6 +644,7 @@ async def _finalize_ask(
     )
 
 
+@tracing.traced("ask", tracing.CHAIN, output=lambda r: getattr(r, "answer", r))
 async def handle_ask(
     session: AsyncSession,
     *,
@@ -902,6 +908,7 @@ async def _stream_book_agent(
     yield _ask_response_event(resp)
 
 
+@tracing.traced("ask", tracing.CHAIN, output=ask_stream_output)
 async def handle_ask_stream(
     *,
     user_id: UUID,

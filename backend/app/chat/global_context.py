@@ -7,8 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.retrieval import search_chunks
 from app.database.repositories import assets as asset_repo
+from app.core import tracing
+from app.chat.tracing_hooks import context_output
 
 
+@tracing.traced("build_context.global", tracing.RETRIEVER, output=context_output)
 async def build_global_context(
     session: AsyncSession,
     *,

@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.llm.resolver import resolve_llm_sync
+from app.core import tracing
 from app.core.logging import get_logger
 from app.llm.client import chat_sync
 from app.llm.ollama_client import hash_prompt
@@ -299,6 +300,7 @@ def _store_section_summary(
     )
 
 
+@tracing.traced("summaries", tracing.CHAIN)
 def generate_and_store_section_summaries_sync(
     session: Session,
     document_id: UUID,

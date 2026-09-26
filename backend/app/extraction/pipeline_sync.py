@@ -13,9 +13,11 @@ from sqlalchemy import text, Table, MetaData, Column, String, Integer, JSON, ins
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PG_UUID
 from sqlalchemy.orm import Session
 
+from app.core import tracing
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.paths import assets_dir, documents_dir, ensure_storage_dirs, extracted_dir, images_dir
+from app.extraction.tracing_hooks import extractor_output
 from app.extraction.mineru_client import (
     extract_pdf_sync,
     find_markdown_output,
@@ -309,6 +311,7 @@ def clean_slate_sync(session: Session, document_id: UUID) -> None:
     )
 
 
+@tracing.traced("extract", tracing.CHAIN, output=extractor_output)
 def resolve_extractor(
     pdf_path: Path,
     output_dir: Path,
@@ -382,6 +385,7 @@ def _classification_from_user_confirmation(row) -> ClassificationDecision | None
     )
 
 
+@tracing.traced("classify", tracing.CHAIN)
 def _get_arabic_classification(
     session: Session, document_id: UUID, pdf_path: Path
 ) -> ClassificationDecision:
@@ -472,6 +476,7 @@ def _assert_document_exists(session: Session, document_id: UUID) -> None:
         raise DocumentDeleted(str(document_id))
 
 
+@tracing.traced("ingest.pdf", tracing.CHAIN, attributes=lambda session, **kw: {"document.id": str(kw.get("document_id")), "job.id": str(kw.get("job_id"))})
 def run_pipeline_sync(
     session: Session,
     *,
@@ -672,6 +677,7 @@ def run_pipeline_sync(
         raise e
 
 
+@tracing.traced("persist", tracing.CHAIN, input=lambda session, **kw: {k: kw.get(k) for k in ("document_id", "job_id", "page_count")} | {"chunks": len(kw.get("chunks") or []), "assets": len(kw.get("asset_map") or {})})
 def _finish_ingestion(
     session: Session,
     *,
@@ -984,6 +990,7 @@ def _adopt_pdf_from_url(
     )
 
 
+@tracing.traced("ingest.article", tracing.CHAIN)
 def run_article_pipeline_sync(
     session: Session,
     *,

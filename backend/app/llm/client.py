@@ -39,13 +39,46 @@ from typing import AsyncIterator, Optional
 import httpx
 
 from app.api.errors import ModelUnavailable
-from app.core import circuit_breaker
+from app.core import circuit_breaker, tracing
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.llm import ollama_client, resolver
 from app.llm.resolver import LLMTarget
 
 logger = get_logger(__name__)
+
+
+def _llm_start_attributes(target, messages, *, resolved, **_kwargs) -> dict:
+    return {
+        "llm.model_name": resolved,
+        "llm.provider": getattr(target, "provider", None),
+        "llm.invocation_parameters": tracing.to_text({
+            "temperature": _kwargs.get("temperature"),
+            "num_predict": _kwargs.get("num_predict"),
+            "images": f"<{len(_kwargs['images'])} image(s)>" if _kwargs.get("images") else None,
+        }),
+        **tracing.llm_messages_attributes("llm.input_messages", messages),
+    }
+
+
+def _llm_result(result) -> dict:
+    # Streams hand the wrapper the list of events; plain calls hand it a dict.
+    if isinstance(result, list):
+        done = next((e for e in reversed(result) if isinstance(e, dict) and e.get("type") == "done"), {})
+        text = done.get("content") or "".join(e.get("text", "") for e in result if isinstance(e, dict) and e.get("type") == "token")
+        result = {**done, "content": text}
+    tracing.set_attributes(**{
+        "llm.output_messages.0.message.role": "assistant",
+        "llm.output_messages.0.message.content": tracing.to_text(result.get("content", "")),
+        "llm.token_count.prompt": result.get("prompt_tokens"),
+        "llm.token_count.completion": result.get("completion_tokens"),
+        "llm.finish_reason": result.get("finish_reason"),
+        "llm.response_model": result.get("model"),
+    })
+    return result.get("content", "")
+
+
+_LLM_TRACE_HOOKS = {"record_args": False, "attributes": _llm_start_attributes, "output": _llm_result}
 
 # Cloud inference can be slow on long prompts, but nowhere near local-26B slow.
 _CLOUD_TIMEOUT = httpx.Timeout(connect=15.0, read=600.0, write=30.0, pool=10.0)
@@ -167,6 +200,7 @@ def _openai_payload(
 # Async chat (FastAPI request path)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@tracing.traced("llm.chat", tracing.LLM, **_LLM_TRACE_HOOKS)
 async def _chat_once(
     target: LLMTarget,
     messages: list[dict],
@@ -258,6 +292,7 @@ async def chat(
     raise last_error or ModelUnavailable("no LLM provider configured")
 
 
+@tracing.traced("llm.chat", tracing.LLM, **_LLM_TRACE_HOOKS)
 async def _stream_once(
     target: LLMTarget,
     messages: list[dict],
@@ -402,6 +437,7 @@ async def is_available() -> bool:
 # Sync chat (Celery workers: summaries, figure descriptions)
 # ─────────────────────────────────────────────────────────────────────────────
 
+@tracing.traced("llm.chat", tracing.LLM, **_LLM_TRACE_HOOKS)
 def _chat_sync_once(
     target: LLMTarget,
     messages: list[dict],

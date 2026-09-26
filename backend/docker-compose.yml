@@ -36,6 +36,22 @@ services:
     labels:
       autoheal: "true"
 
+  phoenix:
+    image: arizephoenix/phoenix:version-20.16.0-nonroot
+    container_name: 9xaipal-phoenix
+    restart: unless-stopped
+    ports:
+      - "6006:6006"
+    environment:
+      PHOENIX_SQL_DATABASE_URL: postgresql://${POSTGRES_USER:-9xaipal}:${POSTGRES_PASSWORD:-9xaipal_dev_password}@postgres:5432/phoenix
+      PHOENIX_ENABLE_AUTH: "false"
+      PHOENIX_SECRET: ${PHOENIX_SECRET:-}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:-}
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: ${PHOENIX_DEFAULT_RETENTION_POLICY_DAYS:-14}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   celery_worker:
     build:
       context: .
@@ -49,6 +65,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
       REDIS_URL: redis://redis:6379/0
+      TRACE_ENABLED: ${TRACE_ENABLED:-false}
+      TRACE_MAX_TEXT_CHARS: ${TRACE_MAX_TEXT_CHARS:-8000}
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
       # Ollama runs on the host network (or wherever you point it). Do NOT inherit
       # OLLAMA_BASE_URL from the host .env here: a local-dev value like
       # http://localhost:11434 resolves to *this container* and makes every model
@@ -184,6 +204,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-9xaipal}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-9xaipal_dev_password}
       REDIS_URL: redis://redis:6379/0
+      TRACE_ENABLED: ${TRACE_ENABLED:-false}
+      TRACE_MAX_TEXT_CHARS: ${TRACE_MAX_TEXT_CHARS:-8000}
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
       # Ollama runs on the host network. Do NOT inherit OLLAMA_BASE_URL from the
       # host .env here: a local-dev value like http://localhost:11434 resolves
       # to *this container* and makes every model call fail with connection-refused.

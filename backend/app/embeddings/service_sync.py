@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core import tracing
 from app.core.logging import get_logger
 from app.core.config import settings
 from app.embeddings.model import active_embedding_model_sync, get_embeddings_batch_sync
@@ -117,6 +118,7 @@ def _persist_batch(session: Session, model_name: str, batch: list[dict], embeddi
     session.commit()
 
 
+@tracing.traced("embed", tracing.EMBEDDING)
 def embed_document_chunks_sync(
     session: Session,
     document_id: UUID,

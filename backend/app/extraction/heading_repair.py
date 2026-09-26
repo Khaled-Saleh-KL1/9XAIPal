@@ -41,6 +41,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from app.core import tracing
+
 _CAPTION_RE = re.compile(r"^(?:figure|fig\.?|table|tab\.?|listing|equation|eq\.?|exhibit|chart|plate)\s*[\dIVXivx]+", re.IGNORECASE)
 _CHAPTER_RE = re.compile(r"^(?:chapter\s+\d+\b|\d{1,2}[.:)]\s+[A-Z“\"'])", re.IGNORECASE)
 # Leading numbering in any of the shapes seen live: "Chapter 3", "Part II",
@@ -151,6 +153,7 @@ def _match_outline(chunks: list[dict], outline: list[dict], report: RepairReport
     return claimed
 
 
+@tracing.traced("heading_repair", tracing.CHAIN, record_args=False, output=lambda report: report.as_dict())
 def repair_headings(chunks: list[dict], outline: Optional[list[dict]] = None) -> RepairReport:
     """Repair heading chunks in place (see the module docstring) and say what changed."""
     report = RepairReport(outline_entries=len(outline or []))

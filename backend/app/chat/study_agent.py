@@ -76,6 +76,7 @@ from app.chat.agent_tools import (
 from app.chat.memory import format_memories, recall_memories, write_memory, write_remembered
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core import tracing
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import section_summaries as summary_repo
 # ⚠ create_sticky and update_sticky only. delete_sticky is deliberately not
@@ -768,6 +769,7 @@ async def _pin_written_notes(
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
+@tracing.traced("agent.study", tracing.CHAIN)
 async def answer_study_question(
     session: AsyncSession,
     *,

@@ -4,6 +4,7 @@ import base64, json
 from pathlib import Path
 import fitz  # PyMuPDF
 import httpx
+from app.core import tracing
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.llm.ollama_client import _ollama_headers
@@ -177,6 +178,7 @@ def _crop_figure(doc, page_idx: int, bbox, dpi: int, dest: Path) -> bool:
         logger.warning(f"figure crop failed p{page_idx}: {e}")
         return False
 
+@tracing.traced("extract.vlm", tracing.CHAIN)
 def extract_via_vlm(pdf_path: Path, output_dir: Path) -> Path:
     dpi = settings.extractor_vlm_dpi
     model = settings.extractor_vlm_model

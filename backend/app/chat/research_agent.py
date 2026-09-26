@@ -19,6 +19,7 @@ from typing import Any, Optional, Union
 from uuid import UUID
 
 from app.core.logging import get_logger
+from app.core import tracing
 from app.search.web import search, search_images
 from app.search.ranking import rank_results
 from app.chat.external_context import rewrite_query_for_papers, _wants_images
@@ -33,6 +34,7 @@ RESULTS_PER_SEARCH = 6
 MAX_SOURCES_IN_FINDINGS = 8
 
 
+@tracing.traced("agent.research", tracing.CHAIN)
 async def run_research_agent(
     original_query: str,
     *,

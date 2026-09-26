@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core import tracing
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.paths import images_dir
@@ -133,6 +134,7 @@ def _get_surrounding_text(session: Session, document_id: UUID, center_seq: int, 
     return "\n\n".join(texts)[:4000]
 
 
+@tracing.traced("figure_descriptions", tracing.CHAIN)
 def generate_figure_descriptions_sync(
     session: Session,
     document_id: UUID,
@@ -219,7 +221,7 @@ def generate_figure_descriptions_sync(
     )
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(_describe, jobs))
+        results = list(pool.map(tracing.carry_context(_describe), jobs))
     logger.info(
         f"[figure-describer] All {len(jobs)} VLM call(s) finished in "
         f"{time.time() - t0:.1f}s (concurrency={workers})"

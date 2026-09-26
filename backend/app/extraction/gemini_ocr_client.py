@@ -13,6 +13,7 @@ import httpx
 from google import genai
 from google.genai import errors, types
 
+from app.core import tracing
 from app.core.config import Settings, settings
 from app.core.logging import get_logger
 from app.extraction.arabic_types import (
@@ -188,6 +189,7 @@ class GeminiOcrClient:
         self.jitter = jitter
         self._blocked_keys: dict[int, str] = {}
 
+    @tracing.traced("llm.gemini_ocr", tracing.LLM, record_args=False)
     def generate_batch(
         self,
         pages: Sequence[RenderedPage],
