@@ -7,7 +7,14 @@ import time
 from typing import Any
 from uuid import UUID
 
-from celery.signals import before_task_publish, task_failure, task_postrun, task_prerun, worker_process_init
+from celery.signals import (
+    before_task_publish,
+    task_failure,
+    task_postrun,
+    task_prerun,
+    task_revoked,
+    worker_process_init,
+)
 
 from app.core import tracing
 
@@ -73,9 +80,12 @@ def _start(task_id: str | None = None, task: Any = None, args: tuple = (), kwarg
 
 @task_failure.connect
 def _fail(task_id: str | None = None, exception: BaseException | None = None, **_: Any) -> None:
-    if task_id in _open and exception is not None:
-        manager, _ = _open[task_id]
-        _open[task_id] = (manager, exception)
+    try:
+        if task_id in _open and exception is not None:
+            manager, _ = _open[task_id]
+            _open[task_id] = (manager, exception)
+    except Exception as exc:  # noqa: BLE001
+        tracing._warn("could not record task failure", exc)
 
 
 @task_postrun.connect
@@ -92,6 +102,27 @@ def _end(task_id: str | None = None, state: str | None = None, **_: Any) -> None
             manager.__exit__(None, None, None)
     except Exception as exc:  # noqa: BLE001 — never raise out of a Celery signal
         tracing._warn("could not end task span", exc)
+
+
+@task_revoked.connect
+def _revoked(request: Any = None, **_: Any) -> None:
+    """A revoked/terminated task fires this instead of ``task_postrun``.
+
+    Close its span here too, or it (and its ``_open`` entry) leaks forever.
+    Exiting with a ``KeyboardInterrupt`` instance makes ``tracing.span``'s
+    ``_status_for`` classify it as "cancelled" rather than "error", and
+    ``_GeneratorContextManager.__exit__`` swallows it (it re-raises only if
+    the exception it gets back differs from the one it was given).
+    """
+    try:
+        task_id = getattr(request, "id", None)
+        entry = _open.pop(task_id, None) if task_id else None
+        if entry is None:
+            return
+        manager, _ = entry
+        manager.__exit__(KeyboardInterrupt, KeyboardInterrupt(), None)
+    except Exception as exc:  # noqa: BLE001
+        tracing._warn("could not end revoked task span", exc)
 
 
 @worker_process_init.connect

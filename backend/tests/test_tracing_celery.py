@@ -68,6 +68,19 @@ def test_failed_task_is_marked_error(spans):
     assert s.attributes["error.type"] == "ValueError"
 
 
+def test_fail_with_unhashable_task_id_does_not_raise(spans):
+    tracing_celery._fail(task_id=["not", "hashable"], exception=ValueError("boom"))
+
+
+def test_revoked_task_closes_its_span_as_cancelled(spans):
+    tracing_celery._start(task_id="tR", task=_task(), args=(), kwargs={})
+    tracing_celery._revoked(request=SimpleNamespace(id="tR"))
+
+    s = [s for s in spans.get_finished_spans() if s.name == "task:process_ingestion"][0]
+    assert s.attributes["status"] == "cancelled"
+    assert "tR" not in tracing_celery._open
+
+
 def test_task_without_trace_header_starts_its_own_trace(spans):
     tracing_celery._start(task_id="t3", task=_task(headers={}), args=(), kwargs={})
     tracing_celery._end(task_id="t3", state="SUCCESS")
