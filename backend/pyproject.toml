@@ -18,6 +18,10 @@ dependencies = [
     # Gemini multimodal OCR client (Arabic-only feature-flagged route).
     "google-genai>=2.25.0",
 
+    # Pipeline tracing (TRACE_ENABLED; exported to self-hosted Phoenix).
+    "opentelemetry-sdk>=1.45.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.0",
+
     # HTTP client (Ollama / cloud LLM APIs)
     "httpx",
     # Explicit because the SSRF-safe transport pins validated DNS addresses

@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     arabic_handwritten_confidence_min: float = Field(default=0.97, ge=0, le=1)
     arabic_classifier_batch_pages: int = 8
 
+    # Pipeline tracing (docs/superpowers/specs/2026-09-26-pipeline-tracing-design.md).
+    # Off by default: with it off no OpenTelemetry object is ever created.
+    trace_enabled: bool = False
+    trace_max_text_chars: int = Field(default=8000, ge=200, le=200_000)
+    phoenix_collector_endpoint: str = "http://phoenix:6006/v1/traces"
+    phoenix_api_key: str = ""
+
     @property
     def gemini_api_keys(self) -> list[str]:
         return self._split_keys(self.gemini_api_keys_raw)
