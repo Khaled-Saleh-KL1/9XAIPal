@@ -6,6 +6,8 @@ import math
 import re
 import unicodedata
 from collections import Counter
+from difflib import SequenceMatcher
+from html import unescape
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -493,3 +495,231 @@ def _record_cer(record: Mapping[str, Any]) -> float | None:
         return None
     value = normalized.get("cer")
     return None if value is None else float(value)
+
+
+# --- Structural block retention and reading order ---------------------------
+#
+# Reference blocks are human-verified and listed in true reading order:
+# {"page_number": 1, "type": "heading", "text": "..."}. Predicted blocks come
+# from the same content_list.json the chunker consumes (blocks_from_content_list),
+# so structure lost anywhere between the OCR model and chunking is measured.
+
+STRUCTURE_BLOCK_TYPES = frozenset({"heading", "text", "list", "table", "equation", "caption"})
+DEFAULT_STRUCTURE_MATCH_THRESHOLD = 0.8
+
+
+def blocks_from_content_list(content_list: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Typed, page-numbered blocks from a MinerU-compatible content list.
+
+    Headings are text entries with a text_level; list items are joined by
+    newlines; tables are compared by their cell text; a table's caption is
+    its own "caption" block right after the table.
+    """
+    blocks: list[dict[str, Any]] = []
+    for entry in content_list:
+        page_number = int(entry.get("page_idx", 0)) + 1
+        kind = entry.get("type")
+        if kind == "text":
+            level = entry.get("text_level")
+            blocks.append(_structure_block(
+                page_number, "heading" if level else "text", entry.get("text") or ""
+            ))
+        elif kind == "list":
+            items = [str(item) for item in entry.get("list_items") or []]
+            blocks.append(_structure_block(page_number, "list", "\n".join(items)))
+        elif kind == "table":
+            cells = unescape(_HTML_TAG.sub(" ", str(entry.get("table_body") or "")))
+            blocks.append(_structure_block(page_number, "table", _WHITESPACE.sub(" ", cells).strip()))
+            for caption in entry.get("table_caption") or []:
+                blocks.append(_structure_block(page_number, "caption", str(caption)))
+        elif kind == "equation":
+            blocks.append(_structure_block(page_number, "equation", entry.get("text") or ""))
+    return blocks
+
+
+def score_structure(
+    predicted: Sequence[Mapping[str, Any]],
+    reference: Sequence[Mapping[str, Any]],
+    options: Mapping[str, Any] | None = None,
+    *,
+    match_threshold: float = DEFAULT_STRUCTURE_MATCH_THRESHOLD,
+) -> dict[str, Any]:
+    """Block retention by type and reading-order agreement for one document.
+
+    A reference block is retained when a predicted block of the same type, on
+    the same or an adjacent page, has normalized text similarity of at least
+    ``match_threshold``. Matching is one-to-one and ignores position, so the
+    order metrics then measure only how the matched blocks are sequenced.
+    """
+    if not 0 < match_threshold <= 1:
+        raise ValueError("match_threshold must be in (0, 1]")
+    ref = [_validated_structure_block(block, "reference") for block in reference]
+    pred = [_validated_structure_block(block, "predicted") for block in predicted]
+    ref_text = [normalize_for_score(block["text"], options) for block in ref]
+    pred_text = [normalize_for_score(block["text"], options) for block in pred]
+
+    def candidates(same_type: bool, ref_free: set[int], pred_free: set[int]):
+        found = []
+        for i in ref_free:
+            for j in pred_free:
+                if (ref[i]["type"] == pred[j]["type"]) != same_type:
+                    continue
+                if abs(ref[i]["page_number"] - pred[j]["page_number"]) > 1:
+                    continue
+                similarity = _text_similarity(ref_text[i], pred_text[j])
+                if similarity >= match_threshold:
+                    found.append((-similarity, i, j))
+        return sorted(found)
+
+    matches: dict[int, int] = {}
+    for _, i, j in candidates(True, set(range(len(ref))), set(range(len(pred)))):
+        if i not in matches and j not in matches.values():
+            matches[i] = j
+
+    # A block whose text survived under the wrong type (a heading flattened to
+    # prose, a table read as paragraphs) is a structural loss, reported apart.
+    mismatched_refs: set[int] = set()
+    mismatched_preds: set[int] = set()
+    unmatched_ref = set(range(len(ref))) - set(matches)
+    unmatched_pred = set(range(len(pred))) - set(matches.values())
+    for _, i, j in candidates(False, unmatched_ref, unmatched_pred):
+        if i not in mismatched_refs and j not in mismatched_preds:
+            mismatched_refs.add(i)
+            mismatched_preds.add(j)
+
+    by_type: dict[str, dict[str, Any]] = {}
+    for kind in sorted({block["type"] for block in (*ref, *pred)}):
+        ref_count = sum(block["type"] == kind for block in ref)
+        by_type[kind] = _type_row(
+            ref_count,
+            sum(block["type"] == kind for block in pred),
+            sum(ref[i]["type"] == kind for i in matches),
+        )
+
+    order = [matches[i] for i in sorted(matches)]
+    return {
+        "reference_blocks": len(ref),
+        "predicted_blocks": len(pred),
+        "matched_blocks": len(matches),
+        "block_retention": len(matches) / len(ref) if ref else None,
+        "block_precision": len(matches) / len(pred) if pred else None,
+        "type_mismatches": len(mismatched_refs),
+        "by_type": by_type,
+        "order_pairs": _pair_count(len(order)),
+        "order_concordant_pairs": _pair_count(len(order)) - _inversions(order),
+        "order_lis": _longest_increasing_run(order),
+        "order_pairwise_accuracy": _ratio(_pair_count(len(order)) - _inversions(order), _pair_count(len(order))),
+        "order_lis_ratio": _ratio(_longest_increasing_run(order), len(order)),
+    }
+
+
+def aggregate_structure_scores(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Micro-average structure scores over documents (blocks and pairs pooled)."""
+    reference = sum(int(row["reference_blocks"]) for row in rows)
+    predicted = sum(int(row["predicted_blocks"]) for row in rows)
+    matched = sum(int(row["matched_blocks"]) for row in rows)
+    pairs = sum(int(row["order_pairs"]) for row in rows)
+    concordant = sum(int(row["order_concordant_pairs"]) for row in rows)
+    ordered = sum(int(row["matched_blocks"]) for row in rows)
+    lis = sum(int(row["order_lis"]) for row in rows)
+    by_type: dict[str, dict[str, Any]] = {}
+    for kind in sorted({kind for row in rows for kind in row["by_type"]}):
+        by_type[kind] = _type_row(
+            sum(int(row["by_type"].get(kind, {}).get("reference", 0)) for row in rows),
+            sum(int(row["by_type"].get(kind, {}).get("predicted", 0)) for row in rows),
+            sum(int(row["by_type"].get(kind, {}).get("matched", 0)) for row in rows),
+        )
+    return {
+        "documents": len(rows),
+        "reference_blocks": reference,
+        "predicted_blocks": predicted,
+        "matched_blocks": matched,
+        "block_retention": _ratio(matched, reference),
+        "block_precision": _ratio(matched, predicted),
+        "type_mismatches": sum(int(row["type_mismatches"]) for row in rows),
+        "by_type": by_type,
+        "order_pairwise_accuracy": _ratio(concordant, pairs),
+        "order_lis_ratio": _ratio(lis, ordered),
+    }
+
+
+def _structure_block(page_number: int, kind: str, text: str) -> dict[str, Any]:
+    return {"page_number": page_number, "type": kind, "text": text}
+
+
+def _validated_structure_block(block: Mapping[str, Any], label: str) -> dict[str, Any]:
+    kind = block.get("type")
+    page = block.get("page_number")
+    text = block.get("text")
+    if kind not in STRUCTURE_BLOCK_TYPES:
+        raise ValueError(f"{label} block type must be one of {sorted(STRUCTURE_BLOCK_TYPES)}")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError(f"{label} block page_number must be a positive integer")
+    if not isinstance(text, str):
+        raise ValueError(f"{label} block text must be a string")
+    return {"page_number": page, "type": kind, "text": text}
+
+
+def _text_similarity(left: str, right: str) -> float:
+    if not left and not right:
+        return 1.0
+    matcher = SequenceMatcher(None, left, right, autojunk=False)
+    return matcher.ratio()
+
+
+def _type_row(reference: int, predicted: int, matched: int) -> dict[str, Any]:
+    return {
+        "reference": reference,
+        "predicted": predicted,
+        "matched": matched,
+        "retention": _ratio(matched, reference),
+    }
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _pair_count(n: int) -> int:
+    return n * (n - 1) // 2
+
+
+def _inversions(values: Sequence[int]) -> int:
+    """Out-of-order pairs, counted by merge sort in O(n log n)."""
+    def sort(items: list[int]) -> tuple[list[int], int]:
+        if len(items) < 2:
+            return items, 0
+        middle = len(items) // 2
+        left, left_count = sort(items[:middle])
+        right, right_count = sort(items[middle:])
+        merged: list[int] = []
+        count = left_count + right_count
+        i = j = 0
+        while i < len(left) and j < len(right):
+            if left[i] <= right[j]:
+                merged.append(left[i])
+                i += 1
+            else:
+                merged.append(right[j])
+                count += len(left) - i
+                j += 1
+        merged.extend(left[i:])
+        merged.extend(right[j:])
+        return merged, count
+
+    return sort(list(values))[1]
+
+
+def _longest_increasing_run(values: Sequence[int]) -> int:
+    """Length of the longest increasing subsequence (patience sorting)."""
+    from bisect import bisect_left
+
+    tails: list[int] = []
+    for value in values:
+        position = bisect_left(tails, value)
+        if position == len(tails):
+            tails.append(value)
+        else:
+            tails[position] = value
+    return len(tails)
+

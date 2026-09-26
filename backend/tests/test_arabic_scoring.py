@@ -652,3 +652,271 @@ def test_config_hash_snapshot_includes_classifier_and_decode_settings_but_no_key
     assert snapshot["handwritten_ocr_enabled"] is False
     assert "gemini_api_keys_raw" not in snapshot
     assert "must-not-enter-config-hash" not in json.dumps(snapshot)
+
+
+# --- Structural block retention and reading order (spec §14) ---------------
+
+def _block(page, kind, text):
+    return {"page_number": page, "type": kind, "text": text}
+
+
+_REFERENCE_BLOCKS = [
+    _block(1, "heading", "الفصل الأول: المقدمة"),
+    _block(1, "text", "هذا هو العمود الأيمن ويقرأ أولا من الأعلى إلى الأسفل"),
+    _block(1, "text", "وهذا هو العمود الأيسر ويقرأ بعد انتهاء العمود الأيمن"),
+    _block(2, "table", "البند القيمة ألف ١٢"),
+    _block(2, "list", "العنصر الأول\nالعنصر الثاني"),
+]
+
+
+def test_structure_scores_a_faithful_extraction_as_complete_and_ordered():
+    scores = _scoring().score_structure(_REFERENCE_BLOCKS, _REFERENCE_BLOCKS)
+
+    assert scores["reference_blocks"] == 5
+    assert scores["matched_blocks"] == 5
+    assert scores["block_retention"] == 1.0
+    assert scores["block_precision"] == 1.0
+    assert scores["type_mismatches"] == 0
+    assert scores["order_pairwise_accuracy"] == 1.0
+    assert scores["order_lis_ratio"] == 1.0
+    assert scores["by_type"]["heading"] == {"reference": 1, "predicted": 1, "matched": 1, "retention": 1.0}
+
+
+def test_structure_counts_a_dropped_block_against_retention():
+    predicted = [block for block in _REFERENCE_BLOCKS if block["type"] != "table"]
+
+    scores = _scoring().score_structure(predicted, _REFERENCE_BLOCKS)
+
+    assert scores["matched_blocks"] == 4
+    assert scores["block_retention"] == pytest.approx(0.8)
+    assert scores["block_precision"] == 1.0
+    assert scores["by_type"]["table"]["retention"] == 0.0
+
+
+def test_structure_reports_a_heading_flattened_to_prose_as_a_type_mismatch():
+    predicted = [dict(block) for block in _REFERENCE_BLOCKS]
+    predicted[0]["type"] = "text"
+
+    scores = _scoring().score_structure(predicted, _REFERENCE_BLOCKS)
+
+    assert scores["by_type"]["heading"]["matched"] == 0
+    assert scores["type_mismatches"] == 1
+    assert scores["block_retention"] == pytest.approx(0.8)
+
+
+def test_structure_detects_columns_read_left_to_right():
+    reference = _REFERENCE_BLOCKS
+    predicted = [reference[0], reference[2], reference[1], reference[3], reference[4]]
+
+    scores = _scoring().score_structure(predicted, reference)
+
+    assert scores["block_retention"] == 1.0
+    # One of ten block pairs is out of order; the longest in-order run keeps 4 of 5.
+    assert scores["order_pairwise_accuracy"] == pytest.approx(0.9)
+    assert scores["order_lis_ratio"] == pytest.approx(0.8)
+
+
+def test_structure_counts_spurious_blocks_against_precision():
+    predicted = [*_REFERENCE_BLOCKS, _block(2, "text", "نص مختلق لا يوجد في الوثيقة الأصلية إطلاقا")]
+
+    scores = _scoring().score_structure(predicted, _REFERENCE_BLOCKS)
+
+    assert scores["block_retention"] == 1.0
+    assert scores["block_precision"] == pytest.approx(5 / 6)
+
+
+def test_structure_matching_tolerates_small_ocr_errors_but_not_other_text():
+    predicted = [dict(block) for block in _REFERENCE_BLOCKS]
+    predicted[1]["text"] = "هذا هو العمود الايمن ويقرأ اولا من الاعلى الى الاسفل"  # alef variants
+    predicted[2]["text"] = "كلام آخر تماما لا علاقة له بالعمود"
+
+    scores = _scoring().score_structure(predicted, _REFERENCE_BLOCKS)
+
+    assert scores["matched_blocks"] == 4
+    assert scores["by_type"]["text"]["matched"] == 1
+
+
+def test_structure_does_not_match_blocks_more_than_one_page_apart():
+    reference = [_block(1, "text", "فقرة فريدة في الصفحة الأولى من الوثيقة")]
+    predicted = [_block(3, "text", "فقرة فريدة في الصفحة الأولى من الوثيقة")]
+
+    assert _scoring().score_structure(predicted, reference)["matched_blocks"] == 0
+
+
+def test_structure_rejects_unknown_block_types():
+    with pytest.raises(ValueError):
+        _scoring().score_structure([_block(1, "sidebar", "x")], _REFERENCE_BLOCKS)
+
+
+def test_structure_aggregate_is_micro_over_documents():
+    scoring = _scoring()
+    perfect = scoring.score_structure(_REFERENCE_BLOCKS, _REFERENCE_BLOCKS)
+    dropped = scoring.score_structure(_REFERENCE_BLOCKS[:1], _REFERENCE_BLOCKS)
+
+    aggregate = scoring.aggregate_structure_scores([perfect, dropped])
+
+    assert aggregate["documents"] == 2
+    assert aggregate["reference_blocks"] == 10
+    assert aggregate["matched_blocks"] == 6
+    assert aggregate["block_retention"] == pytest.approx(0.6)
+    assert aggregate["by_type"]["text"]["retention"] == pytest.approx(0.5)
+    assert aggregate["order_pairwise_accuracy"] == 1.0
+    assert scoring.aggregate_structure_scores([])["block_retention"] is None
+
+
+def test_structure_blocks_come_from_the_same_content_list_the_chunker_reads():
+    from app.extraction.arabic_adapter import pages_to_content_list
+    from app.extraction.arabic_types import ArabicOcrPage
+
+    markdown = (
+        "## الفصل الأول: المقدمة\n\n"
+        "هذا هو العمود الأيمن ويقرأ أولا من الأعلى إلى الأسفل\n\n"
+        "- العنصر الأول\n- العنصر الثاني\n\n"
+        "| البند | القيمة |\n| --- | --- |\n| ألف | ١٢ |\n\n"
+        "$$x=1$$"
+    )
+    page = ArabicOcrPage(
+        page_number=2, raw_markdown=markdown, markdown=markdown,
+        provider="gemini_arabic_flash", model="m",
+    )
+
+    blocks = _scoring().blocks_from_content_list(pages_to_content_list([page]))
+
+    assert [(block["page_number"], block["type"]) for block in blocks] == [
+        (2, "heading"), (2, "text"), (2, "list"), (2, "table"), (2, "equation"),
+    ]
+    assert blocks[2]["text"] == "العنصر الأول\nالعنصر الثاني"
+    assert "<" not in blocks[3]["text"] and "ألف" in blocks[3]["text"]
+
+
+def _blocks_file(tmp_path, blocks, name="doc.blocks.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(blocks, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_block_ground_truth_is_read_validated_and_hashed(tmp_path):
+    runner = _runner()
+    path = _blocks_file(tmp_path, _REFERENCE_BLOCKS)
+
+    blocks, digest = runner._read_block_ground_truth(
+        {"doc_id": "doc-1", "ground_truth_blocks_path": path}
+    )
+
+    assert blocks == _REFERENCE_BLOCKS
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert runner._read_block_ground_truth({"doc_id": "doc-2"}) == (None, None)
+
+    bad = _blocks_file(tmp_path, [{"page_number": 1, "type": "sidebar", "text": "x"}], "bad.json")
+    with pytest.raises(runner.EvaluationError, match="block"):
+        runner._read_block_ground_truth({"doc_id": "doc-3", "ground_truth_blocks_path": bad})
+
+
+def test_real_manifest_resolves_the_block_ground_truth_file(tmp_path):
+    runner = _runner()
+    source = tmp_path / "source.pdf"
+    gold = tmp_path / "gold.txt"
+    source.write_bytes(b"placeholder")
+    gold.write_text("gold", encoding="utf-8")
+    blocks = _blocks_file(tmp_path, _REFERENCE_BLOCKS)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "schema_version": 1, "held_out_splits": ["printed"],
+        "documents": [{
+            "doc_id": "doc", "split": "printed", "expected_route": "printed",
+            "source_pdf": str(source), "ground_truth_file": str(gold),
+            "ground_truth_blocks_file": str(blocks),
+        }],
+    }), encoding="utf-8")
+
+    loaded = runner._load_manifest(manifest, allow_inline=False)
+
+    assert loaded["documents"][0]["ground_truth_blocks_path"] == blocks
+
+
+def test_mock_manifest_rejects_a_block_ground_truth_file(tmp_path):
+    runner = _runner()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"schema_version": 1, "documents": [{
+        "doc_id": "doc", "split": "mock", "expected_route": "printed",
+        "ground_truth_text": "نص", "ground_truth_blocks_file": str(_blocks_file(tmp_path, [])),
+    }]}), encoding="utf-8")
+
+    with pytest.raises(runner.EvaluationError, match="synthetic"):
+        runner._load_manifest(manifest, allow_inline=True)
+
+
+def test_mock_run_reports_structure_metrics_without_storing_text(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    run_dir = tmp_path / "structure-run"
+    predicted = [_REFERENCE_BLOCKS[0], _REFERENCE_BLOCKS[2], _REFERENCE_BLOCKS[1]]
+    manifest.write_text(json.dumps({
+        "schema_version": 1,
+        "structure": {"match_threshold": 0.8},
+        "documents": [{
+            "doc_id": "structured", "split": "mock", "expected_route": "printed",
+            "ground_truth_text": "نص", "mock_prediction_text": "نص",
+            "ground_truth_blocks": _REFERENCE_BLOCKS[:3],
+            "mock_prediction_blocks": predicted,
+        }],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert _runner().main(["--manifest", str(manifest), "--mock", "--run-dir", str(run_dir)]) == 0
+
+    report = json.loads((run_dir / "score.json").read_text(encoding="utf-8"))
+    record = json.loads((run_dir / "records.jsonl").read_text(encoding="utf-8"))
+    structure = report["structure_metrics"]["all"]
+    assert structure["block_retention"] == 1.0
+    assert structure["order_pairwise_accuracy"] == pytest.approx(2 / 3)
+    assert report["structure_metrics"]["by_split"]["mock"]["documents"] == 1
+    assert record["structure_scores"]["matched_blocks"] == 3
+    assert len(record["ground_truth_blocks_sha256"]) == 64
+    assert "العمود" not in (run_dir / "records.jsonl").read_text(encoding="utf-8")
+    assert "العمود" not in (run_dir / "score.json").read_text(encoding="utf-8")
+    markdown = (run_dir / "score.md").read_text(encoding="utf-8")
+    assert "block retention 1.0000" in markdown
+    assert "Reading order: pairwise" in markdown
+
+
+def test_live_ocr_scores_structure_from_the_adapter_content_list(tmp_path, monkeypatch):
+    from app.extraction import arabic_fallback, arabic_ocr, gemini_ocr_client
+    from app.extraction.arabic_types import ArabicOcrPage
+
+    runner = _runner()
+    markdown = "## الفصل الأول: المقدمة\n\nهذا هو العمود الأيمن ويقرأ أولا من الأعلى إلى الأسفل"
+    page = ArabicOcrPage(
+        page_number=1, raw_markdown=markdown, markdown=markdown,
+        provider="gemini_arabic_flash", model="m",
+    )
+
+    def fake_extract(*, output_dir, **_kwargs):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "ocr_manifest.json").write_text(json.dumps({"provider_runs": []}), encoding="utf-8")
+        return SimpleNamespace(
+            pages=(page,), output_dir=output_dir,
+            provider_summary=[{"provider": "gemini_arabic_flash", "pages": [1]}],
+        )
+
+    monkeypatch.setattr(arabic_ocr, "extract_arabic_document", fake_extract)
+    monkeypatch.setattr(gemini_ocr_client, "GeminiOcrClient", lambda **_kwargs: object())
+    monkeypatch.setattr(arabic_fallback, "GemmaArabicFallback", lambda **_kwargs: object())
+    monkeypatch.setattr(runner, "_pdf_page_count", lambda _path: 1)
+    document = {
+        "doc_id": "live", "split": "printed", "expected_route": "printed",
+        "source_path": tmp_path / "live.pdf", "ground_truth_path": None,
+        "ground_truth_pages_path": None,
+        "ground_truth_blocks_path": _blocks_file(tmp_path, _REFERENCE_BLOCKS[:2]),
+    }
+    classified = [{
+        "doc_id": "live", "split": "printed", "classification_status": "complete",
+        "predicted_route": "arabic_printed",
+    }]
+
+    records, _ = runner._run_live_ocr(
+        classified, [document], {}, SimpleNamespace(arabic_router_model="m", arabic_gemini_printed_model="m"),
+        "config", "git", tmp_path, "hybrid",
+    )
+
+    assert records[0]["ocr_status"] == "complete"
+    assert records[0]["structure_scores"]["block_retention"] == 1.0
+    assert records[0]["structure_scores"]["by_type"]["heading"]["matched"] == 1

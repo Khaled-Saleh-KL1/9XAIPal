@@ -21,13 +21,17 @@ from typing import Any
 from uuid import uuid4
 
 from eval.arabic_documents.scoring import (
+    DEFAULT_STRUCTURE_MATCH_THRESHOLD,
+    aggregate_structure_scores,
     aggregate_text_scores,
+    blocks_from_content_list,
     cogs_gap_percent,
     compare_paired_runs,
     latency_percentiles,
     page_coverage,
     score_ocr_text,
     score_routes,
+    score_structure,
     usage_cost_usd,
     validate_provider_ranges,
 )
@@ -165,6 +169,12 @@ def _load_manifest(path: Path, *, allow_inline: bool) -> dict[str, Any]:
     normalization = manifest.get("normalization", {})
     if not isinstance(normalization, dict) or set(normalization) - _NORMALIZATION_OPTIONS:
         raise EvaluationError("The manifest contains unsupported normalization options.")
+    structure = manifest.get("structure", {})
+    if not isinstance(structure, dict) or set(structure) - {"match_threshold"}:
+        raise EvaluationError("The manifest structure section accepts only match_threshold.")
+    threshold = structure.get("match_threshold", DEFAULT_STRUCTURE_MATCH_THRESHOLD)
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold <= 1:
+        raise EvaluationError("structure.match_threshold must be a number in (0, 1].")
     for key, value in normalization.items():
         if not isinstance(value, bool):
             raise EvaluationError(f"Normalization option {key!r} must be boolean.")
@@ -183,7 +193,7 @@ def _load_manifest(path: Path, *, allow_inline: bool) -> dict[str, Any]:
             raise EvaluationError("Every manifest document entry must be an object.")
         if allow_inline and any(
             raw.get(field) is not None
-            for field in ("source_pdf", "ground_truth_file", "ground_truth_pages_file")
+            for field in ("source_pdf", "ground_truth_file", "ground_truth_pages_file", "ground_truth_blocks_file")
         ):
             raise EvaluationError("Mock mode accepts synthetic inline text only; remove PDF and ground-truth file paths.")
         doc_id = raw.get("doc_id")
@@ -209,6 +219,7 @@ def _load_manifest(path: Path, *, allow_inline: bool) -> dict[str, Any]:
             required=not (allow_inline and isinstance(inline_gt, str)),
         )
         pages_file = _manifest_file(raw.get("ground_truth_pages_file"), path.parent, "ground_truth_pages_file", doc_id, required=False)
+        blocks_file = _manifest_file(raw.get("ground_truth_blocks_file"), path.parent, "ground_truth_blocks_file", doc_id, required=False)
         if allow_inline:
             if inline_gt is not None and not isinstance(inline_gt, str):
                 raise EvaluationError(f"Mock ground_truth_text for {doc_id!r} must be a string.")
@@ -221,6 +232,8 @@ def _load_manifest(path: Path, *, allow_inline: bool) -> dict[str, Any]:
             _assert_private_file(ground_truth_file, repo_root)
             if pages_file is not None:
                 _assert_private_file(pages_file, repo_root)
+            if blocks_file is not None:
+                _assert_private_file(blocks_file, repo_root)
 
         result.append({
             **raw,
@@ -230,6 +243,7 @@ def _load_manifest(path: Path, *, allow_inline: bool) -> dict[str, Any]:
             "source_path": source_pdf,
             "ground_truth_path": ground_truth_file,
             "ground_truth_pages_path": pages_file,
+            "ground_truth_blocks_path": blocks_file,
         })
     unknown_held_out = set(held_out_splits) - {document["split"] for document in result}
     if unknown_held_out:
@@ -377,6 +391,41 @@ def _read_ground_truth(
                 raise EvaluationError(f"Page ground truth for {document['doc_id']!r} has an invalid page entry.")
             page_text[page_number] = value
     return text, digest, page_text, page_digest
+
+
+def _read_block_ground_truth(
+    document: dict[str, Any],
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Human-verified blocks in reading order, from a file or (mock) inline."""
+    path = document.get("ground_truth_blocks_path")
+    if path is not None:
+        raw = path.read_bytes()
+        digest = _sha256(raw)
+        try:
+            blocks = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise EvaluationError(f"Block ground truth for {document['doc_id']!r} must be UTF-8 JSON.") from None
+    elif document.get("ground_truth_blocks") is not None:
+        blocks = document["ground_truth_blocks"]
+        digest = _sha256(json.dumps(blocks, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    else:
+        return None, None
+    return _validated_blocks(blocks, document["doc_id"], "Block ground truth"), digest
+
+
+def _validated_blocks(blocks: Any, doc_id: str, label: str) -> list[dict[str, Any]]:
+    if not isinstance(blocks, list):
+        raise EvaluationError(f"{label} for {doc_id!r} must be an array of blocks.")
+    try:
+        # score_structure validates types, page numbers and text.
+        score_structure(blocks, blocks)
+    except ValueError as error:
+        raise EvaluationError(f"{label} for {doc_id!r} has an invalid block: {error}") from None
+    return blocks
+
+
+def _structure_threshold(manifest: dict[str, Any]) -> float:
+    return float(manifest.get("structure", {}).get("match_threshold", DEFAULT_STRUCTURE_MATCH_THRESHOLD))
 
 
 def _runtime_settings():
@@ -530,6 +579,8 @@ def _base_record(
         "source_sha256": _sha256(source_path.read_bytes()) if source_path is not None else None,
         "ground_truth_sha256": reference_hash,
         "ground_truth_pages_sha256": page_reference_hash,
+        "ground_truth_blocks_sha256": _read_block_ground_truth(document)[1],
+        "structure_scores": None,
         "config_sha256": config_sha256,
         "git_sha": git_sha,
         "mode": mode,
@@ -592,6 +643,15 @@ def _mock_run(
                 "cost_usd_per_page": 0.0 if page_count else None,
             })
             pairs.append({"doc_id": document["doc_id"], "split": document["split"], "reference": reference, "prediction": prediction})
+            reference_blocks, _ = _read_block_ground_truth(document)
+            if reference_blocks is not None and document.get("mock_prediction_blocks") is not None:
+                predicted_blocks = _validated_blocks(
+                    document["mock_prediction_blocks"], document["doc_id"], "mock_prediction_blocks"
+                )
+                record["structure_scores"] = score_structure(
+                    predicted_blocks, reference_blocks, normalization,
+                    match_threshold=_structure_threshold(manifest),
+                )
         elif record["predicted_route"] == "handwritten":
             record["ocr_status"] = "disabled_handwritten"
         else:
@@ -699,6 +759,7 @@ def _run_live_ocr(
     run_dir: Path,
     arm: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    from app.extraction.arabic_adapter import pages_to_content_list
     from app.extraction.arabic_fallback import GemmaArabicFallback
     from app.extraction.arabic_ocr import extract_arabic_document
     from app.extraction.arabic_types import ClassificationDecision, DocumentRoute, GeminiKeysExhausted
@@ -776,6 +837,16 @@ def _run_live_ocr(
                 pairs.append({"doc_id": record["doc_id"], "split": record["split"], "reference": reference, "prediction": predicted_text})
             if page_gt:
                 record["provider_page_scores"] = _provider_page_scores(result.pages, page_gt, manifest.get("normalization", {}))
+            reference_blocks, _ = _read_block_ground_truth(document)
+            if reference_blocks is not None:
+                # The same content list the chunker would receive, so structure
+                # lost by the model or by the adapter both count.
+                record["structure_scores"] = score_structure(
+                    blocks_from_content_list(pages_to_content_list(result.pages)),
+                    reference_blocks,
+                    manifest.get("normalization", {}),
+                    match_threshold=_structure_threshold(manifest),
+                )
         except Exception as error:
             record["ocr_status"] = "failed"
             record["ocr_error_type"] = type(error).__name__
@@ -918,6 +989,19 @@ def _build_report(
             "all": route_all,
             "by_split": route_metrics_by_split,
             "held_out": score_routes(held_out_rows),
+        },
+        "structure_metrics": {
+            "all": aggregate_structure_scores(
+                [record["structure_scores"] for record in records if record.get("structure_scores")]
+            ),
+            "by_split": {
+                split: aggregate_structure_scores([
+                    record["structure_scores"] for record in records
+                    if record["split"] == split and record.get("structure_scores")
+                ])
+                for split in expected_splits
+            },
+            "match_threshold": _structure_threshold(manifest),
         },
         "ocr_metrics": {
             "all": aggregate_text_scores(pairs, manifest.get("normalization", {})),
@@ -1097,6 +1181,7 @@ def _write_run_outputs(run_dir: Path, records: list[dict[str, Any]], report: dic
 def _markdown_report(report: dict[str, Any]) -> str:
     route = report["route_metrics"]["all"]
     ocr = report["ocr_metrics"]["all"]["micro"]["normalized"]
+    structure = report["structure_metrics"]["all"]
     cost = report["cost"]
     lines = [
         "# Arabic document OCR evaluation",
@@ -1112,6 +1197,8 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"- OCR cost including thoughts: {_format_metric(cost['ocr_total_usd'])} USD; {_format_metric(cost['ocr_cost_usd_per_page'])} USD/page",
         f"- Candidates-only tracker estimate: {_format_metric(cost['ocr_tracker_basis_total_usd'])} USD; thought-token under-report: {_format_percent(cost['cogs_gap_percent'])}",
         f"- Total including preflight: {_format_metric(cost['total_usd_including_preflight'])} USD; all-in/page: {_format_metric(cost['all_in_cost_usd_per_page'])} USD",
+        f"- Structure (documents with block ground truth: {structure['documents']}): block retention {_format_metric(structure['block_retention'])}; precision {_format_metric(structure['block_precision'])}; type mismatches {structure['type_mismatches']}",
+        f"- Reading order: pairwise {_format_metric(structure['order_pairwise_accuracy'])}; longest in-order run {_format_metric(structure['order_lis_ratio'])}",
         f"- Parse failures: {report['parse_failure_count']}; OCR failures: {report['ocr_failure_count']}",
         f"- OCR p50/p95 latency: {report['latency_ms']['ocr']['p50_ms']} / {report['latency_ms']['ocr']['p95_ms']} ms",
         "",

@@ -57,6 +57,35 @@ rate, its cost is reported as unknown, not zero. Page ground truth
 is optional and uses either `{"1": "page text"}` or an array of
 `{"page_number": 1, "text": "page text"}` entries. Its SHA-256 is recorded
 separately from the whole-document ground-truth hash.
+### Structural ground truth (optional)
+
+`ground_truth_blocks_file` scores spec §14 structural block retention and
+reading order. It is a human-verified JSON array in true reading order —
+Arabic columns right to left, each top to bottom:
+
+```json
+[
+  {"page_number": 1, "type": "heading", "text": "الفصل الأول"},
+  {"page_number": 1, "type": "text", "text": "نص العمود الأيمن"},
+  {"page_number": 1, "type": "text", "text": "نص العمود الأيسر"},
+  {"page_number": 2, "type": "table", "text": "البند القيمة ألف ١٢"},
+  {"page_number": 2, "type": "caption", "text": "جدول ١: النتائج"}
+]
+```
+
+Types are `heading`, `text`, `list` (items separated by newlines), `table`
+(cell text in reading order), `equation`, and `caption` (listed right after
+its table). The OCR side is the same `content_list.json` the chunker reads,
+so structure lost by the model or by the adapter both count. A reference block
+is retained when a predicted block of the same type, on the same or an
+adjacent page, reaches `structure.match_threshold` (default 0.8) normalized
+text similarity; matching is one-to-one. The report gives block retention and
+precision overall and per type, type mismatches (text that survived under the
+wrong type, such as a heading flattened to prose), and reading-order agreement
+over matched blocks: the share of block pairs in the right order and the
+longest in-order run. Mock manifests use inline `ground_truth_blocks` and
+`mock_prediction_blocks` instead.
+
 The `held_out_splits` list is required for real runs; it names frozen splits
 whose printed↔handwritten misroutes make the CLI exit non-zero after writing
 the report. The synthetic example uses its sole mock split for harness checks.
