@@ -162,6 +162,20 @@ def test_inline_display_math_does_not_swallow_surrounding_arabic_prose():
 
 @pytest.mark.parametrize(
     "source",
+    [
+        "$$a=1$$ وهذا نص عربي بين معادلتين $$b=2$$",
+        r"\[a=1\] وهذا نص عربي بين معادلتين \[b=2\]",
+    ],
+)
+def test_prose_between_two_display_equations_stays_text(source):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+
+    assert [block["type"] for block in blocks] == ["text"]
+    assert blocks[0]["text"] == source
+
+
+@pytest.mark.parametrize(
+    "source",
     [r"\[x=1\]", r"\begin{equation}x=1\end{equation}"],
 )
 def test_display_math_delimiters_are_normalized_for_chunker(source):
@@ -169,6 +183,15 @@ def test_display_math_delimiters_are_normalized_for_chunker(source):
 
     assert [block["type"] for block in blocks] == ["equation"]
     assert blocks[0]["text"] == "$$\nx=1\n$$"
+
+
+def test_display_environment_with_nested_cases_is_one_equation():
+    source = r"\begin{align}f(x) = \begin{cases} 1 & x > 0 \\ 0 \end{cases}\end{align}"
+
+    blocks = pages_to_content_list([ocr_page(1, source)])
+
+    assert [block["type"] for block in blocks] == ["equation"]
+    assert "\\begin{cases}" in blocks[0]["text"]
 
 
 def test_nested_list_text_is_not_lost():

@@ -17,10 +17,13 @@ _MARKER_CANDIDATE_RE = re.compile(
 _TABLE_RE = re.compile(r"<table\b[\s\S]*?</table\s*>", re.IGNORECASE)
 _CAPTION_RE = re.compile(r"<caption\b[^>]*>([\s\S]*?)</caption\s*>", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+# One display-math block. The body may not contain its own closing delimiter,
+# so "$$a$$ prose $$b$$" is two formulas around prose, not one formula.
 _DISPLAY_MATH_RE = re.compile(
-    r"\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|"
+    r"\$\$(?:(?!\$\$)[\s\S])+\$\$|\\\[(?:(?!\\\])[\s\S])+\\\]|"
     r"\\begin\{(?:equation\*?|align\*?|gather\*?|displaymath)\}"
-    r"[\s\S]+?\\end\{(?:equation\*?|align\*?|gather\*?|displaymath)\}",
+    r"(?:(?!\\(?:begin|end)\{(?:equation\*?|align\*?|gather\*?|displaymath)\})[\s\S])+"
+    r"\\end\{(?:equation\*?|align\*?|gather\*?|displaymath)\}",
 )
 _EQUATION_ENV_RE = re.compile(
     r"\\begin\{(equation\*?|align\*?|gather\*?|displaymath)\}"
