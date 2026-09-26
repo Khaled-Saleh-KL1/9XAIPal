@@ -77,6 +77,35 @@ def test_duplicate_zero_width_marks_are_collapsed_but_single_mark_is_preserved()
     assert repaired.repaired is True
 
 
+def test_unicode_normalization_preserves_non_presentation_symbols_and_religious_ligatures():
+    original = ocr_page(1, "س² ½ ﷺ ﷻ ﷲ ﷽ ﺍﻟﻨﺺ")
+
+    repaired = repair_gemma_page(original, source_text="")
+
+    assert repaired.markdown == "س² ½ ﷺ ﷻ ﷲ ﷽ النص"
+    assert repaired.raw_markdown == original.raw_markdown
+
+
+def test_source_alignment_repairs_only_prose_and_preserves_markdown_structure():
+    markdown = (
+        "## عنوان رئيسي\n\n"
+        "**مقدمة:** هذا النص العربي الطويل يشرح the diference بين الكلمات بطريقة واضحة للقارئ.\n\n"
+        "| بند | قيمة |\n| --- | --- |\n| ألف | ١٢ |\n\n"
+        "```python\nvalue = 1\n```\n\n"
+        "$$x² = ½$$"
+    )
+    source = (
+        "عنوان رئيسي\n"
+        "مقدمة: هذا النص العربي الطويل يشرح the difference بين الكلمات بطريقة واضحة للقارئ.\n"
+        "بند قيمة ألف ١٢\nvalue = 2\nx2 = 1/2"
+    )
+
+    repaired = repair_gemma_page(ocr_page(1, markdown), source_text=source)
+
+    assert repaired.markdown == markdown.replace("the diference", "the difference")
+    assert repaired.raw_markdown == markdown
+
+
 def test_usable_source_text_repairs_only_a_uniquely_anchored_span():
     source = "هذا نص عربي طويل يثبت أن السياق المحيط بهذه الكلمة واضح للغاية في الصفحة"
     original = ocr_page(

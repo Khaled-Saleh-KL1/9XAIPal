@@ -26,6 +26,7 @@ from app.extraction.arabic_types import (
     GeminiRequestInvalid,
     OcrBatchResult,
     OcrUsage,
+    GemmaOutputInvalid,
 )
 
 
@@ -380,6 +381,61 @@ def test_failed_final_page_never_publishes_partial_output(two_page_pdf, tmp_path
     with pytest.raises(ArabicExtractionFailed):
         extract(two_page_pdf, target, gemini, gemma)
 
+    assert not target.exists()
+
+
+def test_gemma_repair_invalid_output_retries_page_then_commits(tmp_path, monkeypatch):
+    from app.extraction import arabic_ocr
+
+    pdf = _make_pdf(tmp_path / "one.pdf", 1)
+    original_repair = arabic_ocr.repair_gemma_page
+    repair_calls = []
+
+    def repair(page, source_text):
+        repair_calls.append(page.page_number)
+        if len(repair_calls) == 1:
+            raise GemmaOutputInvalid("repetition found after parsing")
+        return original_repair(page, source_text)
+
+    monkeypatch.setattr(arabic_ocr, "repair_gemma_page", repair)
+    gemma = FakeGemma({1: "هذا النص العربي واضح"})
+
+    result = extract(
+        pdf,
+        tmp_path / "out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        gemma,
+    )
+
+    assert repair_calls == [1, 1]
+    assert gemma.requested_pages == [1, 1]
+    assert result.pages[0].markdown == "هذا النص العربي واضح"
+
+
+def test_repeated_gemma_repair_invalid_output_is_typed_retryable_failure(
+    tmp_path, monkeypatch
+):
+    from app.extraction import arabic_ocr
+
+    pdf = _make_pdf(tmp_path / "one.pdf", 1)
+    def repair_fails(_page, source_text):
+        raise GemmaOutputInvalid("repetition found after parsing")
+
+    monkeypatch.setattr(arabic_ocr, "repair_gemma_page", repair_fails)
+    target = tmp_path / "out"
+    gemma = FakeGemma({1: "هذا النص العربي واضح"})
+
+    with pytest.raises(ArabicExtractionFailed) as raised:
+        extract(
+            pdf,
+            target,
+            FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+            gemma,
+        )
+
+    assert raised.value.failure_kind == "invalid_output"
+    assert raised.value.retryable is True
+    assert gemma.requested_pages == [1, 1]
     assert not target.exists()
 
 

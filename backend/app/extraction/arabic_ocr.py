@@ -26,6 +26,7 @@ from app.extraction.arabic_types import (
     ClassificationDecision,
     DocumentRoute,
     GemmaKeysExhausted,
+    GemmaOutputInvalid,
     GemmaRequestInvalid,
     GeminiKeysExhausted,
     GeminiRequestInvalid,
@@ -67,6 +68,17 @@ _GEMINI_FALLBACK_KINDS = frozenset(
 
 class ArabicExtractionFailed(RuntimeError):
     """Arabic OCR did not produce a fully validated document."""
+
+
+class ArabicOcrBatchInvalid(ArabicExtractionFailed):
+    """A single OCR page stayed invalid after a bounded retry."""
+
+    failure_kind = "invalid_output"
+    retryable = True
+
+    def __init__(self, page_number: int) -> None:
+        self.page_number = page_number
+        super().__init__(f"Gemma Arabic OCR page {page_number} failed output validation.")
 
 
 def extract_arabic_document(
@@ -246,6 +258,7 @@ def extract_arabic_document(
         "arabic_gemma_fallback_model",
         settings.arabic_gemma_fallback_model,
     )
+    repair_retry_count = 0
     while next_page <= page_count:
         page = rendered_pages[next_page - 1]
         started = time.monotonic()
@@ -298,9 +311,27 @@ def extract_arabic_document(
             )
             raise ArabicExtractionFailed("Gemma Arabic OCR returned an invalid page.")
 
-        repaired_page = repair_gemma_page(
-            parsed.pages[0], source_text=source_texts[next_page - 1]
-        )
+        try:
+            repaired_page = repair_gemma_page(
+                parsed.pages[0], source_text=source_texts[next_page - 1]
+            )
+        except GemmaOutputInvalid:
+            provider_runs.append(
+                _provider_run(
+                    provider=_GEMMA_PROVIDER,
+                    model=result.model or gemma_model,
+                    requested_pages=(next_page,),
+                    committed_pages=(),
+                    attempt_count=result.attempt_count,
+                    latency_ms=result.latency_ms or _elapsed_ms(started),
+                    usage=result.usage,
+                    failure_kind="invalid_output",
+                )
+            )
+            if repair_retry_count == 0:
+                repair_retry_count = 1
+                continue
+            raise ArabicOcrBatchInvalid(next_page) from None
         page_map[next_page] = repaired_page
         provider_runs.append(
             _provider_run(
@@ -314,6 +345,7 @@ def extract_arabic_document(
             )
         )
         next_page += 1
+        repair_retry_count = 0
         _notify_progress(progress_callback, next_page - 1, page_count)
 
     if tuple(page_map) != tuple(range(1, page_count + 1)):
