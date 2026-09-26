@@ -42,3 +42,84 @@ def test_retrieval_output_lists_chunks_as_documents():
         assert shown == {"chunks": 1}
     finally:
         tracing.reset_for_tests()
+
+
+def test_retrieval_output_unwraps_wrapped_chunks_from_search_figure_chunks():
+    """Test that search_figure_chunks wrapped items are unwrapped before tracing."""
+    from app.chat.tracing_hooks import retrieval_output
+    from app.core import tracing
+
+    exporter = tracing.use_in_memory_exporter()
+    try:
+        with tracing.span("retrieve.figures", tracing.RETRIEVER):
+            # search_figure_chunks returns items shaped {"chunk": {...}, "assets": [...]}
+            shown = retrieval_output([
+                {"chunk": {"id": "fig1", "plain_text": "Figure description", "score": 0.9}, "assets": []},
+            ])
+        s = exporter.get_finished_spans()[0]
+        assert s.attributes["retrieval.documents.0.document.id"] == "fig1"
+        assert shown == {"chunks": 1}
+    finally:
+        tracing.reset_for_tests()
+
+
+def test_context_output_maps_section_summaries_from_overview_context():
+    """Test that build_overview_context section summaries are mapped correctly."""
+    from app.chat.tracing_hooks import context_output
+    from app.core import tracing
+
+    exporter = tracing.use_in_memory_exporter()
+    try:
+        with tracing.span("build_context.overview", tracing.RETRIEVER):
+            # build_overview_context returns section_summaries under that key
+            shown = context_output({
+                "paper_overview": None,
+                "section_summaries": [
+                    {
+                        "id": "s1",
+                        "heading_path": "Introduction",
+                        "summary_plain": "This section introduces the topic.",
+                        "level": 1,
+                    }
+                ],
+                "total": 1,
+            })
+        s = exporter.get_finished_spans()[0]
+        # Verify the section's heading_path was used as id and summary_plain as content
+        assert s.attributes["retrieval.documents.0.document.id"] == "Introduction"
+        assert "introduces the topic" in s.attributes.get("retrieval.documents.0.document.content", "")
+    finally:
+        tracing.reset_for_tests()
+
+
+def test_context_output_maps_web_results_from_external_context():
+    """Test that build_external_context web results are mapped correctly."""
+    from app.chat.tracing_hooks import context_output
+    from app.core import tracing
+
+    exporter = tracing.use_in_memory_exporter()
+    try:
+        with tracing.span("build_context.web", tracing.RETRIEVER):
+            # build_external_context returns results with title, url, snippet, score
+            shown = context_output({
+                "results": [
+                    {
+                        "title": "Research Paper",
+                        "url": "https://example.com/paper",
+                        "snippet": "A paper about AI",
+                        "score": 0.95,
+                    }
+                ],
+                "images": [],
+                "query": "AI research",
+                "original_query": "AI research",
+                "image_intent": False,
+            })
+        s = exporter.get_finished_spans()[0]
+        # Verify the url was used as id and title + snippet as content
+        assert s.attributes["retrieval.documents.0.document.id"] == "https://example.com/paper"
+        content = s.attributes.get("retrieval.documents.0.document.content", "")
+        assert "Research Paper" in content
+        assert "A paper about AI" in content
+    finally:
+        tracing.reset_for_tests()
