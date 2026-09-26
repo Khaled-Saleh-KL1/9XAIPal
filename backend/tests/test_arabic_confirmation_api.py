@@ -308,3 +308,16 @@ async def test_dispatch_failure_restores_typed_failed_state_without_leaking_erro
     assert job["status"] == "failed"
     assert job["error_code"] == "arabic_confirmation_dispatch_failed"
     assert document["status"] == "failed"
+
+    dispatched = []
+    monkeypatch.setattr(
+        documents_endpoint.process_ingestion,
+        "delay",
+        lambda *args: dispatched.append(args),
+    )
+    retry = await client.post(
+        f"/api/v1/papers/{document_id}/arabic-writing-style",
+        json={"writing_style": "printed"},
+    )
+    assert retry.status_code == 202
+    assert dispatched == [(str(document_id), str(job_id), f"{document_id}.pdf")]

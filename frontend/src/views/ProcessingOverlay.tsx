@@ -143,11 +143,15 @@ interface Props {
  * worker finishes a paper in a minute or two and a book in many, so a slot
  * rarely frees faster than this; the reader can always press Try again. */
 const QUEUE_FULL_RETRY_SECONDS = 45;
+const HANDWRITTEN_UNAVAILABLE_MESSAGE = 'Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.';
 
 function extractorLabel(ex: string | null | undefined): { label: string; tone: 'good' | 'warn' | 'pending' } {
   if (ex === 'mineru') return { label: 'MinerU (full layout + math + footnotes)', tone: 'good' };
   if (ex === 'pymupdf_fallback') return { label: 'PyMuPDF fallback (degraded: no math LaTeX, no table structure)', tone: 'warn' };
   if (ex === 'trafilatura') return { label: 'trafilatura (readable content + real images, hotlinked)', tone: 'good' };
+  if (ex === 'gemini_arabic_flash') return { label: 'Gemini Flash Arabic OCR', tone: 'good' };
+  if (ex === 'gemma4_arabic_fallback') return { label: 'Gemma 4 Arabic OCR fallback', tone: 'warn' };
+  if (ex === 'gemini_gemma_arabic_hybrid') return { label: 'Gemini + Gemma Arabic OCR', tone: 'warn' };
   return { label: 'Choosing extractor…', tone: 'pending' };
 }
 
@@ -173,7 +177,7 @@ export function ProcessingOverlay({
   const failed = status === 'failed';
   const declined = status === 'queue_full';
   const allowedActions = allowedActionsInput ?? [];
-  const handwrittenUnavailable = errorCode === 'handwritten_arabic_unavailable';
+  const handwrittenUnavailable = errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_gemini_pro_not_configured';
   const classifierUnavailable = errorCode === 'arabic_classifier_unavailable';
   const needsWritingStyleConfirmation =
     actionRequired === 'confirm_arabic_writing_style' && allowedActions.length > 0;
@@ -279,7 +283,7 @@ export function ProcessingOverlay({
           >
             {errorMessage || (classifierUnavailable
               ? 'Start Ollama and make sure the configured vision model is available, then retry.'
-              : 'Handwritten Arabic extraction is unavailable on this deployment.')}
+              : HANDWRITTEN_UNAVAILABLE_MESSAGE)}
           </div>
         )}
 

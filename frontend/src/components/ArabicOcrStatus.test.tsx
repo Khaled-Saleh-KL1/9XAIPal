@@ -12,11 +12,15 @@ describe('ArabicOcrStatus', () => {
     render(
       <ArabicOcrStatus
         errorCode="handwritten_arabic_unavailable"
-        errorMessage="Handwritten Arabic extraction is unavailable."
       />,
     );
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Handwritten Arabic extraction is unavailable.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.');
+  });
+
+  it('also blocks the Pro-not-configured state', () => {
+    render(<ArabicOcrStatus errorCode="arabic_gemini_pro_not_configured" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('No text was extracted');
   });
 
   it('sends the selected writing style', async () => {

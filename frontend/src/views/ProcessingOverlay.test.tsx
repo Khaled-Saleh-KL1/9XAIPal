@@ -21,7 +21,7 @@ describe('ProcessingOverlay Arabic states', () => {
   });
   it('keeps the full handwritten-unavailable message in a blocking alert', () => {
     const message =
-      'Handwritten Arabic extraction is unavailable. This deployment does not have a billing-enabled account with Gemini Pro access; printed Arabic documents can still be processed.';
+      'Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.';
 
     render(
       <ProcessingOverlay
@@ -35,6 +35,19 @@ describe('ProcessingOverlay Arabic states', () => {
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent(message);
+  });
+
+  it('also blocks the Pro-not-configured state', () => {
+    render(
+      <ProcessingOverlay
+        file={file}
+        status="failed"
+        errorCode="arabic_gemini_pro_not_configured"
+        onClose={noop}
+        onCancel={noop}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('No text was extracted');
   });
 
   it('offers printed and handwritten actions and sends the selected value', async () => {

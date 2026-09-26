@@ -38,9 +38,9 @@ from app.extraction.arabic_types import (
 logger = get_logger(__name__)
 
 ProgressCallback = Callable[[int, int], None]
-_EXTRACTOR = "arabic_ocr"
 _GEMINI_PROVIDER = "gemini_arabic_flash"
 _GEMMA_PROVIDER = "gemma4_arabic_fallback"
+_HYBRID_EXTRACTOR = "gemini_gemma_arabic_hybrid"
 _GEMINI_FALLBACK_KINDS = frozenset(
     {
         "no_keys_configured",
@@ -354,6 +354,7 @@ def extract_arabic_document(
         raise ArabicExtractionFailed("The Arabic OCR result contains a page gap or duplicate.")
 
     final_pages = tuple(page_map[number] for number in range(1, page_count + 1))
+    extractor = _extractor_from_pages(final_pages)
     provider_summary = _provider_summary(final_pages)
     total_usage = _sum_usage(usage_parts)
     try:
@@ -366,6 +367,7 @@ def extract_arabic_document(
         _write_artifacts(
             staging_dir,
             final_pages,
+            extractor,
             classification,
             provider_summary,
             provider_runs,
@@ -382,11 +384,22 @@ def extract_arabic_document(
 
     return ArabicExtractionResult(
         output_dir=target_dir,
-        extractor=_EXTRACTOR,
+        extractor=extractor,
         pages=final_pages,
         provider_summary=provider_summary,
         usage=total_usage,
     )
+
+
+def _extractor_from_pages(pages: Sequence[ArabicOcrPage]) -> str:
+    providers = {page.provider for page in pages}
+    if providers == {_GEMINI_PROVIDER}:
+        return _GEMINI_PROVIDER
+    if providers == {_GEMMA_PROVIDER}:
+        return _GEMMA_PROVIDER
+    if providers == {_GEMINI_PROVIDER, _GEMMA_PROVIDER}:
+        return _HYBRID_EXTRACTOR
+    raise ArabicExtractionFailed("The Arabic OCR provider provenance is invalid.")
 
 
 def _render_document(pdf_path: Path, dpi: int) -> tuple[list[RenderedPage], list[str]]:
@@ -525,6 +538,7 @@ def _classification_manifest(decision: ClassificationDecision) -> dict[str, Any]
 def _write_artifacts(
     staging_dir: Path,
     pages: Sequence[ArabicOcrPage],
+    extractor: str,
     classification: ClassificationDecision,
     provider_summary: list[dict[str, Any]],
     provider_runs: Sequence[dict[str, Any]],
@@ -551,7 +565,7 @@ def _write_artifacts(
     ]
     manifest = {
         "schema_version": 1,
-        "extractor": _EXTRACTOR,
+        "extractor": extractor,
         "classification": _classification_manifest(classification),
         "page_count": page_count,
         "rendering": {"dpi": config.arabic_ocr_dpi, "color_space": "RGB"},

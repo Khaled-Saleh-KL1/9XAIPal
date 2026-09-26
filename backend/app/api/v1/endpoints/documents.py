@@ -1061,7 +1061,10 @@ async def confirm_arabic_writing_style(
     if (
         not job
         or job["status"] != "failed"
-        or job["error_code"] != "arabic_style_confirmation_required"
+        or job["error_code"] not in {
+            "arabic_style_confirmation_required",
+            "arabic_confirmation_dispatch_failed",
+        }
     ):
         raise HTTPException(
             status_code=409,
@@ -1216,6 +1219,13 @@ async def reextract_paper(
             SET status = 'processing',
                 error_message = NULL,
                 extractor = NULL,
+                detected_language = NULL,
+                detected_writing_style = NULL,
+                text_direction = NULL,
+                classifier_model = NULL,
+                classification_confidence = NULL,
+                classification_source = NULL,
+                ocr_provider_summary = NULL,
                 updated_at = NOW()
             WHERE id = :id
         """),

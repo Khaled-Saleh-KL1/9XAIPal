@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
+import asyncio
 import os
 from pathlib import Path
 
@@ -187,6 +188,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await verify_connection()
     await apply_migrations()
 
+    if settings.arabic_ocr_enabled:
+        from app.extraction.arabic_capability import probe_printed_flash
+        await asyncio.to_thread(probe_printed_flash, settings)
+
     # Report which AI backend auto-detection picked (Ollama → cloud API keys
     # → clear configure-me message).
     await _report_ai_backend()
@@ -220,4 +225,3 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.core.redis import close_redis
     await close_redis()
     await engine.dispose()
-

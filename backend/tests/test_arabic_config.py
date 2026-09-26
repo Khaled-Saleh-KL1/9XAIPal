@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.extraction.arabic_types import HandwrittenArabicUnavailable
 
 
 def test_gemini_keys_are_trimmed_and_empty_values_are_dropped():
@@ -24,6 +25,14 @@ def test_arabic_features_are_safe_by_default():
     assert cfg.arabic_gemini_handwritten_model == "gemini-3.1-pro-preview"
 
 
+def test_handwritten_unavailable_message_matches_public_contract():
+    assert HandwrittenArabicUnavailable.public_message == (
+        "Handwritten Arabic extraction is not currently available because it "
+        "requires Gemini Pro with a billing-enabled account. No text was "
+        "extracted, and your original file has been kept."
+    )
+
+
 def test_arabic_gemma_uses_a_separate_cloud_endpoint_and_key_list():
     cfg = Settings(
         arabic_gemma_api_keys_raw=" cloud-1, ,cloud-2 ",
@@ -43,3 +52,9 @@ def test_arabic_gemma_accepts_the_existing_ollama_cloud_key(monkeypatch):
 def test_classifier_thresholds_are_bounded():
     with pytest.raises(ValidationError):
         Settings(arabic_classifier_confidence_min=1.1, _env_file=None)
+
+
+@pytest.mark.parametrize("invalid", ["medium", "high", "minimal", ""])
+def test_printed_flash_rejects_any_thinking_level_except_low(invalid):
+    with pytest.raises(ValidationError):
+        Settings(arabic_gemini_printed_thinking_level=invalid, _env_file=None)

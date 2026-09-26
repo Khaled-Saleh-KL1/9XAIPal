@@ -1,5 +1,7 @@
 import type { ArabicWritingStyle } from '../api';
 
+const HANDWRITTEN_UNAVAILABLE_MESSAGE = 'Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.';
+
 interface Props {
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -17,7 +19,7 @@ export function ArabicOcrStatus({
   confirmationPending = false,
   onConfirmWritingStyle,
 }: Props) {
-  if (errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_classifier_unavailable') {
+  if (errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_gemini_pro_not_configured' || errorCode === 'arabic_classifier_unavailable') {
     return (
       <div
         className="mx-3 mb-3 rounded-md px-3 py-2 text-[12px] leading-relaxed sm:mx-4"
@@ -26,7 +28,7 @@ export function ArabicOcrStatus({
       >
         {errorMessage || (errorCode === 'arabic_classifier_unavailable'
           ? 'Start Ollama and make sure the configured vision model is available, then retry.'
-          : 'Handwritten Arabic extraction is unavailable on this deployment.')}
+          : HANDWRITTEN_UNAVAILABLE_MESSAGE)}
       </div>
     );
   }

@@ -51,11 +51,13 @@ feature. If the model cannot fit or is being unintentionally offloaded, do not
 enable Arabic routing; lower the workload only through a separately reviewed
 configuration change.
 
-Every PDF page is checked for selectable text and embedded images. Text-only
-English PDFs with enough Latin text take the no-model fast path; if the PDF has
-embedded images, Arabic text, or insufficient text, local Ollama visually
-screens every page before routing. Low-confidence or handwriting-like cases
-receive a second full-page-plus-region vote and unresolved cases abstain.
+Every PDF page is checked for selectable text. A page with a clear English
+text layer remains English even if it has figures or logos, and an entirely
+clear English document takes the no-model fast path. Pages with Arabic body
+text still require local writing-style classification. Pages with missing or
+sparse text need local visual language screening; a high-confidence Arabic
+vote also needs a full-page-plus-region detail confirmation. Unresolved cases
+abstain.
 Synthetic unit tests prove these decision rules and routing behavior, but do
 **not** establish real-world classifier precision/recall. Those rates remain
 unmeasured until the labeled held-out corpus is supplied.
@@ -81,12 +83,16 @@ Relevant variable names (no values are included here):
 - `GEMINI_API_KEYS` — comma-separated Gemini Flash keys for printed Arabic.
   Keys are tried through the configured cascade.
 - `ARABIC_GEMINI_PRINTED_MODEL`,
-  `ARABIC_GEMINI_PRINTED_THINKING_LEVEL` — defaults are
+  `ARABIC_GEMINI_PRINTED_THINKING_LEVEL`,
+  `ARABIC_GEMINI_TIMEOUT_SECONDS`, and
+  `ARABIC_GEMINI_RETRY_AFTER_MAX_SECONDS` — defaults are
   `gemini-3.7-flash` and `low`. Low is the model's lowest supported level, not
   thinking-off: the current Gemini API documents no full thinking-off mode for
   Gemini 3 Flash, and its Gemini 3.7 Flash table supports `low`, `medium`, and
   `high` only. Thought tokens may still be billed and are included in eval COGS
   reporting. See Google's [thinking-level table and controls](https://ai.google.dev/gemini-api/docs/generate-content/thinking).
+  The request timeout defaults to 120 seconds; a Retry-After delay is used
+  once on a key only when it is at most 10 seconds by default.
 - `ARABIC_GEMINI_HANDWRITTEN_MODEL` — configured as
   `gemini-3.1-pro-preview` for future billing-enabled work, but never called
   while handwritten OCR is disabled.
@@ -133,6 +139,11 @@ config` command before restarting services.
    `ARABIC_OCR_ENABLED=true` in the sandbox environment and recreate both
    API and worker services so they read the same settings. Keep
    `ARABIC_HANDWRITTEN_OCR_ENABLED=false`.
+   Both services probe every configured printed Flash key at startup with a
+   small request. They record only key index and success/failure. If no key
+   works, startup fails with a configuration error; check key access, model
+   availability, and quota before retrying. The disabled Pro model is never
+   probed. Startup probing consumes one Flash request per key per service.
 5. Upload the English, printed Arabic, mixed, uncertain, and handwritten
    controls from the approved sandbox set. Check route/status metadata,
    reading order/direction, page completeness, and error persistence. Do not
@@ -149,6 +160,9 @@ config` command before restarting services.
   handwritten. Printed confirmation requeues the same job; handwritten
   confirmation records the choice and leaves the job unavailable, with no
   Gemini Pro call and no chunks.
+- `arabic_classifier_unavailable` means the local Ollama classifier could not
+  route a page without a clear English text layer. Start Ollama, check the
+  configured vision model, and retry. Clear English pages continue to MinerU.
 - `handwritten_arabic_unavailable` is the explicit user-facing handwritten
   state. `arabic_gemini_pro_not_configured` is the internal typed state if an
   operator tries to enable handwritten processing without billing access.

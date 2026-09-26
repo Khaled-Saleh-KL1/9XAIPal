@@ -445,7 +445,7 @@ def _persist_arabic_classification(
             "writing_style": classification.writing_style,
             "direction": classification.text_direction,
             "classifier_model": classification.classifier_model or None,
-            "confidence": classification.confidence,
+            "confidence": None if source == "user_confirmed" else classification.confidence,
             "source": source,
             "id": document_id,
         },
@@ -560,7 +560,11 @@ def run_pipeline_sync(
         # U+FFFD wherever the paper used a Mathematical Alphanumeric Symbol
         # (𝑛, 𝑚, 𝑇 …); the PDF still knows, so we read it back.
         # See app/extraction/glyph_repair.py.
-        if extractor != "arabic_ocr":
+        if extractor not in {
+            "gemini_arabic_flash",
+            "gemma4_arabic_fallback",
+            "gemini_gemma_arabic_hybrid",
+        }:
             try:
                 repair_chunks(chunks, pdf_path)
             except Exception:

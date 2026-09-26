@@ -356,6 +356,7 @@ def test_truncated_batch_keeps_complete_gemini_prefix(four_page_pdf, tmp_path):
 
     result = extract(four_page_pdf, tmp_path / "out", gemini, gemma)
 
+    assert result.extractor == "gemini_gemma_arabic_hybrid"
     assert result.provider_summary == [
         {"provider": "gemini_arabic_flash", "pages": [1, 2]},
         {"provider": "gemma4_arabic_fallback", "pages": [3, 4]},
@@ -451,10 +452,23 @@ def test_document_at_threshold_uses_one_gemini_request(four_page_pdf, tmp_path):
     gemini = FakeGemini(_gemini_batch(response_text))
     gemma = FakeGemma({})
 
-    extract(four_page_pdf, tmp_path / "out", gemini, gemma)
+    result = extract(four_page_pdf, tmp_path / "out", gemini, gemma)
 
+    assert result.extractor == "gemini_arabic_flash"
     assert gemini.requested_pages == [[1, 2, 3, 4]]
     assert gemma.requested_pages == []
+
+
+def test_gemma_only_result_reports_gemma_extractor(tmp_path):
+    pdf = _make_pdf(tmp_path / "one.pdf", 1)
+    result = extract(
+        pdf,
+        tmp_path / "out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        FakeGemma({1: "نص عربي مطبوع"}),
+    )
+
+    assert result.extractor == "gemma4_arabic_fallback"
 
 
 def test_large_document_uses_consecutive_four_page_batches(tmp_path):

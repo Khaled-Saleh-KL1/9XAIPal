@@ -51,9 +51,9 @@ class HandwrittenArabicUnavailable(ArabicRoutingError):
 
     error_code = "handwritten_arabic_unavailable"
     public_message = (
-        "Handwritten Arabic extraction is unavailable. This deployment does "
-        "not have a billing-enabled account with Gemini Pro access; printed "
-        "Arabic documents can still be processed."
+        "Handwritten Arabic extraction is not currently available because it "
+        "requires Gemini Pro with a billing-enabled account. No text was "
+        "extracted, and your original file has been kept."
     )
 
     def __init__(self) -> None:

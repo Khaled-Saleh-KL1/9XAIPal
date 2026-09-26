@@ -75,7 +75,7 @@ def _pipeline_mocks(monkeypatch, tmp_path, *, extractor="mineru"):
     arabic_extractor = MagicMock(
         return_value=SimpleNamespace(
             output_dir=output_dir,
-            extractor="arabic_ocr",
+            extractor="gemini_arabic_flash",
             provider_summary=[
                 {"provider": "gemini_arabic_flash", "pages": [1]}
             ],
@@ -312,7 +312,7 @@ def test_printed_arabic_and_mixed_use_new_route_and_persist_summary(
     mocks.gemma_factory.assert_called_once()
     mocks.repair.assert_not_called()
     stored = _stored_document(db_session_sync, document_id)
-    assert stored["extractor"] == "arabic_ocr"
+    assert stored["extractor"] == "gemini_arabic_flash"
     assert stored["detected_language"] == language
     assert stored["detected_writing_style"] == "printed"
     assert stored["text_direction"] == "rtl"
@@ -425,6 +425,7 @@ def test_user_confirmed_style_is_reused_without_reclassification(
     mocks.arabic_extractor.assert_called_once()
     assert mocks.arabic_extractor.call_args.kwargs["classification"].route == DocumentRoute.ARABIC_PRINTED
     assert _stored_document(db_session_sync, document_id)["classification_source"] == "user_confirmed"
+    assert _stored_document(db_session_sync, document_id)["classification_confidence"] is None
 
 
 def test_handwritten_pro_flag_still_never_constructs_a_gemini_client(

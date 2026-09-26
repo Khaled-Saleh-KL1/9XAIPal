@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import text
 
 from app.main import app
+from app.api.v1.endpoints import documents as documents_endpoint
 
 
 @pytest.fixture(autouse=True)
@@ -212,3 +213,29 @@ async def test_old_document_with_null_arabic_metadata_serializes(client, db_sess
     assert progress.json()["text_direction"] is None
     assert full_document.json()["text_direction"] is None
     assert full_document.json()["ocr_provider_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_reextract_clears_stale_arabic_route_metadata(client, db_session, monkeypatch):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session,
+        await _user_id(db_session, email),
+        language="arabic",
+        writing_style="printed",
+        direction="rtl",
+        source="automatic",
+        confidence=0.99,
+        provider_summary=[{"provider": "gemini_arabic_flash", "pages": [1]}],
+    )
+    monkeypatch.setattr(documents_endpoint.process_ingestion, "delay", lambda *_args: None)
+
+    response = await client.post(f"/api/v1/papers/{document_id}/reextract")
+
+    assert response.status_code == 202
+    row = (await db_session.execute(text(
+        "SELECT detected_language, detected_writing_style, text_direction, "
+        "classifier_model, classification_confidence, classification_source, "
+        "ocr_provider_summary FROM documents WHERE id=:id"
+    ), {"id": document_id})).mappings().one()
+    assert all(value is None for value in row.values())

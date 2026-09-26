@@ -7,6 +7,16 @@ from app.database.repositories.documents import list_documents
 from app.extraction.pipeline_sync import update_job_status_sync
 from app.schemas.documents import DocumentResponse
 from app.services.ingestion import requeue_failed_job, update_job_status
+from app.api.arabic_status import document_error_fields
+
+
+def test_non_arabic_error_keeps_actionable_document_message():
+    fields = document_error_fields({
+        "error_message": "Failed to queue ingestion task. Start Redis and retry.",
+        "job_error_message": "Dispatch failed: private connection detail",
+        "job_error_code": None,
+    })
+    assert fields["error_message"] == "Failed to queue ingestion task. Start Redis and retry."
 
 
 def _insert_job_sync(session, status="queued"):
