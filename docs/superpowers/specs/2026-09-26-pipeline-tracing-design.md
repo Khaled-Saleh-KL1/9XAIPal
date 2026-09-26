@@ -159,8 +159,8 @@ computed from the job's `created_at` to task start.
 ## 6. Phoenix service
 
 - `docker-compose.prod.yml` gains `9xaipal-phoenix` (image pinned to a
-  specific Phoenix release), on the internal network only, with no published
-  port.
+  specific Phoenix release), on the internal network only, with a port
+  published only on 127.0.0.1:6006 so host nginx can reach it.
 - Storage: database `phoenix` on the existing `9xaipal-postgres`, created
   idempotently by the deploy step. Phoenix manages its own schema.
 - Limits: 512 MB memory, 1 CPU.

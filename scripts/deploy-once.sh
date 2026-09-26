@@ -59,10 +59,19 @@ case "$SCOPE" in
   full|both|frontend) build_frontend ;;
 esac
 
+ensure_phoenix() {
+  # Phoenix keeps its traces in its own database on the shared Postgres.
+  (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml exec -T postgres sh -c \
+    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT 1 FROM pg_database WHERE datname = '"'"'phoenix'"'"'" | grep -q 1 \
+     || psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE DATABASE phoenix"')
+  (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d phoenix)
+}
+
 case "$SCOPE" in
   full)
     echo "Building and restarting every container..."
     (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build)
+    ensure_phoenix
     ;;
   both|backend)
     # Only the two services built from this repo. postgres, redis and
@@ -71,6 +80,7 @@ case "$SCOPE" in
     # intent explicit and the output short.
     echo "Rebuilding and restarting api + celery_worker..."
     (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build api celery_worker)
+    ensure_phoenix
     ;;
   frontend|none)
     echo "No container rebuilt or restarted (scope: $SCOPE)."
