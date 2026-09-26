@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.lifecycle import lifespan
 from app.core.security import SecurityHeadersMiddleware, RateLimitMiddleware
+from app.core.tracing_http import TraceRequestMiddleware
 from app.core.version import APP_VERSION
 from app.api.v1.router import api_router
 from app.api.errors import register_exception_handlers
@@ -33,6 +34,9 @@ app.add_middleware(
     # filename when the frontend is hosted on a different origin.
     expose_headers=["Content-Disposition", "Content-Length"],
 )
+
+# Outermost: one root span per mutating API request (no-op unless TRACE_ENABLED).
+app.add_middleware(TraceRequestMiddleware)
 
 app.include_router(api_router, prefix="/api/v1")
 register_exception_handlers(app)
