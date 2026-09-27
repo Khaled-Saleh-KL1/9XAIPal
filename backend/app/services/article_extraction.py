@@ -48,6 +48,7 @@ buys: no storage, no risk of pulling arbitrary bytes onto this server for an
 the AI to look closely at one specific photo isn't supported for articles.
 """
 
+import concurrent.futures
 import json
 import re
 from dataclasses import dataclass, field
@@ -83,7 +84,7 @@ PDF_CONTENT_TYPE = "application/pdf"
 # addition to Content-Type because a server can mislabel or omit the type —
 # /upload's own guard reads the magic bytes for the same reason.
 PDF_MAGIC = b"%PDF-"
-MAX_IMAGES = 20
+MAX_IMAGES = 60
 # Below this, almost certainly a spacer GIF, a UI icon, or a tracking pixel —
 # not a figure worth showing in the reading flow. Found empirically: Wikipedia's
 # page-protection lock badge and a 1x1 transparent GIF both showed up as
@@ -470,9 +471,10 @@ def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
     # No private-address pre-check here: safe_send_sync re-runs exactly that
     # check on its first hop, and both outcomes end at `return False` below,
     # so a pre-check only buys a second blocking getaddrinfo per image. With
-    # MAX_IMAGES at 20 and a HEAD plus a ranged-GET fallback each, that was up
-    # to 40 redundant lookups per article, none of them timeout-bounded
-    # (socket.getaddrinfo takes no timeout), on a --concurrency=1 worker.
+    # MAX_IMAGES at 60 and a HEAD plus a ranged-GET fallback each, that would
+    # be up to 120 redundant lookups per article, none of them timeout-bounded
+    # (socket.getaddrinfo takes no timeout) — run across a small thread pool
+    # rather than serially, but still not worth doubling up on.
     try:
         # ⚠ Same User-Agent as the page fetch — found empirically: Wikimedia's
         # image CDN (and likely others) answers a User-Agent-less HEAD with a
@@ -921,8 +923,15 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     # inside _is_worth_keeping) forces it off on every call and walks
     # redirects itself, hop by hop, re-checked; a client-level True here
     # would be dead configuration that reads as if it still did something.
+    #
+    # The checks themselves run concurrently — httpx.Client is thread-safe,
+    # and with MAX_IMAGES now at 60 a fully serial HEAD-then-maybe-ranged-GET
+    # per image would be a long, and pointless, wait: none of these requests
+    # depend on each other.
     with httpx.Client(transport=safe_sync_transport()) as client:
-        kept = {u for u in candidates if _is_worth_keeping(client, u)}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            checked = pool.map(lambda u: (u, _is_worth_keeping(client, u)), candidates)
+            kept = {u for u, worth_keeping in checked if worth_keeping}
 
     all_refs = _image_urls_in(markdown)
     markdown = _drop_image_refs(markdown, {u for u in all_refs if u not in kept})
