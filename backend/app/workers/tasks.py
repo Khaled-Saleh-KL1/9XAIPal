@@ -39,7 +39,36 @@ def _mark_document_and_job_complete(session, doc_uuid: UUID) -> None:
     This is the full-pipeline completion helper. The fast path marks a paper
     complete in extraction/pipeline_sync.py and may later add retrieval-only
     figure metadata without changing the document's ready state.
+
+    ⚠ Looks at the document first. Production had a 916-page book at
+    'complete' with a stored error message AND 0 chunks, because this helper
+    set it complete without checking: a document extraction already failed
+    stays failed, and one with no chunks is failed rather than shown as an
+    empty finished book.
     """
+    doc_row = session.execute(
+        text("SELECT status FROM documents WHERE id = :doc_id"),
+        {"doc_id": doc_uuid},
+    ).mappings().first()
+    current_status = doc_row.get("status") if doc_row else None
+
+    if current_status == "failed":
+        logger.warning(
+            f"[complete-guard] document {doc_uuid} is already 'failed' — not "
+            "marking it (or its job) complete"
+        )
+        return
+
+    chunk_count = session.execute(
+        text("SELECT COUNT(*) FROM chunks WHERE document_id = :doc_id"),
+        {"doc_id": doc_uuid},
+    ).scalar()
+    if not chunk_count:
+        _mark_document_and_job_failed(
+            session, doc_uuid, "No readable text was extracted from this document."
+        )
+        return
+
     update_document_status_sync(session, doc_uuid, "complete")
     job_row = session.execute(
         text(
