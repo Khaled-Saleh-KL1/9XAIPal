@@ -677,6 +677,50 @@ def run_pipeline_sync(
         raise e
 
 
+_ARABIC_SCRIPT_RANGES = (
+    (0x0600, 0x06FF),
+    (0x0750, 0x077F),
+    (0x08A0, 0x08FF),
+    (0xFB50, 0xFDFF),
+    (0xFE70, 0xFEFF),
+)
+
+
+def _mark_rtl_if_arabic(session: Session, document_id: UUID, texts: list[str]) -> None:
+    """Flip a document's reading direction to RTL when its extracted text is
+    predominantly Arabic-script.
+
+    With the Arabic OCR route switched off (see arabic_classifier.py /
+    arabic_ocr.py), `documents.text_direction` stays NULL for every
+    document — including one that legitimately is Arabic prose extracted
+    through the ordinary, non-Arabic-aware path — and the reader defaults
+    to left-to-right. This is a cheap, extraction-path-agnostic backstop:
+    it looks only at the plain text every pipeline already produces, not at
+    which route produced it, and it never overwrites a direction someone
+    (or the Arabic route) already set.
+    """
+    total_letters = 0
+    arabic_letters = 0
+    for t in texts:
+        if not t:
+            continue
+        for ch in t:
+            if not ch.isalpha():
+                continue
+            total_letters += 1
+            cp = ord(ch)
+            if any(lo <= cp <= hi for lo, hi in _ARABIC_SCRIPT_RANGES):
+                arabic_letters += 1
+
+    if total_letters < 50 or (arabic_letters / total_letters) < 0.30:
+        return
+
+    session.execute(
+        text("UPDATE documents SET text_direction = 'rtl' WHERE id = :id AND text_direction IS NULL"),
+        {"id": document_id},
+    )
+
+
 @tracing.traced("persist", tracing.CHAIN, input=lambda session, **kw: {k: kw.get(k) for k in ("document_id", "job_id", "page_count")} | {"chunks": len(kw.get("chunks") or []), "assets": len(kw.get("asset_map") or {})})
 def _finish_ingestion(
     session: Session,
@@ -756,6 +800,13 @@ def _finish_ingestion(
     # Commit the transaction atomically
     session.commit()
     logger.info(f"Synchronously persisted {len(chunks)} chunks and {len(asset_payloads)} assets for document {document_id}")
+
+    # Best-effort direction flip — see _mark_rtl_if_arabic's docstring for why
+    # this is needed even with the Arabic OCR route off. Shared by both PDF
+    # (run_pipeline_sync) and article (run_article_pipeline_sync) ingestion,
+    # since both funnel through this one persistence tail.
+    _mark_rtl_if_arabic(session, document_id, [c.get("plain_text") or "" for c in chunks])
+    session.commit()
 
     # Step 5a: Fast profile — extraction is the document pipeline. Mark the
     # document complete right here, then optionally build the small,

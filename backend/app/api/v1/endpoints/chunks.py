@@ -349,7 +349,11 @@ def _is_plausible_chapter_heading(text: str) -> bool:
         return False
     # Markdown escaping survives extraction, so strip it before deciding a
     # divider has no words: "\\* \\* \\*" is punctuation, not a title.
-    if not re.search(r"[A-Za-z0-9]", t.replace("\\", "")):
+    # A Unicode letter/digit, not just ASCII — an Arabic (or other
+    # non-Latin-script) chapter title has no ASCII letters at all and was
+    # being rejected here as an "ornamental divider", leaving Arabic books
+    # with no chapter list at all.
+    if not re.search(r"[^\W_]", t.replace("\\", "")):
         return False
     if t.endswith(":") and len(t.split()) <= 6:
         return False

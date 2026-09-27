@@ -48,6 +48,7 @@ buys: no storage, no risk of pulling arbitrary bytes onto this server for an
 the AI to look closely at one specific photo isn't supported for articles.
 """
 
+import concurrent.futures
 import json
 import re
 from dataclasses import dataclass, field
@@ -83,7 +84,7 @@ PDF_CONTENT_TYPE = "application/pdf"
 # addition to Content-Type because a server can mislabel or omit the type —
 # /upload's own guard reads the magic bytes for the same reason.
 PDF_MAGIC = b"%PDF-"
-MAX_IMAGES = 20
+MAX_IMAGES = 60
 # Below this, almost certainly a spacer GIF, a UI icon, or a tracking pixel —
 # not a figure worth showing in the reading flow. Found empirically: Wikipedia's
 # page-protection lock badge and a 1x1 transparent GIF both showed up as
@@ -283,6 +284,60 @@ def _url_width_hint(url: str) -> float:
     return 0.0
 
 
+def _split_srcset(value: str) -> list[str]:
+    """Split a srcset attribute value into `url [descriptor]` candidate
+    strings, following the shape of the HTML living-standard's own srcset
+    parsing: a URL is a run of non-whitespace characters, and a comma only
+    separates candidates when it trails a URL directly (no descriptor) or
+    terminates the descriptor that follows it.
+
+    A naive `value.split(",")` cuts a candidate apart the moment its URL
+    itself contains a comma — common on image CDNs whose transform path
+    encodes options that way, e.g. Substack's
+    `$s_!oL5G!,w_424,c_limit,f_webp,q_auto:good,fl_progressive:steep/...`.
+    That left the "best" candidate resolving to a bare fragment like
+    `fl_progressive:steep/https%3A...jpeg`, a 404.
+    """
+    out: list[str] = []
+    i, n = 0, len(value)
+    while i < n:
+        while i < n and (value[i].isspace() or value[i] == ","):
+            i += 1
+        if i >= n:
+            break
+        start = i
+        while i < n and not value[i].isspace():
+            i += 1
+        url = value[start:i]
+        descriptor = ""
+        if url.endswith(","):
+            # No descriptor: this comma ends the candidate, not a URL path
+            # segment (a real URL segment never ends a whitespace-delimited
+            # token with a bare trailing comma).
+            url = url.rstrip(",")
+        else:
+            while i < n and value[i].isspace():
+                i += 1
+            desc_start = i
+            depth = 0
+            while i < n:
+                c = value[i]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth = max(0, depth - 1)
+                elif c == "," and depth == 0:
+                    break
+                i += 1
+            descriptor = value[desc_start:i].strip()
+            if i < n and value[i] == ",":
+                i += 1  # skip the comma that ended this candidate
+        if not url:
+            continue
+        out.append(f"{url} {descriptor}" if descriptor else url)
+    return out
+
+
 def _srcset_candidates(value: str) -> list[tuple[float, str]]:
     """Every `url [descriptor]` pair in a srcset, scored by declared width.
 
@@ -291,7 +346,7 @@ def _srcset_candidates(value: str) -> list[tuple[float, str]]:
     single srcset in practice, so the two scales never need to agree.
     """
     out: list[tuple[float, str]] = []
-    for part in value.split(","):
+    for part in _split_srcset(value):
         m = _SRCSET_ENTRY_RE.match(part)
         if not m or not m.group(1):
             continue
@@ -416,9 +471,10 @@ def _is_worth_keeping(client: httpx.Client, url: str) -> bool:
     # No private-address pre-check here: safe_send_sync re-runs exactly that
     # check on its first hop, and both outcomes end at `return False` below,
     # so a pre-check only buys a second blocking getaddrinfo per image. With
-    # MAX_IMAGES at 20 and a HEAD plus a ranged-GET fallback each, that was up
-    # to 40 redundant lookups per article, none of them timeout-bounded
-    # (socket.getaddrinfo takes no timeout), on a --concurrency=1 worker.
+    # MAX_IMAGES at 60 and a HEAD plus a ranged-GET fallback each, that would
+    # be up to 120 redundant lookups per article, none of them timeout-bounded
+    # (socket.getaddrinfo takes no timeout) — run across a small thread pool
+    # rather than serially, but still not worth doubling up on.
     try:
         # ⚠ Same User-Agent as the page fetch — found empirically: Wikimedia's
         # image CDN (and likely others) answers a User-Agent-less HEAD with a
@@ -867,8 +923,15 @@ def extract_article_from_html(html: str, url: str) -> ArticleExtraction:
     # inside _is_worth_keeping) forces it off on every call and walks
     # redirects itself, hop by hop, re-checked; a client-level True here
     # would be dead configuration that reads as if it still did something.
+    #
+    # The checks themselves run concurrently — httpx.Client is thread-safe,
+    # and with MAX_IMAGES now at 60 a fully serial HEAD-then-maybe-ranged-GET
+    # per image would be a long, and pointless, wait: none of these requests
+    # depend on each other.
     with httpx.Client(transport=safe_sync_transport()) as client:
-        kept = {u for u in candidates if _is_worth_keeping(client, u)}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            checked = pool.map(lambda u: (u, _is_worth_keeping(client, u)), candidates)
+            kept = {u for u, worth_keeping in checked if worth_keeping}
 
     all_refs = _image_urls_in(markdown)
     markdown = _drop_image_refs(markdown, {u for u in all_refs if u not in kept})
