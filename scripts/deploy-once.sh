@@ -59,6 +59,16 @@ case "$SCOPE" in
   full|both|frontend) build_frontend ;;
 esac
 
+# Nothing else trims BuildKit's cache: the daemon's builder.gc policy
+# (/etc/docker/daemon.json, 28 GB cap) was not keeping it bounded in
+# practice, and each rebuild of the ~11 GB MinerU worker image leaves the
+# previous build's layers behind — 46.6 GB of cache on the 96 GB VPS by
+# 2026-09-27. Only cache no build has used in the last day is dropped, so
+# the layers this deploy just used (the next deploy's speed) are kept.
+prune_build_cache() {
+  docker builder prune -f --filter until=24h >/dev/null
+}
+
 ensure_phoenix() {
   # Phoenix keeps its traces in its own database on the shared Postgres.
   (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml exec -T postgres sh -c \
@@ -72,6 +82,7 @@ case "$SCOPE" in
     echo "Building and restarting every container..."
     (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build)
     ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
+    prune_build_cache || echo "::warning::Build-cache cleanup failed; disk use may keep growing" >&2
     ;;
   both|backend)
     # Only the two services built from this repo. postgres, redis and
@@ -81,6 +92,7 @@ case "$SCOPE" in
     echo "Rebuilding and restarting api + celery_worker..."
     (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build api celery_worker)
     ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
+    prune_build_cache || echo "::warning::Build-cache cleanup failed; disk use may keep growing" >&2
     ;;
   frontend)
     echo "Building frontend..."
