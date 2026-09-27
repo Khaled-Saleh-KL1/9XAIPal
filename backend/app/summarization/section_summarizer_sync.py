@@ -113,12 +113,26 @@ def get_paper_overview_prompt() -> str:
     return PAPER_OVERVIEW_PROMPT_V1
 
 
-def _make_section_id(heading_path: list[str], level: int) -> str:
-    """Create a stable section identifier."""
+def _make_section_id(heading_path: list[str], level: int, sequence_start: int | None) -> str:
+    """Create a stable section identifier.
+
+    `re.sub(r"[^a-z0-9]+", ...)` used to strip every non-ASCII letter from
+    the slug, so any Arabic (or other non-Latin-script) heading collapsed to
+    an empty slug and every such section got the same id ("h1-"). Rows are
+    upserted on the unique key (document_id, section_id, model), so each new
+    section silently overwrote the previous one. A Unicode-aware class
+    (`[\\W_]`) keeps the heading's own letters in the slug instead, and a
+    short hash of level/sequence_start/heading_path is appended so that two
+    different headings — Arabic ones that legitimately produce the same
+    slug, or long English ones that share their first 60 characters — still
+    get distinct ids.
+    """
     if not heading_path:
         return f"level{level}-root"
-    slug = re.sub(r"[^a-z0-9]+", "-", " ".join(heading_path).lower()).strip("-")
-    return f"h{level}-{slug[:60]}"
+    slug = re.sub(r"[\W_]+", "-", " ".join(heading_path).lower()).strip("-")[:60]
+    hash_input = f"{level}|{sequence_start}|" + "\x1f".join(heading_path)
+    digest = hashlib.sha1(hash_input.encode("utf-8")).hexdigest()[:8]
+    return f"h{level}-{slug}-{digest}"
 
 
 def _collect_text_under_heading(
@@ -216,7 +230,7 @@ def group_chunks_into_sections(chunks: list[dict]) -> list[dict]:
                     seq_end = max(seq_end, s)
 
         sections.append({
-            "section_id": _make_section_id(hp, level),
+            "section_id": _make_section_id(hp, level, seq_start),
             "level": level,
             "heading_path": list(hp),
             "heading_text": heading_text,
