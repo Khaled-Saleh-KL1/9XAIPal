@@ -283,6 +283,60 @@ def _url_width_hint(url: str) -> float:
     return 0.0
 
 
+def _split_srcset(value: str) -> list[str]:
+    """Split a srcset attribute value into `url [descriptor]` candidate
+    strings, following the shape of the HTML living-standard's own srcset
+    parsing: a URL is a run of non-whitespace characters, and a comma only
+    separates candidates when it trails a URL directly (no descriptor) or
+    terminates the descriptor that follows it.
+
+    A naive `value.split(",")` cuts a candidate apart the moment its URL
+    itself contains a comma — common on image CDNs whose transform path
+    encodes options that way, e.g. Substack's
+    `$s_!oL5G!,w_424,c_limit,f_webp,q_auto:good,fl_progressive:steep/...`.
+    That left the "best" candidate resolving to a bare fragment like
+    `fl_progressive:steep/https%3A...jpeg`, a 404.
+    """
+    out: list[str] = []
+    i, n = 0, len(value)
+    while i < n:
+        while i < n and (value[i].isspace() or value[i] == ","):
+            i += 1
+        if i >= n:
+            break
+        start = i
+        while i < n and not value[i].isspace():
+            i += 1
+        url = value[start:i]
+        descriptor = ""
+        if url.endswith(","):
+            # No descriptor: this comma ends the candidate, not a URL path
+            # segment (a real URL segment never ends a whitespace-delimited
+            # token with a bare trailing comma).
+            url = url.rstrip(",")
+        else:
+            while i < n and value[i].isspace():
+                i += 1
+            desc_start = i
+            depth = 0
+            while i < n:
+                c = value[i]
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth = max(0, depth - 1)
+                elif c == "," and depth == 0:
+                    break
+                i += 1
+            descriptor = value[desc_start:i].strip()
+            if i < n and value[i] == ",":
+                i += 1  # skip the comma that ended this candidate
+        if not url:
+            continue
+        out.append(f"{url} {descriptor}" if descriptor else url)
+    return out
+
+
 def _srcset_candidates(value: str) -> list[tuple[float, str]]:
     """Every `url [descriptor]` pair in a srcset, scored by declared width.
 
@@ -291,7 +345,7 @@ def _srcset_candidates(value: str) -> list[tuple[float, str]]:
     single srcset in practice, so the two scales never need to agree.
     """
     out: list[tuple[float, str]] = []
-    for part in value.split(","):
+    for part in _split_srcset(value):
         m = _SRCSET_ENTRY_RE.match(part)
         if not m or not m.group(1):
             continue
