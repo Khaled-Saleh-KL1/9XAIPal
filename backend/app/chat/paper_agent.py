@@ -805,7 +805,7 @@ async def _run_call(
 # asks for. A strict \[\[(\d+)\]\] silently returns nothing for those, so the
 # note renders with no jump-chips and the grounding looks absent when it isn't.
 # Match the whole bracket blob, then pull every number out of it.
-_CITE_BLOB_RE = re.compile(r"\[\[([0-9,;\s\[\]]+?)\]\]")
+_CITE_BLOB_RE = re.compile(r"\[\[([0-9\u0660-\u0669\u06F0-\u06F9,;\s\[\]]+?)\]\]")
 _DIGITS_RE = re.compile(r"\d+")
 
 
