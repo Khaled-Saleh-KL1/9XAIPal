@@ -43,8 +43,16 @@ from typing import Optional
 
 from app.core import tracing
 
-_CAPTION_RE = re.compile(r"^(?:figure|fig\.?|table|tab\.?|listing|equation|eq\.?|exhibit|chart|plate)\s*[\dIVXivx]+", re.IGNORECASE)
-_CHAPTER_RE = re.compile(r"^(?:chapter\s+\d+\b|\d{1,2}[.:)]\s+[A-Z“\"'])", re.IGNORECASE)
+_CAPTION_RE = re.compile(
+    r"^(?:figure|fig\.?|table|tab\.?|listing|equation|eq\.?|exhibit|chart|plate|"
+    r"الشكل|شكل|الجدول|جدول)\s*[\dIVXivx]+",
+    re.IGNORECASE,
+)
+_CHAPTER_RE = re.compile(
+    r"^(?:chapter\s+\d+\b|(?:الفصل|الباب|الجزء|القسم)\s+\S|"
+    r"\d{1,2}[.:)]\s+[A-Z“\"']|[\u0660-\u0669\u06F0-\u06F9]{1,2}[.:)]\s+\S)",
+    re.IGNORECASE,
+)
 # Leading numbering in any of the shapes seen live: "Chapter 3", "Part II",
 # "1.", "IV.", "3.2.1", and the bare "1 Introduction" / "4 Why Self-Attention"
 # an arXiv paper uses (a one-or-two-digit number, then a space).
@@ -52,7 +60,7 @@ _NUMBERING_RE = re.compile(
     r"^\s*(?:chapter\s+\d+[.:]?\s*|part\s+[\divx]+[.:]?\s*|[\divx]{1,4}[.:)]\s+|\d+(?:\.\d+)+[.:)]?\s+|\d{1,2}\s+)",
     re.IGNORECASE,
 )
-_WORD_RE = re.compile(r"[a-z0-9]+")
+_WORD_RE = re.compile(r"[a-z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+")
 MAX_HEADING_WORDS = 24
 
 

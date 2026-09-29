@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core import tracing
 from app.core.config import settings
+from app.core.language import SOURCE_LANGUAGE_RULE
 from app.core.logging import get_logger
 from app.core.paths import images_dir
 from app.llm.client import chat_sync
@@ -79,7 +80,7 @@ Surrounding text / references:
 --- END FIGURE CONTEXT ---
 
 Now write the rich technical description of this figure.
-""".strip()
+""".strip() + "\n\n" + SOURCE_LANGUAGE_RULE
 
 
 def _get_prompt_hash() -> str:

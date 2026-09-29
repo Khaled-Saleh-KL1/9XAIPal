@@ -35,6 +35,10 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+def _serialize_sse_event(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
 class NoteAnchor(BaseModel):
     """Where in the paper a note hangs."""
 
@@ -343,7 +347,7 @@ async def create_note_stream(
         ]
 
     def sse(event: dict) -> str:
-        return f"data: {json.dumps(event)}\n\n"
+        return _serialize_sse_event(event)
 
     async def event_stream():
         yield sse({"type": "created", "note_id": str(note_id)})

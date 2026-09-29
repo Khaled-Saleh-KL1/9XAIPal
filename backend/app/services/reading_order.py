@@ -21,6 +21,10 @@ from app.llm import client as llm_client
 logger = get_logger(__name__)
 
 
+_LTR_COLUMN_INSTRUCTION = "Read left column top-to-bottom first, then right column top-to-bottom."
+_RTL_COLUMN_INSTRUCTION = "Read right column top-to-bottom first, then left column top-to-bottom."
+
+
 READING_ORDER_SYSTEM_PROMPT = """You are an expert academic reading assistant who specializes in fixing extraction order problems in two-column research papers.
 
 Your job: Given a list of extracted text/image blocks from one or more pages of a paper (with their bounding boxes and types), output the **correct logical reading order** as a simple JSON array of the original `sequence_id` values.
@@ -38,6 +42,14 @@ Output ONLY valid JSON in this exact format (no extra text):
 
 The numbers must be the exact `sequence_id` values from the input. Do not invent new numbers.
 """
+
+
+def _system_prompt_for_text_direction(text_direction: Optional[str]) -> str:
+    """Keep the established LTR prompt, reversing only its column order for RTL documents."""
+    if (text_direction or "").lower() == "rtl":
+        return READING_ORDER_SYSTEM_PROMPT.replace(_LTR_COLUMN_INSTRUCTION, _RTL_COLUMN_INSTRUCTION)
+    return READING_ORDER_SYSTEM_PROMPT
+
 
 READING_ORDER_USER_PROMPT_TEMPLATE = """Paper title/context: {paper_context}
 
@@ -65,6 +77,12 @@ async def reconstruct_reading_order_for_document(
     merges the results into one global logical order, and stores it on the document.
     """
     logger.info(f"[reading-order] Starting LLM reconstruction for document {document_id}")
+
+    direction_result = await session.execute(
+        text("SELECT text_direction FROM documents WHERE id = :doc_id"),
+        {"doc_id": str(document_id)},
+    )
+    text_direction = direction_result.scalar_one_or_none()
 
     # Fetch all chunks with bbox info
     result = await session.execute(
@@ -119,11 +137,11 @@ async def reconstruct_reading_order_for_document(
         user_prompt = READING_ORDER_USER_PROMPT_TEMPLATE.format(
             paper_context=paper_context,
             page_range=f"{batch_pages[0]}-{batch_pages[-1]}",
-            blocks_json=json.dumps(blocks_for_llm, indent=2),
+            blocks_json=json.dumps(blocks_for_llm, indent=2, ensure_ascii=False),
         )
 
         messages = [
-            {"role": "system", "content": READING_ORDER_SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt_for_text_direction(text_direction)},
             {"role": "user", "content": user_prompt},
         ]
 
@@ -174,7 +192,7 @@ async def reconstruct_reading_order_for_document(
             "doc_id": str(document_id),
             # asyncpg can't encode a Python list into a JSONB bind param directly;
             # serialize to a JSON string and cast it server-side.
-            "ro": json.dumps(final_order),
+            "ro": json.dumps(final_order, ensure_ascii=False),
             "model": model,
         },
     )

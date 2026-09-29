@@ -39,6 +39,10 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+def _serialize_sse_event(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
 @router.get("/{paper_id}/chunks")
 async def list_chunks(
     paper_id: UUID,
@@ -327,7 +331,9 @@ async def get_chunk_by_sequence(
 # are never chapters, and on a figure-heavy book they can outnumber the real
 # ones — 6 of 18 on the book this filter was written against.
 _CAPTION_HEADING = re.compile(
-    r"^\s*(FIGURE|FIG\.?|TABLE|CHART|EXHIBIT|PLATE|BOX)\s*[\dIVXA-E]", re.IGNORECASE
+    r"^\s*(?:(FIGURE|FIG\.?|TABLE|CHART|EXHIBIT|PLATE|BOX)\s*[\dIVXA-E]"
+    r"|(?:الشكل|شكل|الجدول|جدول)\s*[0-9\u0660-\u0669\u06F0-\u06F9])",
+    re.IGNORECASE,
 )
 
 
@@ -748,7 +754,7 @@ async def resolve_reference_stream(
         raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
 
     def sse(event: dict) -> str:
-        return f"data: {json.dumps(event)}\n\n"
+        return _serialize_sse_event(event)
 
     async def event_stream():
         # The request-scoped `db` closes when this handler returns, which is

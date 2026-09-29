@@ -12,6 +12,7 @@ from typing import Optional
 from app.search.web import search, search_images
 from app.search.ranking import rank_results
 from app.core import tracing
+from app.core.language import is_primarily_arabic, normalize_arabic_for_matching
 from app.chat.tracing_hooks import context_output
 
 # Words in the user query that strongly suggest they want a picture.
@@ -21,12 +22,13 @@ _IMAGE_INTENT_WORDS = {
     "image", "picture", "photo", "diagram", "figure", "illustration",
     "visualize", "visualization", "show me", "draw", "generate a picture",
     "what does it look like", "looks like",
+    "الشكل", "شكل", "الصورة", "صورة", "أرني الشكل", "اعرض الصورة",
 }
 
 
 def _wants_images(q: str) -> bool:
-    ql = q.lower()
-    return any(w in ql for w in _IMAGE_INTENT_WORDS)
+    ql = normalize_arabic_for_matching(q.lower())
+    return any(normalize_arabic_for_matching(w.lower()) in ql for w in _IMAGE_INTENT_WORDS)
 
 
 # Words that signal the user already framed the question as IT/CS/ML, so we
@@ -59,6 +61,8 @@ def rewrite_query_for_papers(
       - If the query already contains tech jargon, only add a light bias.
     """
     q = query.strip()
+    if is_primarily_arabic(q):
+        return q
     if paper_title:
         # Strip .pdf and any trailing junk so the title reads naturally.
         title = paper_title.rsplit(".", 1)[0].strip()
