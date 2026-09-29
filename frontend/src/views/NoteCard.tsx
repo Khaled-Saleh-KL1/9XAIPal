@@ -14,6 +14,7 @@ import { AgentTrail } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { citeChips, usePageMap } from '../lib/pageMap';
 import type { AgentStep, PaperNote } from '../api';
+import { textDirection } from '../lib/documentDirection';
 
 /**
  * A margin note: one question, its answer, and any follow-ups, rendered as a
@@ -208,7 +209,7 @@ export function PendingNoteCard({
         right={<ModelTag name={note.model} />}
       />
       <Quote kind={note.anchorKind} quote={note.quote} />
-      <div className="note-question">{note.question}</div>
+      <div className="note-question" dir={textDirection(note.question) ?? 'auto'}>{note.question}</div>
       {note.error ? (
         <>
           <div className="note-error">{note.error}</div>
@@ -296,7 +297,7 @@ export function NoteCardView({
     return (
       <div className="note-body is-study-front">
         <Quote kind={group.root.anchor_kind} quote={group.root.anchor_quote} />
-        <div className="note-question">{group.root.question}</div>
+        <div className="note-question" dir={textDirection(group.root.question) ?? 'auto'}>{group.root.question}</div>
         <button type="button" className="card-reveal" onClick={study.onReveal}>
           Reveal answer
         </button>
@@ -307,7 +308,7 @@ export function NoteCardView({
   const body = (
     <>
       <Quote kind={group.root.anchor_kind} quote={group.root.anchor_quote} />
-      <div className="note-question">{group.root.question}</div>
+      <div className="note-question" dir={textDirection(group.root.question) ?? 'auto'}>{group.root.question}</div>
 
       <Collapsible max={inDeck ? 400 : 300}>
         <Answer text={withCitationLinks(group.root.answer)} />
@@ -315,7 +316,7 @@ export function NoteCardView({
 
         {group.replies.map((reply) => (
           <div key={reply.id} className="note-reply">
-            <div className="note-question">{reply.question}</div>
+            <div className="note-question" dir={textDirection(reply.question) ?? 'auto'}>{reply.question}</div>
             {/* Follow-ups inherit the root's model, so the tag is only worth
                 the space when something actually answered differently. */}
             {(reply.model || reply.requested_model) !== rootModel && (
