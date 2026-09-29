@@ -2,7 +2,13 @@ import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { PluggableList } from 'unified';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_LINK_COMPONENT } from '../lib/markdown';
-import { remarkCitationRefs, makeCitationSpanComponent, EMPTY_REFERENCE_INDEX, type ReferenceIndex } from '../lib/references';
+import {
+  remarkAuthorYearCitationRefs,
+  remarkCitationRefs,
+  makeCitationSpanComponent,
+  EMPTY_REFERENCE_INDEX,
+  type ReferenceIndex,
+} from '../lib/references';
 import type { DocBlock } from '../api';
 import { blockDirection, type TextDirection } from '../lib/documentDirection';
 
@@ -40,9 +46,12 @@ function Md({
   // `.use(remarkCitationRefs, refs)` form and never exercised this one. Same
   // shape MARKDOWN_REHYPE already uses for [rehypeSanitize, SANITIZE_SCHEMA].
   const remarkPlugins = useMemo<PluggableList>(
-    () => (citations && citations.refIndex.numbers.size > 0
-      ? [...MARKDOWN_REMARK, [remarkCitationRefs, citations.refIndex.numbers]]
-      : MARKDOWN_REMARK),
+    () => {
+      if (!citations || citations.refIndex.numbers.size === 0) return MARKDOWN_REMARK;
+      return citations.refIndex.citationStyle === 'author_year'
+        ? [...MARKDOWN_REMARK, [remarkAuthorYearCitationRefs, citations.refIndex.byNumber]]
+        : [...MARKDOWN_REMARK, [remarkCitationRefs, citations.refIndex.numbers]];
+    },
     [citations],
   );
   const components = useMemo(

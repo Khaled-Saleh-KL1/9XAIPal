@@ -67,6 +67,32 @@ def test_empty_and_limit():
     assert len(title_candidates(many, limit=2)) == 2
 
 
+@pytest.mark.parametrize("raw, title", [
+    (
+        "Ahmed Abdelali, Hamdy Mubarak, …, and 1 others. 2024. LAraBench: Benchmarking Arabic AI "
+        "with large language models. In Proceedings of the ACL.",
+        "LAraBench: Benchmarking Arabic AI with large language models",
+    ),
+    (
+        "Jonas Gehring, Michael Auli, David Grangier, Denis Yarats, and Yann N Dauphin. "
+        "Convolutional sequence to sequence learning. In International Conference on Machine "
+        "Learning, pages 1243–1252. PMLR, 2017.",
+        "Convolutional sequence to sequence learning",
+    ),
+    (
+        "T. Achim, A. Best, A. Bietti, …, et al. Aristotle: Benchmarking reasoning in large "
+        "language models. 2025.",
+        "Aristotle: Benchmarking reasoning in large language models",
+    ),
+])
+def test_author_year_bibliography_samples_select_the_title(raw, title):
+    assert title_candidates(raw)[0] == title
+
+
+def test_acl_year_then_single_word_title_is_still_a_title_candidate():
+    assert title_candidates("A. Author. 2024. BERT. In NLP.") == ["BERT"]
+
+
 # ── What a Semantic Scholar hit turns into ──────────────────────────────────
 # Verified 2026-09-12 on the live box: every arXiv paper the resolver matched
 # came back with `openAccessPdf: null`, so nothing was addable. The arXiv id

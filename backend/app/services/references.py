@@ -32,6 +32,11 @@ _REFERENCES_HEADINGS = {
 # keeps this from ever treating a citation number appearing mid-sentence
 # inside another entry's own prose as a boundary.
 _ENTRY_START_RE = re.compile(r"^- \[(\d+)\]\s*", re.MULTILINE)
+_AUTHOR_YEAR_ENTRY_START_RE = re.compile(r"^- ", re.MULTILINE)
+
+_BIBLIOGRAPHY_YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})([a-z]?)(?!\d)", re.IGNORECASE)
+_YEAR_AFTER_AUTHOR_CLAUSE_RE = re.compile(r"^\s*\.\s*((?:19|20)\d{2}[a-z]?)\b", re.IGNORECASE)
+_SURNAME_TOKEN_RE = re.compile(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*", re.UNICODE)
 
 
 def parse_references(chunks: list[dict]) -> list[dict]:
@@ -43,6 +48,11 @@ def parse_references(chunks: list[dict]) -> list[dict]:
     heading is followed by nothing parseable (both real, non-error outcomes —
     a PyMuPDF-fallback extraction commonly has neither).
     """
+    return parse_references_with_style(chunks)[0]
+
+
+def parse_references_with_style(chunks: list[dict]) -> tuple[list[dict], str]:
+    """Return entries and list style without changing the entry dictionary shape."""
     heading_at = next(
         (
             i for i, c in enumerate(chunks)
@@ -52,7 +62,7 @@ def parse_references(chunks: list[dict]) -> list[dict]:
         None,
     )
     if heading_at is None:
-        return []
+        return [], "numeric"
 
     # Consecutive chunk_type='text' chunks right after the heading are the
     # bibliography; the first chunk of any other type (a heading like
@@ -64,20 +74,92 @@ def parse_references(chunks: list[dict]) -> list[dict]:
             break
         body_chunks.append(c)
     if not body_chunks:
-        return []
+        return [], "numeric"
 
     combined = "\n".join((c.get("plain_text") or "") for c in body_chunks)
 
-    entries: list[dict] = []
     starts = list(_ENTRY_START_RE.finditer(combined))
+    if starts:
+        entries: list[dict] = []
+        for i, m in enumerate(starts):
+            end = starts[i + 1].start() if i + 1 < len(starts) else len(combined)
+            raw = combined[m.end():end].strip()
+            if not raw:
+                continue
+            entries.append({"number": int(m.group(1)), "raw_text": raw})
+        return entries, "numeric"
+
+    starts = list(_AUTHOR_YEAR_ENTRY_START_RE.finditer(combined))
+    entries = []
     for i, m in enumerate(starts):
         end = starts[i + 1].start() if i + 1 < len(starts) else len(combined)
         raw = combined[m.end():end].strip()
         if not raw:
             continue
-        entries.append({"number": int(m.group(1)), "raw_text": raw})
+        # ⚠ MinerU sometimes breaks one entry into two list items at a line
+        # break ("- volume 30. Curran Associates, Inc., 2017."). A real entry
+        # starts with an author or organisation name, never a lowercase word,
+        # so such an item is the previous entry's tail. Arabic letters have no
+        # case, so an Arabic entry is never folded.
+        if entries and raw[0].islower():
+            entries[-1]["raw_text"] += "\n" + raw
+            continue
+        entries.append({"number": len(entries) + 1, "raw_text": raw})
 
-    return entries
+    return entries, "author_year" if entries else "numeric"
+
+
+def extract_author_year(raw_text: str) -> tuple[str | None, int | None]:
+    """Return the first-author surname and publication year in an entry.
+
+    Prefer a year immediately after the author clause; otherwise select the
+    final plausible four-digit year to avoid title or venue years.
+    """
+    text = " ".join((raw_text or "").split())
+    if not text:
+        return None, None
+
+    author_text = _author_clause(text)
+    year_after_authors = _YEAR_AFTER_AUTHOR_CLAUSE_RE.match(text[len(author_text):])
+    if year_after_authors:
+        year_match = _BIBLIOGRAPHY_YEAR_RE.fullmatch(year_after_authors.group(1))
+    else:
+        year_matches = list(_BIBLIOGRAPHY_YEAR_RE.finditer(text))
+        year_match = year_matches[-1] if year_matches else None
+
+    year = int(year_match.group(1)) if year_match else None
+    return _first_author_surname(author_text), year
+
+
+def _author_clause(text: str) -> str:
+    """Find the leading author clause while skipping periods in initials."""
+    for match in re.finditer(r"\.\s+", text):
+        before_period = text[:match.start()].rstrip()
+        after_period = text[match.end():]
+        # A year immediately following the period marks the end of the author
+        # clause even when a one-letter surname appears (for example, X and Y).
+        if _BIBLIOGRAPHY_YEAR_RE.match(after_period):
+            return before_period
+        last_words = _SURNAME_TOKEN_RE.findall(before_period)
+        last_word = last_words[-1] if last_words else ""
+        # A one-letter token is an initial (for example, T. Achim), not an
+        # author-list boundary. Longer tokens also handle acronym authors.
+        if len(last_word) > 1:
+            return before_period
+    return text
+
+
+def _first_author_surname(author_text: str) -> str | None:
+    author_text = re.sub(
+        r"(?:,?\s*(?:et\s+al\.?|and\s+\d+\s+others))\s*$",
+        "",
+        author_text.strip(),
+        flags=re.IGNORECASE,
+    )
+    first_author = re.split(r"[,،;]", author_text, maxsplit=1)[0]
+    first_author = re.split(r"\s+(?:and|&)\s+", first_author, maxsplit=1, flags=re.IGNORECASE)[0]
+    tokens = _SURNAME_TOKEN_RE.findall(first_author)
+    return tokens[-1] if tokens else None
 
 
 # ── The title inside a bibliography entry ────────────────────────────────────
@@ -109,6 +191,7 @@ _TRAILING_YEAR_RE = re.compile(
     r"[,\s]*\(?\b(?:19|20)\d{2}[a-z]?\)?\s*[.,]?\s*$"
     r"|[,\s]*\(?[\u0660-\u0669\u06F0-\u06F9]{4}\)?\s*[.,،]?\s*$"
 )
+_YEAR_ONLY_SEGMENT_RE = re.compile(r"\(?((?:19|20)\d{2}[a-z]?)\)?[.,]?", re.IGNORECASE)
 # A segment that is plainly the venue/identifier part, never the title.
 _VENUE_START_RE = re.compile(
     r"^(?:in\b|arxiv\b|corr\b|proceedings\b|proc\b|journal\b|pages?\b|pp\b|vol\b|"
@@ -150,6 +233,27 @@ def title_candidates(raw_text: str, limit: int = 2) -> list[str]:
     def cleaned(seg: str) -> str:
         seg = _TRAILING_YEAR_RE.sub("", seg).strip()
         return seg.rstrip(".,;:").strip()
+
+    # ACL's Authors. YEAR. Title. Venue shape gives the publication year its
+    # own segment. Select the next segment directly, including short titles
+    # that the general sentence heuristic rejects as too title-like.
+    if len(segments) >= 3 and _YEAR_ONLY_SEGMENT_RE.fullmatch(segments[1]):
+        title = cleaned(segments[2])
+        if title and not _VENUE_START_RE.match(title):
+            candidates.append(title)
+        for seg in segments[3:]:
+            body = cleaned(seg)
+            if (
+                len(body.split()) < _MIN_TITLE_WORDS
+                or _VENUE_START_RE.match(body)
+                or _VENUE_SHAPE_RE.search(body)
+            ):
+                continue
+            if body not in candidates:
+                candidates.append(body)
+            if len(candidates) >= limit:
+                break
+        return candidates[:limit]
 
     # Segment 0 is the author list in the common shape; the title is the
     # first later segment that is not venue-shaped. The author segment is a

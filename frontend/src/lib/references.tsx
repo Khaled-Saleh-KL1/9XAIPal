@@ -18,42 +18,65 @@ import { useEffect, useMemo, useState } from 'react';
 import { visit } from 'unist-util-visit';
 import type { Root, Text, Parent } from 'mdast';
 import type { Components } from 'react-markdown';
-import { getReferences, type ReferenceEntry } from '../api';
+import { getReferences, type ReferenceCitationStyle, type ReferenceEntry } from '../api';
 import { BibCitationRef } from '../views/BibCitationRef';
 
 export interface ReferenceIndex {
+  /** Style detected while parsing this paper's bibliography. */
+  citationStyle: ReferenceCitationStyle;
   /** Every citation number this paper's References section actually has. */
   numbers: Set<number>;
   byNumber: Map<number, ReferenceEntry>;
 }
 
-export const EMPTY_REFERENCE_INDEX: ReferenceIndex = { numbers: new Set(), byNumber: new Map() };
+export const EMPTY_REFERENCE_INDEX: ReferenceIndex = {
+  citationStyle: 'numeric',
+  numbers: new Set(),
+  byNumber: new Map(),
+};
 
 /** Fetch a paper's parsed bibliography once. `enabled` gates this on
  * doc_kind === 'paper' at the call site — books and articles never fetch. */
 export function useReferences(paperId: string | null | undefined, enabled: boolean): ReferenceIndex {
-  const [entries, setEntries] = useState<ReferenceEntry[] | null>(null);
+  const [referenceList, setReferenceList] = useState<{
+    entries: ReferenceEntry[];
+    citationStyle: ReferenceCitationStyle;
+  } | null>(null);
 
   useEffect(() => {
-    if (!paperId || !enabled) { setEntries(null); return; }
+    if (!paperId || !enabled) { setReferenceList(null); return; }
     let alive = true;
-    setEntries(null);
+    setReferenceList(null);
     getReferences(paperId)
-      .then((refs) => { if (alive) setEntries(refs); })
-      .catch(() => { if (alive) setEntries([]); });
+      .then((list) => {
+        if (alive) setReferenceList({ entries: list.references, citationStyle: list.citation_style });
+      })
+      .catch(() => { if (alive) setReferenceList({ entries: [], citationStyle: 'numeric' }); });
     return () => { alive = false; };
   }, [paperId, enabled]);
 
   return useMemo(() => {
-    if (!entries || entries.length === 0) return EMPTY_REFERENCE_INDEX;
+    if (!referenceList) return EMPTY_REFERENCE_INDEX;
     return {
-      numbers: new Set(entries.map((e) => e.number)),
-      byNumber: new Map(entries.map((e) => [e.number, e])),
+      citationStyle: referenceList.citationStyle,
+      numbers: new Set(referenceList.entries.map((e) => e.number)),
+      byNumber: new Map(referenceList.entries.map((e) => [e.number, e])),
     };
-  }, [entries]);
+  }, [referenceList]);
 }
 
 const CITATION_RE = /\[(\d+(?:,\s*\d+)*)\]/g;
+const SURNAME_PATTERN = String.raw`[\p{L}\p{M}][\p{L}\p{M}'’.-]*`;
+const AUTHOR_PATTERN = String.raw`${SURNAME_PATTERN}(?:\s+(?:et\s+al\.?|(?:and|&)\s+${SURNAME_PATTERN}))?`;
+const AUTHOR_LIST_PREFIX_RE = new RegExp(
+  String.raw`^\s*${SURNAME_PATTERN}(?:\s+et\s+al\.?)?(?:(?:\s*,\s*|\s+(?:and|&)\s+)${SURNAME_PATTERN}(?:\s+et\s+al\.?)?)*(?:\s*,|\s+(?:and|&))\s*$`,
+  'iu',
+);
+const AUTHOR_YEAR_CITATION_RE = new RegExp(
+  String.raw`(?<![\p{L}\p{M}])(${AUTHOR_PATTERN})(?:\s*,\s*((?:19|20)\d{2}[a-z]?)|\s+\(\s*((?:19|20)\d{2}[a-z]?)\s*\)|\s+((?:19|20)\d{2}[a-z]?))(?![\p{L}\p{M}\d])`,
+  'giu',
+);
+const YEAR_IN_REFERENCE_RE = /(?<!\d)((?:19|20)\d{2}[a-z]?)(?!\d)/gi;
 
 /**
  * Splits a "[5, 2, 35]"-shaped run out of a text node into a marker `span`
@@ -106,6 +129,81 @@ export function remarkCitationRefs(refNumbers: Set<number>) {
       return index + out.length;
     });
   };
+}
+
+/** Turn unambiguous author/year text into the same numbered marker the
+ * existing citation chip consumes. Parentheses around a citation stay as
+ * ordinary text; a narrative citation's year parentheses remain in the chip.
+ */
+export function remarkAuthorYearCitationRefs(entriesByNumber: Map<number, ReferenceEntry>) {
+  return (tree: Root) => {
+    if (entriesByNumber.size === 0) return;
+    visit(tree, 'text', (node: Text, index, parent: Parent | undefined) => {
+      if (!parent || index == null) return;
+      const value = node.value;
+      AUTHOR_YEAR_CITATION_RE.lastIndex = 0;
+      const matches = [...value.matchAll(AUTHOR_YEAR_CITATION_RE)];
+      if (matches.length === 0) return;
+
+      const out: (Text | ReturnType<typeof citationNode>)[] = [];
+      let cursor = 0;
+      let matchedAny = false;
+      for (const match of matches) {
+        if (hasEarlierAuthorInGroup(value, match.index as number)) continue;
+        const surname = match[1].match(new RegExp(SURNAME_PATTERN, 'u'))?.[0];
+        const citationYear = (match[2] || match[3] || match[4]).toLowerCase();
+        if (!surname) continue;
+        const normalizedSurname = normalizeSurname(surname);
+        const matchingEntries = [...entriesByNumber.values()].filter((entry) => (
+          entry.first_author
+          && normalizeSurname(entry.first_author) === normalizedSurname
+          && entry.year === Number.parseInt(citationYear.slice(0, 4), 10)
+          && referenceYearKey(entry) === citationYear
+        ));
+        if (matchingEntries.length !== 1) continue;
+
+        const start = match.index as number;
+        if (start > cursor) out.push({ type: 'text', value: value.slice(cursor, start) });
+        out.push(citationNode([matchingEntries[0].number], match[0]));
+        cursor = start + match[0].length;
+        matchedAny = true;
+      }
+      if (!matchedAny) return;
+      if (cursor < value.length) out.push({ type: 'text', value: value.slice(cursor) });
+
+      parent.children.splice(index, 1, ...(out as any));
+      return index + out.length;
+    });
+  };
+}
+
+/** Don't link a later surname when an earlier author in the same citation
+ * group did not match. This avoids turning `(Unknown, Brown and Jones, 2020)`
+ * into a link for Brown just because Brown is the only known reference. */
+function hasEarlierAuthorInGroup(value: string, matchStart: number): boolean {
+  const beforeMatch = value.slice(0, matchStart);
+  const groupStart = Math.max(
+    beforeMatch.lastIndexOf('('),
+    beforeMatch.lastIndexOf('['),
+    beforeMatch.lastIndexOf('{'),
+    beforeMatch.lastIndexOf(';'),
+  );
+  return AUTHOR_LIST_PREFIX_RE.test(beforeMatch.slice(groupStart + 1));
+}
+
+function normalizeSurname(surname: string): string {
+  return surname.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+}
+
+function referenceYearKey(entry: ReferenceEntry): string | null {
+  if (entry.year == null) return null;
+  YEAR_IN_REFERENCE_RE.lastIndex = 0;
+  const years = [...(entry.raw_text || '').matchAll(YEAR_IN_REFERENCE_RE)];
+  const afterAuthors = (entry.raw_text || '').match(/\.\s*((?:19|20)\d{2}[a-z]?)\b/i)?.[1];
+  const preferred = afterAuthors && Number.parseInt(afterAuthors.slice(0, 4), 10) === entry.year
+    ? afterAuthors
+    : [...years].reverse().find((match) => Number.parseInt(match[1].slice(0, 4), 10) === entry.year)?.[1];
+  return preferred?.toLowerCase() ?? String(entry.year);
 }
 
 function citationNode(numbers: number[], raw: string) {
