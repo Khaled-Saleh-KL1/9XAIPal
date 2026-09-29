@@ -171,6 +171,31 @@ def test_feature_off_never_calls_classifier(db_session_sync, tmp_path, monkeypat
     mocks.repair.assert_called_once()
 
 
+def test_feature_off_keeps_clear_english_on_existing_resolver_path(
+    db_session_sync, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", False)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    classifier = MagicMock(side_effect=AssertionError("feature-off path must not classify"))
+    monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_with_text(tmp_path / "clear-english.pdf", _ENGLISH_PAGE)
+
+    pipeline_sync.run_pipeline_sync(
+        db_session_sync,
+        document_id=document_id,
+        job_id=job_id,
+        pdf_path=pdf_path,
+    )
+
+    classifier.assert_not_called()
+    mocks.resolver.assert_called_once()
+    mocks.arabic_extractor.assert_not_called()
+    stored = _stored_document(db_session_sync, document_id)
+    assert stored["detected_language"] is None
+    assert stored["text_direction"] is None
+
+
 def test_english_route_calls_existing_resolver_only(db_session_sync, tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
     mocks = _pipeline_mocks(monkeypatch, tmp_path)

@@ -159,6 +159,91 @@ def test_english_text_layer_skips_the_local_vision_model(english_only_pdf):
     assert decision.route is DocumentRoute.ENGLISH
     assert decision.language == "english"
     assert decision.text_direction == "ltr"
+    assert decision.classifier_model == "text_layer"
+    assert decision.confidence == 1.0
+
+
+def test_digital_arabic_text_layer_skips_local_vision(scanned_arabic_pdf, monkeypatch):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 120, 0),
+        )),
+    )
+
+    def should_not_call(_images, _phase):
+        raise AssertionError("digital Arabic text should not call the local model")
+
+    decision = classify_document(scanned_arabic_pdf, vision_call=should_not_call)
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "arabic"
+    assert decision.writing_style == "printed"
+    assert decision.text_direction == "rtl"
+    assert decision.confidence == 1.0
+    assert decision.classifier_model == "text_layer"
+
+
+def test_digital_arabic_and_clear_english_pages_are_mixed_without_vision(
+    two_page_scan, monkeypatch
+):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 0, 120),
+            TextPageEvidence(2, 120, 0),
+        )),
+    )
+
+    def should_not_call(_images, _phase):
+        raise AssertionError("text-backed pages should not call the local model")
+
+    decision = classify_document(two_page_scan, vision_call=should_not_call)
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "mixed"
+    assert decision.writing_style == "printed"
+    assert decision.text_direction == "rtl"
+    assert decision.confidence == 1.0
+    assert decision.classifier_model == "text_layer"
+
+
+def test_textless_pages_alone_are_sent_to_vision(two_page_scan, monkeypatch):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 120, 0),
+            TextPageEvidence(2, 0, 0),
+        )),
+    )
+    calls = []
+
+    def classify_only_scan(images, phase):
+        calls.append((phase, [image.page_idx for image in images]))
+        return [
+            PageStyleVote(
+                page_idx=image.page_idx,
+                language="arabic",
+                writing_style="printed",
+                confidence=0.99,
+                region=image.region,
+                primary_content=True,
+            )
+            for image in images
+        ]
+
+    decision = classify_document(two_page_scan, vision_call=classify_only_scan)
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "arabic"
+    assert decision.writing_style == "printed"
+    assert calls == [
+        ("page_screen", [2]),
+        ("detail", [2, 2, 2, 2]),
+    ]
 
 
 def test_clear_english_text_layer_ignores_embedded_image_language_vote(
@@ -279,7 +364,7 @@ def test_arabic_body_with_english_abstract_uses_mixed_arabic_route(
         arabic_classifier,
         "inspect_text_layers",
         lambda _path: DocumentTextEvidence((
-            TextPageEvidence(1, 80, 0),
+            TextPageEvidence(1, 0, 0),
             TextPageEvidence(2, 0, 300),
         )),
     )
