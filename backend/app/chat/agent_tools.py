@@ -23,6 +23,7 @@ from typing import AsyncIterator, Optional, Sequence, Union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.language import normalize_arabic_for_matching
 from app.core.logging import get_logger
 from app.core import tracing
 from app.services.retrieval import search_chunks
@@ -223,6 +224,7 @@ _COMPARISON_PHRASES = (
     "difference between", "differs from", "how does this differ",
     "how does it differ", "how do they differ",
     "similar to", "in contrast to", "relative to",
+    "قارن", "مقارنة", "مقارنة بين", "الفرق بين", "ما الفرق بين",
 )
 
 # Deliberately narrower than router.py's own EXTERNAL-routing keyword list
@@ -235,6 +237,8 @@ _EXPLICIT_WEB_PHRASES = (
     "search the web", "search online", "look it up online", "look up online",
     "find online", "on the web", "on wikipedia", "wikipedia",
     "google it", "google this",
+    "ابحث في الإنترنت", "ابحث في الويب", "من الإنترنت", "من الويب",
+    "ابحث على الانترنت", "ابحث على الويب",
 )
 
 
@@ -248,9 +252,10 @@ def wants_outside_context(prompt: str) -> bool:
     """
     if not prompt:
         return False
-    lowered = prompt.lower()
-    return any(p in lowered for p in _COMPARISON_PHRASES) or any(
-        p in lowered for p in _EXPLICIT_WEB_PHRASES
+    lowered = normalize_arabic_for_matching(prompt.lower())
+    return any(
+        normalize_arabic_for_matching(p.lower()) in lowered
+        for p in (*_COMPARISON_PHRASES, *_EXPLICIT_WEB_PHRASES)
     )
 
 

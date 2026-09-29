@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.language import LANGUAGE_RULE
+from app.core.language import LANGUAGE_RULE, normalize_arabic_for_matching
 from app.core.logging import get_logger
 from app.core import tracing
 from app.chat.tracing_hooks import ask_stream_output
@@ -1427,6 +1427,7 @@ _FIGURE_REQUEST_PHRASES = (
     "picture", "figure", "diagram", "image", "illustration",
     "show me", "bring me", "show the", "bring the", "display the",
     "show a", "bring a", "display a",
+    "الشكل", "شكل", "الصورة", "صورة", "أرني الشكل", "اعرض الصورة",
 )
 
 
@@ -1439,5 +1440,8 @@ def _user_wants_figure(prompt: str) -> bool:
     """
     if not prompt:
         return False
-    lowered = prompt.lower()
-    return any(phrase in lowered for phrase in _FIGURE_REQUEST_PHRASES)
+    lowered = normalize_arabic_for_matching(prompt.lower())
+    return any(
+        normalize_arabic_for_matching(phrase.lower()) in lowered
+        for phrase in _FIGURE_REQUEST_PHRASES
+    )
