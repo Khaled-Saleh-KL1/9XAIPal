@@ -714,6 +714,7 @@ function StudyNameInput({
   useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
   return (
     <input
+      dir="auto"
       ref={ref}
       className="rail-rename"
       value={draft}

@@ -113,6 +113,7 @@ export function ExportPanel(p: ExportPanelProps) {
               <div className="relative flex-1 min-w-[160px]">
                 <IconSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />
                 <input
+                  dir="auto"
                   autoFocus
                   value={p.query}
                   onChange={(e) => p.onQuery(e.target.value)}

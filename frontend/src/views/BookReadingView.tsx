@@ -9,6 +9,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } fr
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { displayTitle as paperDisplayTitle } from '../lib/titles';
+import { textDirection } from '../lib/documentDirection';
 import { loadReadingProgress, markChapterFinished, saveReadingPosition } from '../lib/readingPosition';
 import type { Paper } from '../types';
 import { IconBack, IconDoc, IconArrow } from '../components/Icons';
@@ -1575,11 +1576,12 @@ function ChapterPicker({
               </span>
               <span
                 className="font-serif text-[15px] flex-1 min-w-0 truncate"
+                dir={textDirection(ch.title) ?? 'auto'}
                 style={{
                   color: 'var(--fg)',
                   // Indent nested outline entries so a book's sub-sections read
                   // as belonging to the chapter above them, not as peers of it.
-                  paddingLeft: `${Math.max(0, (ch.level ?? 1) - 1) * 14}px`,
+                  paddingInlineStart: `${Math.max(0, (ch.level ?? 1) - 1) * 14}px`,
                   opacity: (ch.level ?? 1) > 1 ? 0.8 : 1,
                 }}
               >

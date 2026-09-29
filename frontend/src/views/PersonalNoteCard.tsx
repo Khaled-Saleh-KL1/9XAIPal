@@ -102,6 +102,7 @@ export function PersonalNoteCard({
     <>
       <Quote quote={note.quote} />
       <textarea
+        dir="auto"
         ref={ref}
         rows={3}
         value={draft}
@@ -240,6 +241,7 @@ export function PersonalNoteComposer({
         <img className="composer-thumb" src={target.imageUrl} alt="" />
       )}
       <textarea
+        dir="auto"
         ref={ref}
         rows={3}
         value={body}

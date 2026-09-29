@@ -4,7 +4,7 @@ import { UserMenuInline } from '../components/UserMenu';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
-import { documentDirection } from '../lib/documentDirection';
+import { documentDirection, textDirection } from '../lib/documentDirection';
 import { bestMatchIndex, makeAnchor } from '../lib/textAnchor';
 import { lastReadSequence, saveReadingPosition, shouldRestorePosition } from '../lib/readingPosition';
 import { ArticleBlock } from './ArticleBlock';
@@ -2110,6 +2110,7 @@ export function ArticleReader({
           <button
             type="button"
             className="reader-title reader-title-btn"
+            dir={textDirection(title) ?? 'auto'}
             onClick={() => setRenamingTitle(true)}
             title="Rename this paper"
           >
@@ -2312,7 +2313,7 @@ export function ArticleReader({
             ref={articleRef}
             dir={documentDirection(doc?.text_direction ?? doc?.detected_language)}
           >
-            {doc && <h1 className="article-title">{doc.title}</h1>}
+            {doc && <h1 className="article-title" dir={textDirection(doc.title) ?? 'auto'}>{doc.title}</h1>}
             {doc && (
               <div className="article-dek">
                 {doc.page_count ? `${doc.page_count} pages` : ''}

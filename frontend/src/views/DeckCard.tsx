@@ -281,6 +281,7 @@ export function DeckCard({
 
         {renaming ? (
           <input
+            dir="auto"
             ref={labelRef}
             className="deck-rename"
             value={draftLabel}

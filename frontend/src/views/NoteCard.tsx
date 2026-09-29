@@ -344,6 +344,7 @@ export function NoteCardView({
         {composing ? (
           <div className="note-followup">
             <textarea
+              dir="auto"
               ref={followUpRef}
               rows={2}
               value={followUp}

@@ -538,6 +538,7 @@ function NoteBox({
         </button>
       )}
       <textarea
+        dir="auto"
         ref={ref}
         className="bnotes-box-text"
         value={body}

@@ -172,6 +172,7 @@ export function StickyNote({
 
       {editing ? (
         <textarea
+          dir="auto"
           ref={ref}
           className="sticky-input"
           value={draft}

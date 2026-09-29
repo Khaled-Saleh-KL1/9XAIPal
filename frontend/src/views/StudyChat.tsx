@@ -322,6 +322,7 @@ export function StudyChat({
 
       <div className="chat-composer">
         <textarea
+          dir="auto"
           ref={inputRef}
           rows={2}
           value={draft}

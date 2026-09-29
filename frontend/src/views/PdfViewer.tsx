@@ -126,6 +126,7 @@ export function PdfViewer({ paper, onBack, onReadStructured, initialPage }: Prop
             ‹
           </button>
           <input
+            dir="auto"
             value={pageInputValue}
             onChange={(e) => setPageInputValue(e.target.value)}
             onKeyDown={handlePageInput}

@@ -775,6 +775,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
             />
           </label>
           <textarea
+            dir="auto"
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}

@@ -88,6 +88,7 @@ export function AskComposer({
         <img className="composer-thumb" src={target.imageUrl} alt="" />
       )}
       <textarea
+        dir="auto"
         ref={ref}
         rows={3}
         value={question}

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { IconDoc } from '../components/Icons';
 import { getCoverUrl } from '../api';
+import { textDirection } from '../lib/documentDirection';
 
 /**
  * A paper's first page, or a placeholder shaped like one.
@@ -56,7 +57,7 @@ export function PaperCover({
       />
       {showTitle && !failed && (
         <div className="paper-cover-title-scrim" aria-hidden="true">
-          <span className="paper-cover-title-text">{title}</span>
+          <span className="paper-cover-title-text" dir={textDirection(title) ?? 'auto'}>{title}</span>
         </div>
       )}
     </div>
