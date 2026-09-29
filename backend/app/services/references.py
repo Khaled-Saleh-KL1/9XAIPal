@@ -18,7 +18,14 @@ by the PDF's layout), so entries can only be told apart by where a NEW
 
 import re
 
-_REFERENCES_HEADING = "references"
+_REFERENCES_HEADINGS = {
+    "references",
+    "المراجع",
+    "المصادر",
+    "قائمة المراجع",
+    "المراجع والمصادر",
+    "مراجع البحث",
+}
 
 # A line beginning with "- [<digits>]" is where MinerU's markdown list marks
 # a new bibliography entry. MULTILINE anchors ^ to line starts, which is what
@@ -40,7 +47,7 @@ def parse_references(chunks: list[dict]) -> list[dict]:
         (
             i for i, c in enumerate(chunks)
             if c.get("chunk_type") == "heading"
-            and (c.get("plain_text") or "").strip().lower() == _REFERENCES_HEADING
+            and (c.get("plain_text") or "").strip().lower() in _REFERENCES_HEADINGS
         ),
         None,
     )
@@ -97,8 +104,11 @@ _QUOTED_TITLE_RE = re.compile(r'[“"]([^”"]{8,}?)[,.]?[”"]')
 _PROTECTED_DOT_RE = re.compile(
     r"\b(?:[A-Z]|Proc|Proceedings|vol|no|pp|eds?|Jr|Sr|St|Conf|Int|Trans|Assoc|Vs)\."
 )
-_SEGMENT_SPLIT_RE = re.compile(r"(?<=[.?!])\s+")
-_TRAILING_YEAR_RE = re.compile(r"[,\s]*\(?\b(?:19|20)\d{2}[a-z]?\)?\s*[.,]?\s*$")
+_SEGMENT_SPLIT_RE = re.compile(r"(?<=[.?!؟])\s+")
+_TRAILING_YEAR_RE = re.compile(
+    r"[,\s]*\(?\b(?:19|20)\d{2}[a-z]?\)?\s*[.,]?\s*$"
+    r"|[,\s]*\(?[\u0660-\u0669\u06F0-\u06F9]{4}\)?\s*[.,،]?\s*$"
+)
 # A segment that is plainly the venue/identifier part, never the title.
 _VENUE_START_RE = re.compile(
     r"^(?:in\b|arxiv\b|corr\b|proceedings\b|proc\b|journal\b|pages?\b|pp\b|vol\b|"

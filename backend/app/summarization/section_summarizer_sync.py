@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.language import SOURCE_LANGUAGE_RULE
 from app.llm.resolver import resolve_llm_sync
 from app.core import tracing
 from app.core.logging import get_logger
@@ -68,7 +69,11 @@ Here is the section content:
 --- END SECTION ---
 
 Now write the summary for this section only.
-""".strip()
+""".strip() + (
+    "\n\nWrite output headings and labels in the output language too. "
+    "For English source text, use the English labels shown here.\n\n"
+    + SOURCE_LANGUAGE_RULE
+)
 
 
 PAPER_OVERVIEW_PROMPT_V1 = """You are an expert research assistant helping a scientist deeply understand their own paper.
@@ -105,7 +110,11 @@ Here are the section summaries:
 --- END SECTION SUMMARIES ---
 
 Now write the integrated paper-level executive overview.
-""".strip()
+""".strip() + (
+    "\n\nWrite output headings and labels in the output language too. "
+    "For English source text, use the English labels shown here.\n\n"
+    + SOURCE_LANGUAGE_RULE
+)
 
 
 def get_paper_overview_prompt() -> str:

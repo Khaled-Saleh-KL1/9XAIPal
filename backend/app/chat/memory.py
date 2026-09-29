@@ -41,12 +41,18 @@ from typing import AsyncIterator, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.agent_tools import step_event
+from app.core.language import LANGUAGE_RULE
 from app.core.logging import get_logger
 from app.database.repositories import memories as memory_repo
 from app.embeddings.model import active_embedding_model, get_embeddings_batch
 from app.llm import client as llm_client
 
 logger = get_logger(__name__)
+
+MEMORY_SYSTEM_PROMPT = (
+    "You extract durable facts about a reader from a conversation transcript.\n\n"
+    + LANGUAGE_RULE
+)
 
 # Above this cosine similarity, a candidate is treated as "already known"
 # rather than written again — a reader who mentions the same preference three
@@ -220,7 +226,7 @@ async def distill_memories(
             [
                 {
                     "role": "system",
-                    "content": "You extract durable facts about a reader from a conversation transcript.",
+                    "content": MEMORY_SYSTEM_PROMPT,
                 },
                 {"role": "user", "content": prompt},
             ],

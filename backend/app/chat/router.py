@@ -13,6 +13,7 @@ from typing import Optional
 
 from app.llm import client as llm_client
 from app.chat.prompts import ROUTER_SYSTEM_PROMPT
+from app.core.language import normalize_arabic_for_matching
 from app.core.logging import get_logger
 from app.core import tracing
 
@@ -72,6 +73,8 @@ _EXTERNAL_KEYWORDS = [
     "latest", "recent", "news", "today", "current events", "2025", "2026",
     "who is", "what happened", "search the web", "find online", "look up",
     "wikipedia", "according to",
+    "ابحث في الإنترنت", "ابحث في الويب", "ابحث على الانترنت", "ابحث على الويب",
+    "من الإنترنت", "من الويب",
 ]
 
 # Strong signals for "give me the high-level view of this paper"
@@ -87,6 +90,9 @@ _OVERVIEW_KEYWORDS = [
     "give me an overview", "give an overview", "paper overview",
     "in a nutshell", "bottom line", "key takeaway", "key takeaways",
     "what are the main findings", "main results of the paper",
+    "لخص", "لخّص", "ملخص", "نظرة عامة", "ملخص الورقة", "ملخص البحث",
+    "المساهمة الرئيسية", "الملخص التنفيذي", "خلاصة شاملة",
+    "ما وصلنا إليه حتى الآن",
 ]
 
 
@@ -102,12 +108,12 @@ async def route_prompt(
     Step 1: Heuristic keyword matching for fast routing.
     Step 2: If ambiguous, use LLM for classification.
     """
-    lower = prompt.lower().strip()
+    lower = normalize_arabic_for_matching(prompt.lower()).strip()
 
     # Step 1: LOCAL — user references the visible chunk/image
     if has_current_chunk:
         for kw in _LOCAL_KEYWORDS:
-            if kw in lower:
+            if normalize_arabic_for_matching(kw.lower()) in lower:
                 return RouterDecision(
                     context_type="LOCAL",
                     reason=f"Query references visible content (matched: '{kw}')",
@@ -117,7 +123,7 @@ async def route_prompt(
     # Step 1 (OVERVIEW): High-value pre-computed path for paper-level questions.
     # This bypasses vector search and uses the rich hierarchical summaries.
     for kw in _OVERVIEW_KEYWORDS:
-        if kw in lower:
+        if normalize_arabic_for_matching(kw.lower()) in lower:
             return RouterDecision(
                 context_type="OVERVIEW",
                 reason=f"Overview / paper-level summary request (matched: '{kw}')",
@@ -126,7 +132,7 @@ async def route_prompt(
 
     # Step 1: EXTERNAL — user asks about external/web information
     for kw in _EXTERNAL_KEYWORDS:
-        if kw in lower:
+        if normalize_arabic_for_matching(kw.lower()) in lower:
             return RouterDecision(
                 context_type="EXTERNAL",
                 reason=f"Query targets external/web information (matched: '{kw}')",

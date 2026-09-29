@@ -3,7 +3,9 @@ flashcards, or CSV. The POST path is synchronous; the frontend shows a
 waiting/progress screen while the authenticated response is being built.
 """
 
+import re
 from typing import Literal, Optional
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -159,10 +161,24 @@ async def export_selected(
 
 
 def _attachment(content: str | bytes, filename: str, media_type: str) -> Response:
+    if filename.isascii():
+        content_disposition = f'attachment; filename="{filename}"'
+    else:
+        stem, separator, extension = filename.rpartition(".")
+        if not separator:
+            stem, extension = filename, ""
+        ascii_stem = stem.encode("ascii", "ignore").decode("ascii")
+        ascii_stem = re.sub(r"[^A-Za-z0-9_-]+", "-", ascii_stem).strip("-_") or "export"
+        ascii_extension = re.sub(r"[^A-Za-z0-9]+", "", extension.encode("ascii", "ignore").decode("ascii"))
+        fallback = ascii_stem + (f".{ascii_extension}" if ascii_extension else "")
+        encoded_filename = quote(filename, safe="!#$&+-.^_`|~")
+        content_disposition = (
+            f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded_filename}'
+        )
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition},
     )
 
 

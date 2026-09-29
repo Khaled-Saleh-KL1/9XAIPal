@@ -105,7 +105,7 @@ def collapse_outline(entries: list[dict]) -> list[dict]:
             and descendants[0]["title"] not in cur["title"]
         ):
             sub = descendants[0]["title"]
-            sep = " " if cur["title"].rstrip().endswith((":", "?", "!", "—", "-")) else ": "
+            sep = " " if cur["title"].rstrip().endswith((":", "?", "؟", "!", "—", "-")) else ": "
             cur["title"] = f"{cur['title'].rstrip()}{sep}{sub}"
             out.append(cur)
             i = j          # the subtitle is consumed, not emitted separately
@@ -119,7 +119,7 @@ def collapse_outline(entries: list[dict]) -> list[dict]:
 # "Part I", "Part 1:", "I.", "IV —", "Section A" — a grouping above chapters.
 _PART_RE = re.compile(
     r"^\s*(?:part\s+(?:[ivxlc]+|\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b"
-    r"|[ivxlc]{1,6}\s*[.:—–-]\s+\S|section\s+[a-z]\b)",
+    r"|[ivxlc]{1,6}\s*[.:—–-]\s+\S|section\s+[a-z]\b|(?:الجزء|الباب|القسم)\s+\S)",
     re.IGNORECASE,
 )
 
@@ -249,6 +249,8 @@ _MATTER_TITLES = frozenset({
     "acknowledgments", "acknowledgements", "notes", "endnotes", "index",
     "about the author", "about the publisher", "bibliography", "references",
     "further reading", "glossary", "credits", "permissions", "front matter",
+    "الفهرس", "المحتويات", "فهرس المحتويات", "الإهداء", "شكر وتقدير",
+    "المراجع", "المصادر", "الملاحق", "نبذة عن المؤلف",
 })
 
 
@@ -261,7 +263,8 @@ _MATTER_PREFIXES = (
     "also by", "about ", "praise", "copyright", "other books", "contributors",
     "table of contents", "title page", "half title", "dedication", "acknowledg",
     "bibliograph", "further reading", "index", "colophon", "imprint", "credits",
-    "permissions", "endnotes",
+    "permissions", "endnotes", "فهرس المحتويات", "شكر وتقدير", "المراجع",
+    "المصادر", "الملاحق", "نبذة عن المؤلف",
 )
 
 
