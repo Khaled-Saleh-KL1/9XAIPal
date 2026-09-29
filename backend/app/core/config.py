@@ -101,7 +101,8 @@ class Settings(BaseSettings):
     arabic_classifier_outage_english_page_share: float = Field(default=0.80, gt=0, le=1)
     arabic_classifier_confidence_min: float = Field(default=0.80, ge=0, le=1)
     arabic_handwritten_confidence_min: float = Field(default=0.97, ge=0, le=1)
-    arabic_classifier_batch_pages: int = 8
+    arabic_classifier_batch_pages: int = 2
+    arabic_router_timeout_seconds: float = Field(default=600.0, gt=0)
 
     # Pipeline tracing (docs/superpowers/specs/2026-09-26-pipeline-tracing-design.md).
     # Off by default: with it off no OpenTelemetry object is ever created.

@@ -1,6 +1,8 @@
 import json
+from types import SimpleNamespace
 
 import fitz
+import httpx
 import pytest
 
 from app.extraction.arabic_types import (
@@ -588,6 +590,13 @@ def test_detail_rerender_is_higher_resolution_and_keeps_region_views(scanned_ara
 
 def test_local_router_sends_strict_json_request_without_cloud_credentials(monkeypatch):
     captured = {}
+    settings = arabic_classifier.settings.model_dump()
+    settings["arabic_router_timeout_seconds"] = 123.5
+    monkeypatch.setattr(
+        arabic_classifier,
+        "settings",
+        SimpleNamespace(**settings),
+    )
 
     class Response:
         def raise_for_status(self):
@@ -614,11 +623,73 @@ def test_local_router_sends_strict_json_request_without_cloud_credentials(monkey
     assert captured["body"]["model"] == "qwen3-vl:4b-instruct"
     assert captured["body"]["stream"] is False
     assert captured["body"]["options"]["temperature"] == 0
+    assert captured["body"]["options"]["num_ctx"] == 3584
     assert isinstance(captured["body"]["format"], dict)
     assert captured["body"]["messages"][0]["images"]
     assert captured["timeout"] > 0
+    assert captured["timeout"] == 123.5
     assert captured["trust_env"] is False
     assert "api_key" not in captured["body"]
+
+
+def test_local_router_context_size_is_capped_for_large_batches(monkeypatch):
+    images = [
+        ClassificationImage(index, "page", b"png")
+        for index in range(1, 30)
+    ]
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": json.dumps({"votes": [
+                {
+                    "page_idx": image.page_idx,
+                    "region": image.region,
+                    "language": "arabic",
+                    "writing_style": "printed",
+                    "confidence": 0.97,
+                    "primary_content": True,
+                    "evidence": "printed body",
+                }
+                for image in images
+            ]})}}
+
+    def fake_post(_url, *, json, **_kwargs):
+        captured.update(body=json)
+        return Response()
+
+    monkeypatch.setattr(arabic_classifier.httpx, "post", fake_post)
+
+    call_local_router(images, "page_screen")
+
+    assert captured["body"]["options"]["num_ctx"] == 32768
+
+
+def test_local_router_logs_only_truncated_ollama_400_body(monkeypatch, caplog):
+    error_body = "context length exceeded: " + ("x" * 400)
+    response = httpx.Response(
+        400,
+        text=error_body,
+        request=httpx.Request("POST", "http://localhost:11434/api/chat"),
+    )
+    monkeypatch.setattr(
+        arabic_classifier.httpx,
+        "post",
+        lambda *_args, **_kwargs: response,
+    )
+
+    with pytest.raises(arabic_classifier.ArabicClassifierUnavailable):
+        call_local_router([ClassificationImage(1, "page", b"private-image")], "page_screen")
+
+    assert caplog.records[-1].getMessage() == (
+        "Local Ollama Arabic classifier returned HTTP 400: " + error_body[:300]
+    )
+    assert error_body not in caplog.text
+    assert "Classify the visible language" not in caplog.text
+    assert "cHJpdmF0ZS1pbWFnZQ==" not in caplog.text
 
 
 def test_local_router_refuses_a_public_cloud_endpoint(monkeypatch):

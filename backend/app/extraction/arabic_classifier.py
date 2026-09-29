@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ LANGUAGES = frozenset({"english", "arabic", "mixed", "unknown"})
 WRITING_STYLES = frozenset({"printed", "handwritten", "mixed", "unknown"})
 _SCREEN_DPI = 72
 _DETAIL_DPI = 168
-_ROUTER_TIMEOUT_SECONDS = 45.0
+logger = logging.getLogger(__name__)
 _URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
 _WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
 
@@ -426,17 +427,28 @@ def call_local_router(
         }],
         "format": _request_schema(),
         "stream": False,
-        "options": {"temperature": 0, "num_predict": 4096},
+        "options": {
+            "temperature": 0,
+            "num_predict": 4096,
+            "num_ctx": min(32768, 2048 + 1536 * len(images)),
+        },
     }
     endpoint = f"{settings.arabic_router_base_url.rstrip('/')}/api/chat"
     try:
         response = httpx.post(
             endpoint,
             json=body,
-            timeout=_ROUTER_TIMEOUT_SECONDS,
+            timeout=settings.arabic_router_timeout_seconds,
             trust_env=False,
         )
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 400:
+            logger.warning(
+                "Local Ollama Arabic classifier returned HTTP 400: %s",
+                exc.response.text[:300],
+            )
+        raise ArabicClassifierUnavailable("The local Arabic classifier is unavailable") from exc
     except httpx.HTTPError as exc:
         raise ArabicClassifierUnavailable("The local Arabic classifier is unavailable") from exc
     try:
