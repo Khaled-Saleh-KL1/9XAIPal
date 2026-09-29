@@ -48,6 +48,7 @@ buys: no storage, no risk of pulling arbitrary bytes onto this server for an
 the AI to look closely at one specific photo isn't supported for articles.
 """
 
+import codecs
 import concurrent.futures
 import json
 import re
@@ -117,12 +118,56 @@ class ArticleExtraction:
     asset_map: dict = field(default_factory=dict)
 
 
+_CHARSET_PARAMETER_RE = re.compile(r"\bcharset\s*=\s*[\"']?([A-Za-z0-9._:-]+)", re.IGNORECASE)
+_META_TAG_RE = re.compile(rb"<meta\b[^>]*>", re.IGNORECASE)
+_META_ATTRIBUTE_RE = re.compile(
+    rb"([^\s=/>]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))",
+    re.IGNORECASE,
+)
+
+
+def _charset_from_content_type(content_type: str) -> Optional[str]:
+    match = _CHARSET_PARAMETER_RE.search(content_type or "")
+    return match.group(1) if match else None
+
+
+def _charset_from_html_meta(content: bytes) -> Optional[str]:
+    for tag in _META_TAG_RE.findall(content[:4096]):
+        attributes = {}
+        for match in _META_ATTRIBUTE_RE.finditer(tag):
+            value = next((part for part in match.groups()[1:] if part is not None), b"")
+            attributes[match.group(1).decode("ascii", errors="ignore").lower()] = value.decode(
+                "ascii", errors="ignore"
+            ).strip()
+
+        if attributes.get("charset"):
+            return attributes["charset"]
+        if attributes.get("http-equiv", "").lower() == "content-type":
+            charset = _charset_from_content_type(attributes.get("content", ""))
+            if charset:
+                return charset
+    return None
+
+
+def _decode_html(content: bytes, http_charset: Optional[str] = None) -> str:
+    for charset in (http_charset, _charset_from_html_meta(content)):
+        if not charset:
+            continue
+        try:
+            codecs.lookup(charset)
+        except LookupError:
+            continue
+        return content.decode(charset, errors="replace")
+    return content.decode("utf-8", errors="replace")
+
+
 @dataclass
 class FetchedResource:
     """What a URL actually turned out to be, so a caller can route on it."""
     content: bytes
     content_type: str
     final_url: str
+    charset: Optional[str] = None
 
     @property
     def is_pdf(self) -> bool:
@@ -130,7 +175,8 @@ class FetchedResource:
 
     @property
     def text(self) -> str:
-        return self.content.decode("utf-8", errors="replace")
+        charset = self.charset or _charset_from_content_type(self.content_type)
+        return _decode_html(self.content, charset)
 
 
 def _check_url_is_fetchable(url: str) -> None:
@@ -527,7 +573,9 @@ def _fetch_direct(url: str) -> FetchedResource:
                 client, "GET", url, stream=True, headers={"User-Agent": USER_AGENT},
             )
             resp.raise_for_status()
-            content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+            content_type_header = resp.headers.get("content-type") or ""
+            content_type = content_type_header.split(";")[0].strip().lower()
+            charset = _charset_from_content_type(content_type_header)
             final_url = str(resp.url)
 
             limit = MAX_PDF_BYTES if content_type == PDF_CONTENT_TYPE else MAX_PAGE_BYTES
@@ -577,7 +625,7 @@ def _fetch_direct(url: str) -> FetchedResource:
         if resp is not None:
             resp.close()
 
-    return FetchedResource(content=content, content_type=content_type, final_url=final_url)
+    return FetchedResource(content=content, content_type=content_type, final_url=final_url, charset=charset)
 
 
 # Tier 1 of the article-fetch cascade: HTML-capable providers, tried in this
@@ -643,7 +691,7 @@ def fetch_resource(url: str) -> FetchedResource:
                 logger.info(f"{name} resolved {url} to a PDF; fetching it directly instead of using its HTML conversion")
                 return _fetch_direct(final_url)
             return FetchedResource(
-                content=html.encode("utf-8"), content_type="text/html", final_url=final_url,
+                content=html.encode("utf-8"), content_type="text/html", final_url=final_url, charset="utf-8",
             )
 
     try:

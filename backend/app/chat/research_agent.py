@@ -18,6 +18,7 @@ import asyncio
 from typing import Any, Optional, Union
 from uuid import UUID
 
+from app.core.language import is_primarily_arabic
 from app.core.logging import get_logger
 from app.core import tracing
 from app.search.web import search, search_images
@@ -172,6 +173,8 @@ async def run_research_agent(
 
 def _generate_initial_queries(query: str, paper_title: Optional[str]) -> list[str]:
     """Produce 2-3 strong starting search queries."""
+    if is_primarily_arabic(query):
+        return [query]
     queries = [query]
     if paper_title:
         clean_title = paper_title.rsplit(".", 1)[0]

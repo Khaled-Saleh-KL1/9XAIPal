@@ -938,6 +938,7 @@ _IDENTIFIER_NAME_RE = re.compile(
 _SECTION_WORDS = {
     "abstract", "introduction", "contents", "table of contents", "references", "acknowledgements",
     "acknowledgments", "appendix", "keywords", "index", "preface", "summary", "overview",
+    "الملخص", "ملخص", "المقدمة", "مقدمة", "الخلاصة", "الخاتمة", "المراجع", "الفهرس", "المحتويات",
 }
 
 

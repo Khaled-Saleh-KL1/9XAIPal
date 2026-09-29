@@ -453,9 +453,11 @@ class Settings(BaseSettings):
     # write" can't land two requests inside the same provider-side second.
     semantic_scholar_min_interval_seconds: float = 1.05
     # Semantic Scholar's limiter is bursty: measured live, a third to a half
-    # of correctly spaced requests still get 429. Each retry re-queues in the
-    # shared line (fair to other readers) and backs off one more interval.
-    semantic_scholar_max_attempts: int = 4
+    # of correctly spaced requests still get 429 — and on 2026-09-29, 9 of 12
+    # at 1.05 s and half at 3 s. Each retry backs off exponentially (honouring
+    # Retry-After, capped at 8 s) and then re-queues in the shared line, and a
+    # 429 never opens the outage breaker (search/semantic_scholar_client.py).
+    semantic_scholar_max_attempts: int = 6
 
     # SerpApi (https://serpapi.com) — a paid scraping API returning genuine
     # Google SERP data (organic_results / images_results). This is the only

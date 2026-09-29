@@ -45,6 +45,11 @@ from app.services import image_service
 logger = get_logger(__name__)
 router = APIRouter()
 
+
+def _serialize_sse_event(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
 # The path segment that means "every paper", as opposed to a study's UUID.
 LIBRARY = "library"
 
@@ -399,7 +404,7 @@ async def chat_stream(
     universal_notes = [{"body": n["body"], "origin": n["origin"]} for n in universal_notes]
 
     def sse(event: dict) -> str:
-        return f"data: {json.dumps(event)}\n\n"
+        return _serialize_sse_event(event)
 
     async def event_stream():
         yield sse({"type": "created", "turn_id": str(user_turn["id"]), "conversation_id": str(conversation_id)})

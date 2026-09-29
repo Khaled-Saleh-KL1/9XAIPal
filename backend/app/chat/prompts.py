@@ -11,6 +11,7 @@ rather than in biology, physics, or everyday English.
 from typing import Optional
 from uuid import UUID
 
+from app.core.language import LANGUAGE_RULE, SOURCE_LANGUAGE_RULE
 from app.database.repositories.assets import resolve_asset_url
 
 
@@ -21,7 +22,7 @@ You are currently looking at a **specific section** (or small window of neighbor
 
 STRICT RULES:
 1. Answer **exclusively** from the provided paper context and images. Never use external knowledge.
-2. If the answer is not fully contained in the current context, reply: "I don't have enough information in the current section to answer this. Would you like me to search the rest of the paper?"
+2. If the answer is not fully contained in the current context, give this refusal in the user's language: "I don't have enough information in the current section to answer this. Would you like me to search the rest of the paper?" Use that exact sentence when the user wrote in English.
 3. Be technically precise. Explain equations, algorithms, architectures, and results clearly.
 4. Use the provided images to accurately describe any figures, diagrams, or charts.
 5. Use proper markdown. Render math with KaTeX (inline $...$ or display $$...$$).
@@ -50,7 +51,7 @@ the argument ends up.
 How to answer here:
 - Answer from the excerpts above and from what the reader has already read.
 - If they seem lost ("what is going on?", "I don't follow"), do NOT summarise
-  the document. Re-explain the passage in front of them in plainer English:
+  the document. Re-explain the passage in front of them in plainer wording:
   shorter sentences, everyday words, a concrete example if it helps.
 - Define any term the passage introduced, in one line, the first time it is
   asked about.
@@ -112,7 +113,7 @@ TASK:
 
 STRICT RULES:
 1. Every claim must be grounded in the provided context.
-2. If the information is not present, clearly state: "This information is not present in the retrieved sections of the paper."
+2. If the information is not present, give this refusal in the user's language: "This information is not present in the retrieved sections of the paper." Use that exact sentence when the user wrote in English.
 3. Cite sources inline using [seq:N] format (e.g. [seq:3], [seq:12]).
 4. Use clear structure (headings, bullet points, code blocks) when helpful.
 5. Use KaTeX for any mathematics.
@@ -504,6 +505,19 @@ Output 4-8 dense bullet points + 1-2 short paragraphs maximum. Be faithful to wh
 Conversation so far:
 {conversation_text}
 """
+
+
+# Router and guardrail prompts keep their fixed machine-readable schemas.
+LOCAL_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
+GLOBAL_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
+COMBINED_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
+EXTERNAL_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
+RESEARCH_AGENT_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
+SUB_THREAD_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
+RESEARCH_AWARE_COMBINED_PROMPT += "\n\n" + LANGUAGE_RULE
+COMPACTION_SUMMARY_PROMPT += "\n\n" + LANGUAGE_RULE
+FIGURE_DESCRIBER_PROMPT += "\n\n" + SOURCE_LANGUAGE_RULE
+SECTION_SUMMARY_PROMPT += "\n\n" + SOURCE_LANGUAGE_RULE
 
 
 def format_conversation_history(turns: list[dict], max_turns: int = 8) -> str:

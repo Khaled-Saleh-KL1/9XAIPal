@@ -901,7 +901,11 @@ def _split_text_into_paragraphs(text: str) -> list[str]:
     for para in paragraphs:
         if len(para) > 850:
             # Split on sentence boundaries
-            sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\u201C\"'])", para)
+            sentences = re.split(
+                r"(?<=[.!?؟۔])\s+(?=[A-Z0-9\u0600-\u06FF\u0750-\u077F"
+                r"\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u201C\"'])",
+                para,
+            )
             current = ""
             for sent in sentences:
                 if len(current) + len(sent) > 620 and current:

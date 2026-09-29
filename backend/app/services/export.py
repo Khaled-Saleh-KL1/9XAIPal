@@ -72,7 +72,11 @@ def _escape_bibtex(text: str) -> str:
 def _slug(text: str) -> str:
     """Lowercase, alnum-and-dash only, collapsed and trimmed — used for both
     a BibTeX key's title fallback and a Markdown export filename."""
-    slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    slug = re.sub(
+        r"[^a-z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+",
+        "-",
+        (text or "").lower(),
+    ).strip("-")
     return slug or "untitled"
 
 
@@ -98,7 +102,11 @@ def _bibtex_key(authors: str, year: Optional[int], title: str) -> str:
     if authors:
         first_author = authors.split(",")[0].strip()
         last_name = first_author.split()[-1] if first_author.split() else first_author
-        base = re.sub(r"[^a-zA-Z0-9]", "", last_name).lower() or "ref"
+        base = re.sub(
+            r"[^a-zA-Z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]",
+            "",
+            last_name,
+        ).lower() or "ref"
         return f"{base}{year}" if year else base
     return _slug_key(title)
 
@@ -330,4 +338,4 @@ def to_library_csv(papers: list[dict]) -> str:
             added.date().isoformat() if isinstance(added, (datetime, date)) else "",
             p.get("page_count") or "",
         ])
-    return buf.getvalue()
+    return buf.getvalue().encode("utf-8-sig").decode("utf-8")

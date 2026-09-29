@@ -23,6 +23,11 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+
+def _serialize_sse_event(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
 # Hard cap on sub-thread nesting: main chat (layer 0) + 3 sub-chat layers.
 # Tested up to L3; deeper nesting is disabled in the UI and rejected by /ask.
 MAX_SUB_THREAD_DEPTH = 3
@@ -184,7 +189,7 @@ async def ask_paper_stream(
     user_id = current_user["id"]
 
     def sse(event: dict) -> str:
-        return f"data: {json.dumps(event)}\n\n"
+        return _serialize_sse_event(event)
 
     async def event_stream():
         async with get_ask_semaphore():

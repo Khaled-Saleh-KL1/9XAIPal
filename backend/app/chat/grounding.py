@@ -40,6 +40,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.core.config import settings
+from app.core.language import LANGUAGE_RULE
 from app.core.logging import get_logger
 from app.llm import client as llm_client
 
@@ -64,7 +65,7 @@ class Claim:
 # ── Claim splitting ───────────────────────────────────────────────────────
 
 # `[[11]]`, `[[30], [31]]`, `[[11, 12]]` — a margin note's markers.
-_NOTE_MARKER_RE = re.compile(r"\[\[([0-9,;\s\[\]]+?)\]\]")
+_NOTE_MARKER_RE = re.compile(r"\[\[([0-9\u0660-\u0669\u06F0-\u06F9,;\s\[\]]+?)\]\]")
 # `[seq:12]`, `[seq:12, seq:94]` — book chat's markers.
 _SEQ_MARKER_RE = re.compile(r"\[(seq:\d+(?:\s*,\s*seq:\d+)*)\]")
 # `[[P2:41]]` — the desk's markers, one paper index + block per marker.
@@ -72,7 +73,7 @@ _DESK_MARKER_RE = re.compile(r"\[\[P(\d+):(\d+)\]\]")
 # For stripping: the same shapes the three parsers accept — `[[30], [31]]`
 # has a `]` INSIDE it, so a naive `[^\]]*` stops early and leaves it in the
 # text the reader sees.
-_ANY_MARKER_RE = re.compile(r"\[\[[0-9P:,;\s\[\]]+?\]\]|\[seq:[^\]]*\]")
+_ANY_MARKER_RE = re.compile(r"\[\[[0-9P\u0660-\u0669\u06F0-\u06F9:,;\s\[\]]+?\]\]|\[seq:[^\]]*\]")
 # Emphasis/code markers: harmless to the judge, ugly in the evidence panel.
 # Emphasis and code markers only. ⚠ An underscore is emphasis at a word's
 # edge ("_this_"), and a subscript inside LaTeX ("d_{model}", "d_k"); the
@@ -80,7 +81,10 @@ _ANY_MARKER_RE = re.compile(r"\[\[[0-9P:,;\s\[\]]+?\]\]|\[seq:[^\]]*\]")
 _INLINE_MD_RE = re.compile(r"\*+|`+|(?<!\w)_+(?=\w)|(?<=\w)_+(?=[\s.,;:!?)\]]|$)")
 
 # A claim boundary: a sentence end, or a new line (a bullet or paragraph).
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(\[*])|\n+")
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?<=[.!?؟۔])\s+(?=[A-Z\"'(\[*\u0600-\u06FF\u0750-\u077F"
+    r"\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF])|\n+"
+)
 _MD_NOISE_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+|#+\s+|>\s*)")
 _HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 
@@ -179,7 +183,8 @@ def build_evidence(
 
 # ── The judge ─────────────────────────────────────────────────────────────
 
-_SYSTEM = """You are a meticulous fact-checker. You are given CLAIMS from an AI's answer about a document, and the PASSAGES from that document the answer was based on. For each claim, decide strictly from the passages:
+_SYSTEM = (
+    """You are a meticulous fact-checker. You are given CLAIMS from an AI's answer about a document, and the PASSAGES from that document the answer was based on. For each claim, decide strictly from the passages:
 
 - "supported": a passage states this (paraphrase is fine; the meaning must be there).
 - "partial": a passage supports part of it, but the claim adds, overstates, or generalises beyond what is written.
@@ -193,6 +198,9 @@ Rules:
 - "quote" must be a short verbatim excerpt (under 200 characters) copied from the passage you judged against, or "" if none applies.
 - Output ONLY a JSON array, one object per claim, in order, no prose:
 [{"claim": 1, "verdict": "supported", "passage": "<passage key or empty>", "quote": "<verbatim excerpt or empty>", "note": "<one short clause, optional>"}]"""
+    + "\n\n"
+    + LANGUAGE_RULE
+)
 
 
 def _judge_prompt(claims: list[Claim], evidence: list[dict]) -> str:

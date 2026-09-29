@@ -41,7 +41,7 @@ _ARXIV_RE = re.compile(
 _OPENREVIEW_RE = re.compile(r"https?://(?:www\.)?openreview\.net/(?:forum|pdf)\?id=([\w\-]+)", re.IGNORECASE)
 _ACL_RE = re.compile(r"https?://(?:www\.)?aclanthology\.org/([\w\-.]+?)(?:\.pdf)?/?$", re.IGNORECASE)
 
-_WORD_RE = re.compile(r"[a-z0-9]+")
+_WORD_RE = re.compile(r"[a-z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+")
 _STOP = {"a", "an", "the", "of", "for", "and", "in", "on", "with", "to", "via", "by", "is", "are"}
 
 
