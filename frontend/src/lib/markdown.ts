@@ -55,11 +55,12 @@ const SANITIZE_SCHEMA: typeof defaultSchema = {
     ],
     span: [
       ...(defaultSchema.attributes?.span ?? []),
-      // 'citation-ref': lib/references.tsx's remarkCitationRefs marks a "[12]"
-      // bracket this way; its span override reads the numbers back off it to
-      // render <BibCitationRef>. Without both entries here the marker span
-      // (or its data attribute) would be silently stripped by this same
-      // rehype-sanitize pass, same reason `video` needed adding above.
+      // 'citation-ref': lib/references.tsx's numeric and author-year remark
+      // plugins mark recognized citations this way; the span override reads
+      // the reference numbers back off the marker to render <BibCitationRef>.
+      // Without both entries here the marker span (or its data attribute)
+      // would be silently stripped by this same rehype-sanitize pass, same
+      // reason `video` needed adding above.
       //
       // ⚠ `dataNumbers`, the PROPERTY name — not `data-numbers`, the HTML
       // attribute. rehypeRaw runs before this and round-trips the tree

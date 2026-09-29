@@ -66,6 +66,13 @@ export function useReferences(paperId: string | null | undefined, enabled: boole
 }
 
 const CITATION_RE = /\[(\d+(?:,\s*\d+)*)\]/g;
+const SURNAME_PATTERN = String.raw`[\p{L}\p{M}][\p{L}\p{M}'’.-]*`;
+const AUTHOR_PATTERN = String.raw`${SURNAME_PATTERN}(?:\s+(?:et\s+al\.?|(?:and|&)\s+${SURNAME_PATTERN}))?`;
+const AUTHOR_YEAR_CITATION_RE = new RegExp(
+  String.raw`(?<![\p{L}\p{M}])(${AUTHOR_PATTERN})(?:\s*,\s*((?:19|20)\d{2}[a-z]?)|\s+\(\s*((?:19|20)\d{2}[a-z]?)\s*\)|\s+((?:19|20)\d{2}[a-z]?))(?![\p{L}\p{M}\d])`,
+  'giu',
+);
+const YEAR_IN_REFERENCE_RE = /(?<!\d)((?:19|20)\d{2}[a-z]?)(?!\d)/gi;
 
 /**
  * Splits a "[5, 2, 35]"-shaped run out of a text node into a marker `span`
@@ -118,6 +125,66 @@ export function remarkCitationRefs(refNumbers: Set<number>) {
       return index + out.length;
     });
   };
+}
+
+/** Turn unambiguous author/year text into the same numbered marker the
+ * existing citation chip consumes. Parentheses around a citation stay as
+ * ordinary text; a narrative citation's year parentheses remain in the chip.
+ */
+export function remarkAuthorYearCitationRefs(entriesByNumber: Map<number, ReferenceEntry>) {
+  return (tree: Root) => {
+    if (entriesByNumber.size === 0) return;
+    visit(tree, 'text', (node: Text, index, parent: Parent | undefined) => {
+      if (!parent || index == null) return;
+      const value = node.value;
+      AUTHOR_YEAR_CITATION_RE.lastIndex = 0;
+      const matches = [...value.matchAll(AUTHOR_YEAR_CITATION_RE)];
+      if (matches.length === 0) return;
+
+      const out: (Text | ReturnType<typeof citationNode>)[] = [];
+      let cursor = 0;
+      let matchedAny = false;
+      for (const match of matches) {
+        const surname = match[1].match(new RegExp(SURNAME_PATTERN, 'u'))?.[0];
+        const citationYear = (match[2] || match[3] || match[4]).toLowerCase();
+        if (!surname) continue;
+        const normalizedSurname = normalizeSurname(surname);
+        const matchingEntries = [...entriesByNumber.values()].filter((entry) => (
+          entry.first_author
+          && normalizeSurname(entry.first_author) === normalizedSurname
+          && entry.year === Number.parseInt(citationYear.slice(0, 4), 10)
+          && referenceYearKey(entry) === citationYear
+        ));
+        if (matchingEntries.length !== 1) continue;
+
+        const start = match.index as number;
+        if (start > cursor) out.push({ type: 'text', value: value.slice(cursor, start) });
+        out.push(citationNode([matchingEntries[0].number], match[0]));
+        cursor = start + match[0].length;
+        matchedAny = true;
+      }
+      if (!matchedAny) return;
+      if (cursor < value.length) out.push({ type: 'text', value: value.slice(cursor) });
+
+      parent.children.splice(index, 1, ...(out as any));
+      return index + out.length;
+    });
+  };
+}
+
+function normalizeSurname(surname: string): string {
+  return surname.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+}
+
+function referenceYearKey(entry: ReferenceEntry): string | null {
+  if (entry.year == null) return null;
+  YEAR_IN_REFERENCE_RE.lastIndex = 0;
+  const years = [...(entry.raw_text || '').matchAll(YEAR_IN_REFERENCE_RE)];
+  const afterAuthors = (entry.raw_text || '').match(/\.\s*((?:19|20)\d{2}[a-z]?)\b/i)?.[1];
+  const preferred = afterAuthors && Number.parseInt(afterAuthors.slice(0, 4), 10) === entry.year
+    ? afterAuthors
+    : [...years].reverse().find((match) => Number.parseInt(match[1].slice(0, 4), 10) === entry.year)?.[1];
+  return preferred?.toLowerCase() ?? String(entry.year);
 }
 
 function citationNode(numbers: number[], raw: string) {

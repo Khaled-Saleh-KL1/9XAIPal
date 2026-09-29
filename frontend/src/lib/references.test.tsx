@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown from 'react-markdown';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PluggableList } from 'unified';
+import type { ReferenceEntry } from '../api';
 import { MARKDOWN_REHYPE, MARKDOWN_REMARK } from './markdown';
-import { remarkCitationRefs, useReferences } from './references';
+import { remarkAuthorYearCitationRefs, remarkCitationRefs, useReferences } from './references';
 
 const numericRemark = [
   ...MARKDOWN_REMARK,
@@ -19,7 +20,19 @@ function renderWithNumericReferences(markdown: string): string {
   );
 }
 
-const referenceEntry = {
+function renderWithAuthorYearReferences(markdown: string, entries: Map<number, ReferenceEntry>): string {
+  const remarkPlugins = [
+    ...MARKDOWN_REMARK,
+    [remarkAuthorYearCitationRefs, entries],
+  ] as PluggableList;
+  return renderToStaticMarkup(
+    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={MARKDOWN_REHYPE}>
+      {markdown}
+    </ReactMarkdown>,
+  );
+}
+
+const referenceEntry: ReferenceEntry = {
   number: 3,
   raw_text: 'Smith. 2020. A paper title.',
   resolve_status: 'pending',
@@ -44,6 +57,20 @@ describe('bibliography citations through the shared markdown pipeline', () => {
 
     expect(html).toContain('<span class="citation-ref" data-numbers="3">[3]</span>');
     expect(html).toContain('<span class="citation-ref" data-numbers="1,2">[1, 2]</span>');
+  });
+
+  it('keeps author-year marker attributes through rehype-sanitize', () => {
+    const entry: ReferenceEntry = {
+      ...referenceEntry,
+      number: 1,
+      first_author: 'Abdelali',
+      year: 2024,
+      raw_text: 'Ahmed Abdelali et al. 2024. LAraBench title.',
+    };
+
+    const html = renderWithAuthorYearReferences('(Abdelali et al., 2024)', new Map([[1, entry]]));
+
+    expect(html).toContain('<span class="citation-ref" data-numbers="1">Abdelali et al., 2024</span>');
   });
 });
 
