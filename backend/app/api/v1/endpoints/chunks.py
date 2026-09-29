@@ -39,6 +39,10 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
+def _serialize_sse_event(event: dict) -> str:
+    return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
 @router.get("/{paper_id}/chunks")
 async def list_chunks(
     paper_id: UUID,
@@ -750,7 +754,7 @@ async def resolve_reference_stream(
         raise HTTPException(status_code=404, detail=f"No reference [{ref_number}] on this paper.")
 
     def sse(event: dict) -> str:
-        return f"data: {json.dumps(event)}\n\n"
+        return _serialize_sse_event(event)
 
     async def event_stream():
         # The request-scoped `db` closes when this handler returns, which is
