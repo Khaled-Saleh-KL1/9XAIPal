@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { resolveReferenceStream, addReferenceToLibrary, getPaperProgress, type ReferenceEntry, type ResolveQueueState, findReferenceOnWeb } from '../api';
 import type { ReferenceIndex } from '../lib/references';
 
@@ -34,10 +34,16 @@ export function BibCitationRef({
   numbers,
   refIndex,
   onOpenPaper,
+  label,
 }: {
   paperId: string;
   numbers: number[];
   refIndex: ReferenceIndex;
+  /** What the chip shows. Omitted for numbered bibliographies, where the
+   * paper's own "[12]" is the label; an author–year paper passes its own
+   * citation text ("Abdelali et al., 2024") so the reader never sees a
+   * number the paper doesn't use. */
+  label?: ReactNode;
   /** Switches the reader to a different paper — undefined only when the
    * reader shell hasn't wired one in, in which case "Open" simply doesn't
    * render rather than being a dead button. */
@@ -144,7 +150,7 @@ export function BibCitationRef({
         onClick={toggle}
         title={numbers.length === 1 ? `Reference [${numbers[0]}]` : `References [${numbers.join(', ')}]`}
       >
-        [{numbers.join(', ')}]
+        {label ?? `[${numbers.join(', ')}]`}
       </button>
       {open && (
         <span className="cite-peek bib-ref-peek">
