@@ -239,3 +239,37 @@ async def test_reextract_clears_stale_arabic_route_metadata(client, db_session, 
         "ocr_provider_summary FROM documents WHERE id=:id"
     ), {"id": document_id})).mappings().one()
     assert all(value is None for value in row.values())
+
+
+@pytest.mark.asyncio
+async def test_reextract_preserves_user_confirmed_classification(
+    client, db_session, monkeypatch
+):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session,
+        await _user_id(db_session, email),
+        language="mixed",
+        writing_style="printed",
+        direction="rtl",
+        source="user_confirmed",
+        confidence=0.99,
+        provider_summary=[{"provider": "gemini_arabic_flash", "pages": [1]}],
+    )
+    monkeypatch.setattr(documents_endpoint.process_ingestion, "delay", lambda *_args: None)
+
+    response = await client.post(f"/api/v1/papers/{document_id}/reextract")
+
+    assert response.status_code == 202
+    row = (await db_session.execute(text(
+        "SELECT detected_language, detected_writing_style, text_direction, "
+        "classification_source, classifier_model, classification_confidence, "
+        "ocr_provider_summary FROM documents WHERE id=:id"
+    ), {"id": document_id})).mappings().one()
+    assert row["detected_language"] == "mixed"
+    assert row["detected_writing_style"] == "printed"
+    assert row["text_direction"] == "rtl"
+    assert row["classification_source"] == "user_confirmed"
+    assert row["classifier_model"] is None
+    assert row["classification_confidence"] is None
+    assert row["ocr_provider_summary"] is None

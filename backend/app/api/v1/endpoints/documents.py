@@ -1232,12 +1232,24 @@ async def reextract_paper(
             SET status = 'processing',
                 error_message = NULL,
                 extractor = NULL,
-                detected_language = NULL,
-                detected_writing_style = NULL,
-                text_direction = NULL,
+                detected_language = CASE
+                    WHEN classification_source = 'user_confirmed' THEN detected_language
+                    ELSE NULL
+                END,
+                detected_writing_style = CASE
+                    WHEN classification_source = 'user_confirmed' THEN detected_writing_style
+                    ELSE NULL
+                END,
+                text_direction = CASE
+                    WHEN classification_source = 'user_confirmed' THEN text_direction
+                    ELSE NULL
+                END,
                 classifier_model = NULL,
                 classification_confidence = NULL,
-                classification_source = NULL,
+                classification_source = CASE
+                    WHEN classification_source = 'user_confirmed' THEN classification_source
+                    ELSE NULL
+                END,
                 ocr_provider_summary = NULL,
                 updated_at = NOW()
             WHERE id = :id
