@@ -89,10 +89,23 @@ describe('ArticleBlock citation style', () => {
       refs,
     );
 
-    expect([...rendered.container.querySelectorAll('.cite-chip')].map((button) => button.textContent)).toEqual([
-      '[1]', '[2]', '[3]', '[4]', '[5]', '[1]', '[4]',
+    // Each chip keeps the paper's own citation text as its label — the reader
+    // sees "(Abdelali et al., 2024)", never a number the paper doesn't use —
+    // while the chip still opens entry [1], [2], … (its title says which).
+    const chips = [...rendered.container.querySelectorAll('.cite-chip')];
+    expect(chips.map((button) => button.textContent)).toEqual([
+      'Abdelali et al., 2024', 'Gehring et al., 2017', 'Kiela et al., 2021',
+      'Smith and Jones, 2020', 'Smith, 2020a', 'Abdelali et al. (2024)', 'Smith and Jones (2020)',
     ]);
-    expect(rendered.container.textContent).toBe('([1]) ([2]; [3]) ([4]) ([5]). [1] and [4].');
+    expect(chips.map((button) => button.getAttribute('title'))).toEqual([
+      'Reference [1]', 'Reference [2]', 'Reference [3]', 'Reference [4]', 'Reference [5]',
+      'Reference [1]', 'Reference [4]',
+    ]);
+    expect(rendered.container.textContent).toBe(
+      '(Abdelali et al., 2024) (Gehring et al., 2017; Kiela et al., 2021) '
+        + '(Smith and Jones, 2020) (Smith, 2020a). '
+        + 'Abdelali et al. (2024) and Smith and Jones (2020).',
+    );
   });
 
   it('matches accented surnames without accents', () => {
@@ -102,7 +115,8 @@ describe('ArticleBlock citation style', () => {
 
     const rendered = renderBlock('(fEderico, 2023).', 'ltr', refs);
 
-    expect(rendered.container.querySelector('.cite-chip')).toHaveTextContent('[6]');
+    expect(rendered.container.querySelector('.cite-chip')).toHaveTextContent('fEderico, 2023');
+    expect(rendered.container.querySelector('.cite-chip')).toHaveAttribute('title', 'Reference [6]');
   });
 
   it('leaves ambiguous, unknown, and suffix-mismatched citations as text', () => {

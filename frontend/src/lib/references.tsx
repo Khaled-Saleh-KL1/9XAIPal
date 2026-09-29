@@ -243,7 +243,15 @@ export function makeCitationSpanComponent(
         return <span className={className} {...rest}>{children}</span>;
       }
       const numbers = numbersAttr.split(',').map((s) => parseInt(s, 10)).filter((n) => !Number.isNaN(n));
-      return <BibCitationRef paperId={paperId} numbers={numbers} refIndex={refIndex} onOpenPaper={onOpenPaper} />;
+      return (
+        <BibCitationRef
+          paperId={paperId}
+          numbers={numbers}
+          refIndex={refIndex}
+          onOpenPaper={onOpenPaper}
+          label={refIndex.citationStyle === 'author_year' ? children : undefined}
+        />
+      );
     },
   };
 }
