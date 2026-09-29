@@ -20,6 +20,8 @@ def test_arabic_features_are_safe_by_default():
     cfg = Settings(_env_file=None)
     assert cfg.arabic_ocr_enabled is False
     assert cfg.arabic_handwritten_ocr_enabled is False
+    assert cfg.arabic_classifier_batch_pages == 2
+    assert cfg.arabic_router_timeout_seconds == 600.0
     assert cfg.arabic_gemini_printed_model == "gemini-3.7-flash"
     assert cfg.arabic_gemini_printed_thinking_level == "low"
     assert cfg.arabic_gemini_handwritten_model == "gemini-3.1-pro-preview"
@@ -54,6 +56,12 @@ def test_classifier_thresholds_are_bounded():
         Settings(arabic_classifier_confidence_min=1.1, _env_file=None)
     with pytest.raises(ValidationError):
         Settings(arabic_min_body_letter_share=1.1, _env_file=None)
+
+
+@pytest.mark.parametrize("invalid", [0, -1])
+def test_arabic_router_timeout_must_be_positive(invalid):
+    with pytest.raises(ValidationError):
+        Settings(arabic_router_timeout_seconds=invalid, _env_file=None)
 
 
 @pytest.mark.parametrize("invalid", ["medium", "high", "minimal", ""])

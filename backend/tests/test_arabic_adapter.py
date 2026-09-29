@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from markdown_it import MarkdownIt
 
 from app.extraction.arabic_adapter import (
     pages_to_content_list,
@@ -201,6 +202,75 @@ def test_nested_list_text_is_not_lost():
 
     assert blocks[0]["type"] == "list"
     assert blocks[0]["list_items"] == ["عنصر رئيسي", "عنصر فرعي", "العنصر الأخير"]
+
+
+def test_ordered_list_numbers_and_nested_levels_survive_adapter_and_chunker(tmp_path):
+    markdown = (
+        "2. العنصر الأول\n"
+        "   1. العنصر الفرعي الأول\n"
+        "   2. العنصر الفرعي الثاني\n"
+        "3. العنصر الأخير"
+    )
+    entries = pages_to_content_list([ocr_page(1, markdown)])
+    list_block = next(block for block in entries if block["type"] == "list")
+
+    assert list_block["list_items"] == [
+        "2. العنصر الأول",
+        "   1. العنصر الفرعي الأول",
+        "   2. العنصر الفرعي الثاني",
+        "3. العنصر الأخير",
+    ]
+
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    chunks = create_chunks_from_content_list(content_list)
+
+    assert chunks[0]["markdown"] == "\n".join(list_block["list_items"])
+    list_depths = []
+    list_stack = []
+    for token in MarkdownIt("gfm-like", {"linkify": False}).parse(chunks[0]["markdown"]):
+        if token.type in {"ordered_list_open", "bullet_list_open"}:
+            list_stack.append(token.type)
+        elif token.type in {"ordered_list_close", "bullet_list_close"}:
+            list_stack.pop()
+        elif token.type == "list_item_open":
+            list_depths.append(len(list_stack))
+    assert list_depths == [1, 2, 2, 1]
+
+
+def test_multi_digit_ordered_parent_and_nested_bullet_keep_markers(tmp_path):
+    markdown = (
+        "10. العنصر العاشر\n"
+        "    1. عنصر فرعي مرتب\n"
+        "    - عنصر فرعي نقطي\n"
+        "11. العنصر الحادي عشر"
+    )
+    entries = pages_to_content_list([ocr_page(1, markdown)])
+    list_block = next(block for block in entries if block["type"] == "list")
+
+    assert list_block["list_items"] == [
+        "10. العنصر العاشر",
+        "    1. عنصر فرعي مرتب",
+        "    - عنصر فرعي نقطي",
+        "11. العنصر الحادي عشر",
+    ]
+
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    chunks = create_chunks_from_content_list(content_list)
+
+    assert chunks[0]["markdown"] == "\n".join(list_block["list_items"])
+    assert "- - عنصر فرعي نقطي" not in chunks[0]["markdown"]
+    list_depths = []
+    list_stack = []
+    for token in MarkdownIt("gfm-like", {"linkify": False}).parse(chunks[0]["markdown"]):
+        if token.type in {"ordered_list_open", "bullet_list_open"}:
+            list_stack.append(token.type)
+        elif token.type in {"ordered_list_close", "bullet_list_close"}:
+            list_stack.pop()
+        elif token.type == "list_item_open":
+            list_depths.append(len(list_stack))
+    assert list_depths == [1, 2, 2, 1]
 
 
 def test_fenced_display_math_maps_to_equation():

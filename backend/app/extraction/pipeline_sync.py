@@ -31,6 +31,7 @@ from app.extraction.chunker import (
     create_chunks_from_content_list,
     create_chunks_from_markdown,
     crop_code_blocks,
+    clean_arabic_plain_text_chunks,
 )
 from app.extraction.assets import move_asset_to_storage
 from app.extraction.glyph_repair import repair_chunks
@@ -655,6 +656,11 @@ def run_pipeline_sync(
 
         # Last look before writing rows for a paper that may be gone.
         _assert_document_exists(session, document_id)
+        if (
+            classification is not None
+            and classification.route == DocumentRoute.ARABIC_PRINTED
+        ):
+            clean_arabic_plain_text_chunks(chunks)
         _finish_ingestion(
             session,
             document_id=document_id,

@@ -1,6 +1,8 @@
 import json
+from types import SimpleNamespace
 
 import fitz
+import httpx
 import pytest
 
 from app.extraction.arabic_types import (
@@ -159,6 +161,91 @@ def test_english_text_layer_skips_the_local_vision_model(english_only_pdf):
     assert decision.route is DocumentRoute.ENGLISH
     assert decision.language == "english"
     assert decision.text_direction == "ltr"
+    assert decision.classifier_model == "text_layer"
+    assert decision.confidence == 1.0
+
+
+def test_digital_arabic_text_layer_skips_local_vision(scanned_arabic_pdf, monkeypatch):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 120, 0),
+        )),
+    )
+
+    def should_not_call(_images, _phase):
+        raise AssertionError("digital Arabic text should not call the local model")
+
+    decision = classify_document(scanned_arabic_pdf, vision_call=should_not_call)
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "arabic"
+    assert decision.writing_style == "printed"
+    assert decision.text_direction == "rtl"
+    assert decision.confidence == 1.0
+    assert decision.classifier_model == "text_layer"
+
+
+def test_digital_arabic_and_clear_english_pages_are_mixed_without_vision(
+    two_page_scan, monkeypatch
+):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 0, 120),
+            TextPageEvidence(2, 120, 0),
+        )),
+    )
+
+    def should_not_call(_images, _phase):
+        raise AssertionError("text-backed pages should not call the local model")
+
+    decision = classify_document(two_page_scan, vision_call=should_not_call)
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "mixed"
+    assert decision.writing_style == "printed"
+    assert decision.text_direction == "rtl"
+    assert decision.confidence == 1.0
+    assert decision.classifier_model == "text_layer"
+
+
+def test_textless_pages_alone_are_sent_to_vision(two_page_scan, monkeypatch):
+    monkeypatch.setattr(
+        arabic_classifier,
+        "inspect_text_layers",
+        lambda _path: DocumentTextEvidence((
+            TextPageEvidence(1, 120, 0),
+            TextPageEvidence(2, 0, 0),
+        )),
+    )
+    calls = []
+
+    def classify_only_scan(images, phase):
+        calls.append((phase, [image.page_idx for image in images]))
+        return [
+            PageStyleVote(
+                page_idx=image.page_idx,
+                language="arabic",
+                writing_style="printed",
+                confidence=0.99,
+                region=image.region,
+                primary_content=True,
+            )
+            for image in images
+        ]
+
+    decision = classify_document(two_page_scan, vision_call=classify_only_scan)
+
+    assert decision.route is DocumentRoute.ARABIC_PRINTED
+    assert decision.language == "arabic"
+    assert decision.writing_style == "printed"
+    assert calls == [
+        ("page_screen", [2]),
+        ("detail", [2, 2, 2, 2]),
+    ]
 
 
 def test_clear_english_text_layer_ignores_embedded_image_language_vote(
@@ -279,7 +366,7 @@ def test_arabic_body_with_english_abstract_uses_mixed_arabic_route(
         arabic_classifier,
         "inspect_text_layers",
         lambda _path: DocumentTextEvidence((
-            TextPageEvidence(1, 80, 0),
+            TextPageEvidence(1, 0, 0),
             TextPageEvidence(2, 0, 300),
         )),
     )
@@ -503,6 +590,13 @@ def test_detail_rerender_is_higher_resolution_and_keeps_region_views(scanned_ara
 
 def test_local_router_sends_strict_json_request_without_cloud_credentials(monkeypatch):
     captured = {}
+    settings = arabic_classifier.settings.model_dump()
+    settings["arabic_router_timeout_seconds"] = 123.5
+    monkeypatch.setattr(
+        arabic_classifier,
+        "settings",
+        SimpleNamespace(**settings),
+    )
 
     class Response:
         def raise_for_status(self):
@@ -529,11 +623,73 @@ def test_local_router_sends_strict_json_request_without_cloud_credentials(monkey
     assert captured["body"]["model"] == "qwen3-vl:4b-instruct"
     assert captured["body"]["stream"] is False
     assert captured["body"]["options"]["temperature"] == 0
+    assert captured["body"]["options"]["num_ctx"] == 3584
     assert isinstance(captured["body"]["format"], dict)
     assert captured["body"]["messages"][0]["images"]
     assert captured["timeout"] > 0
+    assert captured["timeout"] == 123.5
     assert captured["trust_env"] is False
     assert "api_key" not in captured["body"]
+
+
+def test_local_router_context_size_is_capped_for_large_batches(monkeypatch):
+    images = [
+        ClassificationImage(index, "page", b"png")
+        for index in range(1, 30)
+    ]
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": json.dumps({"votes": [
+                {
+                    "page_idx": image.page_idx,
+                    "region": image.region,
+                    "language": "arabic",
+                    "writing_style": "printed",
+                    "confidence": 0.97,
+                    "primary_content": True,
+                    "evidence": "printed body",
+                }
+                for image in images
+            ]})}}
+
+    def fake_post(_url, *, json, **_kwargs):
+        captured.update(body=json)
+        return Response()
+
+    monkeypatch.setattr(arabic_classifier.httpx, "post", fake_post)
+
+    call_local_router(images, "page_screen")
+
+    assert captured["body"]["options"]["num_ctx"] == 32768
+
+
+def test_local_router_logs_only_truncated_ollama_400_body(monkeypatch, caplog):
+    error_body = "context length exceeded: " + ("x" * 400)
+    response = httpx.Response(
+        400,
+        text=error_body,
+        request=httpx.Request("POST", "http://localhost:11434/api/chat"),
+    )
+    monkeypatch.setattr(
+        arabic_classifier.httpx,
+        "post",
+        lambda *_args, **_kwargs: response,
+    )
+
+    with pytest.raises(arabic_classifier.ArabicClassifierUnavailable):
+        call_local_router([ClassificationImage(1, "page", b"private-image")], "page_screen")
+
+    assert caplog.records[-1].getMessage() == (
+        "Local Ollama Arabic classifier returned HTTP 400: " + error_body[:300]
+    )
+    assert error_body not in caplog.text
+    assert "Classify the visible language" not in caplog.text
+    assert "cHJpdmF0ZS1pbWFnZQ==" not in caplog.text
 
 
 def test_local_router_refuses_a_public_cloud_endpoint(monkeypatch):

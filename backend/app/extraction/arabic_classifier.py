@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -35,7 +36,7 @@ LANGUAGES = frozenset({"english", "arabic", "mixed", "unknown"})
 WRITING_STYLES = frozenset({"printed", "handwritten", "mixed", "unknown"})
 _SCREEN_DPI = 72
 _DETAIL_DPI = 168
-_ROUTER_TIMEOUT_SECONDS = 45.0
+logger = logging.getLogger(__name__)
 _URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
 _WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
 
@@ -426,17 +427,28 @@ def call_local_router(
         }],
         "format": _request_schema(),
         "stream": False,
-        "options": {"temperature": 0, "num_predict": 4096},
+        "options": {
+            "temperature": 0,
+            "num_predict": 4096,
+            "num_ctx": min(32768, 2048 + 1536 * len(images)),
+        },
     }
     endpoint = f"{settings.arabic_router_base_url.rstrip('/')}/api/chat"
     try:
         response = httpx.post(
             endpoint,
             json=body,
-            timeout=_ROUTER_TIMEOUT_SECONDS,
+            timeout=settings.arabic_router_timeout_seconds,
             trust_env=False,
         )
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 400:
+            logger.warning(
+                "Local Ollama Arabic classifier returned HTTP 400: %s",
+                exc.response.text[:300],
+            )
+        raise ArabicClassifierUnavailable("The local Arabic classifier is unavailable") from exc
     except httpx.HTTPError as exc:
         raise ArabicClassifierUnavailable("The local Arabic classifier is unavailable") from exc
     try:
@@ -748,13 +760,49 @@ def classify_document(
             classifier_model="text_layer",
         )
 
+    arabic_text_pages = [
+        page for page in evidence.pages if page.has_substantive_arabic_body
+    ]
+    text_backed_pages = all(
+        page.has_clear_english_body or page.has_substantive_arabic_body
+        for page in evidence.pages
+    )
+    if arabic_text_pages and text_backed_pages:
+        # A PDF whose pages carry a real Arabic text layer was produced
+        # digitally (or already OCR'd), so its text is printed. Pages without
+        # a usable text layer are scans and continue through the vision path.
+        return ClassificationDecision(
+            route=DocumentRoute.ARABIC_PRINTED,
+            language="mixed" if evidence.has_latin_body else "arabic",
+            writing_style="printed",
+            text_direction="rtl",
+            confidence=1.0,
+            classifier_model="text_layer",
+        )
+
     call = vision_call or call_local_router
     page_indices = [
         page.page_idx
         for page in evidence.pages
         if not page.has_clear_english_body
+        and not page.has_substantive_arabic_body
     ]
-    screen_votes: list[PageStyleVote] = []
+    # Substantive Arabic text layers are printed evidence even when other
+    # pages are scans that still need a visual language/style decision.
+    screen_votes: list[PageStyleVote] = [
+        PageStyleVote(
+            page_idx=page.page_idx,
+            language=(
+                "mixed" if page.has_substantive_latin_body else "arabic"
+            ),
+            writing_style="printed",
+            confidence=1.0,
+            evidence="substantive Arabic text layer",
+            region="page",
+            primary_content=True,
+        )
+        for page in arabic_text_pages
+    ]
     for start in range(0, len(page_indices), settings.arabic_classifier_batch_pages):
         batch_pages = page_indices[start:start + settings.arabic_classifier_batch_pages]
         images = render_page_images(pdf_path, batch_pages)
@@ -762,18 +810,16 @@ def classify_document(
             images, settings.arabic_classifier_batch_pages, call, "page_screen"
         ))
 
-    arabic_text_pages = [
-        page.page_idx for page in evidence.pages
-        if page.has_substantive_arabic_body
-    ]
     sparse_arabic_pages = [
         vote.page_idx
         for vote in screen_votes
         if vote.region == "page"
         and vote.language in {"arabic", "mixed"}
-        and vote.page_idx not in arabic_text_pages
+        and not next(
+            page for page in evidence.pages if page.page_idx == vote.page_idx
+        ).has_substantive_arabic_body
     ]
-    force_detail_pages = [*arabic_text_pages, *sparse_arabic_pages]
+    force_detail_pages = sparse_arabic_pages
     if len(evidence.pages) == 1 and page_indices:
         force_detail_pages.append(page_indices[0])
     detail_votes: list[PageStyleVote] = []
@@ -790,7 +836,7 @@ def classify_document(
     document_language = _derive_language(evidence, confirmed_languages)
     screen_by_page = {vote.page_idx: vote for vote in screen_votes if vote.region == "page"}
     style_pages = {
-        page_idx for page_idx in arabic_text_pages
+        page_idx for page_idx in (page.page_idx for page in arabic_text_pages)
         if page_idx in screen_by_page and screen_by_page[page_idx].primary_content
     } | {
         page_idx

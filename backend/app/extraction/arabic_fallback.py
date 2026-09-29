@@ -241,7 +241,8 @@ class GemmaArabicFallback:
 
     def _payload(self, page: RenderedPage, image_base64: str) -> dict[str, Any]:
         prompt = (
-            "Transcribe this confidently printed Arabic document page verbatim. "
+            "Transcribe the document body on this confidently printed Arabic page verbatim. "
+            "Omit running headers, running footers, and bare page numbers. Keep footnotes. "
             "Output paragraphs, headings, lists, tables, displayed equations, and captions in Markdown. "
             "Read the rightmost column top to bottom, then each column to the left "
             "through the leftmost column, each top to bottom; "

@@ -157,7 +157,7 @@ def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
         if token.type in {"bullet_list_open", "ordered_list_open"}:
             closing = _matching_close(tokens, index, token.type)
             if closing is not None:
-                items = _list_items(tokens[index + 1 : closing])
+                items = _list_items(tokens[index + 1 : closing], token)
                 if items:
                     result.append({"type": "list", "list_items": items})
                 index = closing + 1
@@ -268,14 +268,63 @@ def _html_blocks(content: str) -> list[dict[str, Any]]:
     return blocks
 
 
-def _list_items(tokens: Sequence[Any]) -> list[str]:
+def _list_items(tokens: Sequence[Any], root_list: Any) -> list[str]:
     items: list[str] = []
+    list_stack = [_list_frame(root_list)]
+    item_prefix: str | None = None
     for token in tokens:
+        if token.type in {"bullet_list_open", "ordered_list_open"}:
+            parent = list_stack[-1]
+            list_stack.append(
+                _list_frame(
+                    token,
+                    base_indent=parent["base_indent"] + parent["item_marker_width"],
+                )
+            )
+            continue
+        if token.type in {"bullet_list_close", "ordered_list_close"}:
+            if len(list_stack) > 1:
+                list_stack.pop()
+            continue
+        if token.type == "list_item_open":
+            frame = list_stack[-1]
+            if frame["ordered"]:
+                marker = f"{frame['next']}. "
+                frame["item_marker_width"] = len(marker)
+                item_prefix = f"{' ' * frame['base_indent']}{marker}"
+                frame["next"] += 1
+            elif any(frame["ordered"] for frame in list_stack):
+                marker = "- "
+                frame["item_marker_width"] = len(marker)
+                item_prefix = f"{' ' * frame['base_indent']}{marker}"
+            else:
+                # The chunker adds the marker to unordered items. Record its
+                # width here so any ordered child still aligns under content.
+                frame["item_marker_width"] = 2
+                item_prefix = ""
+            continue
+        if token.type == "list_item_close":
+            item_prefix = None
+            continue
         if token.type == "inline" and token.content.strip():
-            # Flatten nested list items instead of losing a parent's text when
-            # a nested list opens inside it. The order remains the source order.
-            items.append(token.content.strip())
+            items.append(f"{item_prefix or ''}{token.content.strip()}")
+            item_prefix = None
     return items
+
+
+def _list_frame(token: Any, *, base_indent: int = 0) -> dict[str, Any]:
+    ordered = token.type == "ordered_list_open"
+    start = token.attrGet("start") if ordered else None
+    try:
+        next_number = int(start) if start is not None else 1
+    except (TypeError, ValueError):
+        next_number = 1
+    return {
+        "ordered": ordered,
+        "next": next_number,
+        "base_indent": base_indent,
+        "item_marker_width": 0,
+    }
 
 
 def _matching_close(tokens: Sequence[Any], start: int, open_type: str) -> int | None:

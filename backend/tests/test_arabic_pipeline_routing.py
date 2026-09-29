@@ -171,6 +171,31 @@ def test_feature_off_never_calls_classifier(db_session_sync, tmp_path, monkeypat
     mocks.repair.assert_called_once()
 
 
+def test_feature_off_keeps_clear_english_on_existing_resolver_path(
+    db_session_sync, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", False)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    classifier = MagicMock(side_effect=AssertionError("feature-off path must not classify"))
+    monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = _write_pdf_with_text(tmp_path / "clear-english.pdf", _ENGLISH_PAGE)
+
+    pipeline_sync.run_pipeline_sync(
+        db_session_sync,
+        document_id=document_id,
+        job_id=job_id,
+        pdf_path=pdf_path,
+    )
+
+    classifier.assert_not_called()
+    mocks.resolver.assert_called_once()
+    mocks.arabic_extractor.assert_not_called()
+    stored = _stored_document(db_session_sync, document_id)
+    assert stored["detected_language"] is None
+    assert stored["text_direction"] is None
+
+
 def test_english_route_calls_existing_resolver_only(db_session_sync, tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
     mocks = _pipeline_mocks(monkeypatch, tmp_path)
@@ -618,3 +643,45 @@ def test_gemini_arabic_text_preserves_orthographic_codepoints(
     plain_text = captured_chunks["chunks"][0]["plain_text"]
     assert plain_text == original
     mocks.repair.assert_not_called()
+
+
+def test_arabic_chunks_store_markdown_free_plain_text(
+    db_session_sync, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        pipeline_sync,
+        "classify_document",
+        MagicMock(
+            return_value=_decision(
+                DocumentRoute.ARABIC_PRINTED, "arabic", "printed", "rtl"
+            )
+        ),
+    )
+    document_id, job_id = _seed(db_session_sync)
+    markdown = "**مقدمة مهمة** _نص مائل_ `رمز` [رابط](https://example.test)"
+    page = ArabicOcrPage(
+        page_number=1,
+        raw_markdown=markdown,
+        markdown=markdown,
+        provider="gemini_arabic_flash",
+        model="gemini-3.7-flash",
+    )
+    mocks.output_dir.mkdir(parents=True, exist_ok=True)
+    content_list = mocks.output_dir / "content_list.json"
+    content_list.write_text(
+        json.dumps(pages_to_content_list([page]), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline_sync, "find_content_list", lambda _path: content_list)
+    captured_chunks = {}
+    mocks.finish.side_effect = lambda _session, **kwargs: captured_chunks.update(kwargs)
+
+    _run(db_session_sync, tmp_path, monkeypatch, document_id, job_id)
+
+    chunk = captured_chunks["chunks"][0]
+    assert chunk["markdown"] == markdown
+    assert chunk["plain_text"] == "مقدمة مهمة نص مائل رمز رابط"
+    for syntax in ("**", "_", "`", "[", "https://example.test"):
+        assert syntax not in chunk["plain_text"]
