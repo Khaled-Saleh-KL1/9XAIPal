@@ -40,7 +40,9 @@ function Md({
   // `.use(remarkCitationRefs, refs)` form and never exercised this one. Same
   // shape MARKDOWN_REHYPE already uses for [rehypeSanitize, SANITIZE_SCHEMA].
   const remarkPlugins = useMemo<PluggableList>(
-    () => (citations && citations.refIndex.numbers.size > 0
+    () => (citations
+      && citations.refIndex.citationStyle === 'numeric'
+      && citations.refIndex.numbers.size > 0
       ? [...MARKDOWN_REMARK, [remarkCitationRefs, citations.refIndex.numbers]]
       : MARKDOWN_REMARK),
     [citations],

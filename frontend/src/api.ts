@@ -499,10 +499,14 @@ export async function getFullDocument(paperId: string): Promise<FullDocument> {
 
 // ── Bibliography citations (clickable "[12]" markers, papers only) ──────────
 
+export type ReferenceCitationStyle = 'numeric' | 'author_year';
+
 export interface ReferenceEntry {
   number: number;
   raw_text: string;
   resolve_status: 'pending' | 'resolved' | 'no_match' | 'unavailable';
+  first_author?: string | null;
+  year?: number | null;
   resolved_title?: string | null;
   resolved_authors?: string | null;
   resolved_year?: number | null;
@@ -527,10 +531,17 @@ export interface AddReferenceResult {
 
 /** A paper's own bibliography, parsed and cached server-side on first call.
  * Cheap — no external lookup happens here, see resolveReference. */
-export async function getReferences(paperId: string): Promise<ReferenceEntry[]> {
+export async function getReferences(paperId: string): Promise<{
+  references: ReferenceEntry[];
+  citation_style: ReferenceCitationStyle;
+}> {
   const res = await fetch(`${BASE}/papers/${paperId}/references`);
   if (!res.ok) throw new Error(`References fetch failed: ${res.status}`);
-  return (await res.json()).references || [];
+  const list = await res.json();
+  return {
+    references: list.references || [],
+    citation_style: list.citation_style === 'author_year' ? 'author_year' : 'numeric',
+  };
 }
 
 /** Resolve one bibliography entry against Semantic Scholar — the call that

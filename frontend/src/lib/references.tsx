@@ -18,39 +18,51 @@ import { useEffect, useMemo, useState } from 'react';
 import { visit } from 'unist-util-visit';
 import type { Root, Text, Parent } from 'mdast';
 import type { Components } from 'react-markdown';
-import { getReferences, type ReferenceEntry } from '../api';
+import { getReferences, type ReferenceCitationStyle, type ReferenceEntry } from '../api';
 import { BibCitationRef } from '../views/BibCitationRef';
 
 export interface ReferenceIndex {
+  /** Style detected while parsing this paper's bibliography. */
+  citationStyle: ReferenceCitationStyle;
   /** Every citation number this paper's References section actually has. */
   numbers: Set<number>;
   byNumber: Map<number, ReferenceEntry>;
 }
 
-export const EMPTY_REFERENCE_INDEX: ReferenceIndex = { numbers: new Set(), byNumber: new Map() };
+export const EMPTY_REFERENCE_INDEX: ReferenceIndex = {
+  citationStyle: 'numeric',
+  numbers: new Set(),
+  byNumber: new Map(),
+};
 
 /** Fetch a paper's parsed bibliography once. `enabled` gates this on
  * doc_kind === 'paper' at the call site — books and articles never fetch. */
 export function useReferences(paperId: string | null | undefined, enabled: boolean): ReferenceIndex {
-  const [entries, setEntries] = useState<ReferenceEntry[] | null>(null);
+  const [referenceList, setReferenceList] = useState<{
+    entries: ReferenceEntry[];
+    citationStyle: ReferenceCitationStyle;
+  } | null>(null);
 
   useEffect(() => {
-    if (!paperId || !enabled) { setEntries(null); return; }
+    if (!paperId || !enabled) { setReferenceList(null); return; }
     let alive = true;
-    setEntries(null);
+    setReferenceList(null);
     getReferences(paperId)
-      .then((refs) => { if (alive) setEntries(refs); })
-      .catch(() => { if (alive) setEntries([]); });
+      .then((list) => {
+        if (alive) setReferenceList({ entries: list.references, citationStyle: list.citation_style });
+      })
+      .catch(() => { if (alive) setReferenceList({ entries: [], citationStyle: 'numeric' }); });
     return () => { alive = false; };
   }, [paperId, enabled]);
 
   return useMemo(() => {
-    if (!entries || entries.length === 0) return EMPTY_REFERENCE_INDEX;
+    if (!referenceList) return EMPTY_REFERENCE_INDEX;
     return {
-      numbers: new Set(entries.map((e) => e.number)),
-      byNumber: new Map(entries.map((e) => [e.number, e])),
+      citationStyle: referenceList.citationStyle,
+      numbers: new Set(referenceList.entries.map((e) => e.number)),
+      byNumber: new Map(referenceList.entries.map((e) => [e.number, e])),
     };
-  }, [entries]);
+  }, [referenceList]);
 }
 
 const CITATION_RE = /\[(\d+(?:,\s*\d+)*)\]/g;
