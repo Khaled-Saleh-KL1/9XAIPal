@@ -106,6 +106,10 @@ def test_query_script_majority_counts_non_ascii_latin_letters():
     assert is_primarily_arabic("بحث ééééé") is False
 
 
+def test_query_script_majority_counts_non_latin_non_arabic_letters():
+    assert is_primarily_arabic("بحث 中文中文中文") is False
+
+
 def test_english_research_queries_keep_the_existing_three_query_shape():
     query = "transformer results"
 

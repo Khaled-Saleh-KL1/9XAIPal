@@ -44,16 +44,15 @@ def normalize_arabic_for_matching(text: str) -> str:
 
 
 def is_primarily_arabic(text: str) -> bool:
-    """Return whether Arabic-script letters outnumber Latin-script letters."""
+    """Return whether Arabic-script letters outnumber all other letters."""
     arabic_letters = 0
-    latin_letters = 0
+    other_letters = 0
     for char in text:
         if not unicodedata.category(char).startswith("L"):
-            continue
-        if "LATIN" in unicodedata.name(char, ""):
-            latin_letters += 1
             continue
         codepoint = ord(char)
         if any(start <= codepoint <= end for start, end in _ARABIC_RANGES):
             arabic_letters += 1
-    return arabic_letters > 0 and arabic_letters > latin_letters
+        else:
+            other_letters += 1
+    return arabic_letters > 0 and arabic_letters > other_letters
