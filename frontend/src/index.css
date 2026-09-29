@@ -816,6 +816,23 @@ body {
   white-space: pre;
 }
 .md-body { text-align: start; }
+/* Code and formulas are always left-to-right and isolated from the bidi
+   ordering of the Arabic sentence around them, so `x_i`, a URL or a formula
+   never gets its characters reordered. Applies to every markdown surface
+   (article, chat, notes, book view), not just .md-body. */
+.md-body code, .md-body pre, .md-body .katex, .md-body .katex-display,
+.note-answer code, .note-answer .katex, .note-answer .katex-display,
+.msg-body code, .msg-body pre, .msg-body .katex, .msg-body .katex-display,
+.sticky-body code, .sticky-body pre, .sticky-body .katex, .sticky-body .katex-display,
+.cite-peek-body code, .cite-peek-body .katex {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.md-body pre, .md-body .katex-display,
+.msg-body pre, .msg-body .katex-display,
+.note-answer .katex-display, .sticky-body pre, .sticky-body .katex-display {
+  text-align: left;
+}
 .md-body ul, .md-body ol { padding-inline-start: 1.4em; margin: 0.6em 0; }
 /* Videos an article actually contains, recovered by the extractor and
    emitted as raw <video> (see services/article_extraction.py). Sized like
@@ -2109,7 +2126,7 @@ body {
 }
 .note-answer p { margin: 0; }
 .note-answer p + p { margin-top: 0.7em; }
-.note-answer ul, .note-answer ol { padding-left: 1.2em; margin: 0.5em 0; }
+.note-answer ul, .note-answer ol { padding-inline-start: 1.2em; margin: 0.5em 0; }
 .note-answer code {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 0.85em;
@@ -3316,7 +3333,7 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 }
 .msg.is-assistant .msg-body p + p { margin-top: 0.85em; }
 .msg.is-assistant .msg-body ul,
-.msg.is-assistant .msg-body ol { padding-left: 1.3em; margin: 0.6em 0; }
+.msg.is-assistant .msg-body ol { padding-inline-start: 1.3em; margin: 0.6em 0; }
 .msg.is-assistant .msg-body li { margin: 0.3em 0; }
 .msg-meta { display: flex; align-items: center; gap: 8px; }
 .msg-sources {
