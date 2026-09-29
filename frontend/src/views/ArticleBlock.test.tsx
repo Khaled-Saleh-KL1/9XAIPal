@@ -117,6 +117,17 @@ describe('ArticleBlock citation style', () => {
     expect(rendered.container.querySelector('.cite-chip')).toBeNull();
     expect(rendered.container.textContent).toContain('(Ng et al., 2022), (Unknown, 2099), and (Smith, 2020b).');
   });
+
+  it('does not match a later coauthor when the citation starts with an unknown author', () => {
+    const refs = makeAuthorYearIndex([
+      authorYearEntry(10, 'Brown', 2020, 'Brown and Jones. 2020. A paper title.'),
+    ]);
+
+    const rendered = renderBlock('(Unknown, Brown and Jones, 2020).', 'ltr', refs);
+
+    expect(rendered.container.querySelector('.cite-chip')).toBeNull();
+    expect(rendered.container.textContent).toContain('(Unknown, Brown and Jones, 2020).');
+  });
 });
 
 function authorYearEntry(number: number, firstAuthor: string, year: number, rawText: string): ReferenceEntry {

@@ -108,6 +108,8 @@ def test_parser_reports_numeric_style_for_numbered_entries():
         ),
         ("X and Y. 2020. A paper title.", ("X", 2020)),
         ("AA. Gdpval-aa leaderboard, 2025.", ("AA", 2025)),
+        ("John Smith. Useful paper title. 2020.", ("Smith", 2020)),
+        ("John A. Smith. Useful paper title. 2020.", ("Smith", 2020)),
         ("Smith and Jones. 2020a. A paper title.", ("Smith", 2020)),
         ("Fédérico, A. Colleague. 2023. Une étude importante.", ("Fédérico", 2023)),
         ("محمد الفارسي، علي حسن، وآخرون. 2022. بحث علمي.", ("الفارسي", 2022)),

@@ -68,6 +68,10 @@ export function useReferences(paperId: string | null | undefined, enabled: boole
 const CITATION_RE = /\[(\d+(?:,\s*\d+)*)\]/g;
 const SURNAME_PATTERN = String.raw`[\p{L}\p{M}][\p{L}\p{M}'’.-]*`;
 const AUTHOR_PATTERN = String.raw`${SURNAME_PATTERN}(?:\s+(?:et\s+al\.?|(?:and|&)\s+${SURNAME_PATTERN}))?`;
+const AUTHOR_LIST_PREFIX_RE = new RegExp(
+  String.raw`^\s*${SURNAME_PATTERN}(?:\s+et\s+al\.?)?(?:(?:\s*,\s*|\s+(?:and|&)\s+)${SURNAME_PATTERN}(?:\s+et\s+al\.?)?)*(?:\s*,|\s+(?:and|&))\s*$`,
+  'iu',
+);
 const AUTHOR_YEAR_CITATION_RE = new RegExp(
   String.raw`(?<![\p{L}\p{M}])(${AUTHOR_PATTERN})(?:\s*,\s*((?:19|20)\d{2}[a-z]?)|\s+\(\s*((?:19|20)\d{2}[a-z]?)\s*\)|\s+((?:19|20)\d{2}[a-z]?))(?![\p{L}\p{M}\d])`,
   'giu',
@@ -145,6 +149,7 @@ export function remarkAuthorYearCitationRefs(entriesByNumber: Map<number, Refere
       let cursor = 0;
       let matchedAny = false;
       for (const match of matches) {
+        if (hasEarlierAuthorInGroup(value, match.index as number)) continue;
         const surname = match[1].match(new RegExp(SURNAME_PATTERN, 'u'))?.[0];
         const citationYear = (match[2] || match[3] || match[4]).toLowerCase();
         if (!surname) continue;
@@ -170,6 +175,20 @@ export function remarkAuthorYearCitationRefs(entriesByNumber: Map<number, Refere
       return index + out.length;
     });
   };
+}
+
+/** Don't link a later surname when an earlier author in the same citation
+ * group did not match. This avoids turning `(Unknown, Brown and Jones, 2020)`
+ * into a link for Brown just because Brown is the only known reference. */
+function hasEarlierAuthorInGroup(value: string, matchStart: number): boolean {
+  const beforeMatch = value.slice(0, matchStart);
+  const groupStart = Math.max(
+    beforeMatch.lastIndexOf('('),
+    beforeMatch.lastIndexOf('['),
+    beforeMatch.lastIndexOf('{'),
+    beforeMatch.lastIndexOf(';'),
+  );
+  return AUTHOR_LIST_PREFIX_RE.test(beforeMatch.slice(groupStart + 1));
 }
 
 function normalizeSurname(surname: string): string {

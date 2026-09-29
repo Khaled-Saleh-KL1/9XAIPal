@@ -35,10 +35,7 @@ _ENTRY_START_RE = re.compile(r"^- \[(\d+)\]\s*", re.MULTILINE)
 _AUTHOR_YEAR_ENTRY_START_RE = re.compile(r"^- ", re.MULTILINE)
 
 _BIBLIOGRAPHY_YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})([a-z]?)(?!\d)", re.IGNORECASE)
-_AUTHOR_YEAR_PREFIX_RE = re.compile(
-    r"^\s*(?P<authors>.+?)\.\s*(?P<year>(?:19|20)\d{2}[a-z]?)\b",
-    re.IGNORECASE,
-)
+_YEAR_AFTER_AUTHOR_CLAUSE_RE = re.compile(r"^\s*\.\s*((?:19|20)\d{2}[a-z]?)\b", re.IGNORECASE)
 _SURNAME_TOKEN_RE = re.compile(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*", re.UNICODE)
 
 
@@ -113,15 +110,13 @@ def extract_author_year(raw_text: str) -> tuple[str | None, int | None]:
     if not text:
         return None, None
 
-    author_year_prefix = _AUTHOR_YEAR_PREFIX_RE.match(text)
-    if author_year_prefix:
-        author_text = author_year_prefix.group("authors")
-        year_text = author_year_prefix.group("year")
-        year_match = _BIBLIOGRAPHY_YEAR_RE.fullmatch(year_text)
+    author_text = _author_clause(text)
+    year_after_authors = _YEAR_AFTER_AUTHOR_CLAUSE_RE.match(text[len(author_text):])
+    if year_after_authors:
+        year_match = _BIBLIOGRAPHY_YEAR_RE.fullmatch(year_after_authors.group(1))
     else:
         year_matches = list(_BIBLIOGRAPHY_YEAR_RE.finditer(text))
         year_match = year_matches[-1] if year_matches else None
-        author_text = _author_clause(text)
 
     year = int(year_match.group(1)) if year_match else None
     return _first_author_surname(author_text), year
@@ -131,10 +126,16 @@ def _author_clause(text: str) -> str:
     """Find the leading author clause while skipping periods in initials."""
     for match in re.finditer(r"\.\s+", text):
         before_period = text[:match.start()].rstrip()
-        last_word = _SURNAME_TOKEN_RE.search(before_period)
+        after_period = text[match.end():]
+        # A year immediately following the period marks the end of the author
+        # clause even when a one-letter surname appears (for example, X and Y).
+        if _BIBLIOGRAPHY_YEAR_RE.match(after_period):
+            return before_period
+        last_words = _SURNAME_TOKEN_RE.findall(before_period)
+        last_word = last_words[-1] if last_words else ""
         # A one-letter token is an initial (for example, T. Achim), not an
         # author-list boundary. Longer tokens also handle acronym authors.
-        if last_word and len(last_word.group()) > 1:
+        if len(last_word) > 1:
             return before_period
     return text
 
