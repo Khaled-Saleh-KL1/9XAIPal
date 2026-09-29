@@ -327,7 +327,9 @@ async def get_chunk_by_sequence(
 # are never chapters, and on a figure-heavy book they can outnumber the real
 # ones — 6 of 18 on the book this filter was written against.
 _CAPTION_HEADING = re.compile(
-    r"^\s*(FIGURE|FIG\.?|TABLE|CHART|EXHIBIT|PLATE|BOX)\s*[\dIVXA-E]", re.IGNORECASE
+    r"^\s*(?:(FIGURE|FIG\.?|TABLE|CHART|EXHIBIT|PLATE|BOX)\s*[\dIVXA-E]"
+    r"|(?:الشكل|شكل|الجدول|جدول)\s*[0-9\u0660-\u0669\u06F0-\u06F9])",
+    re.IGNORECASE,
 )
 
 
