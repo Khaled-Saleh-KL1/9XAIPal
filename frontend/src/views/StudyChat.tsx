@@ -7,6 +7,7 @@ import { AgentTrail } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
 import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
+import { textDirection } from '../lib/documentDirection';
 
 /**
  * The desk's chat.
@@ -252,7 +253,7 @@ export function StudyChat({
           turns.map((turn) => (
             <Fragment key={turn.id}>
               {turn.role === 'user' ? (
-                <div className="msg is-user"><div className="msg-body">{turn.content}</div></div>
+                <div className="msg is-user"><div className="msg-body" dir={textDirection(turn.content) ?? 'auto'}>{turn.content}</div></div>
               ) : (
                 <div className="msg is-assistant">
                   <div className="msg-meta">
@@ -289,7 +290,7 @@ export function StudyChat({
 
         {pending && (
           <>
-            <div className="msg is-user"><div className="msg-body">{pending.question}</div></div>
+            <div className="msg is-user"><div className="msg-body" dir={textDirection(pending.question) ?? 'auto'}>{pending.question}</div></div>
             <div className="msg is-assistant">
               {/* Live, the trail IS the progress indicator: the answer has not
                   started yet and a bare spinner says nothing about what it is
@@ -322,6 +323,7 @@ export function StudyChat({
 
       <div className="chat-composer">
         <textarea
+          dir="auto"
           ref={inputRef}
           rows={2}
           value={draft}

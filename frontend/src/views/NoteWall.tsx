@@ -69,6 +69,7 @@ export function NoteWall({
         </div>
 
         <input
+          dir="auto"
           className="wall-search"
           value={query}
           placeholder="Find a note…"

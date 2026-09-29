@@ -10,6 +10,7 @@ import {
 } from '../api';
 import { AgentTrail } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
+import { textDirection } from '../lib/documentDirection';
 
 // The shared set already supplies the image and diagram renderers; chat only
 // overrides the anchor, which it wants without the shared component's extra
@@ -775,6 +776,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
             />
           </label>
           <textarea
+            dir="auto"
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -853,6 +855,7 @@ const MessageBubble = memo(function MessageBubble({
       <div className="flex justify-end">
         <div
           onClick={openThread}
+          dir={textDirection(m.text) ?? 'auto'}
           title={clickable ? 'Click to open this exchange in a focused sub-thread' : undefined}
           className={`max-w-[88%] rounded-2xl rounded-tr-sm px-3.5 py-2 text-[13.5px] ${clickable ? 'cursor-pointer hover:opacity-90' : ''}`}
           style={{
@@ -861,7 +864,7 @@ const MessageBubble = memo(function MessageBubble({
             border: clickable ? '1px dashed var(--accent)' : '1px solid transparent',
           }}
         >
-          <span className="font-mono text-[11.5px] mr-1.5" style={{ color: 'var(--muted)' }}>
+          <span className="font-mono text-[11.5px] me-1.5" style={{ color: 'var(--muted)' }}>
             /ask
           </span>
           {m.text}

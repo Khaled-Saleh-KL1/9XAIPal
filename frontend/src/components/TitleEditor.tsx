@@ -49,6 +49,7 @@ export function TitleEditor({
 
   return (
     <input
+      dir="auto"
       ref={ref}
       className={className}
       value={draft}

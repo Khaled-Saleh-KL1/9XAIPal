@@ -189,6 +189,7 @@ export function PaperPicker({
             </div>
 
             <input
+              dir="auto"
               ref={searchRef}
               className="picker-search"
               value={query}

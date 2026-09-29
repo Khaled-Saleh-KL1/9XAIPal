@@ -24,6 +24,7 @@ import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import type { PluggableList } from 'unified';
+import { rehypeTextDirection } from './rehypeTextDirection';
 import type { Components } from 'react-markdown';
 import { MermaidDiagram } from '../components/MermaidDiagram';
 import { AnswerImage } from '../components/AnswerImage';
@@ -92,6 +93,9 @@ export const MARKDOWN_REHYPE: PluggableList = [
   rehypeRaw,
   [rehypeSanitize, SANITIZE_SCHEMA],
   [rehypeKatex, { errorColor: 'var(--muted)' }],
+  // Last: it reads the finished tree (KaTeX output included) to pick a
+  // direction per block, so Arabic flows RTL and English is untouched.
+  rehypeTextDirection,
 ];
 
 /**

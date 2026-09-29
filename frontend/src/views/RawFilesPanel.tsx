@@ -82,6 +82,7 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
               style={{ color: 'var(--muted)' }}
             />
             <input
+              dir="auto"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by title, author, or venue…"

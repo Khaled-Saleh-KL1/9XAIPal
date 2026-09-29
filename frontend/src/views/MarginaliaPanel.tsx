@@ -194,6 +194,7 @@ export function MarginaliaPanel({
         </div>
 
         <input
+          dir="auto"
           ref={searchRef}
           className="marg-search"
           value={query}

@@ -82,6 +82,7 @@ export function AuthView() {
           />
           {mode === 'signup' && (
             <input
+              dir="auto"
               type="text"
               placeholder="Display name (optional)"
               value={displayName}

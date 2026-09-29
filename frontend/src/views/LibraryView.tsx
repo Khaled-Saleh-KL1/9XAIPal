@@ -13,6 +13,7 @@ import { ExportWizard } from '../components/ExportWizard';
 import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
+import { textDirection } from '../lib/documentDirection';
 import { stageProgress } from '../lib/progress';
 import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
@@ -589,6 +590,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 style={{ color: 'var(--muted)' }}
               />
               <input
+                dir="auto"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search by title, or what it's about…"
@@ -955,7 +957,7 @@ function PaperCard({
             {renaming ? (
               <TitleEditor value={paper.title} onCommit={onCommitRename} onCancel={onCancelRename} />
             ) : (
-              <h3 className="paper-title" title={paper.title}>{paper.title}</h3>
+              <h3 className="paper-title" title={paper.title} dir={textDirection(paper.title) ?? 'auto'}>{paper.title}</h3>
             )}
             {paper.pinned && <IconPin className="w-3.5 h-3.5 shrink-0" style={{ color: 'var(--muted)' }} />}
           </div>
@@ -1091,7 +1093,7 @@ function PaperRow({
         {renaming ? (
           <TitleEditor value={paper.title} onCommit={onCommitRename} onCancel={onCancelRename} />
         ) : (
-          <div className="paper-row-title" title={paper.title}>{paper.title}</div>
+          <div className="paper-row-title" title={paper.title} dir={textDirection(paper.title) ?? 'auto'}>{paper.title}</div>
         )}
         <div className="paper-meta">
           <span>{paper.pages ? `${paper.pages}p` : '–'}</span>
@@ -1201,6 +1203,7 @@ function ShelfPanel({
         >
           <IconFolder className="w-4 h-4 shrink-0" style={{ color: 'var(--muted)' }} />
           <input
+            dir="auto"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="New folder, e.g. Technical Books"
