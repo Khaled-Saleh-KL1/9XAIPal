@@ -750,3 +750,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_members_ai
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_members_personal
     ON note_deck_members(personal_note_id) WHERE personal_note_id IS NOT NULL;
+
+-- The reference cache is also created in the recovery migration list. This
+-- applies the style field to existing caches and is a no-op before creation.
+ALTER TABLE IF EXISTS paper_references
+    ADD COLUMN IF NOT EXISTS citation_style TEXT;

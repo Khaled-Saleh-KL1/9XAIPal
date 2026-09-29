@@ -22,7 +22,7 @@ from app.services import chunks as chunk_service
 from app.services import documents as doc_service
 from app.services.outline import heading_level
 from app.services import book_outline
-from app.services.references import parse_references, title_candidates
+from app.services.references import extract_author_year, parse_references_with_style, title_candidates
 from app.services.reference_finder import canonical_pdf_url, find_pdf_on_web
 from app.services.ingestion import create_ingestion_job, update_job_status as update_job_status_svc
 from app.search.semantic_scholar_client import match_reference, Unresolved
@@ -613,10 +613,17 @@ def _entry_out(row: dict) -> ReferenceEntry:
     # the reader's experience of the old link.
     candidates = title_candidates(row["raw_text"])
     search_query = row.get("resolved_title") or (candidates[0] if candidates else row["raw_text"])
+    first_author, year = (
+        extract_author_year(row["raw_text"])
+        if row.get("citation_style") == "author_year"
+        else (None, None)
+    )
     return ReferenceEntry(
         number=row["ref_number"],
         raw_text=row["raw_text"],
         resolve_status=row["resolve_status"],
+        first_author=first_author,
+        year=year,
         resolved_title=row.get("resolved_title"),
         resolved_authors=row.get("resolved_authors"),
         resolved_year=row.get("resolved_year"),
@@ -650,15 +657,20 @@ async def get_references(
     existing = await ref_repo.get_references(db, paper_id)
     if not existing:
         chunks = await chunk_repo.get_all_document_chunks(db, paper_id)
-        parsed = parse_references(chunks)
+        parsed, citation_style = parse_references_with_style(chunks)
         if parsed:
-            await ref_repo.bulk_insert_pending(db, paper_id, parsed)
+            await ref_repo.bulk_insert_pending(db, paper_id, parsed, citation_style=citation_style)
             await db.commit()
             existing = await ref_repo.get_references(db, paper_id)
 
+    citation_style = next(
+        (row.get("citation_style") for row in existing if row.get("citation_style")),
+        "numeric",
+    )
     return ReferenceListResponse(
         references=[_entry_out(r) for r in existing],
         document_id=paper_id,
+        citation_style=citation_style,
     )
 
 

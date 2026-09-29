@@ -5,7 +5,7 @@ See services/references.py (parsing), database/repositories/paper_references.py
 api/v1/endpoints/chunks.py (the three endpoints these back).
 """
 
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -15,6 +15,8 @@ class ReferenceEntry(BaseModel):
     number: int
     raw_text: str
     resolve_status: str  # pending | resolved | no_match | unavailable
+    first_author: Optional[str] = None
+    year: Optional[int] = None
     resolved_title: Optional[str] = None
     resolved_authors: Optional[str] = None
     resolved_year: Optional[int] = None
@@ -38,6 +40,7 @@ class ReferenceEntry(BaseModel):
 class ReferenceListResponse(BaseModel):
     references: list[ReferenceEntry]
     document_id: UUID
+    citation_style: Literal["numeric", "author_year"] = "numeric"
 
 
 class AddReferenceResponse(BaseModel):

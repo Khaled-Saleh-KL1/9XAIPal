@@ -18,7 +18,12 @@ async def get_references(session: AsyncSession, document_id: UUID) -> list[dict]
     return [dict(r) for r in result.mappings().all()]
 
 
-async def bulk_insert_pending(session: AsyncSession, document_id: UUID, entries: list[dict]) -> None:
+async def bulk_insert_pending(
+    session: AsyncSession,
+    document_id: UUID,
+    entries: list[dict],
+    citation_style: str = "numeric",
+) -> None:
     """Seed one row per parsed entry with resolve_status='pending' (the column
     default), first call only — see the UNIQUE(document_id, ref_number)
     constraint this relies on. `entries` is `parse_references`'s own output.
@@ -27,12 +32,17 @@ async def bulk_insert_pending(session: AsyncSession, document_id: UUID, entries:
         return
     await session.execute(
         text("""
-            INSERT INTO paper_references (document_id, ref_number, raw_text)
-            VALUES (:document_id, :ref_number, :raw_text)
+            INSERT INTO paper_references (document_id, ref_number, raw_text, citation_style)
+            VALUES (:document_id, :ref_number, :raw_text, :citation_style)
             ON CONFLICT (document_id, ref_number) DO NOTHING
         """),
         [
-            {"document_id": document_id, "ref_number": e["number"], "raw_text": e["raw_text"]}
+            {
+                "document_id": document_id,
+                "ref_number": e["number"],
+                "raw_text": e["raw_text"],
+                "citation_style": citation_style,
+            }
             for e in entries
         ],
     )

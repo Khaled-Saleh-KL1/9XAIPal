@@ -244,6 +244,7 @@ async def _ensure_recent_columns() -> None:
             document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             ref_number INT NOT NULL,
             raw_text TEXT NOT NULL,
+            citation_style TEXT,
             resolved_title TEXT,
             resolved_authors TEXT,
             resolved_year INT,
@@ -254,6 +255,7 @@ async def _ensure_recent_columns() -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (document_id, ref_number)
         )""",
+        "ALTER TABLE paper_references ADD COLUMN IF NOT EXISTS citation_style TEXT",
         "CREATE INDEX IF NOT EXISTS idx_paper_references_document ON paper_references(document_id, ref_number)",
         # A paper resolving its OWN metadata (for BibTeX/CSV export,
         # services/export.py) is the same operation paper_references.resolve_
