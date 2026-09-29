@@ -30,17 +30,17 @@ const renderBlock = (text: string, baseDirection: 'ltr' | 'rtl' | 'auto') => {
 };
 
 describe('ArticleBlock direction', () => {
-  it('marks Arabic blocks RTL and Latin-only blocks in an RTL document auto', () => {
+  it('marks Arabic blocks RTL and Latin-only blocks in an RTL document LTR', () => {
     const arabic = renderBlock('العنوان 2026', 'rtl');
     expect(arabic.container.querySelector('[data-seq="1"]')).toHaveAttribute('dir', 'rtl');
     arabic.unmount();
 
     const latin = renderBlock('English heading only', 'rtl');
-    expect(latin.container.querySelector('[data-seq="1"]')).toHaveAttribute('dir', 'auto');
+    expect(latin.container.querySelector('[data-seq="1"]')).toHaveAttribute('dir', 'ltr');
   });
 
-  it('keeps all blocks in an English document LTR', () => {
+  it('flows an Arabic block RTL even in an English document', () => {
     const rendered = renderBlock('العنوان 2026', 'ltr');
-    expect(rendered.container.querySelector('[data-seq="1"]')).toHaveAttribute('dir', 'ltr');
+    expect(rendered.container.querySelector('[data-seq="1"]')).toHaveAttribute('dir', 'rtl');
   });
 });
