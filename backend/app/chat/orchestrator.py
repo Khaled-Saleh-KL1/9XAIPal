@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.core.config import settings
+from app.core.language import LANGUAGE_RULE
 from app.core.logging import get_logger
 from app.core import tracing
 from app.chat.tracing_hooks import ask_stream_output
@@ -53,6 +54,10 @@ from app.schemas.chat import AskResponse, Citation
 from app.database.repositories.conversations import get_conversation_history
 
 logger = get_logger(__name__)
+
+COMPACTION_SYSTEM_PROMPT = (
+    "You are an expert research conversation summarizer.\n\n" + LANGUAGE_RULE
+)
 
 
 @dataclass
@@ -1162,7 +1167,7 @@ async def maybe_compact_conversation(
     compaction_prompt = COMPACTION_SUMMARY_PROMPT.format(conversation_text=history_text)
 
     messages = [
-        {"role": "system", "content": "You are an expert research conversation summarizer."},
+        {"role": "system", "content": COMPACTION_SYSTEM_PROMPT},
         {"role": "user", "content": compaction_prompt},
     ]
 

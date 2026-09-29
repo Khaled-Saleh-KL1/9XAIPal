@@ -89,6 +89,7 @@ from app.chat.agent_tools import (
 from app.chat.memory import format_memories, recall_memories, write_memory, write_remembered
 from app.chat.prompts import READING_COMPANION_INSTRUCTIONS
 from app.core.config import settings
+from app.core.language import LANGUAGE_RULE
 from app.core.logging import get_logger
 from app.core import tracing
 from app.database.repositories import chunks as chunk_repo
@@ -121,6 +122,7 @@ inline, not as a bibliography at the end. One number per marker: write \
 give your own expert answer, clearly separated. Never invent what the paper says.
 - If the user quoted a passage, they are asking about THAT passage. Read it in \
 the context of the surrounding text, and answer about it specifically."""
+_BASE_ROLE_PAPER += "\n\n" + LANGUAGE_RULE
 
 # ⚠ A book gets its own voice, not the paper prompt with a word swapped. The
 # original complaint this addresses: answers about a book came out reading
@@ -154,6 +156,7 @@ one. A flat refusal to interpret anything is a worse answer than a clearly-\
 labeled opinion; interpreting is usually the point of discussing a book.
 - If the user quoted a passage, they are asking about THAT passage. Read it in \
 context and answer about it specifically."""
+_BASE_ROLE_BOOK += "\n\n" + LANGUAGE_RULE
 
 _BASE_ROLE_ARTICLE = """You are reading a web article alongside the user and talking with \
 them about it — a reading companion, not an annotator.
@@ -178,6 +181,7 @@ ambiguous claim — say so, and then actually offer your own reading, clearly \
 labeled as one, rather than refusing to engage.
 - If the user quoted a passage, they are asking about THAT passage. Read it in \
 context and answer about it specifically."""
+_BASE_ROLE_ARTICLE += "\n\n" + LANGUAGE_RULE
 
 _WHOLE_SYSTEM_PAPER = _BASE_ROLE_PAPER + """
 

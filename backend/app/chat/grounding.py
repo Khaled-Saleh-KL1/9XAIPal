@@ -40,6 +40,7 @@ from typing import Optional
 from uuid import UUID
 
 from app.core.config import settings
+from app.core.language import LANGUAGE_RULE
 from app.core.logging import get_logger
 from app.llm import client as llm_client
 
@@ -179,7 +180,8 @@ def build_evidence(
 
 # ── The judge ─────────────────────────────────────────────────────────────
 
-_SYSTEM = """You are a meticulous fact-checker. You are given CLAIMS from an AI's answer about a document, and the PASSAGES from that document the answer was based on. For each claim, decide strictly from the passages:
+_SYSTEM = (
+    """You are a meticulous fact-checker. You are given CLAIMS from an AI's answer about a document, and the PASSAGES from that document the answer was based on. For each claim, decide strictly from the passages:
 
 - "supported": a passage states this (paraphrase is fine; the meaning must be there).
 - "partial": a passage supports part of it, but the claim adds, overstates, or generalises beyond what is written.
@@ -193,6 +195,9 @@ Rules:
 - "quote" must be a short verbatim excerpt (under 200 characters) copied from the passage you judged against, or "" if none applies.
 - Output ONLY a JSON array, one object per claim, in order, no prose:
 [{"claim": 1, "verdict": "supported", "passage": "<passage key or empty>", "quote": "<verbatim excerpt or empty>", "note": "<one short clause, optional>"}]"""
+    + "\n\n"
+    + LANGUAGE_RULE
+)
 
 
 def _judge_prompt(claims: list[Claim], evidence: list[dict]) -> str:

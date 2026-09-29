@@ -75,6 +75,7 @@ from app.chat.agent_tools import (
 )
 from app.chat.memory import format_memories, recall_memories, write_memory, write_remembered
 from app.core.config import settings
+from app.core.language import LANGUAGE_RULE
 from app.core.logging import get_logger
 from app.core import tracing
 from app.database.repositories import chunks as chunk_repo
@@ -112,6 +113,7 @@ between two papers is usually the most useful thing you can surface.
 - Math renders: write LaTeX as $inline$ or $$display$$.
 - If the study does not answer the question, say so in one sentence, then \
 give your own expert answer clearly separated. Never invent what a paper says."""
+_BASE_ROLE += "\n\n" + LANGUAGE_RULE
 
 
 _AGENT_SYSTEM = _BASE_ROLE + """
