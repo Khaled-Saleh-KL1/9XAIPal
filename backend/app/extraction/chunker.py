@@ -1147,8 +1147,24 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
             # newlines. Either way, render as a plain text chunk so it flows in
             # the reader; chat retrieval still scores it.
             items = entry.get("list_items") or entry.get("items")
+            is_arabic_ocr = bool(entry.get("ocr_provider"))
             if items and isinstance(items, list):
-                text = "\n".join(f"- {str(it).strip()}" for it in items if str(it).strip())
+                if is_arabic_ocr:
+                    rendered_items = []
+                    for item in items:
+                        item_text = str(item).rstrip()
+                        if not item_text.strip():
+                            continue
+                        if re.match(r"^\s*\d+\.\s", item_text):
+                            rendered_items.append(item_text)
+                        else:
+                            indent = item_text[: len(item_text) - len(item_text.lstrip())]
+                            rendered_items.append(f"{indent}- {item_text.lstrip()}")
+                    text = "\n".join(rendered_items)
+                else:
+                    text = "\n".join(
+                        f"- {str(it).strip()}" for it in items if str(it).strip()
+                    )
             else:
                 text = (entry.get("text") or "").strip()
             if not text:
@@ -1156,7 +1172,7 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
                 continue
             chunks.append(_chunk(
                 sequence_id, "text", text, text, page_one_indexed,
-                heading_path, image_refs=[],
+                heading_path, image_refs=[], normalize=not is_arabic_ocr,
             ))
             continue
 

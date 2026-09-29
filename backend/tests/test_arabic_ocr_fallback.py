@@ -28,6 +28,7 @@ from app.extraction.arabic_types import (
     OcrUsage,
     GemmaOutputInvalid,
 )
+from app.extraction.gemini_ocr_client import batch_prompt
 
 
 def page_section(number: int, text: str) -> str:
@@ -151,12 +152,25 @@ def test_fallback_request_is_direct_ollama_chat_with_absolute_page_and_png():
         "rightmost column", "top to bottom", "leftmost", "Do not translate",
         "summarize", "spelling correction", "diacritics", "historical spelling",
         "headings", "lists", "tables", "displayed equations", "captions", "[غير واضح]",
+        "running headers", "running footers", "bare page numbers", "Keep footnotes",
     ):
         assert instruction in prompt
     assert payload["messages"][0]["images"] == [base64.b64encode(b"png-bytes").decode()]
     assert result.text == page_section(12, "عنوان")
     assert result.usage.prompt_tokens == 7
     assert result.usage.output_tokens == 9
+
+
+def test_gemini_prompt_omits_running_chrome_but_keeps_footnotes():
+    prompt = batch_prompt([page(1)])
+
+    for instruction in (
+        "running headers",
+        "running footers",
+        "bare page numbers",
+        "Keep footnotes",
+    ):
+        assert instruction in prompt
 
 
 @pytest.mark.parametrize("status", [401, 403, 408, 429, 500, 503])

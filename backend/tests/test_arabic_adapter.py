@@ -203,6 +203,30 @@ def test_nested_list_text_is_not_lost():
     assert blocks[0]["list_items"] == ["عنصر رئيسي", "عنصر فرعي", "العنصر الأخير"]
 
 
+def test_ordered_list_numbers_and_nested_levels_survive_adapter_and_chunker(tmp_path):
+    markdown = (
+        "2. العنصر الأول\n"
+        "   1. العنصر الفرعي الأول\n"
+        "   2. العنصر الفرعي الثاني\n"
+        "3. العنصر الأخير"
+    )
+    entries = pages_to_content_list([ocr_page(1, markdown)])
+    list_block = next(block for block in entries if block["type"] == "list")
+
+    assert list_block["list_items"] == [
+        "2. العنصر الأول",
+        "  1. العنصر الفرعي الأول",
+        "  2. العنصر الفرعي الثاني",
+        "3. العنصر الأخير",
+    ]
+
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    chunks = create_chunks_from_content_list(content_list)
+
+    assert chunks[0]["markdown"] == "\n".join(list_block["list_items"])
+
+
 def test_fenced_display_math_maps_to_equation():
     blocks = pages_to_content_list(
         [ocr_page(1, "```math\n\\alpha + \\beta = 1\n```")]

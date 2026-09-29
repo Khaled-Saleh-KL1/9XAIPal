@@ -32,6 +32,7 @@ from app.extraction.chunker import (
     create_chunks_from_markdown,
     crop_code_blocks,
 )
+from app.extraction.normalizer import extract_plain_text
 from app.extraction.assets import move_asset_to_storage
 from app.extraction.glyph_repair import repair_chunks
 from app.extraction.jobs import JobStatus
@@ -582,6 +583,16 @@ def run_pipeline_sync(
             markdown_content = md_file.read_text(encoding="utf-8")
             chunks = create_chunks_from_markdown(markdown_content)
             logger.info(f"[sync] Chunked from markdown fallback: {len(chunks)} chunks")
+
+        if (
+            classification is not None
+            and classification.route == DocumentRoute.ARABIC_PRINTED
+        ):
+            for chunk in chunks:
+                if chunk.get("chunk_type") != "code":
+                    chunk["plain_text"] = extract_plain_text(
+                        str(chunk.get("plain_text") or "")
+                    )
 
         if not chunks:
             raise MinerUError("No structural chunks extracted from document")

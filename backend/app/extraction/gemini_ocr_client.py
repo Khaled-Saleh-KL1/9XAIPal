@@ -39,7 +39,8 @@ def batch_prompt(_pages: Sequence[RenderedPage]) -> str:
     """Ask for faithful page-bounded Markdown; page images carry the evidence."""
 
     return (
-        "Transcribe every visible page verbatim in its original language. "
+        "Transcribe the document body verbatim in its original language. "
+        "Omit running headers, running footers, and bare page numbers. Keep footnotes. "
         "Output paragraphs, headings, lists, tables, displayed equations, and captions in Markdown. "
         "For Arabic or mixed Arabic/English pages, read the rightmost column top to bottom, "
         "then each column to the left through the leftmost column, each top to bottom; "
