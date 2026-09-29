@@ -94,8 +94,17 @@ def parse_references_with_style(chunks: list[dict]) -> tuple[list[dict], str]:
     for i, m in enumerate(starts):
         end = starts[i + 1].start() if i + 1 < len(starts) else len(combined)
         raw = combined[m.end():end].strip()
-        if raw:
-            entries.append({"number": len(entries) + 1, "raw_text": raw})
+        if not raw:
+            continue
+        # ⚠ MinerU sometimes breaks one entry into two list items at a line
+        # break ("- volume 30. Curran Associates, Inc., 2017."). A real entry
+        # starts with an author or organisation name, never a lowercase word,
+        # so such an item is the previous entry's tail. Arabic letters have no
+        # case, so an Arabic entry is never folded.
+        if entries and raw[0].islower():
+            entries[-1]["raw_text"] += "\n" + raw
+            continue
+        entries.append({"number": len(entries) + 1, "raw_text": raw})
 
     return entries, "author_year" if entries else "numeric"
 

@@ -60,6 +60,27 @@ def test_author_year_items_keep_continuations_and_get_document_order_numbers():
     ]
 
 
+def test_a_list_item_starting_lowercase_continues_the_previous_entry():
+    # Real MinerU output (paper 25bc6e66): one NeurIPS entry split into two
+    # list items at a line break, the second beginning "volume 30." — which
+    # became its own "entry" with the surname "volume" and no title.
+    chunks = _chunks(
+        "- Ashish Vaswani, Noam Shazeer, and Illia Polosukhin. Attention is all you need. "
+        "In I. Guyon, editors, Advances in Neural Information Processing Systems,\n"
+        "- volume 30. Curran Associates, Inc., 2017.\n"
+        "- J. Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. Bert. In NAACL-HLT, 2019.\n"
+        "- الذكاء الاصطناعي، محمد علي. 2020. دراسة.",
+    )
+
+    entries = parse_references(chunks)
+
+    assert [e["number"] for e in entries] == [1, 2, 3]
+    assert entries[0]["raw_text"].endswith("Systems,\nvolume 30. Curran Associates, Inc., 2017.")
+    assert entries[1]["raw_text"].startswith("J. Devlin")
+    assert entries[2]["raw_text"].startswith("الذكاء")
+    assert references_service.extract_author_year(entries[0]["raw_text"]) == ("Vaswani", 2017)
+
+
 def test_real_numbered_bibliography_keeps_the_existing_output_exactly():
     raw = (
         "Vaswani, Ashish, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, "
