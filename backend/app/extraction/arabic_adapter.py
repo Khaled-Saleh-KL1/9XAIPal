@@ -274,7 +274,13 @@ def _list_items(tokens: Sequence[Any], root_list: Any) -> list[str]:
     item_prefix: str | None = None
     for token in tokens:
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            list_stack.append(_list_frame(token))
+            parent = list_stack[-1]
+            list_stack.append(
+                _list_frame(
+                    token,
+                    base_indent=parent["base_indent"] + parent["item_marker_width"],
+                )
+            )
             continue
         if token.type in {"bullet_list_close", "ordered_list_close"}:
             if len(list_stack) > 1:
@@ -282,13 +288,19 @@ def _list_items(tokens: Sequence[Any], root_list: Any) -> list[str]:
             continue
         if token.type == "list_item_open":
             frame = list_stack[-1]
-            depth = len(list_stack) - 1
             if frame["ordered"]:
-                item_prefix = f"{'  ' * depth}{frame['next']}. "
+                marker = f"{frame['next']}. "
+                frame["item_marker_width"] = len(marker)
+                item_prefix = f"{' ' * frame['base_indent']}{marker}"
                 frame["next"] += 1
             elif any(frame["ordered"] for frame in list_stack):
-                item_prefix = f"{'  ' * depth}- "
+                marker = "- "
+                frame["item_marker_width"] = len(marker)
+                item_prefix = f"{' ' * frame['base_indent']}{marker}"
             else:
+                # The chunker adds the marker to unordered items. Record its
+                # width here so any ordered child still aligns under content.
+                frame["item_marker_width"] = 2
                 item_prefix = ""
             continue
         if token.type == "list_item_close":
@@ -300,14 +312,19 @@ def _list_items(tokens: Sequence[Any], root_list: Any) -> list[str]:
     return items
 
 
-def _list_frame(token: Any) -> dict[str, Any]:
+def _list_frame(token: Any, *, base_indent: int = 0) -> dict[str, Any]:
     ordered = token.type == "ordered_list_open"
     start = token.attrGet("start") if ordered else None
     try:
         next_number = int(start) if start is not None else 1
     except (TypeError, ValueError):
         next_number = 1
-    return {"ordered": ordered, "next": next_number}
+    return {
+        "ordered": ordered,
+        "next": next_number,
+        "base_indent": base_indent,
+        "item_marker_width": 0,
+    }
 
 
 def _matching_close(tokens: Sequence[Any], start: int, open_type: str) -> int | None:

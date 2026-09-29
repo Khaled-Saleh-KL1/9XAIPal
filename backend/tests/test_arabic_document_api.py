@@ -273,3 +273,59 @@ async def test_reextract_preserves_user_confirmed_classification(
     assert row["classifier_model"] is None
     assert row["classification_confidence"] is None
     assert row["ocr_provider_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_rechunk_cleans_arabic_plain_text_and_refreshes_token_count(
+    client, db_session, monkeypatch, tmp_path
+):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session,
+        await _user_id(db_session, email),
+        language="arabic",
+        writing_style="printed",
+        direction="rtl",
+        source="automatic",
+    )
+    await db_session.execute(
+        text("UPDATE documents SET extractor='gemini_arabic_flash' WHERE id=:id"),
+        {"id": document_id},
+    )
+    await db_session.commit()
+
+    extraction_root = tmp_path / "extracted"
+    extraction_dir = extraction_root / str(document_id)
+    extraction_dir.mkdir(parents=True)
+    content_list = extraction_dir / "content_list.json"
+    content_list.write_text(
+        json.dumps(
+            [{
+                "type": "text",
+                "page_idx": 0,
+                "ocr_provider": "gemini_arabic_flash",
+                "text": "**مرحبا** [الرابط](https://example.test) `المتغير`",
+            }],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(documents_endpoint, "extracted_dir", lambda: extraction_root)
+    monkeypatch.setattr(documents_endpoint, "documents_dir", lambda: tmp_path / "documents")
+
+    from app.extraction import mineru_client
+    from app.extraction.normalizer import estimate_tokens
+
+    monkeypatch.setattr(mineru_client, "find_content_list", lambda _path: content_list)
+    monkeypatch.setattr(mineru_client, "find_images", lambda _path: [])
+    monkeypatch.setattr(documents_endpoint.embed_document, "delay", lambda *_args: None)
+
+    response = await client.post(f"/api/v1/papers/{document_id}/rechunk")
+
+    assert response.status_code == 200
+    stored = (await db_session.execute(
+        text("SELECT plain_text, token_count FROM chunks WHERE document_id=:id"),
+        {"id": document_id},
+    )).mappings().one()
+    assert stored["plain_text"] == "مرحبا الرابط المتغير"
+    assert stored["token_count"] == estimate_tokens("مرحبا الرابط المتغير")

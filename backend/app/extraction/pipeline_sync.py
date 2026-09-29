@@ -31,8 +31,8 @@ from app.extraction.chunker import (
     create_chunks_from_content_list,
     create_chunks_from_markdown,
     crop_code_blocks,
+    clean_arabic_plain_text_chunks,
 )
-from app.extraction.normalizer import extract_plain_text
 from app.extraction.assets import move_asset_to_storage
 from app.extraction.glyph_repair import repair_chunks
 from app.extraction.jobs import JobStatus
@@ -584,16 +584,6 @@ def run_pipeline_sync(
             chunks = create_chunks_from_markdown(markdown_content)
             logger.info(f"[sync] Chunked from markdown fallback: {len(chunks)} chunks")
 
-        if (
-            classification is not None
-            and classification.route == DocumentRoute.ARABIC_PRINTED
-        ):
-            for chunk in chunks:
-                if chunk.get("chunk_type") != "code":
-                    chunk["plain_text"] = extract_plain_text(
-                        str(chunk.get("plain_text") or "")
-                    )
-
         if not chunks:
             raise MinerUError("No structural chunks extracted from document")
 
@@ -666,6 +656,11 @@ def run_pipeline_sync(
 
         # Last look before writing rows for a paper that may be gone.
         _assert_document_exists(session, document_id)
+        if (
+            classification is not None
+            and classification.route == DocumentRoute.ARABIC_PRINTED
+        ):
+            clean_arabic_plain_text_chunks(chunks)
         _finish_ingestion(
             session,
             document_id=document_id,

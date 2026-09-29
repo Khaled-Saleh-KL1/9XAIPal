@@ -802,6 +802,7 @@ async def rechunk_paper(
     from app.extraction.chunker import (
         create_chunks_from_content_list,
         create_chunks_from_markdown,
+        clean_arabic_plain_text_chunks,
     )
     from app.extraction.assets import move_asset_to_storage
     from app.extraction.pipeline_sync import (
@@ -834,7 +835,7 @@ async def rechunk_paper(
     # disk inside native extensions, none of it yielding. Inline it froze the
     # entire process for the whole re-chunk: every other request, everyone
     # else's reading, the library's own polling.
-    def _rebuild_chunks() -> tuple[list[dict], str, int, int]:
+    def _rebuild_chunks() -> tuple[list[dict], str, int, int, dict]:
         # Prefer content_list.json (typed + page-indexed); fall back to markdown.
         content_list = find_content_list(extract_path)
         if content_list is not None:
@@ -890,12 +891,22 @@ async def rechunk_paper(
         else:
             logger.warning("[glyph-repair] source PDF missing for %s — skipping", paper_id)
 
-        return chunks, source, glyphs_repaired, code_blocks_cropped
+        if (
+            str(doc.get("detected_language") or "").strip().lower()
+            in {"arabic", "mixed"}
+            and str(doc.get("detected_writing_style") or "").strip().lower()
+            == "printed"
+        ):
+            clean_arabic_plain_text_chunks(chunks)
+
+        return chunks, source, glyphs_repaired, code_blocks_cropped, headings_report
 
     # An HTTPException raised in the worker thread propagates out of the await
     # unchanged, so the 409/500 branches above still reach the client as
     # themselves rather than as a 500.
-    chunks, source, glyphs_repaired, code_blocks_cropped = await run_in_threadpool(_rebuild_chunks)
+    chunks, source, glyphs_repaired, code_blocks_cropped, headings_report = (
+        await run_in_threadpool(_rebuild_chunks)
+    )
 
     # Wipe and rebuild chunks / embeddings / assets atomically.
     await db.execute(text("""
