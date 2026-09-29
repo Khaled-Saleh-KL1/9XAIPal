@@ -402,7 +402,7 @@ services:
       # silently absent until this line existed.
       SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
       SEMANTIC_SCHOLAR_MIN_INTERVAL_SECONDS: ${SEMANTIC_SCHOLAR_MIN_INTERVAL_SECONDS:-1.05}
-      SEMANTIC_SCHOLAR_MAX_ATTEMPTS: ${SEMANTIC_SCHOLAR_MAX_ATTEMPTS:-4}
+      SEMANTIC_SCHOLAR_MAX_ATTEMPTS: ${SEMANTIC_SCHOLAR_MAX_ATTEMPTS:-6}
       # Managed scrape APIs fronting article-import fetch (see
       # app/services/article_extraction.py) — same "third-party network
       # egress for one URL, nothing else leaves" shape as the web-search

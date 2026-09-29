@@ -68,6 +68,9 @@ _BREAKER_ID = "semantic_scholar"
 # One line for every caller — citation chips, the export enrichment loop —
 # because the 1 req/s allowance is per KEY, not per feature or per worker.
 _PACER_LINE = "semantic_scholar"
+# A 429 backs off 1, 2, 4, 8, 8… intervals before re-queueing, and never waits
+# longer than this for one retry — a Retry-After above it is capped too.
+_MAX_BACKOFF_SECONDS = 8.0
 
 # A raw reference string is the paper's whole bibliography entry (author
 # list, title, venue, year) — plenty to match on; Semantic Scholar's own
@@ -132,6 +135,20 @@ async def match_reference(
     return Unresolved.NO_MATCH
 
 
+def _backoff_seconds(response: httpx.Response, interval: float, attempt: int) -> float:
+    """How long to wait after a 429 on `attempt`: the provider's Retry-After
+    (delta-seconds form) when it sends one, else exponential in the interval;
+    either way at most _MAX_BACKOFF_SECONDS."""
+    header = (response.headers.get("retry-after") or "").strip()
+    try:
+        requested = float(header)
+    except ValueError:
+        requested = None  # absent, or the HTTP-date form: use the backoff
+    if requested is not None and requested >= 0:
+        return min(requested, _MAX_BACKOFF_SECONDS)
+    return min(interval * 2 ** (attempt - 1), _MAX_BACKOFF_SECONDS)
+
+
 async def _match_title(
     title: str,
     interval: float,
@@ -143,8 +160,7 @@ async def _match_title(
     for attempt in range(1, attempts + 1):
         # Take the turn AFTER the cheap rejections in match_reference so a
         # missing key or an open breaker never burns a slot someone else
-        # could have used. On a retry, back off by an extra interval per
-        # attempt on top of the slot — the 429s come in bursts.
+        # could have used.
         try:
             await pacer.wait_turn(_PACER_LINE, interval, on_queued=on_queued)
         except pacer.PacerUnavailable:
@@ -152,8 +168,6 @@ async def _match_title(
             # key, not just this lookup. Not a provider failure: the breaker
             # stays as it is.
             return Unresolved.UNAVAILABLE
-        if attempt > 1:
-            await asyncio.sleep(interval * (attempt - 1))
 
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
@@ -171,14 +185,23 @@ async def _match_title(
                 circuit_breaker.record_success(_BREAKER_ID)
                 return Unresolved.NO_MATCH
             if status == 429:
+                # ⚠ Rate limiting is not an outage, so it never counts toward
+                # the breaker. Measured live (2026-09-29): with a valid key and
+                # every call spaced by the shared line, 9 of 12 requests at
+                # 1.05 s — and half at 3 s — still came back 429. Counting
+                # those as failures opened the breaker after three unlucky
+                # lookups and blanked every reference for five minutes.
                 if attempt < attempts:
+                    delay = _backoff_seconds(e.response, interval, attempt)
                     logger.info(
-                        "Semantic Scholar 429 on attempt %d/%d for %r — re-queueing",
-                        attempt, attempts, title[:60],
+                        "Semantic Scholar 429 on attempt %d/%d for %r — re-queueing in %.1fs",
+                        attempt, attempts, title[:60], delay,
                     )
+                    # Back off BEFORE taking the next slot, so the line keeps
+                    # serving other readers while this one waits.
+                    await asyncio.sleep(delay)
                     continue
-                logger.warning("Semantic Scholar rate-limited (429) %d times — giving up for now", attempts)
-                circuit_breaker.record_failure(_BREAKER_ID)
+                logger.warning("Semantic Scholar rate-limited (429) %d times — giving up on this lookup", attempts)
                 return Unresolved.UNAVAILABLE
             logger.warning("Semantic Scholar match failed: HTTP %s", status)
             circuit_breaker.record_failure(_BREAKER_ID)
