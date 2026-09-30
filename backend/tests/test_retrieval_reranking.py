@@ -202,3 +202,22 @@ async def test_english_question_for_arabic_document_uses_arabic_reranking(monkey
         "is_arabic_query": False,
         "has_arabic_target": True,
     }
+
+
+async def test_reranker_accepts_a_markdown_fenced_json_reply(monkeypatch):
+    # gemma4:31b wraps JSON replies in ```json fences even when asked not to.
+    from app.services import retrieval_reranking as reranker
+
+    monkeypatch.setattr(reranker, "get_redis", lambda: MemoryRedis())
+    monkeypatch.setattr(
+        reranker.llm_client, "chat", AsyncMock(return_value={"content": "```json\n[3, 1, 2]\n```"})
+    )
+    candidates = _candidates()
+
+    ranked = await reranker.rerank_chunks(
+        object(), "ما هي الشبكات؟", candidates, 2,
+        is_arabic_query=True, has_arabic_target=True,
+    )
+
+    assert [row["id"] for row in ranked] == ["chunk-3", "chunk-1", "chunk-2"][: len(ranked)]
+    assert ranked[0]["id"] == "chunk-3"

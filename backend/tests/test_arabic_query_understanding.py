@@ -273,3 +273,13 @@ async def test_library_search_uses_msa_and_english_vectors_and_keyword_only_term
     assert {row["id"] for row in results} == {
         "arabic-paper", "mixed-paper", "english-paper", "keyword-paper"
     }
+
+
+async def test_query_understanding_accepts_a_markdown_fenced_json_reply(monkeypatch):
+    # gemma4:31b wraps JSON replies in ```json fences even when asked not to.
+    module = _understanding_api()
+    monkeypatch.setattr(module, "get_redis", lambda: MemoryRedis())
+    fenced = "```json\n" + json.dumps(_UNDERSTANDING, ensure_ascii=False, indent=2) + "\n```"
+    monkeypatch.setattr(module.llm_client, "chat", AsyncMock(return_value={"content": fenced}))
+
+    assert await module.understand_arabic_query(_QUESTION) == _UNDERSTANDING
