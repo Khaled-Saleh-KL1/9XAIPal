@@ -404,6 +404,7 @@ def extract_arabic_document(
             total_usage,
             page_count,
             settings,
+            source_pdf_path=source_path,
         )
         _publish_staging(staging_dir, target_dir)
     except Exception:
@@ -577,8 +578,15 @@ def _write_artifacts(
     usage: OcrUsage,
     page_count: int,
     config: Settings,
+    *,
+    source_pdf_path: Path,
 ) -> None:
-    content_list = pages_to_content_list(pages)
+    content_list = pages_to_content_list(
+        pages,
+        pdf_path=source_pdf_path,
+        output_dir=staging_dir,
+        dpi=config.arabic_ocr_dpi,
+    )
     document_markdown = "\n\n".join(
         f"<!-- PAGE:{page.page_number} -->\n{page.markdown}\n"
         f"<!-- END_PAGE:{page.page_number} -->"

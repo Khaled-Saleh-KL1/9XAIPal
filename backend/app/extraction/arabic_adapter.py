@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from html import unescape
+from pathlib import Path
 from typing import Any
 
 from markdown_it import MarkdownIt
@@ -30,6 +31,10 @@ _EQUATION_ENV_RE = re.compile(
     r"([\s\S]+?)\\end\{\1\}\Z"
 )
 _MATH_FENCE_LANGUAGES = {"math", "latex", "tex", "equation", "display-math"}
+_FIGURE_CAPTION_RE = re.compile(
+    r"^\s*(?:الشكل|شكل|Figure|Fig\.?)\s*[\d٠-٩]+[^\n]*$",
+    re.IGNORECASE,
+)
 _MARKDOWN = MarkdownIt("gfm-like", {"html": True, "linkify": False})
 
 
@@ -121,8 +126,22 @@ def parse_complete_page_prefix(
     )
 
 
-def pages_to_content_list(pages: Sequence[ArabicOcrPage]) -> list[dict[str, Any]]:
+def pages_to_content_list(
+    pages: Sequence[ArabicOcrPage],
+    *,
+    pdf_path: Path | None = None,
+    output_dir: Path | None = None,
+    dpi: int = 200,
+) -> list[dict[str, Any]]:
     """Convert committed page Markdown into ordered MinerU-compatible blocks."""
+
+    if (pdf_path is None) != (output_dir is None):
+        raise ValueError("pdf_path and output_dir must be provided together")
+    figures_by_page = (
+        _extract_embedded_pdf_figures(pages, pdf_path, output_dir, dpi)
+        if pdf_path is not None and output_dir is not None
+        else {}
+    )
 
     content_list: list[dict[str, Any]] = []
     for page in pages:
@@ -140,7 +159,111 @@ def pages_to_content_list(pages: Sequence[ArabicOcrPage]) -> list[dict[str, Any]
                     "ocr_repaired": page.repaired,
                 }
             )
+        for figure in figures_by_page.get(page.page_number, []):
+            content_list.append(
+                {
+                    **figure,
+                    "page_idx": page.page_number - 1,
+                    "ocr_provider": page.provider,
+                    "ocr_model": page.model,
+                    "ocr_repaired": page.repaired,
+                }
+            )
     return content_list
+
+
+def _extract_embedded_pdf_figures(
+    pages: Sequence[ArabicOcrPage],
+    pdf_path: Path,
+    output_dir: Path,
+    dpi: int,
+) -> dict[int, list[dict[str, Any]]]:
+    """Render substantial embedded page images as MinerU-compatible figures."""
+    if dpi < 1:
+        raise ValueError("dpi must be positive")
+    if not pages:
+        return {}
+
+    import fitz
+
+    image_dir = Path(output_dir) / "images"
+    matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+    figures_by_page: dict[int, list[dict[str, Any]]] = {}
+    with fitz.open(str(pdf_path)) as document:
+        for ocr_page in pages:
+            page_index = ocr_page.page_number - 1
+            if page_index < 0 or page_index >= document.page_count:
+                continue
+            page = document[page_index]
+            page_rect = page.rect
+            page_area = float(page_rect.width * page_rect.height)
+            if page_area <= 0:
+                continue
+
+            candidates = []
+            seen_xrefs: set[int] = set()
+            for image_info in page.get_images(full=True):
+                xref = int(image_info[0])
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
+                for image_rect in page.get_image_rects(xref):
+                    rect = fitz.Rect(image_rect) & page_rect
+                    area = float(rect.width * rect.height)
+                    area_share = area / page_area
+                    if area_share < 0.05:
+                        continue
+                    # A full-page scan is page content, not a separate figure.
+                    # Scanned documents with only these images are out of scope.
+                    if area_share > 0.90:
+                        continue
+                    if (
+                        rect.width * dpi / 72.0 < 80
+                        or rect.height * dpi / 72.0 < 80
+                    ):
+                        continue
+                    pixmap = page.get_pixmap(matrix=matrix, clip=rect)
+                    if pixmap.width < 80 or pixmap.height < 80:
+                        continue
+                    candidates.append((rect, pixmap))
+
+            candidates.sort(key=lambda candidate: (candidate[0].y0, candidate[0].x0))
+            if not candidates:
+                continue
+
+            captions = [
+                line.strip()
+                for line in ocr_page.markdown.splitlines()
+                if _FIGURE_CAPTION_RE.match(line)
+            ]
+            page_figures = []
+            image_dir.mkdir(parents=True, exist_ok=True)
+            for image_number, (rect, pixmap) in enumerate(candidates, start=1):
+                filename = (
+                    f"arabic-page-{ocr_page.page_number:04d}-"
+                    f"figure-{image_number:03d}.png"
+                )
+                pixmap.save(str(image_dir / filename))
+                page_figures.append(
+                    {
+                        "type": "image",
+                        "img_path": f"images/{filename}",
+                        "bbox": [
+                            float(rect.x0),
+                            float(rect.y0),
+                            float(rect.x1),
+                            float(rect.y1),
+                        ],
+                        "img_caption": (
+                            [captions[image_number - 1]]
+                            if image_number <= len(captions)
+                            else []
+                        ),
+                    }
+                )
+            figures_by_page[ocr_page.page_number] = page_figures
+
+    return figures_by_page
 
 
 def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
