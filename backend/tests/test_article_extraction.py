@@ -9,10 +9,12 @@ against the open internet.
 """
 
 from unittest.mock import patch
+import ssl
 
 import httpx
 import pytest
 
+from app.services import article_extraction
 from app.extraction.pipeline_sync import _pdf_name_from_url
 from app.services.article_extraction import (
     ArticleExtractionError,
@@ -24,6 +26,39 @@ from app.services.article_extraction import (
     extract_article_from_html,
     fetch_resource,
 )
+
+
+_TLS_IMPORT_MESSAGE = (
+    "This site's security certificate couldn't be verified, so it can't be imported by link. "
+    "Download the file in your browser and upload it instead."
+)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_fetch_direct_maps_tls_certificate_verification_errors(monkeypatch, wrapped):
+    certificate_error = ssl.SSLCertVerificationError(
+        "certificate verify failed: unable to get local issuer certificate"
+    )
+
+    def raise_certificate_error(*_args, **_kwargs):
+        if wrapped:
+            raise httpx.ConnectError(
+                "TLS connection failed",
+                request=httpx.Request("GET", "https://example.com/article"),
+            ) from certificate_error
+        raise certificate_error
+
+    monkeypatch.setattr(
+        article_extraction,
+        "safe_sync_transport",
+        lambda: httpx.MockTransport(lambda _request: httpx.Response(200)),
+    )
+    monkeypatch.setattr(article_extraction, "safe_send_sync", raise_certificate_error)
+
+    with pytest.raises(ArticleExtractionError) as exc:
+        article_extraction._fetch_direct("https://example.com/article")
+
+    assert str(exc.value) == _TLS_IMPORT_MESSAGE
 
 
 # ── extract_article_from_html: trafilatura's metadata frontmatter leak ──────

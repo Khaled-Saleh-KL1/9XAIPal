@@ -52,6 +52,7 @@ import codecs
 import concurrent.futures
 import json
 import re
+import ssl
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -91,6 +92,10 @@ MAX_IMAGES = 60
 # page-protection lock badge and a 1x1 transparent GIF both showed up as
 # "figures" in an unfiltered extraction during development.
 MIN_IMAGE_BYTES = 8 * 1024
+TLS_CERTIFICATE_IMPORT_MESSAGE = (
+    "This site's security certificate couldn't be verified, so it can't be imported by link. "
+    "Download the file in your browser and upload it instead."
+)
 # Below this many characters, treat the extraction as failed rather than
 # publish a near-empty "paper" — the honest failure mode for a paywalled or
 # JS-rendered page trafilatura (a static-HTML extractor) can't see into.
@@ -601,6 +606,8 @@ def _fetch_direct(url: str) -> FetchedResource:
         raise ArticleExtractionError("That link redirects too many times to follow.") from e
     except UnsafeRedirectError as e:
         raise ArticleExtractionError("That link redirects somewhere that can't be imported.") from e
+    except ssl.SSLCertVerificationError as e:
+        raise ArticleExtractionError(TLS_CERTIFICATE_IMPORT_MESSAGE) from e
     except httpx.HTTPStatusError as e:
         # Caught before the broader httpx.HTTPError below (HTTPStatusError is
         # a subclass): a 403/429 almost always means anti-bot protection
@@ -620,12 +627,32 @@ def _fetch_direct(url: str) -> FetchedResource:
             ) from e
         raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
     except httpx.HTTPError as e:
+        if _has_tls_certificate_verification_error(e):
+            raise ArticleExtractionError(TLS_CERTIFICATE_IMPORT_MESSAGE) from e
         raise ArticleExtractionError(f"Couldn't fetch that page: {e}") from e
     finally:
         if resp is not None:
             resp.close()
 
     return FetchedResource(content=content, content_type=content_type, final_url=final_url, charset=charset)
+
+
+def _has_tls_certificate_verification_error(error: BaseException) -> bool:
+    """Find a certificate-verification failure wrapped by an HTTP client error."""
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return False
 
 
 # Tier 1 of the article-fetch cascade: HTML-capable providers, tried in this
