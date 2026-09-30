@@ -35,6 +35,7 @@ from app.chat.prompts import (
     SUB_THREAD_SYSTEM_PROMPT,
     DIAGRAM_INSTRUCTIONS,
     FIGURE_INSTRUCTIONS,
+    localize_refusals_for_question,
     format_local_context,
     format_global_context,
     format_external_context,
@@ -78,6 +79,7 @@ class _AskPrep:
     start_time: float
     blocked: bool = False
     decision: Any = None
+    route_fallback: Optional[str] = None
     citations: list[Citation] = field(default_factory=list)
     paper_block: str = ""
     context_text: str = ""
@@ -90,7 +92,26 @@ class _AskPrep:
     agent_steps: list[dict] = field(default_factory=list)
 
 
-@tracing.traced("prepare", tracing.CHAIN, output=lambda p: {"route": p.decision.context_type, "reason": p.decision.reason})
+def _fallback_local_to_global(prep: _AskPrep, reason: str) -> None:
+    """Replace a LOCAL decision when no usable local paper context exists."""
+    decision = prep.decision
+    prep.route_fallback = reason
+    prep.decision = RouterDecision(
+        context_type="GLOBAL",
+        reason=f"{decision.reason} (fallback: {reason})",
+        confidence=decision.confidence,
+    )
+
+
+@tracing.traced(
+    "prepare",
+    tracing.CHAIN,
+    output=lambda p: {
+        "route": p.decision.context_type,
+        "reason": p.decision.reason,
+        **({"route_fallback": p.route_fallback} if p.route_fallback else {}),
+    },
+)
 async def _prepare_ask(
     session: AsyncSession,
     *,
@@ -192,6 +213,17 @@ async def _prepare_ask(
         decision = new_decision
         prep.decision = decision
 
+    has_current_position = bool(current_chunk_id or visible_sequence_orders or focused_element)
+    if (
+        decision.context_type == "LOCAL"
+        and document_id
+        and not is_sub_thread
+        and not has_current_position
+    ):
+        _fallback_local_to_global(prep, "local_without_position")
+        decision = prep.decision
+        logger.info("ASK[local-fallback] no current position; using GLOBAL retrieval")
+
     # Step 2: Context Retrieval — paper context per route + web prefetch (conditional)
     t_retrieval = time.time()
     citations = prep.citations
@@ -205,6 +237,7 @@ async def _prepare_ask(
     # The user can still explicitly ask to relate back to the paper if desired.
     if not is_sub_thread:
         try:
+            local_context_handled = False
             if decision.context_type == "LOCAL" and current_chunk_id and document_id:
                 ctx = await build_local_context(
                     session, document_id=document_id, current_chunk_id=current_chunk_id,
@@ -217,19 +250,30 @@ async def _prepare_ask(
                         "ASK[local-rich] visible_seqs=%s focused=%s",
                         visible_sequence_orders, focused_element
                     )
-                paper_block = format_local_context(
-                    ctx["chunks"], assets=ctx.get("assets"), document_id=document_id
+                local_chunks = ctx["chunks"]
+                has_local_text = any(
+                    (chunk.get("markdown") or "").strip()
+                    for chunk in local_chunks
                 )
-                citations.extend(citations_from_chunks(ctx["chunks"]))
-                for asset in ctx.get("assets", []):
-                    if asset.get("asset_type") == "image" and asset.get("file_path"):
-                        image_paths.append(asset["file_path"])
-                logger.info(
-                    "ASK[step2a] LOCAL chunks=%d images=%d paper_chars=%d",
-                    len(ctx["chunks"]), len(image_paths), len(paper_block),
-                )
+                if has_local_text:
+                    paper_block = format_local_context(
+                        local_chunks, assets=ctx.get("assets"), document_id=document_id
+                    )
+                    citations.extend(citations_from_chunks(local_chunks))
+                    for asset in ctx.get("assets", []):
+                        if asset.get("asset_type") == "image" and asset.get("file_path"):
+                            image_paths.append(asset["file_path"])
+                    local_context_handled = True
+                    logger.info(
+                        "ASK[step2a] LOCAL chunks=%d images=%d paper_chars=%d",
+                        len(local_chunks), len(image_paths), len(paper_block),
+                    )
+                else:
+                    _fallback_local_to_global(prep, "local_context_empty")
+                    decision = prep.decision
+                    logger.info("ASK[local-fallback] local context had no usable text; using GLOBAL retrieval")
 
-            elif decision.context_type == "GLOBAL" and document_id:
+            if decision.context_type == "GLOBAL" and document_id:
                 ctx = await build_global_context(
                     session, query=prompt, document_id=document_id, limit=3,
                     max_sequence_id=max_sequence_id,
@@ -262,7 +306,7 @@ async def _prepare_ask(
                     ctx.get("total", 0), len(paper_block),
                 )
 
-            else:
+            elif not local_context_handled:
                 logger.info("ASK[step2a] no paper context (no document or route=EXTERNAL)")
         except Exception:
             logger.exception("ASK[step2a] paper context retrieval failed (route=%s)", decision.context_type)
@@ -418,6 +462,8 @@ async def _prepare_ask(
         system_prompt = GLOBAL_SYSTEM_PROMPT
     else:
         system_prompt = RESEARCH_AWARE_COMBINED_PROMPT if use_research_aware else COMBINED_SYSTEM_PROMPT
+
+    system_prompt = localize_refusals_for_question(system_prompt, prompt)
 
     # A progress ceiling means the reader is mid-document: retrieval has
     # already been clamped, and the model needs to behave like a companion
