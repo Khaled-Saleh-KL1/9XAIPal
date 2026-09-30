@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -16,8 +19,8 @@ def test_gemini_keys_read_the_documented_environment_name(monkeypatch):
     assert cfg.gemini_api_keys == ["first", "second"]
 
 
-def test_arabic_features_are_safe_by_default():
-    cfg = Settings(_env_file=None)
+def test_arabic_features_can_be_disabled_explicitly():
+    cfg = Settings(arabic_ocr_enabled=False, _env_file=None)
     assert cfg.arabic_ocr_enabled is False
     assert cfg.arabic_handwritten_ocr_enabled is False
     assert cfg.arabic_classifier_batch_pages == 2
@@ -27,11 +30,39 @@ def test_arabic_features_are_safe_by_default():
     assert cfg.arabic_gemini_handwritten_model == "gemini-3.1-pro-preview"
 
 
+def test_arabic_ocr_is_enabled_by_default_and_handwriting_is_disabled():
+    cfg = Settings(_env_file=None)
+    assert cfg.arabic_ocr_enabled is True
+    assert cfg.arabic_handwritten_ocr_enabled is False
+
+
+def test_compose_and_example_defaults_enable_only_printed_arabic():
+    backend = Path(__file__).resolve().parents[1]
+    for compose_name in ("docker-compose.yml", "docker-compose.prod.yml"):
+        compose = (backend / compose_name).read_text(encoding="utf-8")
+        arabic_defaults = re.findall(
+            r"ARABIC_OCR_ENABLED:\s*\$\{ARABIC_OCR_ENABLED:-([^}]+)\}",
+            compose,
+        )
+        handwritten_defaults = re.findall(
+            r"ARABIC_HANDWRITTEN_OCR_ENABLED:\s*"
+            r"\$\{ARABIC_HANDWRITTEN_OCR_ENABLED:-([^}]+)\}",
+            compose,
+        )
+        assert arabic_defaults and set(arabic_defaults) == {"true"}
+        assert handwritten_defaults and set(handwritten_defaults) == {"false"}
+
+    example = (backend / ".env.example").read_text(encoding="utf-8")
+    assert re.search(r"^ARABIC_OCR_ENABLED=true$", example, flags=re.MULTILINE)
+    assert re.search(
+        r"^ARABIC_HANDWRITTEN_OCR_ENABLED=false$", example, flags=re.MULTILINE
+    )
+
+
 def test_handwritten_unavailable_message_matches_public_contract():
     assert HandwrittenArabicUnavailable.public_message == (
-        "Handwritten Arabic extraction is not currently available because it "
-        "requires Gemini Pro with a billing-enabled account. No text was "
-        "extracted, and your original file has been kept."
+        "Handwritten Arabic isn't enabled yet. No text was extracted, and "
+        "your original file has been kept."
     )
 
 

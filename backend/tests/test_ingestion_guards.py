@@ -120,6 +120,7 @@ def test_progress_callback_can_abort_a_batched_extraction(tmp_path, monkeypatch)
 
 
 def test_run_pipeline_stops_and_cleans_up_when_the_paper_is_deleted(db_session_sync, tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", False)
     doc_id, job_id = uuid4(), uuid4()
     db_session_sync.execute(
         text("INSERT INTO documents (id, filename, original_filename, status) VALUES (:id, 'a.pdf', 'a.pdf', 'queued')"),
@@ -160,6 +161,7 @@ def test_run_pipeline_stops_and_cleans_up_when_the_paper_is_deleted(db_session_s
 
 
 def test_run_pipeline_does_nothing_for_a_paper_deleted_while_queued(db_session_sync, tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", False)
     doc_id, job_id = uuid4(), uuid4()  # never inserted: already gone when the task starts
     monkeypatch.setattr(pipeline_sync, "extracted_dir", lambda: tmp_path / "extracted")
     monkeypatch.setattr(pipeline_sync, "images_dir", lambda: tmp_path / "images")

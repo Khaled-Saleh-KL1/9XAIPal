@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     extractor_vlm_concurrency: int = 3      # bounded to respect Ollama Cloud rate limits
 
     # ── Arabic document OCR (feature-flagged; separate from English extractors) ──
-    arabic_ocr_enabled: bool = False
+    arabic_ocr_enabled: bool = True
     arabic_handwritten_ocr_enabled: bool = False
     arabic_router_model: str = "qwen3-vl:4b-instruct"
     arabic_router_base_url: str = "http://localhost:11434"
