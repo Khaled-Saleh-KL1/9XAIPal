@@ -167,6 +167,11 @@ async def test_arabic_study_retrieval_uses_expansions_keyword_only_and_one_llm_c
     }
     search = AsyncMock(side_effect=lambda _session, query, *_args: query_hits[query])
     monkeypatch.setattr(retrieval, "_search_chunks_for_query", search)
+    monkeypatch.setattr(
+        retrieval.retrieval_reranking,
+        "rerank_chunks",
+        AsyncMock(side_effect=lambda _session, _query, rows, *_args, **_kwargs: rows),
+    )
     keyword = AsyncMock(return_value=[_hit("keyword-hit", arabic_id)])
     monkeypatch.setattr(retrieval, "search_chunks_fulltext", keyword)
 

@@ -424,6 +424,9 @@ class Settings(BaseSettings):
     arabic_fts_stemming_enabled: bool = True
     arabic_fts_v2_enabled: bool = True
     arabic_query_understanding_enabled: bool = True
+    rerank_arabic_enabled: bool = True
+    rerank_english_enabled: bool = False
+    rerank_candidates: int = 30
 
     # ── Web search ──────────────────────────────────────────────────────────
     # Which provider(s) serve the EXTERNAL route, the research agent, and the

@@ -8,14 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.core import tracing
+from app.core.config import settings
 from app.core.language import is_primarily_arabic
 from app.chat.tracing_hooks import retrieval_output
 from app.database.repositories import embeddings as emb_repo
 from app.database.repositories import assets as asset_repo
 from app.database.pgvector import search_chunks_fulltext
 from app.embeddings.model import get_query_embedding
-from app.core.config import settings
-from app.services import arabic_query_understanding
+from app.services import arabic_query_understanding, retrieval_reranking
 from app.services.query_translation import translated_query
 
 logger = get_logger(__name__)
@@ -117,6 +117,34 @@ async def _search_chunks_for_query(
     return reciprocal_rank_fusion([vec_hits, fts_hits], limit)
 
 
+def _reranking_enabled(query_language: str, has_arabic_target: bool) -> bool:
+    if query_language == "arabic" or has_arabic_target:
+        return settings.rerank_arabic_enabled
+    return settings.rerank_english_enabled
+
+
+async def _rerank_chunks_if_enabled(
+    session: AsyncSession,
+    query: str,
+    candidates: list[dict],
+    limit: int,
+    query_language: str,
+    has_arabic_target: bool,
+) -> list[dict]:
+    if not _reranking_enabled(query_language, has_arabic_target):
+        return candidates[:limit]
+    try:
+        reranked = await retrieval_reranking.rerank_chunks(
+            session, query, candidates, limit,
+            is_arabic_query=query_language == "arabic",
+            has_arabic_target=has_arabic_target,
+        )
+        return reranked[:limit]
+    except Exception:
+        logger.warning("retrieval reranking failed; retaining fused order", exc_info=True)
+        return candidates[:limit]
+
+
 @tracing.traced("retrieve", tracing.RETRIEVER, output=retrieval_output)
 async def search_chunks(
     session: AsyncSession,
@@ -149,11 +177,16 @@ async def search_chunks(
         opposite_ids = [document_id]
     else:
         opposite_ids = []
+    has_arabic_target = any(language == "arabic" for language in language_by_id.values())
+    rerank_enabled = _reranking_enabled(query_language, has_arabic_target)
+    candidate_limit = max(limit, settings.rerank_candidates) if rerank_enabled else limit
 
     if query_language == "arabic" and settings.arabic_query_understanding_enabled:
         understanding = await arabic_query_understanding.understand_arabic_query(query)
         if understanding:
-            fetch_n = max(limit * 3, 15)
+            fetch_n = (
+                candidate_limit if rerank_enabled else max(limit * 3, 15)
+            )
             ranked_lists = [await _search_chunks_for_query(
                 session, query, fetch_n, document_id, document_ids, max_sequence_id
             )]
@@ -186,23 +219,36 @@ async def search_chunks(
                 )
                 ranked_lists.append(english_hits)
 
-            return reciprocal_rank_fusion(ranked_lists, limit)
+            candidates = reciprocal_rank_fusion(ranked_lists, candidate_limit)
+            return await _rerank_chunks_if_enabled(
+                session, query, candidates, limit, query_language, has_arabic_target
+            )
 
     if not opposite_ids:
-        return await _search_chunks_for_query(
-            session, query, limit, document_id, document_ids, max_sequence_id
+        if not rerank_enabled:
+            return await _search_chunks_for_query(
+                session, query, limit, document_id, document_ids, max_sequence_id
+            )
+        candidates = await _search_chunks_for_query(
+            session, query, candidate_limit, document_id, document_ids, max_sequence_id
+        )
+        return await _rerank_chunks_if_enabled(
+            session, query, candidates, limit, query_language, has_arabic_target
         )
 
     target_language = "english" if query_language == "arabic" else "arabic"
     translated = await translated_query(query, target_language)
     if not translated or not translated.strip():
-        return await _search_chunks_for_query(
-            session, query, limit, document_id, document_ids, max_sequence_id
+        candidates = await _search_chunks_for_query(
+            session, query, candidate_limit, document_id, document_ids, max_sequence_id
+        )
+        return await _rerank_chunks_if_enabled(
+            session, query, candidates, limit, query_language, has_arabic_target
         )
 
     # Each language-specific list gets enough candidates for the final RRF
     # pass to combine matches that were not in the first few positions.
-    fetch_n = max(limit * 3, 15)
+    fetch_n = candidate_limit if rerank_enabled else max(limit * 3, 15)
     original_hits = await _search_chunks_for_query(
         session, query, fetch_n, document_id, document_ids, max_sequence_id
     )
@@ -213,10 +259,17 @@ async def search_chunks(
         max_sequence_id,
     )
     if not original_hits:
-        return translated_hits[:limit]
+        return await _rerank_chunks_if_enabled(
+            session, query, translated_hits, limit, query_language, has_arabic_target
+        )
     if not translated_hits:
-        return original_hits[:limit]
-    return reciprocal_rank_fusion([original_hits, translated_hits], limit)
+        return await _rerank_chunks_if_enabled(
+            session, query, original_hits, limit, query_language, has_arabic_target
+        )
+    candidates = reciprocal_rank_fusion([original_hits, translated_hits], candidate_limit)
+    return await _rerank_chunks_if_enabled(
+        session, query, candidates, limit, query_language, has_arabic_target
+    )
 
 
 @tracing.traced("retrieve.figures", tracing.RETRIEVER, output=retrieval_output)
