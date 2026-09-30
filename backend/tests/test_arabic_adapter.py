@@ -402,6 +402,95 @@ def test_two_figures_pair_with_caption_lines_in_page_order(tmp_path):
     assert len({figure["img_path"] for figure in figures}) == 2
 
 
+@pytest.mark.parametrize(
+    ("rotation", "expected_bbox"),
+    [
+        (90, [22, 80, 192, 380]),
+        (270, [650, 215, 820, 515]),
+    ],
+)
+def test_rotated_page_figure_is_cropped_in_display_coordinates(
+    tmp_path, rotation, expected_bbox
+):
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_image(
+        fitz.Rect(80, 650, 380, 820), stream=_png_bytes(300, 170, 80)
+    )
+    page.set_rotation(rotation)
+    pdf_path = tmp_path / f"rotated-{rotation}.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    output_dir = tmp_path / f"extract-{rotation}"
+    blocks = pages_to_content_list(
+        [ocr_page(1, "الشكل 1: شكل على صفحة مدارة")],
+        pdf_path=pdf_path,
+        output_dir=output_dir,
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert len(figures) == 1
+    assert figures[0]["bbox"] == pytest.approx(expected_bbox)
+    crop = fitz.Pixmap(str(output_dir / figures[0]["img_path"]))
+    assert crop.width >= 80
+    assert crop.height >= 80
+    center = (crop.height // 2 * crop.width + crop.width // 2) * crop.n
+    assert max(crop.samples[center : center + 3]) < 200
+
+
+@pytest.mark.parametrize("rotation", [90, 270])
+def test_rotated_full_page_scan_is_not_emitted_as_a_figure(tmp_path, rotation):
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_image(page.rect, stream=_png_bytes(500, 700))
+    page.set_rotation(rotation)
+    pdf_path = tmp_path / f"rotated-scan-{rotation}.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, "[NO_TEXT]")],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / f"scan-extract-{rotation}",
+        dpi=200,
+    )
+
+    assert not any(block["type"] == "image" for block in blocks)
+
+
+def test_rotated_figures_pair_captions_by_visual_page_order(tmp_path):
+    document = fitz.open()
+    page = document.new_page()
+    # Insert the visual bottom figure first so PDF resource order cannot pair
+    # it with the first (topmost) OCR caption.
+    page.insert_image(
+        fitz.Rect(350, 100, 550, 300), stream=_png_bytes(200, 200, 100)
+    )
+    page.insert_image(
+        fitz.Rect(50, 500, 250, 700), stream=_png_bytes(200, 200, 180)
+    )
+    page.set_rotation(90)
+    pdf_path = tmp_path / "rotated-order.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, "الشكل ١: العلوي\nالشكل ٢: السفلي")],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "rotated-order-extract",
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert [figure["img_caption"] for figure in figures] == [
+        ["الشكل ١: العلوي"],
+        ["الشكل ٢: السفلي"],
+    ]
+    assert [figure["bbox"][1] for figure in figures] == [50, 350]
+
+
 def test_arabic_page_without_embedded_images_keeps_adapter_output_unchanged(tmp_path):
     pdf_path = tmp_path / "text-only.pdf"
     document = fitz.open()

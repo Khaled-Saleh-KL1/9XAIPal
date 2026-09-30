@@ -208,7 +208,9 @@ def _extract_embedded_pdf_figures(
                     continue
                 seen_xrefs.add(xref)
                 for image_rect in page.get_image_rects(xref):
-                    rect = fitz.Rect(image_rect) & page_rect
+                    # get_image_rects reports unrotated page coordinates;
+                    # page.rect and get_pixmap clips use displayed coordinates.
+                    rect = (fitz.Rect(image_rect) * page.rotation_matrix) & page_rect
                     area = float(rect.width * rect.height)
                     area_share = area / page_area
                     if area_share < 0.05:
@@ -227,7 +229,10 @@ def _extract_embedded_pdf_figures(
                         continue
                     candidates.append((rect, pixmap))
 
-            candidates.sort(key=lambda candidate: (candidate[0].y0, candidate[0].x0))
+            # Arabic OCR pages read top-to-bottom, then right-to-left.
+            candidates.sort(
+                key=lambda candidate: (candidate[0].y0, -candidate[0].x1)
+            )
             if not candidates:
                 continue
 
