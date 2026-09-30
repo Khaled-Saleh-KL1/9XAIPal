@@ -1268,7 +1268,7 @@ async def reextract_paper(
         {"id": paper_id},
     )
 
-    # Wipe DB-side: embeddings → assets → chunks. Cascades from chunks would
+    # Wipe DB-side: embeddings → assets → summaries → chunks. Cascades from chunks would
     # handle embeddings, but the explicit order is robust to schema drift.
     await db.execute(text("""
         DELETE FROM chunk_embeddings
@@ -1278,6 +1278,10 @@ async def reextract_paper(
         DELETE FROM chunk_assets
         WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = :doc_id)
     """), {"doc_id": paper_id})
+    await db.execute(
+        text("DELETE FROM section_summaries WHERE document_id = :doc_id"),
+        {"doc_id": paper_id},
+    )
     await db.execute(text("DELETE FROM chunks WHERE document_id = :doc_id"),
                      {"doc_id": paper_id})
     # Reserve and insert the job before committing the destructive changes.
