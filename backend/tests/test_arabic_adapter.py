@@ -1,5 +1,7 @@
 import json
+from pathlib import Path
 
+import fitz
 import pytest
 from markdown_it import MarkdownIt
 
@@ -24,6 +26,23 @@ def ocr_page(number: int, markdown: str, *, repaired: bool = False) -> ArabicOcr
         model="gemini-3.7-flash",
         repaired=repaired,
     )
+
+
+def _png_bytes(width: int, height: int, color: int = 0) -> bytes:
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, width, height), False)
+    pixmap.clear_with(color)
+    return pixmap.tobytes("png")
+
+
+def _figure_pdf(path: Path, image_rects: list[tuple[fitz.Rect, bytes]]) -> Path:
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((40, 60), "Arabic text page")
+    for rect, image_bytes in image_rects:
+        page.insert_image(rect, stream=image_bytes)
+    document.save(path)
+    document.close()
+    return path
 
 
 def test_complete_prefix_survives_truncated_last_page():
@@ -298,6 +317,199 @@ def test_empty_markdown_produces_no_empty_artifact_blocks():
     assert pages_to_content_list([ocr_page(1, " \n\n ")]) == []
 
 
+def test_embedded_figure_is_cropped_and_captioned_from_arabic_ocr(tmp_path):
+    output_dir = tmp_path / "extract"
+    rect = fitz.Rect(80, 180, 380, 380)
+    pdf_path = _figure_pdf(
+        tmp_path / "arabic-figure.pdf",
+        [(rect, _png_bytes(300, 200))],
+    )
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, "نص عربي عن النظام\n\nالشكل 1: مخطط النظام")],
+        pdf_path=pdf_path,
+        output_dir=output_dir,
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert len(figures) == 1
+    figure = figures[0]
+    assert figure["img_path"].startswith("images/")
+    assert figure["page_idx"] == 0
+    assert figure["bbox"] == pytest.approx([80, 180, 380, 380])
+    assert figure["img_caption"] == ["الشكل 1: مخطط النظام"]
+    crop_path = output_dir / figure["img_path"]
+    assert crop_path.is_file()
+    crop = fitz.Pixmap(str(crop_path))
+    assert crop.width >= 80
+    assert crop.height >= 80
+
+
+def test_tiny_icon_and_full_page_scan_are_skipped(tmp_path):
+    document = fitz.open()
+    icon_page = document.new_page()
+    icon_page.insert_image(
+        fitz.Rect(20, 20, 40, 40), stream=_png_bytes(20, 20)
+    )
+    scan_page = document.new_page()
+    scan_page.insert_image(
+        scan_page.rect, stream=_png_bytes(500, 700)
+    )
+    pdf_path = tmp_path / "icons-and-scan.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, "نص مع أيقونة صغيرة"), ocr_page(2, "صفحة ممسوحة")],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "extract",
+        dpi=200,
+    )
+
+    assert not any(block["type"] == "image" for block in blocks)
+
+
+def test_two_figures_pair_with_caption_lines_in_page_order(tmp_path):
+    first_rect = fitz.Rect(60, 130, 360, 330)
+    second_rect = fitz.Rect(100, 480, 400, 680)
+    pdf_path = _figure_pdf(
+        tmp_path / "two-figures.pdf",
+        [
+            (first_rect, _png_bytes(300, 200, 80)),
+            (second_rect, _png_bytes(300, 200, 160)),
+        ],
+    )
+
+    blocks = pages_to_content_list(
+        [
+            ocr_page(
+                1,
+                "مقدمة\nالشكل ١: البنية العامة\nتفاصيل\nFig. 2: المقارنة",
+            )
+        ],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "extract",
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert [figure["img_caption"] for figure in figures] == [
+        ["الشكل ١: البنية العامة"],
+        ["Fig. 2: المقارنة"],
+    ]
+    assert [figure["bbox"][1] for figure in figures] == [130, 480]
+    assert len({figure["img_path"] for figure in figures}) == 2
+
+
+@pytest.mark.parametrize(
+    ("rotation", "expected_bbox"),
+    [
+        (90, [22, 80, 192, 380]),
+        (270, [650, 215, 820, 515]),
+    ],
+)
+def test_rotated_page_figure_is_cropped_in_display_coordinates(
+    tmp_path, rotation, expected_bbox
+):
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_image(
+        fitz.Rect(80, 650, 380, 820), stream=_png_bytes(300, 170, 80)
+    )
+    page.set_rotation(rotation)
+    pdf_path = tmp_path / f"rotated-{rotation}.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    output_dir = tmp_path / f"extract-{rotation}"
+    blocks = pages_to_content_list(
+        [ocr_page(1, "الشكل 1: شكل على صفحة مدارة")],
+        pdf_path=pdf_path,
+        output_dir=output_dir,
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert len(figures) == 1
+    assert figures[0]["bbox"] == pytest.approx(expected_bbox)
+    crop = fitz.Pixmap(str(output_dir / figures[0]["img_path"]))
+    assert crop.width >= 80
+    assert crop.height >= 80
+    center = (crop.height // 2 * crop.width + crop.width // 2) * crop.n
+    assert max(crop.samples[center : center + 3]) < 200
+
+
+@pytest.mark.parametrize("rotation", [90, 270])
+def test_rotated_full_page_scan_is_not_emitted_as_a_figure(tmp_path, rotation):
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_image(page.rect, stream=_png_bytes(500, 700))
+    page.set_rotation(rotation)
+    pdf_path = tmp_path / f"rotated-scan-{rotation}.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, "[NO_TEXT]")],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / f"scan-extract-{rotation}",
+        dpi=200,
+    )
+
+    assert not any(block["type"] == "image" for block in blocks)
+
+
+def test_rotated_figures_pair_captions_by_visual_page_order(tmp_path):
+    document = fitz.open()
+    page = document.new_page()
+    # Insert the visual bottom figure first so PDF resource order cannot pair
+    # it with the first (topmost) OCR caption.
+    page.insert_image(
+        fitz.Rect(350, 100, 550, 300), stream=_png_bytes(200, 200, 100)
+    )
+    page.insert_image(
+        fitz.Rect(50, 500, 250, 700), stream=_png_bytes(200, 200, 180)
+    )
+    page.set_rotation(90)
+    pdf_path = tmp_path / "rotated-order.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, "الشكل ١: العلوي\nالشكل ٢: السفلي")],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "rotated-order-extract",
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert [figure["img_caption"] for figure in figures] == [
+        ["الشكل ١: العلوي"],
+        ["الشكل ٢: السفلي"],
+    ]
+    assert [figure["bbox"][1] for figure in figures] == [50, 350]
+
+
+def test_arabic_page_without_embedded_images_keeps_adapter_output_unchanged(tmp_path):
+    pdf_path = tmp_path / "text-only.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    page = ocr_page(1, "عنوان\n\nنص عربي محفوظ كما هو")
+
+    current_output = pages_to_content_list([page])
+    pdf_aware_output = pages_to_content_list(
+        [page],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "extract",
+        dpi=200,
+    )
+
+    assert pdf_aware_output == current_output
+
+
 def test_content_list_chunker_keeps_ordered_absolute_page_numbers(tmp_path):
     pages = [ocr_page(2, "# عنوان\n\nمحتوى الصفحة الثانية"), ocr_page(3, "نص الصفحة الثالثة")]
     entries = pages_to_content_list(pages)
@@ -308,6 +520,32 @@ def test_content_list_chunker_keeps_ordered_absolute_page_numbers(tmp_path):
 
     page_numbers = [chunk["page_start"] for chunk in chunks]
     assert page_numbers == [2, 2, 3]
+
+
+def test_unannotated_mineru_figure_keeps_its_existing_chunk_shape(tmp_path):
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(
+        json.dumps(
+            [
+                {
+                    "type": "image",
+                    "page_idx": 0,
+                    "img_path": "images/mineru-figure.png",
+                    "bbox": [10, 20, 110, 120],
+                    "img_caption": ["Figure 1: Existing caption"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    chunks = create_chunks_from_content_list(content_list)
+
+    assert len(chunks) == 1
+    assert chunks[0]["chunk_type"] == "figure"
+    assert chunks[0]["page_start"] == 1
+    assert chunks[0]["bbox_json"] is None
+    assert chunks[0]["image_refs"] == ["mineru-figure.png"]
 
 
 @pytest.mark.parametrize("expected_pages", [[], [0], [2, 1], [1, 1]])

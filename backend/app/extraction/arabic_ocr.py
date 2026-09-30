@@ -87,6 +87,16 @@ class ArabicOcrBatchInvalid(ArabicExtractionFailed):
         super().__init__(f"Gemma Arabic OCR page {page_number} failed output validation.")
 
 
+# Shown in place of a page no provider could OCR (see the Gemma loop below).
+UNREADABLE_PAGE_MARKER = "[تعذر استخراج هذه الصفحة]"
+
+
+def _unreadable_page_budget(page_count: int, share: float) -> int:
+    """Pages allowed to come back unreadable: a share of the document,
+    rounded down — so a short document (under 1/share pages) must be complete."""
+    return int(page_count * max(0.0, share))
+
+
 @tracing.traced("extract.arabic", tracing.CHAIN)
 def extract_arabic_document(
     *,
@@ -285,6 +295,32 @@ def extract_arabic_document(
         settings.arabic_gemma_fallback_model,
     )
     repair_retry_count = 0
+    unreadable_pages: list[int] = []
+    unreadable_budget = _unreadable_page_budget(
+        page_count, settings.arabic_ocr_max_unreadable_page_share
+    )
+
+    def _mark_unreadable(page_number: int) -> bool:
+        # ⚠ Live (2026-09-30): a 78-page book OCR'd pages 1–38, then Gemma
+        # looped to its token cap on page 39 on every key and the whole book
+        # failed. Within the budget, such a page is kept as a visible Arabic
+        # marker and the document continues; beyond it the document fails.
+        if len(unreadable_pages) >= unreadable_budget:
+            return False
+        unreadable_pages.append(page_number)
+        page_map[page_number] = ArabicOcrPage(
+            page_number=page_number,
+            raw_markdown="",
+            markdown=UNREADABLE_PAGE_MARKER,
+            provider=_GEMMA_PROVIDER,
+            model=gemma_model,
+        )
+        logger.warning(
+            "Arabic OCR page %d unreadable by every provider; kept as a marker (%d/%d allowed)",
+            page_number, len(unreadable_pages), unreadable_budget,
+        )
+        return True
+
     while next_page <= page_count:
         page = rendered_pages[next_page - 1]
         started = time.monotonic()
@@ -313,6 +349,11 @@ def extract_arabic_document(
                     failure_kind=error.final_kind,
                 )
             )
+            if _mark_unreadable(next_page):
+                next_page += 1
+                repair_retry_count = 0
+                _notify_progress(progress_callback, next_page - 1, page_count)
+                continue
             raise ArabicExtractionFailed(
                 "Gemma Arabic OCR could not complete every remaining page."
             ) from None
@@ -339,6 +380,11 @@ def extract_arabic_document(
                     failure_kind="invalid_output",
                 )
             )
+            if _mark_unreadable(next_page):
+                next_page += 1
+                repair_retry_count = 0
+                _notify_progress(progress_callback, next_page - 1, page_count)
+                continue
             raise ArabicExtractionFailed("Gemma Arabic OCR returned an invalid page.")
 
         try:
@@ -360,6 +406,11 @@ def extract_arabic_document(
             )
             if repair_retry_count == 0:
                 repair_retry_count = 1
+                continue
+            if _mark_unreadable(next_page):
+                next_page += 1
+                repair_retry_count = 0
+                _notify_progress(progress_callback, next_page - 1, page_count)
                 continue
             raise ArabicOcrBatchInvalid(next_page) from None
         page_map[next_page] = repaired_page
@@ -404,6 +455,7 @@ def extract_arabic_document(
             total_usage,
             page_count,
             settings,
+            source_pdf_path=source_path,
         )
         _publish_staging(staging_dir, target_dir)
     except Exception:
@@ -577,8 +629,15 @@ def _write_artifacts(
     usage: OcrUsage,
     page_count: int,
     config: Settings,
+    *,
+    source_pdf_path: Path,
 ) -> None:
-    content_list = pages_to_content_list(pages)
+    content_list = pages_to_content_list(
+        pages,
+        pdf_path=source_pdf_path,
+        output_dir=staging_dir,
+        dpi=config.arabic_ocr_dpi,
+    )
     document_markdown = "\n\n".join(
         f"<!-- PAGE:{page.page_number} -->\n{page.markdown}\n"
         f"<!-- END_PAGE:{page.page_number} -->"

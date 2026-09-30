@@ -266,7 +266,10 @@ class GemmaArabicFallback:
             "stream": False,
             "options": {
                 "temperature": 0,
-                "num_predict": self.settings.arabic_ocr_max_output_tokens,
+                "num_predict": min(
+                    self.settings.arabic_ocr_max_output_tokens,
+                    self.settings.arabic_gemma_max_output_tokens,
+                ),
             },
         }
 

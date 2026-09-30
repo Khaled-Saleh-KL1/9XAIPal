@@ -776,3 +776,41 @@ def test_failed_replace_rolls_back_existing_artifact_directory(two_page_pdf, tmp
 
     assert (target / "old.txt").read_text(encoding="utf-8") == "previous complete output"
     assert not list(tmp_path.glob(".out.staging-*"))
+
+
+# Live (2026-09-30): a 78-page Arabic book OCR'd pages 1–38 cleanly through
+# Gemma, then Gemma looped to its 32,768-token cap on page 39 on every key and
+# the whole document failed. Up to 10% of a document's pages (rounded down)
+# may now come back unreadable; they carry a visible Arabic marker instead.
+def test_one_unreadable_page_in_a_long_document_is_marked_not_fatal(tmp_path):
+    from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
+
+    pdf = _make_pdf(tmp_path / "twenty.pdf", 20)
+    replies = {n: f"صفحة رقم {n}" for n in range(1, 21)}
+    replies[7] = GemmaKeysExhausted("invalid_output", ())
+    gemma = FakeGemma(replies)
+
+    result = extract(pdf, tmp_path / "out", FakeGemini(GeminiKeysExhausted("daily_quota", None, ())), gemma)
+
+    assert [p.page_number for p in result.pages] == list(range(1, 21))
+    assert result.pages[6].markdown == UNREADABLE_PAGE_MARKER
+    assert result.pages[7].markdown == "صفحة رقم 8"
+
+
+def test_too_many_unreadable_pages_still_fail_the_document(tmp_path):
+    pdf = _make_pdf(tmp_path / "twenty.pdf", 20)
+    replies = {n: f"صفحة رقم {n}" for n in range(1, 21)}
+    for n in (3, 5, 7):  # 3 > floor(20 * 10%) = 2
+        replies[n] = GemmaKeysExhausted("invalid_output", ())
+    target = tmp_path / "out"
+
+    with pytest.raises(ArabicExtractionFailed):
+        extract(pdf, target, FakeGemini(GeminiKeysExhausted("daily_quota", None, ())), FakeGemma(replies))
+
+    assert not target.exists()
+
+
+def test_gemma_page_output_cap_is_its_own_setting(fake_http):
+    from app.core.config import Settings
+
+    assert Settings().arabic_gemma_max_output_tokens == 8192
