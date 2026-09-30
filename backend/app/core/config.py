@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     arabic_ocr_single_request_max_pages: int = 4
     arabic_ocr_batch_pages: int = 4
     arabic_ocr_max_output_tokens: int = 32768
+    # Gemma OCRs one page per request; a page of dense Arabic is a few thousand
+    # tokens, and a runaway repetition loop hit the 32,768 cap in ~3.5 min.
+    arabic_gemma_max_output_tokens: int = 8192
+    # Share of a document's pages (rounded down) that may come back unreadable
+    # from every provider before the whole document fails.
+    arabic_ocr_max_unreadable_page_share: float = Field(default=0.10, ge=0, le=1)
     arabic_min_body_char_count: int = 20
     arabic_min_body_letter_share: float = Field(default=0.10, ge=0, le=1)
     # With the local classifier down, a document with no substantive Arabic
