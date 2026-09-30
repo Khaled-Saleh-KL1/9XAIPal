@@ -221,6 +221,49 @@ def test_english_route_calls_existing_resolver_only(db_session_sync, tmp_path, m
     assert stored["classification_source"] == "automatic"
 
 
+def test_imported_url_pdf_reaches_the_shared_classifier(
+    db_session_sync, tmp_path, monkeypatch
+):
+    from app.services.article_extraction import FetchedResource
+
+    documents = tmp_path / "documents"
+    assets = tmp_path / "assets"
+    documents.mkdir()
+    assets.mkdir()
+    monkeypatch.setattr(pipeline_sync, "documents_dir", lambda: documents)
+    monkeypatch.setattr(pipeline_sync, "assets_dir", lambda: assets)
+    monkeypatch.setattr(pipeline_sync, "ensure_storage_dirs", lambda: None)
+    monkeypatch.setattr(
+        "app.services.article_extraction.fetch_resource",
+        lambda _url: FetchedResource(
+            content=b"%PDF-1.5\nimported PDF bytes",
+            content_type="application/pdf",
+            final_url="https://example.test/paper.pdf",
+        ),
+    )
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    classifier = MagicMock(
+        return_value=_decision(
+            DocumentRoute.ENGLISH, "english", "unknown", "ltr", 1.0
+        )
+    )
+    monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
+    document_id, job_id = _seed(db_session_sync)
+
+    is_article = pipeline_sync.run_article_pipeline_sync(
+        db_session_sync,
+        document_id=document_id,
+        job_id=job_id,
+        url="https://example.test/paper.pdf",
+    )
+
+    assert is_article is False
+    classifier.assert_called_once_with(documents / f"{document_id}.pdf")
+    mocks.resolver.assert_called_once()
+    mocks.arabic_extractor.assert_not_called()
+
+
 def test_classifier_failure_on_clear_english_text_layer_continues_to_mineru(
     db_session_sync, tmp_path, monkeypatch, caplog
 ):
@@ -509,7 +552,7 @@ def test_disabled_handwriting_calls_no_ocr_and_keeps_source(
         {"id": job_id},
     ).mappings().one()
     assert job["error_code"] == "handwritten_arabic_unavailable"
-    assert "billing-enabled account" in job["error_message"]
+    assert "Handwritten Arabic isn't enabled yet" in job["error_message"]
 
 
 def test_uncertain_style_requires_confirmation_without_ocr(

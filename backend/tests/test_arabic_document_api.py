@@ -1,14 +1,18 @@
 """API contract tests for Arabic OCR status and reader metadata."""
 
 import json
-from uuid import uuid4
+from unittest.mock import MagicMock
+from uuid import UUID, uuid4
 
+import fitz
 import httpx
 import pytest
 from sqlalchemy import text
 
 from app.main import app
 from app.api.v1.endpoints import documents as documents_endpoint
+from app.extraction import pipeline_sync
+from app.extraction.arabic_types import ClassificationDecision, DocumentRoute
 
 
 @pytest.fixture(autouse=True)
@@ -107,6 +111,134 @@ async def _document(
         )
     await db_session.commit()
     return document_id
+
+
+def _install_english_pdf_pipeline_fakes(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    classifier = MagicMock(return_value=ClassificationDecision(
+        route=DocumentRoute.ENGLISH,
+        language="english",
+        writing_style="unknown",
+        text_direction="ltr",
+        confidence=1.0,
+        classifier_model="text_layer",
+    ))
+    monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
+
+    output_dir = tmp_path / "extract"
+    output_dir.mkdir(exist_ok=True)
+    markdown_file = tmp_path / "output.md"
+    markdown_file.write_text("# Heading\n\nBody text.", encoding="utf-8")
+    resolver = MagicMock(return_value=(output_dir, "mineru"))
+    monkeypatch.setattr(pipeline_sync, "resolve_extractor", resolver)
+    monkeypatch.setattr(pipeline_sync, "find_content_list", lambda _output: None)
+    monkeypatch.setattr(pipeline_sync, "find_markdown_output", lambda _output: markdown_file)
+    monkeypatch.setattr(
+        pipeline_sync,
+        "create_chunks_from_markdown",
+        lambda _markdown: [{
+            "sequence_id": 1,
+            "chunk_type": "text",
+            "markdown": "Body text.",
+            "plain_text": "Body text.",
+            "token_count": 2,
+        }],
+    )
+    monkeypatch.setattr(pipeline_sync, "find_images", lambda _output: [])
+    monkeypatch.setattr(pipeline_sync, "get_page_count", lambda _pdf: 1)
+    monkeypatch.setattr(pipeline_sync, "repair_chunks", MagicMock())
+    monkeypatch.setattr(pipeline_sync, "_finish_ingestion", MagicMock())
+    return classifier, resolver
+
+
+def _english_pdf_bytes():
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "An English paper with selectable body text.")
+    content = document.tobytes()
+    document.close()
+    return content
+
+
+@pytest.mark.asyncio
+async def test_direct_pdf_upload_reaches_the_shared_classifier(
+    client, db_session, db_session_sync, monkeypatch, tmp_path
+):
+    email = await _signup(client)
+    documents_dir = tmp_path / "documents"
+    assets_dir = tmp_path / "assets"
+    documents_dir.mkdir()
+    assets_dir.mkdir()
+    monkeypatch.setattr(documents_endpoint, "documents_dir", lambda: documents_dir)
+    monkeypatch.setattr(documents_endpoint, "assets_dir", lambda: assets_dir)
+    monkeypatch.setattr(documents_endpoint, "ensure_storage_dirs", lambda: None)
+    classifier, resolver = _install_english_pdf_pipeline_fakes(monkeypatch, tmp_path)
+
+    def dispatch_pdf(document_id, job_id, filename):
+        pipeline_sync.run_pipeline_sync(
+            db_session_sync,
+            document_id=UUID(document_id),
+            job_id=UUID(job_id),
+            pdf_path=documents_dir / filename,
+        )
+
+    monkeypatch.setattr(documents_endpoint.process_ingestion, "delay", dispatch_pdf)
+    response = await client.post(
+        "/api/v1/papers/upload",
+        files={"file": ("paper.pdf", _english_pdf_bytes(), "application/pdf")},
+    )
+
+    assert response.status_code == 201
+    classifier.assert_called_once()
+    resolver.assert_called_once()
+    stored = (await db_session.execute(
+        text("SELECT detected_language, text_direction FROM documents WHERE id=:id"),
+        {"id": response.json()["id"]},
+    )).mappings().one()
+    assert stored["detected_language"] == "english"
+    assert stored["text_direction"] == "ltr"
+
+
+@pytest.mark.asyncio
+async def test_reextract_dispatch_reaches_the_shared_classifier(
+    client, db_session, db_session_sync, monkeypatch, tmp_path
+):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session,
+        await _user_id(db_session, email),
+        status="complete",
+    )
+    documents_dir = tmp_path / "documents"
+    documents_dir.mkdir()
+    filename = f"{document_id}.pdf"
+    (documents_dir / filename).write_bytes(_english_pdf_bytes())
+    monkeypatch.setattr(documents_endpoint, "documents_dir", lambda: documents_dir)
+    monkeypatch.setattr(documents_endpoint, "extracted_dir", lambda: tmp_path / "extracted")
+    monkeypatch.setattr(documents_endpoint, "images_dir", lambda: tmp_path / "images")
+    classifier, resolver = _install_english_pdf_pipeline_fakes(monkeypatch, tmp_path)
+
+    def dispatch_pdf(paper_id, job_id, dispatched_filename):
+        assert dispatched_filename == filename
+        pipeline_sync.run_pipeline_sync(
+            db_session_sync,
+            document_id=UUID(paper_id),
+            job_id=UUID(job_id),
+            pdf_path=documents_dir / dispatched_filename,
+        )
+
+    monkeypatch.setattr(documents_endpoint.process_ingestion, "delay", dispatch_pdf)
+    response = await client.post(f"/api/v1/papers/{document_id}/reextract")
+
+    assert response.status_code == 202
+    classifier.assert_called_once()
+    resolver.assert_called_once()
+    stored = (await db_session.execute(
+        text("SELECT detected_language, text_direction FROM documents WHERE id=:id"),
+        {"id": document_id},
+    )).mappings().one()
+    assert stored["detected_language"] == "english"
+    assert stored["text_direction"] == "ltr"
 
 
 @pytest.mark.asyncio
