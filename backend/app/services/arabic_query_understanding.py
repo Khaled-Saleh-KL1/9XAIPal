@@ -9,6 +9,7 @@ from app.core.language import is_primarily_arabic
 from app.core.logging import get_logger
 from app.core.redis import get_redis
 from app.llm import client as llm_client
+from app.llm.json_reply import strip_code_fence
 
 logger = get_logger(__name__)
 
@@ -19,7 +20,7 @@ _CACHE_PREFIX = "arabic-query-understanding:"
 
 def _parse_understanding(content: str) -> dict | None:
     try:
-        value = json.loads(content)
+        value = json.loads(strip_code_fence(content))
     except (TypeError, ValueError):
         return None
     if not isinstance(value, dict):

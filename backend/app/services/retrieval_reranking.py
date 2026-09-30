@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.redis import get_redis
 from app.llm import client as llm_client
+from app.llm.json_reply import strip_code_fence
 
 logger = get_logger(__name__)
 
@@ -27,7 +28,7 @@ def _is_enabled(is_arabic_query: bool, has_arabic_target: bool) -> bool:
 
 def _parse_order(content: str, candidate_count: int, minimum_count: int) -> list[int] | None:
     try:
-        value = json.loads(content)
+        value = json.loads(strip_code_fence(content))
     except (TypeError, ValueError):
         return None
     if not isinstance(value, list) or len(value) < minimum_count:
