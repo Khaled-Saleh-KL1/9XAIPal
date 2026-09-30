@@ -155,6 +155,20 @@ COMMENT ON COLUMN documents.reading_order IS 'Array of original chunk sequence_i
 
 CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
 
+CREATE OR REPLACE FUNCTION ar_normalize(input_text TEXT)
+RETURNS TEXT
+LANGUAGE SQL
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+    SELECT translate(
+        regexp_replace(input_text, U&'[\064B-\065F\0670\0640]', '', 'g'),
+        U&'\0623\0625\0622\0671\0629\0649',
+        U&'\0627\0627\0627\0627\0647\064A'
+    )
+$$;
+
 -- Chunks table with physical ordering
 CREATE TABLE IF NOT EXISTS chunks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -175,6 +189,10 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE INDEX IF NOT EXISTS idx_chunks_document_sequence
     ON chunks(document_id, sequence_id);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar
+    ON chunks
+    USING gin (to_tsvector('simple', ar_normalize(coalesce(plain_text, ''))));
 
 -- Chunk embeddings with pgvector
 CREATE TABLE IF NOT EXISTS chunk_embeddings (
