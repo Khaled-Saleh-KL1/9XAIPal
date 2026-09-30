@@ -20,7 +20,11 @@ def test_gemini_keys_read_the_documented_environment_name(monkeypatch):
 
 
 def test_arabic_features_can_be_disabled_explicitly():
-    cfg = Settings(arabic_ocr_enabled=False, _env_file=None)
+    cfg = Settings(
+        arabic_ocr_enabled=False,
+        arabic_handwritten_ocr_enabled=False,
+        _env_file=None,
+    )
     assert cfg.arabic_ocr_enabled is False
     assert cfg.arabic_handwritten_ocr_enabled is False
     assert cfg.arabic_classifier_batch_pages == 2
@@ -30,13 +34,21 @@ def test_arabic_features_can_be_disabled_explicitly():
     assert cfg.arabic_gemini_handwritten_model == "gemini-3.1-pro-preview"
 
 
-def test_arabic_ocr_is_enabled_by_default_and_handwriting_is_disabled():
+def test_arabic_ocr_and_handwriting_are_enabled_by_default():
     cfg = Settings(_env_file=None)
     assert cfg.arabic_ocr_enabled is True
-    assert cfg.arabic_handwritten_ocr_enabled is False
+    assert cfg.arabic_handwritten_ocr_enabled is True
+    assert cfg.modelgateway_api_key == ""
+    assert cfg.modelgateway_base_url == "https://www.modelgateway.co"
+    assert cfg.arabic_gateway_printed_model == "gemini-3.8-flash"
+    assert cfg.arabic_gateway_handwritten_model == "gemini-3.1-pro"
+    assert cfg.arabic_gemini_send_thinking_config is True
+    assert cfg.arabic_gemini_send_media_resolution is True
+    assert cfg.arabic_gemini_gateway_batch_pages == 1
+    assert cfg.arabic_gemini_gateway_max_wait_seconds == 120.0
 
 
-def test_compose_and_example_defaults_enable_only_printed_arabic():
+def test_compose_and_example_defaults_enable_arabic_handwriting():
     backend = Path(__file__).resolve().parents[1]
     for compose_name in ("docker-compose.yml", "docker-compose.prod.yml"):
         compose = (backend / compose_name).read_text(encoding="utf-8")
@@ -50,12 +62,31 @@ def test_compose_and_example_defaults_enable_only_printed_arabic():
             compose,
         )
         assert arabic_defaults and set(arabic_defaults) == {"true"}
-        assert handwritten_defaults and set(handwritten_defaults) == {"false"}
+        assert handwritten_defaults and set(handwritten_defaults) == {"true"}
+
+        for variable, default in (
+            ("MODELGATEWAY_API_KEY", ""),
+            ("MODELGATEWAY_BASE_URL", "https://www.modelgateway.co"),
+            ("ARABIC_GATEWAY_PRINTED_MODEL", "gemini-3.8-flash"),
+            ("ARABIC_GATEWAY_HANDWRITTEN_MODEL", "gemini-3.1-pro"),
+            ("ARABIC_GEMINI_SEND_THINKING_CONFIG", "true"),
+            ("ARABIC_GEMINI_SEND_MEDIA_RESOLUTION", "true"),
+            ("ARABIC_GEMINI_GATEWAY_BATCH_PAGES", "1"),
+            ("ARABIC_GEMINI_GATEWAY_MAX_WAIT_SECONDS", "120"),
+        ):
+            values = re.findall(rf"{variable}: \$\{{{variable}:-([^}}]*)\}}", compose)
+            assert len(values) == 2 and set(values) == {default}
 
     example = (backend / ".env.example").read_text(encoding="utf-8")
     assert re.search(r"^ARABIC_OCR_ENABLED=true$", example, flags=re.MULTILINE)
     assert re.search(
-        r"^ARABIC_HANDWRITTEN_OCR_ENABLED=false$", example, flags=re.MULTILINE
+        r"^ARABIC_HANDWRITTEN_OCR_ENABLED=true$", example, flags=re.MULTILINE
+    )
+    assert re.search(r"^# MODELGATEWAY_API_KEY=$", example, flags=re.MULTILINE)
+    assert re.search(
+        r"^# MODELGATEWAY_BASE_URL=https://www\.modelgateway\.co$",
+        example,
+        flags=re.MULTILINE,
     )
 
 
