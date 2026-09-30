@@ -111,6 +111,8 @@ async def test_query_understanding_rejects_invalid_json_and_keyword_shapes(monke
         "not json",
         json.dumps({**_UNDERSTANDING, "keywords": ["طالب", "طلاب"]}, ensure_ascii=False),
         json.dumps({**_UNDERSTANDING, "keywords": ["student", "learner", "person"]}),
+        json.dumps({**_UNDERSTANDING, "keywords": ["طالب", "طلاب", "students", "شبكة عصبية"]}, ensure_ascii=False),
+        json.dumps({**_UNDERSTANDING, "msa": "Which students use neural networks?"}, ensure_ascii=False),
         json.dumps({**_UNDERSTANDING, "english": "  "}, ensure_ascii=False),
     ):
         monkeypatch.setattr(module.llm_client, "chat", AsyncMock(return_value={"content": content}))
@@ -151,10 +153,11 @@ async def test_query_understanding_redis_failure_does_not_block_chat(monkeypatch
 
 
 async def test_arabic_study_retrieval_uses_expansions_keyword_only_and_one_llm_call(monkeypatch):
-    arabic_id, english_id = "arabic-paper", "english-paper"
+    arabic_id, english_id, mixed_id = "arabic-paper", "english-paper", "mixed-paper"
     session = LanguageSession([
         {"id": arabic_id, "text_direction": "rtl", "detected_language": "arabic"},
         {"id": english_id, "text_direction": "ltr", "detected_language": "english"},
+        {"id": mixed_id, "text_direction": "ltr", "detected_language": "mixed"},
     ])
     module = _understanding_api()
     understand = AsyncMock(return_value=_UNDERSTANDING)
@@ -163,7 +166,9 @@ async def test_arabic_study_retrieval_uses_expansions_keyword_only_and_one_llm_c
     query_hits = {
         _QUESTION: [_hit("original-hit", arabic_id)],
         _UNDERSTANDING["msa"]: [_hit("msa-hit", arabic_id)],
-        _UNDERSTANDING["english"]: [_hit("english-hit", english_id)],
+        _UNDERSTANDING["english"]: [
+            _hit("english-hit", english_id), _hit("mixed-english-hit", mixed_id)
+        ],
     }
     search = AsyncMock(side_effect=lambda _session, query, *_args: query_hits[query])
     monkeypatch.setattr(retrieval, "_search_chunks_for_query", search)
@@ -176,18 +181,18 @@ async def test_arabic_study_retrieval_uses_expansions_keyword_only_and_one_llm_c
     monkeypatch.setattr(retrieval, "search_chunks_fulltext", keyword)
 
     rows = await retrieval.search_chunks(
-        session, _QUESTION, limit=10, document_ids=[arabic_id, english_id]
+        session, _QUESTION, limit=10, document_ids=[arabic_id, english_id, mixed_id]
     )
 
     understand.assert_awaited_once_with(_QUESTION)
     assert [args.args[1] for args in search.await_args_list] == [
         _QUESTION, _UNDERSTANDING["msa"], _UNDERSTANDING["english"]
     ]
-    assert search.await_args_list[-1].args[4] == [english_id]
+    assert search.await_args_list[-1].args[4] == [english_id, mixed_id]
     keyword.assert_awaited_once()
     assert keyword.await_args.args[1] == "طالب طلاب شبكة عصبية شبكات عصبية"
     assert {row["id"] for row in rows} == {
-        "original-hit", "msa-hit", "english-hit", "keyword-hit"
+        "original-hit", "msa-hit", "english-hit", "mixed-english-hit", "keyword-hit"
     }
     assert all("rrf_score" in row for row in rows)
 
@@ -259,7 +264,9 @@ async def test_library_search_uses_msa_and_english_vectors_and_keyword_only_term
     assert semantic.await_count == 3
     assert semantic.await_args_list[0].kwargs.get("document_ids") is None
     assert semantic.await_args_list[1].kwargs.get("document_ids") is None
-    assert semantic.await_args_list[2].kwargs["document_ids"] == ["english-paper"]
+    assert semantic.await_args_list[2].kwargs["document_ids"] == [
+        "mixed-paper", "english-paper"
+    ]
     keyword.assert_awaited_once()
     assert keyword.await_args.args[2] == "طالب طلاب شبكة عصبية شبكات عصبية"
     translate.assert_not_awaited()

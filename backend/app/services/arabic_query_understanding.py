@@ -30,6 +30,8 @@ def _parse_understanding(content: str) -> dict | None:
     keywords = value.get("keywords")
     if not isinstance(msa, str) or not msa.strip():
         return None
+    if not is_primarily_arabic(msa):
+        return None
     if not isinstance(english, str) or not english.strip():
         return None
     if not isinstance(keywords, list) or not 3 <= len(keywords) <= 8:
@@ -37,7 +39,7 @@ def _parse_understanding(content: str) -> dict | None:
     cleaned_keywords = [word.strip() for word in keywords if isinstance(word, str)]
     if len(cleaned_keywords) != len(keywords) or any(not word for word in cleaned_keywords):
         return None
-    if not is_primarily_arabic(" ".join(cleaned_keywords)):
+    if any(not is_primarily_arabic(word) for word in cleaned_keywords):
         return None
     return {
         "msa": msa.strip(),

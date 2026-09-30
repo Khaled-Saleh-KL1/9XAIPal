@@ -28,7 +28,11 @@ from app.database.repositories import documents as doc_repo
 from app.embeddings.model import get_embeddings_batch, get_query_embedding
 from app.services import arabic_query_understanding
 from app.services.query_translation import translated_query
-from app.services.retrieval import _document_language, reciprocal_rank_fusion
+from app.services.retrieval import (
+    _document_language,
+    _document_supports_english_search,
+    reciprocal_rank_fusion,
+)
 
 logger = get_logger(__name__)
 
@@ -81,10 +85,11 @@ async def semantic_search_documents(
                 ),
                 {"user_id": user_id},
             )
-            language_by_id = {
-                row["id"]: _document_language(row) for row in result.mappings().all()
-            }
-            english_ids = [doc_id for doc_id, language in language_by_id.items() if language == "english"]
+            document_rows = result.mappings().all()
+            english_ids = [
+                row["id"] for row in document_rows
+                if _document_supports_english_search(row)
+            ]
             search_limit = max(limit * 3, 15)
             query_variants = [query]
             msa = understanding["msa"].strip()

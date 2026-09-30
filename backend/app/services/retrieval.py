@@ -51,11 +51,21 @@ def _document_language(row: dict) -> str:
     return "arabic" if direction == "rtl" or detected in {"arabic", "mixed"} else "english"
 
 
+def _document_supports_english_search(row: dict) -> bool:
+    """Whether the document has non-Arabic-only content worth an English leg."""
+    detected = str(row.get("detected_language") or "").strip().lower()
+    if detected in {"english", "mixed"}:
+        return True
+    if detected == "arabic":
+        return False
+    return _document_language(row) == "english"
+
+
 async def _get_document_languages(
     session: AsyncSession,
     document_id: Optional[UUID],
     document_ids: Optional[list[UUID]],
-) -> dict:
+) -> tuple[dict, list]:
     if document_ids:
         statement = text(
             "SELECT id, text_direction, detected_language FROM documents "
@@ -68,14 +78,19 @@ async def _get_document_languages(
         )
         params = {"document_id": document_id}
     else:
-        return {}
+        return {}, []
 
     try:
         result = await session.execute(statement, params)
-        return {row["id"]: _document_language(row) for row in result.mappings().all()}
+        rows = result.mappings().all()
+        languages = {row["id"]: _document_language(row) for row in rows}
+        english_search_ids = [
+            row["id"] for row in rows if _document_supports_english_search(row)
+        ]
+        return languages, english_search_ids
     except Exception:
         logger.warning("document language lookup failed; using original query only", exc_info=True)
-        return {}
+        return {}, []
 
 
 async def _search_chunks_for_query(
@@ -166,7 +181,9 @@ async def search_chunks(
     once. Both legs already accepted a list underneath; only this entry point
     did not, which is why the desk's agent had no semantic search at all.
     """
-    language_by_id = await _get_document_languages(session, document_id, document_ids)
+    language_by_id, english_search_ids = await _get_document_languages(
+        session, document_id, document_ids
+    )
     query_language = "arabic" if is_primarily_arabic(query) else "english"
     if document_ids:
         opposite_ids = [
@@ -209,7 +226,7 @@ async def search_chunks(
                     keyword_hits = []
                 ranked_lists.append(keyword_hits)
 
-            english_target_ids = opposite_ids
+            english_target_ids = english_search_ids
             if english_target_ids:
                 english_hits = await _search_chunks_for_query(
                     session, understanding["english"], fetch_n,
