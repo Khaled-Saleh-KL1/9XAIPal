@@ -160,6 +160,7 @@ def test_repetition_loop_is_rejected_not_deleted():
         ("gemma4_arabic_fallback", False),
         ("gemini_gemma_arabic_hybrid", False),
         ("gemini_arabic_pro", False),
+        ("modelgateway_gemini", False),
     ],
 )
 def test_mineru_repairs_apply_only_to_non_arabic_extractors(extractor, applies):

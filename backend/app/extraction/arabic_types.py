@@ -13,13 +13,14 @@ class DocumentRoute(str, Enum):
     ARABIC_STYLE_UNCERTAIN = "arabic_style_uncertain"
 
 
-# Whole-document `documents.extractor` values written by the Arabic route
-# (spec §11), including the reserved handwritten Pro value.
+# Whole-document extractor and page-provider labels written by the Arabic
+# route, including the Google Pro and ModelGateway page providers.
 ARABIC_OCR_EXTRACTORS = frozenset({
     "gemini_arabic_flash",
     "gemma4_arabic_fallback",
     "gemini_gemma_arabic_hybrid",
     "gemini_arabic_pro",
+    "modelgateway_gemini",
 })
 
 
@@ -147,7 +148,7 @@ class GeminiOutputInvalid(RuntimeError):
 
 
 class GeminiKeysExhausted(RuntimeError):
-    """All configured Gemini keys failed; includes safe partial output/usage."""
+    """All configured Gemini providers failed; includes safe partial output/usage."""
 
     def __init__(
         self,

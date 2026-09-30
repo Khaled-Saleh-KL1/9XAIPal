@@ -40,6 +40,11 @@ logger = get_logger(__name__)
 
 ProgressCallback = Callable[[int, int], None]
 _GEMINI_PROVIDER = "gemini_arabic_flash"
+_GEMINI_PRO_PROVIDER = "gemini_arabic_pro"
+_GEMINI_GATEWAY_PROVIDER = "modelgateway_gemini"
+_GEMINI_PROVIDERS = frozenset(
+    {_GEMINI_PROVIDER, _GEMINI_PRO_PROVIDER, _GEMINI_GATEWAY_PROVIDER}
+)
 _GEMMA_PROVIDER = "gemma4_arabic_fallback"
 _HYBRID_EXTRACTOR = "gemini_gemma_arabic_hybrid"
 _GEMINI_FALLBACK_KINDS = frozenset(
@@ -93,18 +98,24 @@ def extract_arabic_document(
     settings: Settings = settings,
     progress_callback: ProgressCallback | None = None,
 ) -> ArabicExtractionResult:
-    """OCR a printed Arabic PDF, resume at page boundaries, and publish atomically."""
+    """OCR a classified Arabic PDF and publish complete page-boundary artifacts."""
 
     source_path = Path(pdf_path)
     target_dir = Path(output_dir)
     if not target_dir.name or target_dir == target_dir.parent:
         raise ArabicExtractionFailed("The Arabic OCR output directory is invalid.")
     if (
-        classification.route != DocumentRoute.ARABIC_PRINTED
-        or classification.writing_style != "printed"
+        classification.route
+        not in {DocumentRoute.ARABIC_PRINTED, DocumentRoute.ARABIC_HANDWRITTEN}
+        or classification.writing_style
+        != (
+            "handwritten"
+            if classification.route == DocumentRoute.ARABIC_HANDWRITTEN
+            else "printed"
+        )
     ):
         raise ArabicExtractionFailed(
-            "Arabic OCR requires a confidently classified printed document."
+            "Arabic OCR requires a confidently classified printed or handwritten document."
         )
     if not source_path.is_file():
         raise ArabicExtractionFailed("The Arabic OCR source PDF is unavailable.")
@@ -134,11 +145,18 @@ def extract_arabic_document(
     usage_parts: list[OcrUsage] = []
     next_page = 1
     gemma_mode = False
+    handwritten = classification.writing_style == "handwritten"
+    gemini_model_attribute = (
+        "arabic_gemini_handwritten_model"
+        if handwritten
+        else "arabic_gemini_printed_model"
+    )
     gemini_model = _configured_model(
         gemini_client,
-        "arabic_gemini_printed_model",
-        settings.arabic_gemini_printed_model,
+        gemini_model_attribute,
+        getattr(settings, gemini_model_attribute),
     )
+    gemini_default_provider = _GEMINI_PRO_PROVIDER if handwritten else _GEMINI_PROVIDER
 
     while next_page <= page_count and not gemma_mode:
         batch_end = min(page_count, next_page + batch_size - 1)
@@ -154,7 +172,7 @@ def extract_arabic_document(
                 parsed = parse_complete_page_prefix(
                     text,
                     requested,
-                    provider=_GEMINI_PROVIDER,
+                    provider=gemini_default_provider,
                     model=gemini_model,
                 )
                 return len(parsed.pages)
@@ -187,7 +205,11 @@ def extract_arabic_document(
                 committed = list(range(committed_before, next_page))
                 provider_runs.append(
                     _provider_run(
-                        provider=_GEMINI_PROVIDER,
+                        provider=(
+                            error.best_partial.provider
+                            if error.best_partial is not None
+                            else error.final_provider or gemini_default_provider
+                        ),
                         model=(
                             error.best_partial.model
                             if error.best_partial is not None
@@ -267,7 +289,11 @@ def extract_arabic_document(
         page = rendered_pages[next_page - 1]
         started = time.monotonic()
         try:
-            result = gemma_client.generate_page(page, writing_style="printed")
+            result = gemma_client.generate_page(
+                page,
+                writing_style=classification.writing_style,
+                allow_handwritten=handwritten,
+            )
         except GemmaRequestInvalid:
             raise ArabicExtractionFailed(
                 "The Gemma Arabic OCR request configuration is invalid."
@@ -356,7 +382,9 @@ def extract_arabic_document(
         raise ArabicExtractionFailed("The Arabic OCR result contains a page gap or duplicate.")
 
     final_pages = tuple(page_map[number] for number in range(1, page_count + 1))
-    extractor = _extractor_from_pages(final_pages)
+    extractor = _extractor_from_pages(
+        final_pages, writing_style=classification.writing_style
+    )
     provider_summary = _provider_summary(final_pages)
     total_usage = _sum_usage(usage_parts)
     try:
@@ -393,13 +421,15 @@ def extract_arabic_document(
     )
 
 
-def _extractor_from_pages(pages: Sequence[ArabicOcrPage]) -> str:
+def _extractor_from_pages(
+    pages: Sequence[ArabicOcrPage], *, writing_style: str
+) -> str:
     providers = {page.provider for page in pages}
-    if providers == {_GEMINI_PROVIDER}:
-        return _GEMINI_PROVIDER
+    if providers and providers <= _GEMINI_PROVIDERS:
+        return _GEMINI_PRO_PROVIDER if writing_style == "handwritten" else _GEMINI_PROVIDER
     if providers == {_GEMMA_PROVIDER}:
         return _GEMMA_PROVIDER
-    if providers == {_GEMINI_PROVIDER, _GEMMA_PROVIDER}:
+    if _GEMMA_PROVIDER in providers and providers <= _GEMINI_PROVIDERS | {_GEMMA_PROVIDER}:
         return _HYBRID_EXTRACTOR
     raise ArabicExtractionFailed("The Arabic OCR provider provenance is invalid.")
 

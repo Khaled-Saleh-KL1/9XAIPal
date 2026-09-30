@@ -2,6 +2,7 @@ import base64
 import json
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import fitz
 import httpx
@@ -269,6 +270,17 @@ def _printed_decision():
     )
 
 
+def _handwritten_decision():
+    return ClassificationDecision(
+        route=DocumentRoute.ARABIC_HANDWRITTEN,
+        language="arabic",
+        writing_style="handwritten",
+        text_direction="rtl",
+        confidence=0.99,
+        classifier_model="qwen3-vl:4b-instruct",
+    )
+
+
 def _make_pdf(path: Path, page_count: int, *, width: float = 72, height: float = 144):
     with fitz.open() as document:
         for _ in range(page_count):
@@ -314,13 +326,68 @@ class FakeGemini:
         return outcome
 
 
+class FakeSdkModels:
+    def __init__(self, outcomes, request_log, api_key):
+        self.outcomes = deque(outcomes)
+        self.request_log = request_log
+        self.api_key = api_key
+
+    def generate_content(self, *, model, contents, config):
+        self.request_log.append({"api_key": self.api_key, "model": model})
+        if not self.outcomes:
+            raise AssertionError("unexpected extra Gemini provider request")
+        outcome = self.outcomes.popleft()
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+class FakeSdkClient:
+    def __init__(self, outcomes, request_log, api_key):
+        self.models = FakeSdkModels(outcomes, request_log, api_key)
+
+    def close(self):
+        pass
+
+
+def sdk_response(text):
+    return SimpleNamespace(
+        text=text,
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=2,
+            candidates_token_count=3,
+            thoughts_token_count=0,
+            total_token_count=5,
+        ),
+    )
+
+
+def sdk_api_error(code, message):
+    from google.genai import errors
+
+    return errors.APIError(
+        code=code,
+        response_json={"error": {"code": code, "message": message, "details": []}},
+        response=httpx.Response(
+            status_code=code,
+            request=httpx.Request("POST", "https://provider.invalid"),
+        ),
+    )
+
+
 class FakeGemma:
     def __init__(self, replies):
         self.replies = replies
         self.requested_pages = []
+        self.requested_styles = []
+        self.handwritten_opt_ins = []
 
-    def generate_page(self, page, *, writing_style="printed"):
+    def generate_page(
+        self, page, *, writing_style="printed", allow_handwritten=False
+    ):
         self.requested_pages.append(page.page_number)
+        self.requested_styles.append(writing_style)
+        self.handwritten_opt_ins.append(allow_handwritten)
         outcome = self.replies[page.page_number]
         if isinstance(outcome, BaseException):
             raise outcome
@@ -336,7 +403,16 @@ class FakeGemma:
         )
 
 
-def extract(pdf_path, output_dir, gemini, gemma, *, progress_callback=None, settings=None):
+def extract(
+    pdf_path,
+    output_dir,
+    gemini,
+    gemma,
+    *,
+    progress_callback=None,
+    settings=None,
+    classification=None,
+):
     settings = settings or Settings(
         arabic_ocr_enabled=True,
         arabic_ocr_dpi=200,
@@ -346,12 +422,104 @@ def extract(pdf_path, output_dir, gemini, gemma, *, progress_callback=None, sett
     return extract_arabic_document(
         pdf_path=pdf_path,
         output_dir=output_dir,
-        classification=_printed_decision(),
+        classification=classification or _printed_decision(),
         gemini_client=gemini,
         gemma_client=gemma,
         settings=settings,
         progress_callback=progress_callback,
     )
+
+
+def test_gateway_provider_is_recorded_on_each_page_and_in_summary(tmp_path):
+    from app.extraction.gemini_ocr_client import GeminiOcrClient
+
+    pdf = _make_pdf(tmp_path / "gateway.pdf", 1)
+    settings = Settings(
+        _env_file=None,
+        modelgateway_api_key="gateway-secret",
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+    )
+    request_log = []
+    clients = {
+        "gateway-secret": FakeSdkClient(
+            [sdk_response(page_section(1, "نص بوابة"))], request_log, "gateway"
+        )
+    }
+    result = extract(
+        pdf,
+        tmp_path / "gateway-out",
+        GeminiOcrClient(
+            settings=settings,
+            client_factory=lambda key: clients[key],
+            sleep=lambda _seconds: None,
+        ),
+        FakeGemma({}),
+        settings=settings,
+    )
+
+    content = json.loads((result.output_dir / "content_list.json").read_text())
+    raw_pages = json.loads((result.output_dir / "raw_pages.json").read_text())
+    assert result.extractor == "gemini_arabic_flash"
+    assert result.provider_summary == [
+        {"provider": "modelgateway_gemini", "pages": [1]}
+    ]
+    assert content[0]["ocr_provider"] == "modelgateway_gemini"
+    assert raw_pages[0]["provider"] == "modelgateway_gemini"
+    assert raw_pages[0]["model"] == "gemini-3.8-flash"
+    assert request_log == [{"api_key": "gateway", "model": "gemini-3.8-flash"}]
+
+
+def test_handwritten_route_uses_gateway_then_google_pro_then_gemma(tmp_path):
+    from app.extraction.gemini_ocr_client import GeminiOcrClient
+
+    pdf = _make_pdf(tmp_path / "handwritten.pdf", 1)
+    settings = Settings(
+        _env_file=None,
+        modelgateway_api_key="gateway-secret",
+        gemini_api_keys_raw="google-secret",
+        arabic_gemini_gateway_max_wait_seconds=0,
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+    )
+    request_log = []
+    clients = {
+        "gateway-secret": FakeSdkClient(
+            [sdk_api_error(403, "Upstream provider access denied")],
+            request_log,
+            "gateway",
+        ),
+        "google-secret": FakeSdkClient(
+            [sdk_api_error(403, "API key not valid")], request_log, "google"
+        ),
+    }
+    gemma = FakeGemma({1: "هذا نص بخط اليد"})
+
+    result = extract(
+        pdf,
+        tmp_path / "handwritten-out",
+        GeminiOcrClient(
+            settings=settings,
+            client_factory=lambda key: clients[key],
+            writing_style="handwritten",
+            sleep=lambda _seconds: None,
+        ),
+        gemma,
+        settings=settings,
+        classification=_handwritten_decision(),
+    )
+
+    assert [request["model"] for request in request_log] == [
+        "gemini-3.1-pro",
+        "gemini-3.1-pro-preview",
+    ]
+    assert [request["api_key"] for request in request_log] == ["gateway", "google"]
+    assert result.pages[0].provider == "gemma4_arabic_fallback"
+    assert gemma.requested_styles == ["handwritten"]
+    assert gemma.handwritten_opt_ins == [True]
+    assert result.provider_summary == [
+        {"provider": "gemma4_arabic_fallback", "pages": [1]}
+    ]
 
 
 def test_truncated_batch_keeps_complete_gemini_prefix(four_page_pdf, tmp_path):

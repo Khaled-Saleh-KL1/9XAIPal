@@ -350,9 +350,10 @@ def test_gateway_sends_one_page_without_optional_generation_options():
     )
 
 
-def test_gateway_transient_upstream_403_retries_without_disabling_key():
+@pytest.mark.parametrize("code", [400, 403, 502, 503, 504])
+def test_gateway_transient_upstream_errors_retry_without_disabling_key(code):
     gateway = FakeClient([
-        api_error(403, message="Upstream provider access denied; try another route"),
+        api_error(code, message="Upstream provider access denied; try another route"),
         response(PAGE_1),
         response(PAGE_1),
     ])
@@ -373,6 +374,43 @@ def test_gateway_transient_upstream_403_retries_without_disabling_key():
     assert first.attempt_metadata[0]["provider"] == "modelgateway_gemini"
     assert sleeps == [0.25]
     assert gateway.models.calls == 3
+
+
+def test_gateway_retries_use_exponential_jitter():
+    gateway = FakeClient([
+        api_error(503, message="Upstream provider unavailable"),
+        api_error(503, message="Upstream provider unavailable"),
+        response(PAGE_1),
+    ])
+    sleeps = []
+    client = make_client(
+        "",
+        {"gateway-secret": gateway},
+        gateway_key="gateway-secret",
+        sleep=sleeps.append,
+        jitter=lambda _low, high: high,
+        arabic_gemini_gateway_max_wait_seconds=2,
+    )
+
+    client.generate_batch([page(1)], validator=complete_validator)
+
+    assert sleeps == [0.375, 0.75]
+
+
+def test_google_generation_options_can_be_disabled(fake_clients):
+    fake_clients["secret-key-1"] = FakeClient([response(PAGE_1)])
+
+    make_client(
+        "secret-key-1",
+        fake_clients,
+        arabic_gemini_send_thinking_config=False,
+        arabic_gemini_send_media_resolution=False,
+    ).generate_batch([page(1)], validator=complete_validator)
+
+    request = fake_clients["secret-key-1"].models.requests[0]
+    assert request["config"].thinking_config is None
+    image_part = next(part for part in request["contents"] if part.inline_data)
+    assert image_part.media_resolution is None
 
 
 def test_gateway_plain_403_is_authentication_and_skips_gateway_on_later_batches():
@@ -427,6 +465,30 @@ def test_gateway_retry_after_is_bounded_by_provider_wait_budget(fake_clients):
     assert result.provider == "gemini_arabic_flash"
     assert gateway.models.calls == 1
     assert sleeps == []
+
+
+def test_gateway_exponential_backoff_stops_at_total_wait_budget(fake_clients):
+    fake_clients["secret-key-1"] = FakeClient([response(PAGE_1)])
+    gateway = FakeClient([
+        api_error(503, message="Upstream provider unavailable"),
+        api_error(503, message="Upstream provider unavailable"),
+        response(PAGE_1),
+    ])
+    sleeps = []
+    client = make_client(
+        "secret-key-1",
+        {**fake_clients, "gateway-secret": gateway},
+        gateway_key="gateway-secret",
+        sleep=sleeps.append,
+        jitter=lambda _low, high: high,
+        arabic_gemini_gateway_max_wait_seconds=0.5,
+    )
+
+    result = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert result.provider == "gemini_arabic_flash"
+    assert gateway.models.calls == 2
+    assert sleeps == [0.375]
 
 
 def test_handwritten_gateway_and_google_use_their_respective_pro_models():

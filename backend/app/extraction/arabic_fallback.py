@@ -1,4 +1,4 @@
-"""Printed-Arabic-only OCR fallback through Ollama Cloud's native API."""
+"""Printed-Arabic OCR fallback through Ollama Cloud's native API."""
 
 from __future__ import annotations
 
@@ -76,7 +76,7 @@ def _close(client: Any) -> None:
 
 
 class GemmaArabicFallback:
-    """Run one printed page through Gemma, rotating only Ollama credentials."""
+    """Run an eligible Arabic page through Gemma, rotating Ollama credentials."""
 
     def __init__(
         self,
@@ -93,10 +93,13 @@ class GemmaArabicFallback:
         page: RenderedPage,
         *,
         writing_style: str = "printed",
+        allow_handwritten: bool = False,
     ) -> OcrBatchResult:
-        if writing_style != "printed":
+        if writing_style != "printed" and not (
+            writing_style == "handwritten" and allow_handwritten
+        ):
             raise HandwrittenFallbackForbidden(
-                "The Gemma Arabic fallback accepts only confidently printed Arabic."
+                "The Gemma Arabic fallback accepts only printed Arabic or an explicitly enabled handwritten route."
             )
         if page.page_number < 1 or not page.png:
             raise GemmaRequestInvalid(

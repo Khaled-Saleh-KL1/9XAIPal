@@ -615,14 +615,16 @@ def test_user_confirmed_style_is_reused_without_reclassification(
     assert _stored_document(db_session_sync, document_id)["classification_confidence"] is None
 
 
-def test_handwritten_pro_flag_still_never_constructs_a_gemini_client(
+def test_enabled_handwritten_route_constructs_pro_gemini_and_gemma_clients(
     db_session_sync, tmp_path, monkeypatch
 ):
-    from app.extraction.arabic_types import ArabicGeminiProNotConfigured
-
     monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
     monkeypatch.setattr(pipeline_sync.settings, "arabic_handwritten_ocr_enabled", True)
     mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    mocks.arabic_extractor.return_value.extractor = "gemini_arabic_pro"
+    mocks.arabic_extractor.return_value.provider_summary = [
+        {"provider": "modelgateway_gemini", "pages": [1]}
+    ]
     monkeypatch.setattr(
         pipeline_sync,
         "classify_document",
@@ -637,11 +639,20 @@ def test_handwritten_pro_flag_still_never_constructs_a_gemini_client(
     )
     document_id, job_id = _seed(db_session_sync)
 
-    with pytest.raises(ArabicGeminiProNotConfigured):
-        _run(db_session_sync, tmp_path, monkeypatch, document_id, job_id)
+    _run(db_session_sync, tmp_path, monkeypatch, document_id, job_id)
 
-    mocks.gemini_factory.assert_not_called()
-    mocks.gemma_factory.assert_not_called()
+    mocks.gemini_factory.assert_called_once_with(writing_style="handwritten")
+    mocks.gemma_factory.assert_called_once_with()
+    mocks.arabic_extractor.assert_called_once()
+    assert (
+        mocks.arabic_extractor.call_args.kwargs["classification"].writing_style
+        == "handwritten"
+    )
+    stored = _stored_document(db_session_sync, document_id)
+    assert stored["extractor"] == "gemini_arabic_pro"
+    assert stored["ocr_provider_summary"] == [
+        {"provider": "modelgateway_gemini", "pages": [1]}
+    ]
 
 
 def test_gemini_arabic_text_preserves_orthographic_codepoints(

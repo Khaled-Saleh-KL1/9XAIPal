@@ -1,4 +1,4 @@
-"""Arabic printed-document OCR through a bounded Gemini API key cascade."""
+"""Arabic OCR through ModelGateway and Google Gemini providers."""
 
 from __future__ import annotations
 
