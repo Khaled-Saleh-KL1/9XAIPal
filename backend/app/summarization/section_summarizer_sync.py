@@ -185,6 +185,15 @@ def _summary_prompt_for_source(prompt: str, source_text: str) -> str:
     return prompt
 
 
+def _section_body_chars(section_text: str) -> int:
+    """Non-space characters outside markdown heading lines."""
+    return sum(
+        len("".join(line.split()))
+        for line in section_text.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+
 def _is_arabic_table_of_contents_heading(heading: str) -> bool:
     normalized = " ".join(normalize_arabic_for_matching(heading).split())
     return normalized in _ARABIC_TABLE_OF_CONTENTS_HEADINGS
@@ -540,6 +549,14 @@ def generate_and_store_section_summaries_sync(
         ):
             logger.info(
                 "[summarizer] Skipping Arabic table-of-contents section %r",
+                sec["heading_text"],
+            )
+            continue
+        # A section of headings only (a book cover: author and title) made the
+        # model invent content from the title alone.
+        if arabic_source and _section_body_chars(sec["text"]) == 0:
+            logger.info(
+                "[summarizer] Skipping Arabic section with no body text %r",
                 sec["heading_text"],
             )
             continue
