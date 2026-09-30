@@ -427,7 +427,10 @@ class Settings(BaseSettings):
     rerank_arabic_enabled: bool = True
     rerank_english_enabled: bool = False
     rerank_candidates: int = 30
-    contextual_embeddings_arabic_enabled: bool = True
+    # Off: measured on the Arabic golden set (2026-09-30), prefixing title and
+    # section to every passage lowered MRR@10 from 0.542 to 0.497 without the
+    # re-ranker and from 0.803 to 0.762 with it.
+    contextual_embeddings_arabic_enabled: bool = False
 
     # ── Web search ──────────────────────────────────────────────────────────
     # Which provider(s) serve the EXTERNAL route, the research agent, and the
