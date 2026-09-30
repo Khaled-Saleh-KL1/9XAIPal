@@ -63,10 +63,13 @@ esac
 # (/etc/docker/daemon.json, 28 GB cap) was not keeping it bounded in
 # practice, and each rebuild of the ~11 GB MinerU worker image leaves the
 # previous build's layers behind — 46.6 GB of cache on the 96 GB VPS by
-# 2026-09-27. Only cache no build has used in the last day is dropped, so
-# the layers this deploy just used (the next deploy's speed) are kept.
+# 2026-09-27. Only cache no build has used in the last two hours is
+# dropped, so the layers this deploy just used (the next deploy's speed)
+# are kept. ⚠ Not a day: on 2026-09-30 eight deploys in one day each
+# rebuilt the worker image and the cache was back at 53 GB (disk 81%),
+# because none of it was a day old yet.
 prune_build_cache() {
-  docker builder prune -f --filter until=24h >/dev/null
+  docker builder prune -f --filter until=2h >/dev/null
 }
 
 ensure_phoenix() {
