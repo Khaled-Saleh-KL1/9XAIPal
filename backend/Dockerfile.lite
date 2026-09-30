@@ -45,6 +45,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project
 
 COPY app ./app
+COPY scripts ./scripts
 
 # Compose overrides this for the Celery worker; default to the API.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

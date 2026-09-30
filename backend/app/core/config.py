@@ -419,6 +419,16 @@ class Settings(BaseSettings):
     # Changing this triggers an automatic re-embed of the library on next start.
     vector_dimension: int = 1024
 
+    # Arabic full-text matching. The exact simple-config leg remains active;
+    # Snowball contributes a lower-weight score when enabled.
+    arabic_fts_stemming_enabled: bool = True
+    arabic_fts_v2_enabled: bool = True
+    arabic_query_understanding_enabled: bool = True
+    rerank_arabic_enabled: bool = True
+    rerank_english_enabled: bool = False
+    rerank_candidates: int = 30
+    contextual_embeddings_arabic_enabled: bool = True
+
     # ── Web search ──────────────────────────────────────────────────────────
     # Which provider(s) serve the EXTERNAL route, the research agent, and the
     # paper agent's WEB tool. "auto" (default): try every configured provider

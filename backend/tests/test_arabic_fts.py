@@ -182,3 +182,144 @@ async def test_library_arabic_fulltext_is_scoped_to_the_requesting_user(db_sessi
     results = await search_documents(db_session, user_ids[0], "شبكات عصبية", limit=10)
 
     assert [row["id"] for row in results] == [document_ids[0]]
+
+
+def test_arabic_stemming_is_enabled_by_default():
+    assert getattr(pgvector.settings, "arabic_fts_stemming_enabled", None) is True
+
+
+async def test_arabic_snowball_matches_surface_forms_and_exact_text_ranks_first(db_session):
+    document_id, chunk_ids = await _add_document(
+        db_session,
+        chunks=[
+            "ذهبت إلى بالمكتبة الجامعية",
+            "في المكتبة الوطنية",
+            "والمعلمين في المدارس",
+            "قرأ الطلاب كتابهم",
+            "للشبكات العصبية العميقة",
+            "الشبكات العصبية",
+            "شبكة عصب متقدمة",
+        ],
+    )
+
+    for query, expected_id in (
+        ("مكتبة", chunk_ids[0]),
+        ("المكتبات", chunk_ids[1]),
+        ("المعلمون", chunk_ids[2]),
+        ("كتاب", chunk_ids[3]),
+        ("شبكة عصبية", chunk_ids[4]),
+    ):
+        rows = await search_chunks_fulltext(db_session, query, limit=10, document_id=document_id)
+        assert expected_id in [row["id"] for row in rows], query
+
+    rows = await search_chunks_fulltext(
+        db_session, "الشبكات العصبية", limit=10, document_id=document_id
+    )
+    ranked_ids = [row["id"] for row in rows]
+    assert ranked_ids.index(chunk_ids[5]) < ranked_ids.index(chunk_ids[6])
+
+
+def test_arabic_fts_v2_is_enabled_by_default():
+    assert getattr(pgvector.settings, "arabic_fts_v2_enabled", None) is True
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("ﻻ ﻷ ﻹ ﻵ", "لا لا لا لا"),
+        ("أ إ آ ٱ ة ى ؤ ئ ی ک", "ا ا ا ا ه ي و ي ي ك"),
+        ("١٢٣ ۱۲۳", "123 123"),
+        ("كَاتِبـ", "كاتب"),
+    ],
+)
+def test_python_arabic_v2_normalization_folds_presentation_forms_letters_and_digits(raw, expected):
+    normalize = getattr(pgvector, "normalize_arabic_v2", None)
+    assert callable(normalize), "the Python v2 normalizer must be available"
+    assert normalize(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_sql_v2_normalization_matches_python_and_has_safe_function_properties(db_session):
+    metadata = await db_session.execute(text("""
+        SELECT p.provolatile::text, p.proisstrict, p.proparallel::text
+        FROM pg_proc p
+        WHERE p.oid = to_regprocedure('ar_normalize_v2(text)')
+    """))
+    properties = metadata.first()
+    assert properties is not None, "ar_normalize_v2(text) must be installed"
+    assert tuple(properties) == ("i", True, "s")
+
+    normalize = getattr(pgvector, "normalize_arabic_v2", None)
+    assert callable(normalize)
+    for raw in ("ﻻ ﻷ ﻹ ﻵ", "أ إ آ ٱ ة ى ؤ ئ ی ک", "١٢٣ ۱۲۳", "كَاتِبـ"):
+        result = await db_session.execute(
+            text("SELECT ar_normalize_v2(:value)"), {"value": raw}
+        )
+        assert result.scalar_one() == normalize(raw)
+
+
+@pytest.mark.asyncio
+async def test_v2_simple_and_arabic_expression_indexes_are_installed(db_session):
+    result = await db_session.execute(text("""
+        SELECT indexname, indexdef
+        FROM pg_indexes
+        WHERE indexname IN ('idx_chunks_fts_ar_v2_simple', 'idx_chunks_fts_ar_v2_arabic')
+    """))
+    indexes = {row["indexname"]: row["indexdef"] for row in result.mappings().all()}
+
+    assert set(indexes) == {"idx_chunks_fts_ar_v2_simple", "idx_chunks_fts_ar_v2_arabic"}
+    assert all("USING gin" in definition and "ar_normalize_v2" in definition for definition in indexes.values())
+
+
+@pytest.mark.asyncio
+async def test_v2_query_normalization_matches_arabic_presentation_forms(db_session, monkeypatch):
+    document_id, chunk_ids = await _add_document(db_session, chunks=["لاجل"])
+    monkeypatch.setattr(pgvector.settings, "arabic_fts_stemming_enabled", False)
+
+    rows = await search_chunks_fulltext(db_session, "ﻷجل", limit=10, document_id=document_id)
+
+    assert [row["id"] for row in rows] == [chunk_ids[0]]
+
+
+@pytest.mark.asyncio
+async def test_arabic_library_fulltext_uses_the_stemming_leg(db_session):
+    document_id, _ = await _add_document(db_session, chunks=["ذهبت إلى بالمكتبة الجامعية"])
+    result = await db_session.execute(
+        text("SELECT user_id FROM documents WHERE id = :id"), {"id": document_id}
+    )
+    user_id = result.scalar_one()
+
+    rows = await pgvector.search_documents_fulltext(db_session, user_id, "مكتبة", limit=10)
+
+    assert [row["id"] for row in rows] == [document_id]
+
+
+@pytest.mark.asyncio
+async def test_v2_disabled_keeps_the_legacy_exact_fts_expression(db_session, monkeypatch):
+    document_id, _ = await _add_document(db_session, chunks=["الشبكات العصبية"])
+    monkeypatch.setattr(pgvector.settings, "arabic_fts_stemming_enabled", False)
+    monkeypatch.setattr(pgvector.settings, "arabic_fts_v2_enabled", False, raising=False)
+    statements = []
+    original_execute = db_session.execute
+
+    async def capture(statement, *args, **kwargs):
+        statements.append(str(statement).strip())
+        return await original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", capture)
+    await search_chunks_fulltext(db_session, "شبكات عصبية", limit=10, document_id=document_id)
+
+    assert statements == ["""
+            SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
+                   c.page_start, c.page_end, c.chunk_type,
+                   ts_rank(
+                       to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
+                       to_tsquery('simple', :q)
+                   ) AS fts_rank
+            FROM chunks c
+            WHERE to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
+                  @@ to_tsquery('simple', :q)
+            AND c.document_id = :document_id
+            ORDER BY fts_rank DESC
+            LIMIT :limit
+        """.strip()]
