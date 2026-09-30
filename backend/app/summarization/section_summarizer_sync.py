@@ -17,7 +17,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.language import SOURCE_LANGUAGE_RULE
+from app.core.language import SOURCE_LANGUAGE_RULE, is_primarily_arabic
 from app.llm.resolver import resolve_llm_sync
 from app.core import tracing
 from app.core.logging import get_logger
@@ -115,6 +115,58 @@ Now write the integrated paper-level executive overview.
     "For English source text, use the English labels shown here.\n\n"
     + SOURCE_LANGUAGE_RULE
 )
+
+
+_ARABIC_SUMMARY_PROMPT_LABELS = (
+    ("### Section Summary:", "### ملخص القسم:"),
+    ("<exact heading>", "<العنوان كما ورد حرفيًا>"),
+    ("**Key points:**", "**النقاط الرئيسية:**"),
+    ("### Paper Overview:", "### نظرة عامة على العمل:"),
+    ("<Paper Title or Filename>", "<عنوان البحث أو اسم الملف>"),
+    ("**Core contribution:**", "**المساهمة الأساسية:**"),
+    ("**Notable results:**", "**أبرز النتائج:**"),
+    (
+        "**Open questions / limitations noted by authors:**",
+        "**الأسئلة المفتوحة / القيود التي ذكرها المؤلفون:**",
+    ),
+)
+
+_ARABIC_SUMMARY_OUTPUT_LABELS = (
+    ("Section Summary:", "ملخص القسم:"),
+    ("Key points:", "النقاط الرئيسية:"),
+    ("Paper Overview:", "نظرة عامة على العمل:"),
+    ("Core contribution:", "المساهمة الأساسية:"),
+    ("Notable results:", "أبرز النتائج:"),
+    (
+        "Open questions / limitations noted by authors:",
+        "الأسئلة المفتوحة / القيود التي ذكرها المؤلفون:",
+    ),
+)
+
+
+def _summary_prompt_for_source(prompt: str, source_text: str) -> str:
+    """Return a summary prompt whose skeleton labels match the source language."""
+    if not is_primarily_arabic(source_text):
+        return prompt
+    for english_label, arabic_label in _ARABIC_SUMMARY_PROMPT_LABELS:
+        prompt = prompt.replace(english_label, arabic_label)
+    return prompt
+
+
+def _localize_leading_summary_labels(summary: str, source_text: str) -> str:
+    """Translate English skeleton labels at line starts in Arabic summaries."""
+    if not is_primarily_arabic(source_text):
+        return summary
+
+    for english_label, arabic_label in _ARABIC_SUMMARY_OUTPUT_LABELS:
+        pattern = re.compile(
+            rf"(?m)^([ \t]*(?:(?:###|\*\*)[ \t]*)?){re.escape(english_label)}(\*\*)?"
+        )
+        summary = pattern.sub(
+            lambda match: f"{match.group(1)}{arabic_label}{match.group(2) or ''}",
+            summary,
+        )
+    return summary
 
 
 def get_paper_overview_prompt() -> str:
@@ -378,7 +430,10 @@ def generate_and_store_section_summaries_sync(
         section_text = sec["text"][:12000]  # Safety cap — very long sections get truncated
 
         messages = [
-            {"role": "system", "content": SECTION_SUMMARY_PROMPT_V1},
+            {
+                "role": "system",
+                "content": _summary_prompt_for_source(SECTION_SUMMARY_PROMPT_V1, section_text),
+            },
             {"role": "user", "content": section_text},
         ]
 
@@ -390,6 +445,7 @@ def generate_and_store_section_summaries_sync(
             # Store a placeholder so we don't keep retrying forever on bad sections
             content = f"[Summarization failed for this section: {e}]"
 
+        content = _localize_leading_summary_labels(content, section_text)
         if not content or content.startswith("[Summarization failed"):
             plain = content
         else:
@@ -435,7 +491,10 @@ def generate_and_store_section_summaries_sync(
         overview_text = "\n\n---\n\n".join(combined)[:25000]
 
         overview_messages = [
-            {"role": "system", "content": PAPER_OVERVIEW_PROMPT_V1},
+            {
+                "role": "system",
+                "content": _summary_prompt_for_source(PAPER_OVERVIEW_PROMPT_V1, overview_text),
+            },
             {"role": "user", "content": overview_text},
         ]
 
@@ -446,6 +505,7 @@ def generate_and_store_section_summaries_sync(
             logger.exception(f"[summarizer] Paper overview LLM call failed: {e}")
             ov_content = f"[Paper-level overview generation failed: {e}]"
 
+        ov_content = _localize_leading_summary_labels(ov_content, overview_text)
         ov_plain = re.sub(r"#{1,6}\s+", "", ov_content)
         ov_plain = re.sub(r"\n{3,}", "\n\n", ov_plain).strip()
 
