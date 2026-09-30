@@ -5,8 +5,9 @@ from app.embeddings.service_sync import (
 )
 
 
-def test_arabic_contextual_embeddings_are_enabled_by_default():
-    assert settings.contextual_embeddings_arabic_enabled is True
+def test_arabic_contextual_embeddings_are_disabled_by_default():
+    # Measured worse on the Arabic retrieval golden set; see core/config.py.
+    assert settings.contextual_embeddings_arabic_enabled is False
 
 
 def test_english_chunk_embedding_input_is_byte_identical(monkeypatch):
