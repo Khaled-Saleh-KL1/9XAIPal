@@ -177,3 +177,32 @@ def test_english_contents_heading_is_still_summarized(monkeypatch):
 
     assert len(calls) == 2
     assert len(stored_sections) == 1
+
+
+def test_arabic_heading_only_section_is_not_summarized(monkeypatch):
+    # A book cover (author and title headings, no body) made the model invent
+    # a plot from the title alone.
+    calls, stored_sections, overview_values = _run_generation(
+        monkeypatch,
+        "# نجيب محفوظ\n\n## فتوة العطوف",
+        "### ملخص القسم: نجيب محفوظ\n\nقصة عن الصراع.",
+        "### نظرة عامة على العمل: كتاب\n\nنظرة عامة.",
+        "نجيب محفوظ",
+    )
+
+    assert calls == []
+    assert stored_sections == []
+    assert overview_values == []
+
+
+def test_english_heading_only_section_is_still_summarized(monkeypatch):
+    calls, stored_sections, _overview_values = _run_generation(
+        monkeypatch,
+        "# Attention Is All You Need\n\n## Ashish Vaswani",
+        "### Section Summary: Attention Is All You Need\n\nA title page.",
+        "### Paper Overview: Paper\n\nAn overview.",
+        "Attention Is All You Need",
+    )
+
+    assert len(calls) == 2
+    assert len(stored_sections) == 1
