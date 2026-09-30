@@ -161,7 +161,7 @@ async def test_confirm_handwritten_does_not_dispatch(client, db_session, monkeyp
 
     assert response.status_code == 200
     assert response.json()["error_code"] == "handwritten_arabic_unavailable"
-    assert "Gemini Pro" in response.json()["message"]
+    assert "Handwritten Arabic isn't enabled yet" in response.json()["message"]
     assert dispatch == []
     assert queue_reservations == []
     job = await _job(db_session, job_id)

@@ -66,13 +66,12 @@ class ArabicClassifierUnavailableError(ArabicRoutingError):
 
 
 class HandwrittenArabicUnavailable(ArabicRoutingError):
-    """Handwritten Arabic is detected but Gemini Pro billing is unavailable."""
+    """Handwritten Arabic is detected while its extraction route is disabled."""
 
     error_code = "handwritten_arabic_unavailable"
     public_message = (
-        "Handwritten Arabic extraction is not currently available because it "
-        "requires Gemini Pro with a billing-enabled account. No text was "
-        "extracted, and your original file has been kept."
+        "Handwritten Arabic isn't enabled yet. No text was extracted, and "
+        "your original file has been kept."
     )
 
     def __init__(self) -> None:
