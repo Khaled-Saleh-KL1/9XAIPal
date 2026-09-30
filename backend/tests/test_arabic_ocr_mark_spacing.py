@@ -1,6 +1,7 @@
 import json
 
 import fitz
+import pytest
 
 from app.core.config import settings
 from app.extraction import arabic_ocr
@@ -10,6 +11,21 @@ from app.extraction.arabic_types import (
     DocumentRoute,
     OcrUsage,
 )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("كتاب ٌ جديد", "كتابٌ جديد"),
+        ("كتاب ٌ، جديد", "كتابٌ، جديد"),
+        ("كتاب ٌ\nجديد", "كتابٌ\nجديد"),
+        ("ف ُ\u2028ت ُ و َ ّ ة", "فُ\u2028تُوَّة"),
+    ],
+)
+def test_arabic_ocr_mark_cleanup_preserves_word_and_paragraph_boundaries(
+    source, expected
+):
+    assert arabic_ocr._normalize_arabic_ocr_mark_spacing(source) == expected
 
 
 def test_arabic_ocr_artifacts_join_combining_marks_without_merging_words(tmp_path):

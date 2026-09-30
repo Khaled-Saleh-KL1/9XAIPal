@@ -94,28 +94,40 @@ UNREADABLE_PAGE_MARKER = "[تعذر استخراج هذه الصفحة]"
 
 _ARABIC_OCR_MARKS = r"\u064b-\u0652\u0670"
 _ARABIC_OCR_LETTERS = r"\u0621-\u064a\u066e-\u06d3\u0750-\u077f\u08a0-\u08ff"
-_BROKEN_ARABIC_MARKED_WORD_RE = re.compile(
-    rf"(?P<base>[{_ARABIC_OCR_LETTERS}])\s+"
-    rf"(?P<marks>(?:[{_ARABIC_OCR_MARKS}]\s*)+)\s+"
-    rf"(?P<next>[{_ARABIC_OCR_LETTERS}])"
+_ARABIC_OCR_HSPACE = r"[ \t\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]"
+_ARABIC_OCR_MARK_RUN = (
+    rf"[{_ARABIC_OCR_MARKS}](?:{_ARABIC_OCR_HSPACE}*"
+    rf"[{_ARABIC_OCR_MARKS}])*"
+)
+_BROKEN_ARABIC_MARKED_CHAIN_RE = re.compile(
+    rf"(?P<chain>[{_ARABIC_OCR_LETTERS}]{_ARABIC_OCR_HSPACE}+"
+    rf"{_ARABIC_OCR_MARK_RUN}(?:{_ARABIC_OCR_HSPACE}+"
+    rf"[{_ARABIC_OCR_LETTERS}]{_ARABIC_OCR_HSPACE}+"
+    rf"{_ARABIC_OCR_MARK_RUN})+{_ARABIC_OCR_HSPACE}+"
+    rf"[{_ARABIC_OCR_LETTERS}])"
 )
 _ARABIC_BASE_MARK_GAP_RE = re.compile(
-    rf"(?P<base>[{_ARABIC_OCR_LETTERS}])\s+"
-    rf"(?P<marks>(?:[{_ARABIC_OCR_MARKS}]\s*)+)"
+    rf"(?P<base>[{_ARABIC_OCR_LETTERS}]){_ARABIC_OCR_HSPACE}+"
+    rf"(?P<marks>{_ARABIC_OCR_MARK_RUN})"
 )
 
 
 def _normalize_arabic_ocr_mark_spacing(text: str) -> str:
-    """Join OCR-split Arabic diacritics to their base letters in broken words."""
+    """Join detached marks without consuming word or paragraph separators.
 
-    def join_marked_word(match: re.Match[str]) -> str:
-        marks = re.sub(r"\s+", "", match.group("marks"))
-        return f"{match.group('base')}{marks}{match.group('next')}"
+    A gap after a mark is removed only inside a chain where multiple letters
+    have their own detached marks, which is evidence that OCR split one word
+    into glyph-sized pieces. A single detached final-letter mark keeps the
+    following word boundary.
+    """
 
-    text = _BROKEN_ARABIC_MARKED_WORD_RE.sub(join_marked_word, text)
+    text = _BROKEN_ARABIC_MARKED_CHAIN_RE.sub(
+        lambda match: re.sub(_ARABIC_OCR_HSPACE + r"+", "", match.group("chain")),
+        text,
+    )
 
     def join_base_and_marks(match: re.Match[str]) -> str:
-        marks = re.sub(r"\s+", "", match.group("marks"))
+        marks = re.sub(_ARABIC_OCR_HSPACE + r"+", "", match.group("marks"))
         return f"{match.group('base')}{marks}"
 
     return _ARABIC_BASE_MARK_GAP_RE.sub(join_base_and_marks, text)
