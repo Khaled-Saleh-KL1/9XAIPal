@@ -11,7 +11,7 @@ rather than in biology, physics, or everyday English.
 from typing import Optional
 from uuid import UUID
 
-from app.core.language import LANGUAGE_RULE, SOURCE_LANGUAGE_RULE
+from app.core.language import LANGUAGE_RULE, SOURCE_LANGUAGE_RULE, is_primarily_arabic
 from app.database.repositories.assets import resolve_asset_url
 
 
@@ -510,6 +510,23 @@ Conversation so far:
 # Router and guardrail prompts keep their fixed machine-readable schemas.
 LOCAL_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
 GLOBAL_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
+
+_LOCAL_REFUSAL_ENGLISH = "I don't have enough information in the current section to answer this. Would you like me to search the rest of the paper?"
+_LOCAL_REFUSAL_ARABIC = "لا أملك معلومات كافية في القسم الحالي للإجابة عن هذا السؤال. هل تريدني أن أبحث في بقية البحث؟"
+_GLOBAL_REFUSAL_ENGLISH = "This information is not present in the retrieved sections of the paper."
+_GLOBAL_REFUSAL_ARABIC = "هذه المعلومات غير موجودة في الأقسام المسترجعة من البحث."
+
+
+def localize_refusals_for_question(system_prompt: str, question: str) -> str:
+    """Use a literal Arabic refusal in the prompt when the question is Arabic."""
+    if not is_primarily_arabic(question):
+        return system_prompt
+
+    return (
+        system_prompt
+        .replace(f'"{_LOCAL_REFUSAL_ENGLISH}"', f'"{_LOCAL_REFUSAL_ARABIC}"')
+        .replace(f'"{_GLOBAL_REFUSAL_ENGLISH}"', f'"{_GLOBAL_REFUSAL_ARABIC}"')
+    )
 COMBINED_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
 EXTERNAL_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
 RESEARCH_AGENT_SYSTEM_PROMPT += "\n\n" + LANGUAGE_RULE
