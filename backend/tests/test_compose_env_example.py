@@ -1,0 +1,87 @@
+import re
+from pathlib import Path
+
+import yaml
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+COMPOSE_FILES = ("docker-compose.yml", "docker-compose.prod.yml")
+INTERPOLATION = re.compile(r"\$\{([A-Z][A-Z0-9_]*)[^}]*\}")
+ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def _strings(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str):
+                yield key
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, str):
+        yield value
+
+
+def _load_compose(name):
+    document = yaml.safe_load((BACKEND_ROOT / name).read_text())
+    assert isinstance(document, dict)
+    return document
+
+
+def _mentioned_environment_names():
+    names = set()
+    for line in (BACKEND_ROOT / ".env.example").read_text().splitlines():
+        line = line.strip()
+        if line.startswith("#"):
+            line = line[1:].strip()
+        name, separator, _value = line.partition("=")
+        if separator and ENV_NAME.fullmatch(name.strip()):
+            names.add(name.strip())
+    return names
+
+
+def _active_environment_values():
+    values = {}
+    for line in (BACKEND_ROOT / ".env.example").read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, separator, value = line.partition("=")
+        if separator and ENV_NAME.fullmatch(name.strip()):
+            values[name.strip()] = value.split("#", 1)[0].strip()
+    return values
+
+
+def test_both_compose_files_only_read_variables_mentioned_in_env_example():
+    compose_documents = [_load_compose(name) for name in COMPOSE_FILES]
+    compose_variables = {
+        match.group(1)
+        for document in compose_documents
+        for value in _strings(document)
+        for match in INTERPOLATION.finditer(value)
+    }
+    missing = sorted(compose_variables - _mentioned_environment_names())
+
+    assert not missing, f"Compose variables missing from backend/.env.example: {missing}"
+
+
+def test_sample_and_production_compose_use_the_production_ingestion_defaults():
+    sample = _active_environment_values()
+    assert {
+        "GENERATE_FIGURE_DESCRIPTIONS": "false",
+        "MINERU_PAGE_BATCH_SIZE": "8",
+        "INGEST_PROFILE": "full",
+        "ALLOW_PYMUPDF_FALLBACK": "true",
+        "DB_POOL_SIZE": "10",
+        "DB_MAX_OVERFLOW": "15",
+        "MAX_UPLOAD_SIZE_MB": "500",
+    }.items() <= sample.items()
+
+    production = _load_compose("docker-compose.prod.yml")["services"]
+    assert production["celery_worker"]["environment"]["GENERATE_FIGURE_DESCRIPTIONS"] == "${GENERATE_FIGURE_DESCRIPTIONS:-false}"
+    assert production["api"]["environment"]["GENERATE_FIGURE_DESCRIPTIONS"] == "${GENERATE_FIGURE_DESCRIPTIONS:-false}"
+    assert production["celery_worker"]["environment"]["MINERU_PAGE_BATCH_SIZE"] == "${MINERU_PAGE_BATCH_SIZE:-8}"
+
+    development = _load_compose("docker-compose.yml")["services"]
+    assert development["celery_worker"]["environment"]["MINERU_PAGE_BATCH_SIZE"] == "${MINERU_PAGE_BATCH_SIZE:-100}"
