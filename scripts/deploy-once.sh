@@ -68,8 +68,13 @@ esac
 # are kept. ⚠ Not a day: on 2026-09-30 eight deploys in one day each
 # rebuilt the worker image and the cache was back at 53 GB (disk 81%),
 # because none of it was a day old yet.
+#
+# ⚠ Only `regular` layer records are pruned. The Dockerfiles' uv download
+# cache (`RUN --mount=type=cache,target=/root/.cache/uv`) is an
+# `exec.cachemount` record; pruning it made every rebuild download every
+# Python wheel again. It is left to the daemon's own builder.gc policy.
 prune_build_cache() {
-  docker builder prune -f --filter until=2h >/dev/null
+  docker builder prune -f --filter type=regular --filter until=2h >/dev/null
 }
 
 ensure_phoenix() {
