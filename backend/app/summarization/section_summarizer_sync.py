@@ -237,6 +237,8 @@ def _collect_text_under_heading(
     chunks: list[dict],
     start_idx: int,
     current_level: int,
+    *,
+    arabic_side: bool = False,
 ) -> tuple[str, int, list[str]]:
     """
     Collect rich text from chunks belonging to this heading and its sub-headings
@@ -258,7 +260,24 @@ def _collect_text_under_heading(
         if ch.get("chunk_type") == "heading":
             ch_level = len(hp) if hp else 0
             if ch_level <= current_level and i != start_idx:
-                break
+                current_heading_path = chunks[start_idx].get("heading_path") or []
+                repeated_arabic_h1 = (
+                    arabic_side
+                    and current_level == 1
+                    and ch_level == 1
+                    and len(current_heading_path) == len(hp) == 1
+                    and " ".join(
+                        normalize_arabic_for_matching(current_heading_path[0]).split()
+                    )
+                    == " ".join(normalize_arabic_for_matching(hp[0]).split())
+                )
+                if not repeated_arabic_h1:
+                    break
+                # Arabic OCR sometimes marks the same level-1 title as a
+                # heading on every page. Treat that repeated title as running
+                # page chrome, then continue collecting the story body.
+                i += 1
+                continue
 
         # Add the content
         md = ch.get("markdown") or ch.get("plain_text") or ""
@@ -274,7 +293,9 @@ def _collect_text_under_heading(
     return text, i, source_ids
 
 
-def group_chunks_into_sections(chunks: list[dict]) -> list[dict]:
+def group_chunks_into_sections(
+    chunks: list[dict], *, arabic_side: bool | None = None
+) -> list[dict]:
     """
     Group the flat chunk list into major sections (H1 and H2).
 
@@ -290,6 +311,12 @@ def group_chunks_into_sections(chunks: list[dict]) -> list[dict]:
     }
     """
     sections: list[dict] = []
+    if arabic_side is None:
+        source_text = "\n".join(
+            chunk.get("markdown") or chunk.get("plain_text") or ""
+            for chunk in chunks
+        )
+        arabic_side = is_primarily_arabic(source_text)
     i = 0
     n = len(chunks)
 
@@ -310,7 +337,9 @@ def group_chunks_into_sections(chunks: list[dict]) -> list[dict]:
 
         heading_text = hp[-1] if hp else "Untitled"
 
-        section_text, end_idx, source_ids = _collect_text_under_heading(chunks, i, level)
+        section_text, end_idx, source_ids = _collect_text_under_heading(
+            chunks, i, level, arabic_side=arabic_side
+        )
 
         if not section_text.strip():
             i = end_idx
@@ -487,10 +516,9 @@ def generate_and_store_section_summaries_sync(
         logger.warning(f"[summarizer] No chunks found for {document_id} — nothing to summarize")
         return {"skipped": True, "reason": "no_chunks"}
 
-    sections = group_chunks_into_sections(chunks)
-    logger.info(f"[summarizer] Grouped into {len(sections)} major sections (H1/H2)")
-
     arabic_source = is_primarily_arabic(source_text)
+    sections = group_chunks_into_sections(chunks, arabic_side=arabic_source)
+    logger.info(f"[summarizer] Grouped into {len(sections)} major sections (H1/H2)")
 
     summaries_created = 0
 

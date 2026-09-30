@@ -49,7 +49,11 @@ def _run_generation(monkeypatch, section_text, section_output, overview_output, 
         "_fetch_all_chunks_for_doc",
         lambda *_args: [{"markdown": section_text}],
     )
-    monkeypatch.setattr(summarizer, "group_chunks_into_sections", lambda _chunks: [section])
+    monkeypatch.setattr(
+        summarizer,
+        "group_chunks_into_sections",
+        lambda _chunks, **_kwargs: [section],
+    )
     stored_sections = []
     monkeypatch.setattr(
         summarizer,
