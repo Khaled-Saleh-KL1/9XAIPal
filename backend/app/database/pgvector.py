@@ -24,6 +24,23 @@ _ARABIC_QUERY_FOLDS = str.maketrans({
     "ى": "ي",
     "ـ": None,
 })
+_ARABIC_QUERY_FOLDS_V2 = str.maketrans({
+    "أ": "ا",
+    "إ": "ا",
+    "آ": "ا",
+    "ٱ": "ا",
+    "ة": "ه",
+    "ى": "ي",
+    "ؤ": "و",
+    "ئ": "ي",
+    "ی": "ي",
+    "ک": "ك",
+    **{
+        ord(source): str(value)
+        for start in (0x0660, 0x06F0)
+        for value, source in enumerate(chr(start + offset) for offset in range(10))
+    },
+})
 _ARABIC_STOPWORDS = (
     "في من على إلى عن ما ماذا لماذا كيف هل هو هي هذا هذه ذلك التي الذي "
     "و أو ثم لا لم لن قد كان يكون مع بين كل"
@@ -34,12 +51,20 @@ def _normalize_arabic_query(query: str) -> str:
     return _ARABIC_QUERY_MARKS.sub("", query.translate(_ARABIC_QUERY_FOLDS))
 
 
+def normalize_arabic_v2(query: str) -> str:
+    """Match PostgreSQL ``ar_normalize_v2`` for Arabic query text."""
+    normalized = unicodedata.normalize("NFKC", query)
+    return _ARABIC_QUERY_MARKS.sub("", normalized.translate(_ARABIC_QUERY_FOLDS_V2))
+
+
 _ARABIC_STOPWORD_SET = set(_normalize_arabic_query(_ARABIC_STOPWORDS).split())
 
 
-def _arabic_tsquery(query: str) -> str:
+def _arabic_tsquery(query: str, *, v2_enabled: bool | None = None) -> str:
     """Build a simple-config OR query with Arabic stopwords removed."""
-    words = re.findall(r"[^\W_]+", _normalize_arabic_query(query), flags=re.UNICODE)
+    use_v2 = settings.arabic_fts_v2_enabled if v2_enabled is None else v2_enabled
+    normalized = normalize_arabic_v2(query) if use_v2 else _normalize_arabic_query(query)
+    words = re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
     terms: list[str] = []
     for word in words:
         if word in _ARABIC_STOPWORD_SET:
@@ -230,25 +255,46 @@ async def search_chunks_fulltext(
             if not stem_query:
                 return []
             params["stem_q"] = stem_query
+            normalizer = "ar_normalize_v2" if settings.arabic_fts_v2_enabled else "ar_normalize"
+            exact_vector = (
+                f"to_tsvector('simple', {normalizer}(coalesce(c.plain_text, '')))"
+            )
+            stem_legs = [
+                ("to_tsvector('arabic', coalesce(c.plain_text, ''))", "stem_q")
+            ]
+            if settings.arabic_fts_v2_enabled:
+                stem_v2_query = _arabic_snowball_tsquery(normalize_arabic_v2(query))
+                if stem_v2_query:
+                    params["stem_v2_q"] = stem_v2_query
+                    stem_legs.append(
+                        (
+                            "to_tsvector('arabic', ar_normalize_v2(coalesce(c.plain_text, '')))",
+                            "stem_v2_q",
+                        )
+                    )
+            stem_ranks = [
+                f"ts_rank({vector}, to_tsquery('arabic', :{query_param}))"
+                for vector, query_param in stem_legs
+            ]
+            stem_rank = f"GREATEST({', '.join(stem_ranks)})" if len(stem_ranks) > 1 else stem_ranks[0]
+            stem_matches = " OR ".join(
+                f"{vector} @@ to_tsquery('arabic', :{query_param})"
+                for vector, query_param in stem_legs
+            )
             result = await session.execute(
                 text(f"""
                     WITH ranked AS (
                         SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
                                c.page_start, c.page_end, c.chunk_type,
                                ts_rank(
-                                   to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
+                                   {exact_vector},
                                    to_tsquery('simple', :q)
                                ) AS simple_rank,
-                               ts_rank(
-                                   to_tsvector('arabic', coalesce(c.plain_text, '')),
-                                   to_tsquery('arabic', :stem_q)
-                               ) AS stem_rank
+                               {stem_rank} AS stem_rank
                         FROM chunks c
                         WHERE (
-                            to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
-                                @@ to_tsquery('simple', :q)
-                            OR to_tsvector('arabic', coalesce(c.plain_text, ''))
-                                @@ to_tsquery('arabic', :stem_q)
+                            {exact_vector} @@ to_tsquery('simple', :q)
+                            OR {stem_matches}
                         )
                         {filters}
                     )
@@ -263,20 +309,42 @@ async def search_chunks_fulltext(
             )
             return [dict(r) for r in result.mappings().all()]
 
+        if settings.arabic_fts_v2_enabled:
+            result = await session.execute(
+                text(f"""
+                    SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
+                           c.page_start, c.page_end, c.chunk_type,
+                           ts_rank(
+                               to_tsvector('simple', ar_normalize_v2(coalesce(c.plain_text, ''))),
+                               to_tsquery('simple', :q)
+                           ) AS fts_rank
+                    FROM chunks c
+                    WHERE to_tsvector('simple', ar_normalize_v2(coalesce(c.plain_text, '')))
+                          @@ to_tsquery('simple', :q)
+                    {filters}
+                    ORDER BY fts_rank DESC
+                    LIMIT :limit
+                """),
+                params,
+            )
+            return [dict(r) for r in result.mappings().all()]
+
+        # With v2 disabled and stemming disabled, preserve the pre-v2 query
+        # verbatim so the setting provides a precise rollback path.
         result = await session.execute(
             text(f"""
-                SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
-                       c.page_start, c.page_end, c.chunk_type,
-                       ts_rank(
-                           to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
-                           to_tsquery('simple', :q)
-                       ) AS fts_rank
-                FROM chunks c
-                WHERE to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
-                      @@ to_tsquery('simple', :q)
-                {filters}
-                ORDER BY fts_rank DESC
-                LIMIT :limit
+            SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
+                   c.page_start, c.page_end, c.chunk_type,
+                   ts_rank(
+                       to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
+                       to_tsquery('simple', :q)
+                   ) AS fts_rank
+            FROM chunks c
+            WHERE to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
+                  @@ to_tsquery('simple', :q)
+            {filters}
+            ORDER BY fts_rank DESC
+            LIMIT :limit
             """),
             params,
         )
@@ -354,6 +422,74 @@ async def search_documents_fulltext(
     if not arabic_query:
         return []
 
+    params = {"user_id": user_id, "q": arabic_query, "limit": limit}
+    if settings.arabic_fts_stemming_enabled:
+        stem_query = _arabic_snowball_tsquery(query)
+        if not stem_query:
+            return []
+        params["stem_q"] = stem_query
+        normalizer = "ar_normalize_v2" if settings.arabic_fts_v2_enabled else "ar_normalize"
+        exact_vector = f"to_tsvector('simple', {normalizer}(coalesce(c.plain_text, '')))"
+        stem_legs = [
+            ("to_tsvector('arabic', coalesce(c.plain_text, ''))", "stem_q")
+        ]
+        if settings.arabic_fts_v2_enabled:
+            stem_v2_query = _arabic_snowball_tsquery(normalize_arabic_v2(query))
+            if stem_v2_query:
+                params["stem_v2_q"] = stem_v2_query
+                stem_legs.append(
+                    (
+                        "to_tsvector('arabic', ar_normalize_v2(coalesce(c.plain_text, '')))",
+                        "stem_v2_q",
+                    )
+                )
+        stem_ranks = [
+            f"ts_rank({vector}, to_tsquery('arabic', :{query_param}))"
+            for vector, query_param in stem_legs
+        ]
+        stem_rank = f"GREATEST({', '.join(stem_ranks)})" if len(stem_ranks) > 1 else stem_ranks[0]
+        stem_matches = " OR ".join(
+            f"{vector} @@ to_tsquery('arabic', :{query_param})"
+            for vector, query_param in stem_legs
+        )
+        result = await session.execute(
+            text(f"""
+                SELECT c.document_id AS id,
+                       MAX(ts_rank({exact_vector}, to_tsquery('simple', :q))
+                           + 0.5 * {stem_rank}) AS fts_rank
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE d.user_id = :user_id
+                  AND ({exact_vector} @@ to_tsquery('simple', :q) OR {stem_matches})
+                GROUP BY c.document_id
+                ORDER BY fts_rank DESC
+                LIMIT :limit
+            """),
+            params,
+        )
+        return [dict(row) for row in result.mappings().all()]
+
+    if settings.arabic_fts_v2_enabled:
+        result = await session.execute(
+            text("""
+                SELECT c.document_id AS id,
+                       MAX(ts_rank(
+                           to_tsvector('simple', ar_normalize_v2(coalesce(c.plain_text, ''))),
+                           to_tsquery('simple', :q)
+                       )) AS fts_rank
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE d.user_id = :user_id
+                  AND to_tsvector('simple', ar_normalize_v2(coalesce(c.plain_text, '')))
+                      @@ to_tsquery('simple', :q)
+                GROUP BY c.document_id
+                ORDER BY fts_rank DESC
+                LIMIT :limit
+            """),
+            params,
+        )
+        return [dict(row) for row in result.mappings().all()]
+
     result = await session.execute(
         text("""
             SELECT c.document_id AS id,
@@ -370,7 +506,7 @@ async def search_documents_fulltext(
             ORDER BY fts_rank DESC
             LIMIT :limit
         """),
-        {"user_id": user_id, "q": arabic_query, "limit": limit},
+        params,
     )
     return [dict(row) for row in result.mappings().all()]
 

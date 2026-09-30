@@ -105,12 +105,40 @@ async def _ensure_recent_columns() -> None:
                     U&'\\0627\\0627\\0627\\0627\\0647\\064A'
                 )
             $$""",
+        """CREATE OR REPLACE FUNCTION ar_normalize_v2(input_text TEXT)
+            RETURNS TEXT
+            LANGUAGE SQL
+            IMMUTABLE
+            STRICT
+            PARALLEL SAFE
+            AS $$
+                SELECT translate(
+                    translate(
+                        regexp_replace(
+                            normalize(input_text, NFKC),
+                            U&'[\\064B-\\065F\\0670\\0640]',
+                            '',
+                            'g'
+                        ),
+                        U&'\\0623\\0625\\0622\\0671\\0629\\0649\\0624\\0626\\06CC\\06A9',
+                        U&'\\0627\\0627\\0627\\0627\\0647\\064A\\0648\\064A\\064A\\0643'
+                    ),
+                    U&'\\0660\\0661\\0662\\0663\\0664\\0665\\0666\\0667\\0668\\0669\\06F0\\06F1\\06F2\\06F3\\06F4\\06F5\\06F6\\06F7\\06F8\\06F9',
+                    '01234567890123456789'
+                )
+            $$""",
         """CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar
             ON chunks
             USING gin (to_tsvector('simple', ar_normalize(coalesce(plain_text, ''))))""",
         """CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar_snowball
             ON chunks
             USING gin (to_tsvector('arabic', coalesce(plain_text, '')))""",
+        """CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar_v2_simple
+            ON chunks
+            USING gin (to_tsvector('simple', ar_normalize_v2(coalesce(plain_text, ''))))""",
+        """CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar_v2_arabic
+            ON chunks
+            USING gin (to_tsvector('arabic', ar_normalize_v2(coalesce(plain_text, ''))))""",
         # Reading order LLM correction (two-column papers)
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order JSONB",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_model TEXT",
