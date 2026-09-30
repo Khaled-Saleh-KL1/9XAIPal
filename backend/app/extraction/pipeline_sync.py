@@ -286,9 +286,14 @@ def update_document_status_sync(
 
 
 def clean_slate_sync(session: Session, document_id: UUID) -> None:
-    """Idempotency check and pre-injection cleanup: delete existing chunks, assets, and embeddings."""
+    """Delete existing summaries, chunks, assets, and embeddings before extraction."""
     logger.info(f"Cleaning slate for document {document_id}")
-    # 1. Delete associated embeddings
+    # 1. Delete summaries before the chunks they reference.
+    session.execute(
+        text("DELETE FROM section_summaries WHERE document_id = :doc_id"),
+        {"doc_id": document_id},
+    )
+    # 2. Delete associated embeddings
     session.execute(
         text("""
             DELETE FROM chunk_embeddings 
@@ -296,7 +301,7 @@ def clean_slate_sync(session: Session, document_id: UUID) -> None:
         """),
         {"doc_id": document_id}
     )
-    # 2. Delete associated assets
+    # 3. Delete associated assets
     session.execute(
         text("""
             DELETE FROM chunk_assets 
@@ -304,7 +309,7 @@ def clean_slate_sync(session: Session, document_id: UUID) -> None:
         """),
         {"doc_id": document_id}
     )
-    # 3. Delete chunks
+    # 4. Delete chunks
     session.execute(
         text("DELETE FROM chunks WHERE document_id = :doc_id"),
         {"doc_id": document_id}
