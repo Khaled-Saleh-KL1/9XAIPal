@@ -13,13 +13,14 @@ class DocumentRoute(str, Enum):
     ARABIC_STYLE_UNCERTAIN = "arabic_style_uncertain"
 
 
-# Whole-document `documents.extractor` values written by the Arabic route
-# (spec §11), including the reserved handwritten Pro value.
+# Whole-document extractor and page-provider labels written by the Arabic
+# route, including the Google Pro and ModelGateway page providers.
 ARABIC_OCR_EXTRACTORS = frozenset({
     "gemini_arabic_flash",
     "gemma4_arabic_fallback",
     "gemini_gemma_arabic_hybrid",
     "gemini_arabic_pro",
+    "modelgateway_gemini",
 })
 
 
@@ -66,13 +67,12 @@ class ArabicClassifierUnavailableError(ArabicRoutingError):
 
 
 class HandwrittenArabicUnavailable(ArabicRoutingError):
-    """Handwritten Arabic is detected but Gemini Pro billing is unavailable."""
+    """Handwritten Arabic is detected while its extraction route is disabled."""
 
     error_code = "handwritten_arabic_unavailable"
     public_message = (
-        "Handwritten Arabic extraction is not currently available because it "
-        "requires Gemini Pro with a billing-enabled account. No text was "
-        "extracted, and your original file has been kept."
+        "Handwritten Arabic isn't enabled yet. No text was extracted, and "
+        "your original file has been kept."
     )
 
     def __init__(self) -> None:
@@ -148,7 +148,7 @@ class GeminiOutputInvalid(RuntimeError):
 
 
 class GeminiKeysExhausted(RuntimeError):
-    """All configured Gemini keys failed; includes safe partial output/usage."""
+    """All configured Gemini providers failed; includes safe partial output/usage."""
 
     def __init__(
         self,
@@ -159,6 +159,7 @@ class GeminiKeysExhausted(RuntimeError):
         attempt_count: int | None = None,
         latency_ms: int = 0,
         attempt_metadata: Sequence[dict[str, Any]] = (),
+        final_provider: str | None = None,
     ) -> None:
         self.final_kind = final_kind
         self.best_partial = best_partial
@@ -168,6 +169,7 @@ class GeminiKeysExhausted(RuntimeError):
         )
         self.latency_ms = latency_ms
         self.attempt_metadata = tuple(attempt_metadata)
+        self.final_provider = final_provider
         super().__init__(f"Gemini OCR keys exhausted ({final_kind}).")
 
 

@@ -76,6 +76,8 @@ def _run_pipeline_success(db_session_sync, tmp_path, monkeypatch):
     by dotted path here) — runs the same success-path pipeline so the
     resulting trace tree can be inspected.
     """
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "arabic_ocr_enabled", False)
     doc_id = uuid4()
     job_id = uuid4()
     pdf_path = tmp_path / "test.pdf"

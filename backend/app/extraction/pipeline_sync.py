@@ -48,7 +48,6 @@ from app.extraction.arabic_fallback import GemmaArabicFallback
 from app.extraction.arabic_ocr import extract_arabic_document
 from app.extraction.arabic_types import (
     ArabicClassifierUnavailableError,
-    ArabicGeminiProNotConfigured,
     ArabicRoutingError,
     ArabicStyleConfirmationRequired,
     ClassificationDecision,
@@ -524,7 +523,7 @@ def run_pipeline_sync(
                     pdf_path=pdf_path,
                     output_dir=output_dir,
                     classification=classification,
-                    gemini_client=GeminiOcrClient(),
+                    gemini_client=GeminiOcrClient(writing_style="printed"),
                     gemma_client=GemmaArabicFallback(),
                     settings=settings,
                     progress_callback=_report_extraction_progress,
@@ -533,11 +532,25 @@ def run_pipeline_sync(
                 extractor = extraction.extractor
                 provider_summary = extraction.provider_summary
             elif classification.route == DocumentRoute.ARABIC_HANDWRITTEN:
-                if settings.arabic_handwritten_ocr_enabled:
-                    # The feature flag reserves the route, but cannot grant the
-                    # Gemini Pro billing access required to execute it.
-                    raise ArabicGeminiProNotConfigured()
-                raise HandwrittenArabicUnavailable()
+                if not settings.arabic_handwritten_ocr_enabled:
+                    raise HandwrittenArabicUnavailable()
+                if (
+                    classification.language not in {"arabic", "mixed"}
+                    or classification.writing_style != "handwritten"
+                ):
+                    raise ArabicStyleConfirmationRequired()
+                extraction = extract_arabic_document(
+                    pdf_path=pdf_path,
+                    output_dir=output_dir,
+                    classification=classification,
+                    gemini_client=GeminiOcrClient(writing_style="handwritten"),
+                    gemma_client=GemmaArabicFallback(),
+                    settings=settings,
+                    progress_callback=_report_extraction_progress,
+                )
+                output_dir = extraction.output_dir
+                extractor = extraction.extractor
+                provider_summary = extraction.provider_summary
             else:
                 raise ArabicStyleConfirmationRequired()
         else:

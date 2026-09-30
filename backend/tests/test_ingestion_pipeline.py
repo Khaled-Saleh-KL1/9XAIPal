@@ -9,6 +9,13 @@ from app.extraction.mineru_client import MinerUError
 from app.extraction.jobs import JobStatus
 
 
+@pytest.fixture(autouse=True)
+def _keep_legacy_pipeline_tests_on_explicit_flag_off(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "arabic_ocr_enabled", False)
+
+
 def test_run_pipeline_success(
     db_session_sync,
     tmp_path,

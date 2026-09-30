@@ -65,19 +65,33 @@ class Settings(BaseSettings):
     extractor_vlm_concurrency: int = 3      # bounded to respect Ollama Cloud rate limits
 
     # ── Arabic document OCR (feature-flagged; separate from English extractors) ──
-    arabic_ocr_enabled: bool = False
-    arabic_handwritten_ocr_enabled: bool = False
+    arabic_ocr_enabled: bool = True
+    arabic_handwritten_ocr_enabled: bool = True
     arabic_router_model: str = "qwen3-vl:4b-instruct"
     arabic_router_base_url: str = "http://localhost:11434"
+    modelgateway_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MODELGATEWAY_API_KEY", "modelgateway_api_key"),
+    )
+    modelgateway_base_url: str = Field(
+        default="https://www.modelgateway.co",
+        validation_alias=AliasChoices("MODELGATEWAY_BASE_URL", "modelgateway_base_url"),
+    )
     gemini_api_keys_raw: str = Field(
         default="",
         validation_alias=AliasChoices("GEMINI_API_KEYS", "gemini_api_keys_raw"),
     )
     arabic_gemini_printed_model: str = "gemini-3.7-flash"
     arabic_gemini_printed_thinking_level: Literal["low"] = "low"
+    arabic_gateway_printed_model: str = "gemini-3.8-flash"
+    arabic_gateway_handwritten_model: str = "gemini-3.1-pro"
     arabic_gemini_timeout_seconds: float = Field(default=120.0, gt=0)
     arabic_gemini_retry_after_max_seconds: float = Field(default=10.0, ge=0, le=60)
     arabic_gemini_handwritten_model: str = "gemini-3.1-pro-preview"
+    arabic_gemini_send_thinking_config: bool = True
+    arabic_gemini_send_media_resolution: bool = True
+    arabic_gemini_gateway_batch_pages: int = Field(default=1, ge=1)
+    arabic_gemini_gateway_max_wait_seconds: float = Field(default=120.0, ge=0)
     arabic_gemma_fallback_model: str = "gemma4:31b-cloud"
     arabic_gemma_base_url: str = "https://ollama.com"
     arabic_gemma_api_keys_raw: str = Field(
