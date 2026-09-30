@@ -36,6 +36,7 @@ _RETRY_DELAY_MAX_SEC = 4.0
 _MAX_GATEWAY_ATTEMPTS = 12
 _GATEWAY_RETRY_DELAY_MAX_SEC = 30.0
 _GATEWAY_PROVIDER = "modelgateway_gemini"
+_GATEWAY_FAILED_BATCHES_BEFORE_SKIP = 2
 
 
 def batch_prompt(_pages: Sequence[RenderedPage]) -> str:
@@ -201,6 +202,7 @@ class GeminiOcrClient:
         self.jitter = jitter
         self._blocked_keys: dict[int, str] = {}
         self._gateway_blocked = False
+        self._gateway_failed_batches = 0
 
     @tracing.traced("llm.gemini_ocr", tracing.LLM, record_args=False)
     def generate_batch(
@@ -244,7 +246,21 @@ class GeminiOcrClient:
                 )
                 final_kind = error.final_kind
                 final_provider = error.final_provider or _GATEWAY_PROVIDER
+                # ⚠ When every gateway seller is failing, each page would wait
+                # out the gateway's full retry budget before the Google keys
+                # answer (live, 2026-09-30: 16 pages took 10.7 min). After two
+                # exhausted batches in a row the rest of THIS document skips
+                # the gateway; the next document (a new client) tries it again.
+                self._gateway_failed_batches += 1
+                if self._gateway_failed_batches >= _GATEWAY_FAILED_BATCHES_BEFORE_SKIP:
+                    self._gateway_blocked = True
+                    logger.warning(
+                        "ModelGateway failed %d batches in a row; using the fallback "
+                        "providers for the rest of this document",
+                        self._gateway_failed_batches,
+                    )
             else:
+                self._gateway_failed_batches = 0
                 return self._with_prior_attempts(
                     gateway_result,
                     prior_usage,

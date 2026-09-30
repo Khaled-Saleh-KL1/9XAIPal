@@ -702,3 +702,49 @@ def test_gateway_that_keeps_failing_falls_back_to_google_keys():
 
     assert result.provider != "modelgateway_gemini"
     assert google.models.calls == 1
+
+
+def test_gateway_is_skipped_for_the_rest_of_a_document_after_two_failed_batches():
+    # Live (2026-09-30): with every seller failing, each page waited through the
+    # gateway's full retry budget before Google answered — 16 pages took 10.7
+    # minutes. Two exhausted batches in a row now send the rest of the document
+    # straight to the Google keys.
+    gateway = FakeClient([api_error(503, message="Upstream provider unavailable")] * 200)
+    google = FakeClient([response(PAGE_1)] * 4)
+    client = make_client(
+        "google-secret",
+        {"gateway-secret": gateway, "google-secret": google},
+        gateway_key="gateway-secret",
+        sleep=lambda _s: None,
+        arabic_gemini_gateway_max_wait_seconds=1,
+    )
+
+    client.generate_batch([page(1)], validator=complete_validator)
+    client.generate_batch([page(1)], validator=complete_validator)
+    calls_after_two = gateway.models.calls
+    third = client.generate_batch([page(1)], validator=complete_validator)
+    fourth = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert calls_after_two > 0
+    assert gateway.models.calls == calls_after_two
+    assert third.provider == fourth.provider != "modelgateway_gemini"
+    assert google.models.calls == 4
+
+
+def test_one_failed_gateway_batch_does_not_skip_it():
+    # A 1 s wait budget allows 3 gateway attempts per batch (0.25 s, 0.5 s, …).
+    gateway = FakeClient([api_error(503, message="Upstream provider unavailable")] * 3 + [response(PAGE_1)])
+    google = FakeClient([response(PAGE_1)])
+    client = make_client(
+        "google-secret",
+        {"gateway-secret": gateway, "google-secret": google},
+        gateway_key="gateway-secret",
+        sleep=lambda _s: None,
+        arabic_gemini_gateway_max_wait_seconds=1,
+    )
+
+    first = client.generate_batch([page(1)], validator=complete_validator)
+    second = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert first.provider != "modelgateway_gemini"
+    assert second.provider == "modelgateway_gemini"
