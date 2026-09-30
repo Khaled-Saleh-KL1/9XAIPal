@@ -284,7 +284,9 @@ def embed_document(self, document_id: str, force: bool = False) -> dict:
     default_retry_delay=30,
     acks_late=True,
 )
-def generate_section_summaries(self, document_id: str) -> dict:
+def generate_section_summaries(
+    self, document_id: str, force: bool = False
+) -> dict:
     """
     Generate rich, attributed, hierarchical section summaries + paper-level overview.
 
@@ -292,7 +294,9 @@ def generate_section_summaries(self, document_id: str) -> dict:
     It exists because the author wants the absolute best possible answers to
     "Summarize the paper" / "What is this about?" questions.
     """
-    logger.info(f"[celery] generate_section_summaries start document={document_id}")
+    logger.info(
+        f"[celery] generate_section_summaries start document={document_id} force={force}"
+    )
 
     sync_engine.dispose()
 
@@ -320,7 +324,9 @@ def generate_section_summaries(self, document_id: str) -> dict:
             # Section summaries (non-fatal: a failure here must not block the
             # document from ever reaching "complete").
             try:
-                result = generate_and_store_section_summaries_sync(session, doc_uuid)
+                result = generate_and_store_section_summaries_sync(
+                    session, doc_uuid, force=force
+                )
             except Exception:
                 logger.exception(f"[celery] Section summary generation failed for {document_id} (non-fatal)")
                 session.rollback()

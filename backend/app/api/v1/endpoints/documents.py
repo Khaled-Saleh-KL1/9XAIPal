@@ -1362,7 +1362,7 @@ async def regenerate_section_summaries(
 
     # Fire the Celery task (idempotent inside the summarizer unless force=True)
     try:
-        generate_section_summaries.delay(str(paper_id))  # type: ignore[attr-defined]
+        generate_section_summaries.delay(str(paper_id), force=force)  # type: ignore[attr-defined]
     except Exception as e:
         logger.exception("Failed to dispatch regenerate summaries")
         raise HTTPException(status_code=500, detail=f"Failed to dispatch summarization task: {e}")

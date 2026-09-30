@@ -408,6 +408,30 @@ async def test_reextract_preserves_user_confirmed_classification(
 
 
 @pytest.mark.asyncio
+async def test_regenerate_summaries_dispatches_force_value(client, db_session, monkeypatch):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session,
+        await _user_id(db_session, email),
+        status="complete",
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        documents_endpoint.generate_section_summaries,
+        "delay",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)),
+    )
+
+    response = await client.post(
+        f"/api/v1/papers/{document_id}/regenerate-summaries?force=true"
+    )
+
+    assert response.status_code == 202
+    assert response.json()["force"] is True
+    assert dispatched == [((str(document_id),), {"force": True})]
+
+
+@pytest.mark.asyncio
 async def test_rechunk_cleans_arabic_plain_text_and_refreshes_token_count(
     client, db_session, monkeypatch, tmp_path
 ):
