@@ -17,7 +17,11 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.language import SOURCE_LANGUAGE_RULE, is_primarily_arabic
+from app.core.language import (
+    SOURCE_LANGUAGE_RULE,
+    is_primarily_arabic,
+    normalize_arabic_for_matching,
+)
 from app.llm.resolver import resolve_llm_sync
 from app.core import tracing
 from app.core.logging import get_logger
@@ -143,14 +147,47 @@ _ARABIC_SUMMARY_OUTPUT_LABELS = (
     ),
 )
 
+_ARABIC_TABLE_OF_CONTENTS_HEADINGS = frozenset(
+    {"المحتويات", "الفهرس", "فهرس المحتويات"}
+)
+
 
 def _summary_prompt_for_source(prompt: str, source_text: str) -> str:
     """Return a summary prompt whose skeleton labels match the source language."""
     if not is_primarily_arabic(source_text):
         return prompt
+    prompt = prompt.replace(
+        "You are an expert research assistant helping a scientist deeply understand their own paper.",
+        "You are an expert assistant helping a reader deeply understand a document.",
+    )
+    prompt = prompt.replace(
+        "one major section of a scientific paper",
+        "one major section of a document — a research paper, a book, a story or other text",
+    )
+    prompt = prompt.replace(
+        "Use the exact technical terminology from the paper.",
+        "Use the exact names and terminology found in the text.",
+    )
+    prompt = prompt.replace(
+        "a list of high-quality summaries of every major section (H1 and important H2) of a scientific paper, in reading order.",
+        "a list of high-quality summaries of every major section (H1 and important H2) of a document, such as a research paper, a book, a story or other text, in reading order.",
+    )
+    prompt = prompt.replace(
+        "the entire paper (what the author would put in a really good \"Broader Impact / Conclusion\" or a very strong abstract).",
+        "the entire document, giving a reader a clear overview of its subject and contents.",
+    )
+    prompt = prompt.replace(
+        "- The core research problem and why it matters\n- The key technical approach / contribution (be specific)\n- The most important results and evidence",
+        "- The document's subject, purpose, and central ideas, events, or arguments\n- The most important details, evidence, or outcomes\n- The way its parts fit together",
+    )
     for english_label, arabic_label in _ARABIC_SUMMARY_PROMPT_LABELS:
         prompt = prompt.replace(english_label, arabic_label)
     return prompt
+
+
+def _is_arabic_table_of_contents_heading(heading: str) -> bool:
+    normalized = " ".join(normalize_arabic_for_matching(heading).split())
+    return normalized in _ARABIC_TABLE_OF_CONTENTS_HEADINGS
 
 
 def _localize_leading_summary_labels(summary: str, source_text: str) -> str:
@@ -393,20 +430,50 @@ def generate_and_store_section_summaries_sync(
     # Resolved upfront because the model name keys the idempotency check and
     # the stored summary rows.
     model = model or resolve_llm_sync().chat_model
-    prompt_hash = hash_prompt(SECTION_SUMMARY_PROMPT_V1 + PAPER_OVERVIEW_PROMPT_V1)
-
     logger.info(f"[summarizer] Starting high-quality section summarization for {document_id} using {model}")
 
-    # Idempotency: if we already have summaries for this model + prompt_hash, skip unless forced
+    chunks = _fetch_all_chunks_for_doc(session, document_id)
+    source_text = "\n\n".join(
+        (chunk.get("markdown") or chunk.get("plain_text") or "").strip()
+        for chunk in chunks
+    )
+    section_prompt = _summary_prompt_for_source(
+        SECTION_SUMMARY_PROMPT_V1, source_text
+    )
+    overview_prompt = _summary_prompt_for_source(
+        PAPER_OVERVIEW_PROMPT_V1, source_text
+    )
+    prompt_hash = hash_prompt(section_prompt + overview_prompt)
+
+    # Idempotency also verifies that every source chunk used by an existing
+    # summary still belongs to this document. Re-extraction/re-chunking can
+    # delete those chunks without changing the model or prompt.
     if not force:
         existing = session.execute(
             text("""
-                SELECT COUNT(*) as n FROM section_summaries
-                WHERE document_id = :doc_id AND model = :model AND prompt_hash = :ph
+                SELECT COUNT(*) AS n,
+                       COALESCE(BOOL_AND(NOT EXISTS (
+                           SELECT 1
+                           FROM unnest(summary.source_chunk_ids) AS stored(source_chunk_id)
+                           WHERE NOT EXISTS (
+                               SELECT 1
+                               FROM chunks AS current_chunk
+                               WHERE current_chunk.id = stored.source_chunk_id
+                                 AND current_chunk.document_id = summary.document_id
+                           )
+                       )), FALSE) AS source_chunks_current
+                FROM section_summaries AS summary
+                WHERE summary.document_id = :doc_id
+                  AND summary.model = :model
+                  AND summary.prompt_hash = :ph
             """),
             {"doc_id": str(document_id), "model": model, "ph": prompt_hash},
         ).mappings().first()
-        if existing and existing["n"] > 0:
+        if (
+            existing
+            and existing["n"] > 0
+            and existing["source_chunks_current"]
+        ):
             logger.info(f"[summarizer] Summaries already exist for {document_id} with current prompt/model. Skipping.")
             return {"skipped": True, "reason": "already_exists", "count": int(existing["n"])}
 
@@ -416,7 +483,6 @@ def generate_and_store_section_summaries_sync(
         {"doc_id": str(document_id), "model": model},
     )
 
-    chunks = _fetch_all_chunks_for_doc(session, document_id)
     if not chunks:
         logger.warning(f"[summarizer] No chunks found for {document_id} — nothing to summarize")
         return {"skipped": True, "reason": "no_chunks"}
@@ -424,15 +490,26 @@ def generate_and_store_section_summaries_sync(
     sections = group_chunks_into_sections(chunks)
     logger.info(f"[summarizer] Grouped into {len(sections)} major sections (H1/H2)")
 
+    arabic_source = is_primarily_arabic(source_text)
+
     summaries_created = 0
 
     for sec in sections:
+        if arabic_source and _is_arabic_table_of_contents_heading(
+            sec["heading_text"]
+        ):
+            logger.info(
+                "[summarizer] Skipping Arabic table-of-contents section %r",
+                sec["heading_text"],
+            )
+            continue
+
         section_text = sec["text"][:12000]  # Safety cap — very long sections get truncated
 
         messages = [
             {
                 "role": "system",
-                "content": _summary_prompt_for_source(SECTION_SUMMARY_PROMPT_V1, section_text),
+                "content": section_prompt,
             },
             {"role": "user", "content": section_text},
         ]
@@ -493,7 +570,7 @@ def generate_and_store_section_summaries_sync(
         overview_messages = [
             {
                 "role": "system",
-                "content": _summary_prompt_for_source(PAPER_OVERVIEW_PROMPT_V1, overview_text),
+                "content": overview_prompt,
             },
             {"role": "user", "content": overview_text},
         ]
