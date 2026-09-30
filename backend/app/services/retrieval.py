@@ -14,6 +14,8 @@ from app.database.repositories import embeddings as emb_repo
 from app.database.repositories import assets as asset_repo
 from app.database.pgvector import search_chunks_fulltext
 from app.embeddings.model import get_query_embedding
+from app.core.config import settings
+from app.services import arabic_query_understanding
 from app.services.query_translation import translated_query
 
 logger = get_logger(__name__)
@@ -147,6 +149,44 @@ async def search_chunks(
         opposite_ids = [document_id]
     else:
         opposite_ids = []
+
+    if query_language == "arabic" and settings.arabic_query_understanding_enabled:
+        understanding = await arabic_query_understanding.understand_arabic_query(query)
+        if understanding:
+            fetch_n = max(limit * 3, 15)
+            ranked_lists = [await _search_chunks_for_query(
+                session, query, fetch_n, document_id, document_ids, max_sequence_id
+            )]
+
+            msa = understanding["msa"].strip()
+            if msa and msa != query.strip():
+                ranked_lists.append(await _search_chunks_for_query(
+                    session, msa, fetch_n, document_id, document_ids, max_sequence_id
+                ))
+
+            keywords = " ".join(understanding["keywords"])
+            if keywords:
+                try:
+                    keyword_hits = await search_chunks_fulltext(
+                        session, keywords, limit=fetch_n, document_id=document_id,
+                        document_ids=document_ids, max_sequence_id=max_sequence_id,
+                    )
+                except Exception:
+                    logger.warning("Arabic keyword search failed; keeping other query legs", exc_info=True)
+                    keyword_hits = []
+                ranked_lists.append(keyword_hits)
+
+            english_target_ids = opposite_ids
+            if english_target_ids:
+                english_hits = await _search_chunks_for_query(
+                    session, understanding["english"], fetch_n,
+                    None if document_ids else english_target_ids[0],
+                    english_target_ids if document_ids else None,
+                    max_sequence_id,
+                )
+                ranked_lists.append(english_hits)
+
+            return reciprocal_rank_fusion(ranked_lists, limit)
 
     if not opposite_ids:
         return await _search_chunks_for_query(

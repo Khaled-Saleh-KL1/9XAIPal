@@ -389,6 +389,7 @@ async def search_documents_semantic(
     user_id: UUID,
     query_embedding: list[float],
     limit: int = 20,
+    document_ids: list[UUID] | None = None,
 ) -> list[dict]:
     """``[{id, similarity}]`` for this user's documents that already have a
     search_embedding, ranked closest first. No index (an ordinary personal
@@ -396,16 +397,31 @@ async def search_documents_semantic(
     vector column per row costs nothing close to what would justify an HNSW
     index, unlike chunk_embeddings which can hold tens of thousands of rows).
     """
-    result = await session.execute(
-        text("""
+    if document_ids is not None and not document_ids:
+        return []
+    if document_ids is None:
+        statement = text("""
             SELECT id, 1 - (search_embedding <=> CAST(:embedding AS vector)) AS similarity
             FROM documents
             WHERE user_id = :user_id AND search_embedding IS NOT NULL
             ORDER BY search_embedding <=> CAST(:embedding AS vector)
             LIMIT :limit
-        """),
-        {"user_id": user_id, "embedding": _vector_literal(query_embedding), "limit": limit},
-    )
+        """)
+        params = {"user_id": user_id, "embedding": _vector_literal(query_embedding), "limit": limit}
+    else:
+        statement = text("""
+            SELECT id, 1 - (search_embedding <=> CAST(:embedding AS vector)) AS similarity
+            FROM documents
+            WHERE user_id = :user_id AND search_embedding IS NOT NULL
+              AND id = ANY(:document_ids)
+            ORDER BY search_embedding <=> CAST(:embedding AS vector)
+            LIMIT :limit
+        """)
+        params = {
+            "user_id": user_id, "embedding": _vector_literal(query_embedding),
+            "document_ids": document_ids, "limit": limit,
+        }
+    result = await session.execute(statement, params)
     return [dict(r) for r in result.mappings().all()]
 
 

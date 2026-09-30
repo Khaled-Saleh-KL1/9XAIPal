@@ -423,6 +423,7 @@ class Settings(BaseSettings):
     # Snowball contributes a lower-weight score when enabled.
     arabic_fts_stemming_enabled: bool = True
     arabic_fts_v2_enabled: bool = True
+    arabic_query_understanding_enabled: bool = True
 
     # ── Web search ──────────────────────────────────────────────────────────
     # Which provider(s) serve the EXTERNAL route, the research agent, and the
