@@ -314,3 +314,36 @@ def test_content_list_chunker_keeps_ordered_absolute_page_numbers(tmp_path):
 def test_invalid_requested_page_numbers_are_rejected(expected_pages):
     with pytest.raises(ValueError):
         parse_complete_page_prefix("", expected_pages, "gemini", "m")
+
+
+# Live (2026-09-30): an Arabic book whose page 1 is a cover picture failed as a
+# whole — every provider returned an empty page 1, the parser refused it, and
+# no page could ever be committed. A page with no text is now declared with the
+# [NO_TEXT] marker; a silently empty page is still refused.
+def test_no_text_marker_commits_an_empty_page():
+    raw = page_section(1, "[NO_TEXT]") + "\n" + page_section(2, "نص الصفحة الثانية")
+
+    parsed = parse_complete_page_prefix(raw, [1, 2], "gemini", "m")
+
+    assert parsed.is_complete is True
+    assert [p.page_number for p in parsed.pages] == [1, 2]
+    assert parsed.pages[0].markdown == ""
+    assert parsed.pages[1].markdown == "نص الصفحة الثانية"
+
+
+def test_no_text_page_produces_no_content_blocks():
+    parsed = parse_complete_page_prefix(page_section(1, " [NO_TEXT] "), [1], "gemini", "m")
+
+    blocks = pages_to_content_list(parsed.pages)
+
+    assert parsed.is_complete is True
+    assert all(block.get("page_idx") != 0 or not str(block.get("text", "")).strip() for block in blocks)
+    assert not any("NO_TEXT" in json.dumps(block, ensure_ascii=False) for block in blocks)
+
+
+def test_ocr_prompts_explain_the_no_text_marker():
+    from app.extraction.arabic_fallback import GemmaArabicFallback  # noqa: F401
+    from app.extraction import arabic_fallback, gemini_ocr_client
+
+    assert "[NO_TEXT]" in gemini_ocr_client.batch_prompt([])
+    assert "[NO_TEXT]" in open(arabic_fallback.__file__, encoding="utf-8").read()

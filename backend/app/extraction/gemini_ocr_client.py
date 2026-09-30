@@ -52,6 +52,8 @@ def batch_prompt(_pages: Sequence[RenderedPage]) -> str:
         "Do not translate, summarize, infer, perform spelling correction, invent diacritics, "
         "or modernize historical spelling. "
         "Mark illegible text as [غير واضح]. "
+        "If a page has no text at all (a cover picture, a blank page, a full-page image), "
+        "write exactly [NO_TEXT] between its markers. "
         "Wrap each page exactly with <!-- PAGE:n --> and <!-- END_PAGE:n --> "
         "markers, replacing n with that page's number shown before its image."
     )
