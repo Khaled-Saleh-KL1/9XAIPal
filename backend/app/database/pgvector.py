@@ -277,6 +277,40 @@ async def search_documents_semantic(
     return [dict(r) for r in result.mappings().all()]
 
 
+async def search_documents_fulltext(
+    session: AsyncSession,
+    user_id: UUID,
+    query: str,
+    limit: int = 20,
+) -> list[dict]:
+    """Find this user's documents by Arabic chunk text, ranked by FTS rank."""
+    if not is_primarily_arabic(query):
+        return []
+    arabic_query = _arabic_tsquery(query)
+    if not arabic_query:
+        return []
+
+    result = await session.execute(
+        text("""
+            SELECT c.document_id AS id,
+                   MAX(ts_rank(
+                       to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
+                       to_tsquery('simple', :q)
+                   )) AS fts_rank
+            FROM chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE d.user_id = :user_id
+              AND to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
+                  @@ to_tsquery('simple', :q)
+            GROUP BY c.document_id
+            ORDER BY fts_rank DESC
+            LIMIT :limit
+        """),
+        {"user_id": user_id, "q": arabic_query, "limit": limit},
+    )
+    return [dict(row) for row in result.mappings().all()]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Agent memory (see chat/memory.py)
 # ─────────────────────────────────────────────────────────────────────────────

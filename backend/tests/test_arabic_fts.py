@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import text
 
 from app.services import retrieval
+from app.database import pgvector
 from app.database.pgvector import search_chunks_fulltext
 
 
@@ -151,3 +152,33 @@ async def test_english_document_keeps_existing_fts_sql_and_does_not_translate(
             ORDER BY fts_rank DESC
             LIMIT :limit
         """.strip()]
+
+
+async def test_library_arabic_fulltext_is_scoped_to_the_requesting_user(db_session):
+    user_ids = [uuid4(), uuid4()]
+    document_ids = [uuid4(), uuid4()]
+    for index, (user_id, document_id) in enumerate(zip(user_ids, document_ids)):
+        await db_session.execute(
+            text("INSERT INTO users (id, email, password_hash) VALUES (:id, :email, 'x')"),
+            {"id": user_id, "email": f"library-{index}-{user_id}@example.test"},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO documents (id, user_id, filename, original_filename, status)
+                VALUES (:id, :user_id, 'paper.pdf', 'paper.pdf', 'complete')
+            """),
+            {"id": document_id, "user_id": user_id},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO chunks (document_id, sequence_id, markdown, plain_text)
+                VALUES (:document_id, 1, 'الشبكات العصبية', 'الشبكات العصبية')
+            """),
+            {"document_id": document_id},
+        )
+    await db_session.commit()
+
+    search_documents = getattr(pgvector, "search_documents_fulltext")
+    results = await search_documents(db_session, user_ids[0], "شبكات عصبية", limit=10)
+
+    assert [row["id"] for row in results] == [document_ids[0]]

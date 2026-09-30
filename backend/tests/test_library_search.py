@@ -21,6 +21,7 @@ def mocked_deps(monkeypatch):
     monkeypatch.setattr(library_search, "set_document_search_embedding", AsyncMock())
     monkeypatch.setattr(library_search, "get_query_embedding", AsyncMock(return_value=[0.1, 0.2]))
     monkeypatch.setattr(library_search, "search_documents_semantic", AsyncMock(return_value=[]))
+    monkeypatch.setattr(library_search, "translated_query", AsyncMock(return_value=None), raising=False)
     yield
 
 
@@ -89,3 +90,82 @@ async def test_similarity_threshold_drops_weak_matches(monkeypatch):
     results = await library_search.semantic_search_documents(object(), "user-1", "transformers")
 
     assert [r["id"] for r in results] == ["doc-1", "doc-2"]
+
+
+async def test_library_search_translates_and_fuses_semantic_and_arabic_keyword_hits(monkeypatch):
+    translation = "آلية الانتباه"
+    translate = AsyncMock(return_value=translation)
+    monkeypatch.setattr(library_search, "translated_query", translate, raising=False)
+    query_embed = AsyncMock(side_effect=[[0.1], [0.2]])
+    monkeypatch.setattr(library_search, "get_query_embedding", query_embed)
+    semantic = AsyncMock(side_effect=[
+        [
+            {"id": "doc-a", "similarity": 0.52},
+            {"id": "doc-b", "similarity": 0.41},
+        ],
+        [
+            {"id": "doc-b", "similarity": 0.83},
+            {"id": "doc-c", "similarity": 0.61},
+        ],
+    ])
+    monkeypatch.setattr(library_search, "search_documents_semantic", semantic)
+    keyword = AsyncMock(return_value=[
+        {"id": "doc-d", "fts_rank": 0.2},
+        {"id": "doc-b", "fts_rank": 0.1},
+    ])
+    monkeypatch.setattr(library_search, "search_documents_fulltext", keyword, raising=False)
+    session = object()
+
+    results = await library_search.semantic_search_documents(
+        session, "user-1", "How does attention work?", limit=4
+    )
+
+    translate.assert_awaited_once_with("How does attention work?", "arabic")
+    assert query_embed.await_args_list[0].args == ("How does attention work?",)
+    assert query_embed.await_args_list[1].args == (translation,)
+    assert semantic.await_count == 2
+    keyword.assert_awaited_once_with(session, "user-1", translation, limit=15)
+    assert [row["id"] for row in results] == ["doc-b", "doc-d", "doc-a", "doc-c"]
+    assert results[0] == {"id": "doc-b", "similarity": 0.83}
+    assert results[1] == {"id": "doc-d", "similarity": 0.0}
+
+
+async def test_arabic_library_search_uses_original_for_keyword_and_falls_back_on_translation_failure(
+    monkeypatch,
+):
+    query = "الشبكات العصبية"
+    translate = AsyncMock(return_value="neural networks")
+    monkeypatch.setattr(library_search, "translated_query", translate, raising=False)
+    query_embed = AsyncMock(side_effect=[[0.1], [0.2]])
+    monkeypatch.setattr(library_search, "get_query_embedding", query_embed)
+    monkeypatch.setattr(
+        library_search,
+        "search_documents_semantic",
+        AsyncMock(side_effect=[[], [{"id": "translated-doc", "similarity": 0.7}]]),
+    )
+    keyword = AsyncMock(return_value=[{"id": "keyword-doc", "fts_rank": 0.2}])
+    monkeypatch.setattr(library_search, "search_documents_fulltext", keyword, raising=False)
+    session = object()
+
+    results = await library_search.semantic_search_documents(session, "user-2", query)
+
+    translate.assert_awaited_once_with(query, "english")
+    keyword.assert_awaited_once_with(session, "user-2", query, limit=60)
+    assert {row["id"] for row in results} == {"translated-doc", "keyword-doc"}
+
+    translate_failure = AsyncMock(return_value=None)
+    monkeypatch.setattr(library_search, "translated_query", translate_failure, raising=False)
+    query_embed = AsyncMock(return_value=[0.3])
+    monkeypatch.setattr(library_search, "get_query_embedding", query_embed)
+    semantic = AsyncMock(return_value=[{"id": "original-doc", "similarity": 0.6}])
+    monkeypatch.setattr(library_search, "search_documents_semantic", semantic)
+    keyword = AsyncMock(return_value=[])
+    monkeypatch.setattr(library_search, "search_documents_fulltext", keyword, raising=False)
+
+    fallback = await library_search.semantic_search_documents(session, "user-2", "attention")
+
+    translate_failure.assert_awaited_once_with("attention", "arabic")
+    query_embed.assert_awaited_once_with("attention")
+    semantic.assert_awaited_once()
+    keyword.assert_not_awaited()
+    assert fallback == [{"id": "original-doc", "similarity": 0.6}]
