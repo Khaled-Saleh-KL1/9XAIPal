@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -89,6 +91,34 @@ class ArabicOcrBatchInvalid(ArabicExtractionFailed):
 
 # Shown in place of a page no provider could OCR (see the Gemma loop below).
 UNREADABLE_PAGE_MARKER = "[تعذر استخراج هذه الصفحة]"
+
+_ARABIC_OCR_MARKS = r"\u064b-\u0652\u0670"
+_ARABIC_OCR_LETTERS = r"\u0621-\u064a\u066e-\u06d3\u0750-\u077f\u08a0-\u08ff"
+_BROKEN_ARABIC_MARKED_WORD_RE = re.compile(
+    rf"(?P<base>[{_ARABIC_OCR_LETTERS}])\s+"
+    rf"(?P<marks>(?:[{_ARABIC_OCR_MARKS}]\s*)+)\s+"
+    rf"(?P<next>[{_ARABIC_OCR_LETTERS}])"
+)
+_ARABIC_BASE_MARK_GAP_RE = re.compile(
+    rf"(?P<base>[{_ARABIC_OCR_LETTERS}])\s+"
+    rf"(?P<marks>(?:[{_ARABIC_OCR_MARKS}]\s*)+)"
+)
+
+
+def _normalize_arabic_ocr_mark_spacing(text: str) -> str:
+    """Join OCR-split Arabic diacritics to their base letters in broken words."""
+
+    def join_marked_word(match: re.Match[str]) -> str:
+        marks = re.sub(r"\s+", "", match.group("marks"))
+        return f"{match.group('base')}{marks}{match.group('next')}"
+
+    text = _BROKEN_ARABIC_MARKED_WORD_RE.sub(join_marked_word, text)
+
+    def join_base_and_marks(match: re.Match[str]) -> str:
+        marks = re.sub(r"\s+", "", match.group("marks"))
+        return f"{match.group('base')}{marks}"
+
+    return _ARABIC_BASE_MARK_GAP_RE.sub(join_base_and_marks, text)
 
 
 def _unreadable_page_budget(page_count: int, share: float) -> int:
@@ -632,6 +662,13 @@ def _write_artifacts(
     *,
     source_pdf_path: Path,
 ) -> None:
+    pages = tuple(
+        replace(
+            page,
+            markdown=_normalize_arabic_ocr_mark_spacing(page.markdown),
+        )
+        for page in pages
+    )
     content_list = pages_to_content_list(
         pages,
         pdf_path=source_pdf_path,
