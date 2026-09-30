@@ -1,6 +1,7 @@
 """pgvector operations: insert, search, and index management."""
 
 import re
+import unicodedata
 from uuid import UUID
 from typing import Optional
 
@@ -50,6 +51,31 @@ def _arabic_tsquery(query: str) -> str:
             elif word != "ال":
                 variants.append("ال" + word)
         terms.extend(variants)
+    return " | ".join(terms)
+
+
+def _arabic_snowball_tsquery(query: str) -> str:
+    """Build safe OR alternatives for PostgreSQL's Arabic stemmer.
+
+    PostgreSQL retains a prefixed waw/faa in forms such as ``والمعلمون``.
+    Include both prefixed and unprefixed query forms around the definite
+    article so either surface spelling can match the raw-text stem vector.
+    """
+    normalized = unicodedata.normalize("NFKC", query)
+    normalized = re.sub(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]", "", normalized)
+    words = re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
+    terms: list[str] = []
+    for word in words:
+        if _normalize_arabic_query(word) in _ARABIC_STOPWORD_SET:
+            continue
+        variants = [word]
+        if word.startswith(("وال", "فال")) and len(word) > 3:
+            variants.append(word[1:])
+        elif word.startswith("ال") and len(word) > 2:
+            variants.extend(("و" + word, "ف" + word))
+        for variant in variants:
+            if variant not in terms:
+                terms.append(variant)
     return " | ".join(terms)
 
 
@@ -199,6 +225,44 @@ async def search_chunks_fulltext(
         if not arabic_query:
             return []
         params["q"] = arabic_query
+        if settings.arabic_fts_stemming_enabled:
+            stem_query = _arabic_snowball_tsquery(query)
+            if not stem_query:
+                return []
+            params["stem_q"] = stem_query
+            result = await session.execute(
+                text(f"""
+                    WITH ranked AS (
+                        SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
+                               c.page_start, c.page_end, c.chunk_type,
+                               ts_rank(
+                                   to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
+                                   to_tsquery('simple', :q)
+                               ) AS simple_rank,
+                               ts_rank(
+                                   to_tsvector('arabic', coalesce(c.plain_text, '')),
+                                   to_tsquery('arabic', :stem_q)
+                               ) AS stem_rank
+                        FROM chunks c
+                        WHERE (
+                            to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
+                                @@ to_tsquery('simple', :q)
+                            OR to_tsvector('arabic', coalesce(c.plain_text, ''))
+                                @@ to_tsquery('arabic', :stem_q)
+                        )
+                        {filters}
+                    )
+                    SELECT id, document_id, sequence_id, markdown, plain_text,
+                           page_start, page_end, chunk_type,
+                           simple_rank + 0.5 * stem_rank AS fts_rank
+                    FROM ranked
+                    ORDER BY fts_rank DESC
+                    LIMIT :limit
+                """),
+                params,
+            )
+            return [dict(r) for r in result.mappings().all()]
+
         result = await session.execute(
             text(f"""
                 SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,

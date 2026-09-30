@@ -182,3 +182,38 @@ async def test_library_arabic_fulltext_is_scoped_to_the_requesting_user(db_sessi
     results = await search_documents(db_session, user_ids[0], "شبكات عصبية", limit=10)
 
     assert [row["id"] for row in results] == [document_ids[0]]
+
+
+def test_arabic_stemming_is_enabled_by_default():
+    assert getattr(pgvector.settings, "arabic_fts_stemming_enabled", None) is True
+
+
+async def test_arabic_snowball_matches_surface_forms_and_exact_text_ranks_first(db_session):
+    document_id, chunk_ids = await _add_document(
+        db_session,
+        chunks=[
+            "ذهبت إلى بالمكتبة الجامعية",
+            "في المكتبة الوطنية",
+            "والمعلمين في المدارس",
+            "قرأ الطلاب كتابهم",
+            "للشبكات العصبية العميقة",
+            "الشبكات العصبية",
+            "شبكة عصب متقدمة",
+        ],
+    )
+
+    for query, expected_id in (
+        ("مكتبة", chunk_ids[0]),
+        ("المكتبات", chunk_ids[1]),
+        ("المعلمون", chunk_ids[2]),
+        ("كتاب", chunk_ids[3]),
+        ("شبكة عصبية", chunk_ids[4]),
+    ):
+        rows = await search_chunks_fulltext(db_session, query, limit=10, document_id=document_id)
+        assert expected_id in [row["id"] for row in rows], query
+
+    rows = await search_chunks_fulltext(
+        db_session, "الشبكات العصبية", limit=10, document_id=document_id
+    )
+    ranked_ids = [row["id"] for row in rows]
+    assert ranked_ids.index(chunk_ids[5]) < ranked_ids.index(chunk_ids[6])

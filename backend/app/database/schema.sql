@@ -194,6 +194,10 @@ CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar
     ON chunks
     USING gin (to_tsvector('simple', ar_normalize(coalesce(plain_text, ''))));
 
+CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar_snowball
+    ON chunks
+    USING gin (to_tsvector('arabic', coalesce(plain_text, '')));
+
 -- Chunk embeddings with pgvector
 CREATE TABLE IF NOT EXISTS chunk_embeddings (
     chunk_id UUID PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,

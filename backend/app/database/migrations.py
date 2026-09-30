@@ -108,6 +108,9 @@ async def _ensure_recent_columns() -> None:
         """CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar
             ON chunks
             USING gin (to_tsvector('simple', ar_normalize(coalesce(plain_text, ''))))""",
+        """CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar_snowball
+            ON chunks
+            USING gin (to_tsvector('arabic', coalesce(plain_text, '')))""",
         # Reading order LLM correction (two-column papers)
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order JSONB",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_model TEXT",
