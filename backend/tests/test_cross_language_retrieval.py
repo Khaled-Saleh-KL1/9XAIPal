@@ -74,6 +74,12 @@ def _configure_search(monkeypatch, query_hits):
             "english",
         ),
         (
+            "ما آلية الانتباه؟",
+            {"id": "unknown-doc", "text_direction": None, "detected_language": None},
+            "attention mechanism",
+            "english",
+        ),
+        (
             "How does attention work?",
             {"id": "arabic-doc", "text_direction": "rtl", "detected_language": "arabic"},
             "كيف تعمل آلية الانتباه؟",
@@ -129,6 +135,27 @@ async def test_same_language_retrieval_uses_only_original_query_and_keeps_result
     assert [q for q, _ in fulltext_queries] == ["Explain attention"]
     assert [row["id"] for row in rows] == ["original"]
     assert rows[0]["rrf_score"] == pytest.approx(2 / 61)
+
+
+async def test_arabic_question_on_arabic_document_does_not_translate(monkeypatch):
+    doc_id = "arabic-doc"
+    query = "ما آلية الانتباه؟"
+    original = _hit("original", doc_id, 1)
+    query_hits = {1.0: {"vector": [original], "fulltext": [original]}}
+    embedding_queries, fulltext_queries, _ = _configure_search(monkeypatch, query_hits)
+    translate = AsyncMock(return_value="attention mechanism")
+    monkeypatch.setattr(retrieval, "translated_query", translate, raising=False)
+
+    rows = await retrieval.search_chunks(
+        LanguageSession([{"id": doc_id, "text_direction": "rtl", "detected_language": "english"}]),
+        query,
+        document_id=doc_id,
+    )
+
+    translate.assert_not_awaited()
+    assert embedding_queries == [query]
+    assert [q for q, _ in fulltext_queries] == [query]
+    assert [row["id"] for row in rows] == ["original"]
 
 
 async def test_translation_failure_keeps_original_retrieval_results(monkeypatch):

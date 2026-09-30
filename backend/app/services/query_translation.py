@@ -14,17 +14,7 @@ _TRANSLATION_TIMEOUT_SECONDS = 8
 _TARGET_NAMES = {"arabic": "Arabic", "english": "English"}
 
 
-async def translated_query(query: str, target_language: str) -> str | None:
-    """Translate a retrieval query, returning ``None`` when unavailable.
-
-    Only successful, non-empty translations are cached. Redis is best-effort:
-    a cache outage must not prevent the existing chat model from translating.
-    """
-    target = target_language.strip().lower()
-    target_name = _TARGET_NAMES.get(target)
-    if not query.strip() or target_name is None:
-        return None
-
+async def _translate_and_cache(query: str, target: str, target_name: str) -> str | None:
     digest = hashlib.sha1(query.encode("utf-8")).hexdigest()
     cache_key = f"query-translation:{digest}:{target}"
     try:
@@ -46,14 +36,11 @@ async def translated_query(query: str, target_language: str) -> str | None:
         {"role": "user", "content": query},
     ]
     try:
-        response = await asyncio.wait_for(
-            llm_client.chat(
-                messages,
-                role="chat",
-                temperature=0.0,
-                num_predict=128,
-            ),
-            timeout=_TRANSLATION_TIMEOUT_SECONDS,
+        response = await llm_client.chat(
+            messages,
+            role="chat",
+            temperature=0.0,
+            num_predict=128,
         )
         translation = str(response.get("content") or "").strip()
     except Exception as exc:
@@ -67,3 +54,24 @@ async def translated_query(query: str, target_language: str) -> str | None:
     except Exception as exc:
         logger.debug("query translation cache write failed: %s", exc)
     return translation
+
+
+async def translated_query(query: str, target_language: str) -> str | None:
+    """Translate a retrieval query under one overall deadline.
+
+    The deadline covers Redis reads/writes as well as the chat call. A stalled
+    cache or model therefore returns ``None`` so retrieval can use the source
+    query within the same bounded time budget.
+    """
+    target = target_language.strip().lower()
+    target_name = _TARGET_NAMES.get(target)
+    if not query.strip() or target_name is None:
+        return None
+    try:
+        return await asyncio.wait_for(
+            _translate_and_cache(query, target, target_name),
+            timeout=_TRANSLATION_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("query translation to %s exceeded its deadline", target)
+        return None

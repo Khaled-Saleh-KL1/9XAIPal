@@ -169,3 +169,32 @@ async def test_arabic_library_search_uses_original_for_keyword_and_falls_back_on
     semantic.assert_awaited_once()
     keyword.assert_not_awaited()
     assert fallback == [{"id": "original-doc", "similarity": 0.6}]
+
+
+@pytest.mark.parametrize("failure_stage", ["embedding", "semantic-search"])
+async def test_translated_library_leg_failure_preserves_original_results(
+    monkeypatch, failure_stage,
+):
+    monkeypatch.setattr(
+        library_search,
+        "translated_query",
+        AsyncMock(return_value="آلية الانتباه"),
+        raising=False,
+    )
+    if failure_stage == "embedding":
+        query_embed = AsyncMock(side_effect=[[0.1], RuntimeError("embedding unavailable")])
+        semantic = AsyncMock(return_value=[{"id": "original-doc", "similarity": 0.6}])
+    else:
+        query_embed = AsyncMock(side_effect=[[0.1], [0.2]])
+        semantic = AsyncMock(side_effect=[
+            [{"id": "original-doc", "similarity": 0.6}],
+            RuntimeError("translated search unavailable"),
+        ])
+    monkeypatch.setattr(library_search, "get_query_embedding", query_embed)
+    monkeypatch.setattr(library_search, "search_documents_semantic", semantic)
+    keyword = AsyncMock(return_value=[])
+    monkeypatch.setattr(library_search, "search_documents_fulltext", keyword, raising=False)
+
+    results = await library_search.semantic_search_documents(object(), "user-3", "attention")
+
+    assert results == [{"id": "original-doc", "similarity": 0.6}]

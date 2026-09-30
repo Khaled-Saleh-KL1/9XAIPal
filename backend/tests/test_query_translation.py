@@ -53,6 +53,26 @@ async def test_translation_timeout_returns_none_without_raising(monkeypatch):
     assert await query_translation.translated_query("attention", "arabic") is None
 
 
+async def test_stalled_chat_call_returns_none_at_the_translation_deadline(monkeypatch):
+    from app.services import query_translation
+
+    monkeypatch.setattr(query_translation, "get_redis", lambda: MemoryRedis())
+    monkeypatch.setattr(query_translation, "_TRANSLATION_TIMEOUT_SECONDS", 0.02)
+
+    async def never_finishes(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    chat = AsyncMock(side_effect=never_finishes)
+    monkeypatch.setattr(query_translation.llm_client, "chat", chat)
+
+    result = await asyncio.wait_for(
+        query_translation.translated_query("attention", "arabic"), timeout=0.2
+    )
+
+    assert result is None
+    chat.assert_awaited_once()
+
+
 async def test_translation_cache_failure_does_not_block_chat(monkeypatch):
     from app.services import query_translation
 
@@ -69,3 +89,35 @@ async def test_translation_cache_failure_does_not_block_chat(monkeypatch):
 
     assert await query_translation.translated_query("انتباه", "english") == "attention"
     chat.assert_awaited_once()
+
+
+@pytest.mark.parametrize("stalled_operation", ["get", "set"])
+async def test_stalled_redis_operations_obey_the_translation_deadline(
+    monkeypatch, stalled_operation,
+):
+    from app.services import query_translation
+
+    class StalledRedis:
+        async def get(self, _key):
+            if stalled_operation == "get":
+                await asyncio.Event().wait()
+            return None
+
+        async def set(self, *_args, **_kwargs):
+            if stalled_operation == "set":
+                await asyncio.Event().wait()
+
+    monkeypatch.setattr(query_translation, "get_redis", lambda: StalledRedis())
+    monkeypatch.setattr(query_translation, "_TRANSLATION_TIMEOUT_SECONDS", 0.02)
+    chat = AsyncMock(return_value={"content": "attention"})
+    monkeypatch.setattr(query_translation.llm_client, "chat", chat)
+
+    result = await asyncio.wait_for(
+        query_translation.translated_query("انتباه", "english"), timeout=0.2
+    )
+
+    assert result is None
+    if stalled_operation == "get":
+        chat.assert_not_awaited()
+    else:
+        chat.assert_awaited_once()

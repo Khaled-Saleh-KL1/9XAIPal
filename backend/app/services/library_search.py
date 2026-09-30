@@ -79,11 +79,17 @@ async def semantic_search_documents(
     )
     semantic_lists = [original_results]
     if translated:
-        translated_embedding = await get_query_embedding(translated)
-        translated_results = await search_documents_semantic(
-            session, user_id, translated_embedding, limit=search_limit
-        )
-        semantic_lists.append(translated_results)
+        try:
+            translated_embedding = await get_query_embedding(translated)
+            translated_results = await search_documents_semantic(
+                session, user_id, translated_embedding, limit=search_limit
+            )
+            semantic_lists.append(translated_results)
+        except Exception:
+            logger.warning(
+                "translated library semantic search failed; keeping original results",
+                exc_info=True,
+            )
 
     if len(semantic_lists) == 1:
         semantic_results = original_results
