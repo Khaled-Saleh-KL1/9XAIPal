@@ -1,11 +1,8 @@
 """Local-only Arabic document language and writing-style classification.
 
-Pages with a substantial English text layer and no substantive Arabic text are
-authoritatively English for language routing. Pages with Arabic body text still
-receive local style classification; only pages with missing or sparse text
-need visual language classification. Sparse-page Arabic votes require a
-high-confidence detail confirmation. Any unresolved style disagreement
-abstains instead of guessing handwritten.
+Every PDF page is checked for text first. Substantive Arabic text is printed
+evidence; sufficiently text-backed English documents bypass vision. Only scan
+documents use a small, evenly spread sample of single-page local vision calls.
 """
 
 from __future__ import annotations
@@ -36,6 +33,9 @@ LANGUAGES = frozenset({"english", "arabic", "mixed", "unknown"})
 WRITING_STYLES = frozenset({"printed", "handwritten", "mixed", "unknown"})
 _SCREEN_DPI = 72
 _DETAIL_DPI = 168
+_SCAN_SAMPLE_PAGES = 3
+_SCAN_MAX_IMAGE_SIDE = 1024
+_SCAN_MIN_DARK_PIXEL_SHARE = 0.001
 logger = logging.getLogger(__name__)
 _URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
 _WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
@@ -239,6 +239,79 @@ def render_page_images(
     return rendered
 
 
+def _sample_page_indices(page_count: int, limit: int = _SCAN_SAMPLE_PAGES) -> list[int]:
+    """Choose up to ``limit`` 1-based page numbers spread over the document."""
+    count = min(page_count, limit)
+    if count <= 0:
+        return []
+    if count == 1:
+        return [1]
+    return sorted({
+        1 + int(index * (page_count - 1) / (count - 1))
+        for index in range(count)
+    })
+
+
+def _pixmap_has_visible_content(pixmap: fitz.Pixmap) -> bool:
+    """Ignore pages whose raster contains only background and scan noise."""
+    pixel_count = pixmap.width * pixmap.height
+    minimum_dark_pixels = max(64, int(pixel_count * _SCAN_MIN_DARK_PIXEL_SHARE))
+    samples = pixmap.samples
+    dark_pixels = 0
+    for offset in range(0, len(samples), pixmap.n):
+        if samples[offset] < 245:
+            dark_pixels += 1
+            if dark_pixels >= minimum_dark_pixels:
+                return True
+    return False
+
+
+def _render_scan_sample(
+    pdf_path: Path, page_indices: Iterable[int]
+) -> list[ClassificationImage]:
+    """Render only selected scan pages, at no more than 1024 px per side."""
+    rendered: list[ClassificationImage] = []
+    try:
+        with fitz.open(pdf_path) as document:
+            for page_idx in page_indices:
+                if page_idx < 1 or page_idx > document.page_count:
+                    raise ArabicClassifierInputError("A requested PDF page is out of range")
+                page = document.load_page(page_idx - 1)
+                scale = min(
+                    1.0,
+                    _SCAN_MAX_IMAGE_SIDE / max(page.rect.width, page.rect.height),
+                )
+                pixmap = page.get_pixmap(
+                    matrix=fitz.Matrix(scale, scale),
+                    colorspace=fitz.csRGB,
+                    alpha=False,
+                )
+                while max(pixmap.width, pixmap.height) > _SCAN_MAX_IMAGE_SIDE:
+                    pixmap.shrink(1)
+                if _pixmap_has_visible_content(pixmap):
+                    rendered.append(
+                        ClassificationImage(page_idx, "page", pixmap.tobytes("png"))
+                    )
+    except ArabicClassifierInputError:
+        raise
+    except Exception as exc:
+        raise ArabicClassifierInputError("The document pages could not be rendered") from exc
+    return rendered
+
+
+def _downscale_image_bytes(image_bytes: bytes) -> bytes:
+    """Reduce a router image until its long side fits the request limit."""
+    try:
+        pixmap = fitz.Pixmap(image_bytes)
+        if pixmap.n > 3:
+            pixmap = fitz.Pixmap(fitz.csRGB, pixmap)
+        while max(pixmap.width, pixmap.height) > _SCAN_MAX_IMAGE_SIDE:
+            pixmap.shrink(1)
+        return pixmap.tobytes("png")
+    except Exception as exc:
+        raise ArabicClassifierInputError("The classifier page image could not be prepared") from exc
+
+
 def render_all_page_thumbnails(pdf_path: Path) -> list[ClassificationImage]:
     evidence = inspect_text_layers(pdf_path)
     return render_page_images(pdf_path, (page.page_idx for page in evidence.pages))
@@ -376,6 +449,36 @@ def _parse_votes(content: object, images: Sequence[ClassificationImage]) -> list
     return parsed
 
 
+def _parse_scan_vote(
+    content: object, image: ClassificationImage
+) -> list[PageStyleVote]:
+    """Read the compact language/style labels returned for one scan page."""
+    if not isinstance(content, str):
+        raise ArabicClassifierResponseInvalid("Classifier response content must be text")
+    languages = re.findall(
+        r"\blanguage\s*[:=\-]?\s*(english|arabic|mixed|unknown)\b",
+        content,
+        flags=re.IGNORECASE,
+    )
+    styles = re.findall(
+        r"\bstyle\s*[:=\-]?\s*(printed|handwritten|unknown)\b",
+        content,
+        flags=re.IGNORECASE,
+    )
+    if len(languages) != 1 or len(styles) != 1:
+        raise ArabicClassifierResponseInvalid(
+            "Classifier response must include one language and one style label"
+        )
+    return [PageStyleVote(
+        page_idx=image.page_idx,
+        language=languages[0].lower(),
+        writing_style=styles[0].lower(),
+        confidence=1.0,
+        region=image.region,
+        primary_content=True,
+    )]
+
+
 @tracing.traced("classify.vision", tracing.LLM, record_args=False)
 def call_local_router(
     images: Sequence[ClassificationImage],
@@ -384,8 +487,10 @@ def call_local_router(
     """Call only the configured local Ollama endpoint; never try a cloud provider."""
     if not images:
         return []
-    if phase not in {"page_screen", "detail"}:
+    if phase not in {"page_screen", "detail", "scan"}:
         raise ValueError("Unknown classifier phase")
+    if phase == "scan" and len(images) != 1:
+        raise ValueError("Scan classification accepts exactly one page image")
     parsed_endpoint = urlsplit(settings.arabic_router_base_url)
     hostname = (parsed_endpoint.hostname or "").lower().rstrip(".")
     try:
@@ -403,36 +508,62 @@ def call_local_router(
         or parsed_endpoint.fragment
     ):
         raise ArabicClassifierUnavailable("Arabic classification is restricted to a local Ollama endpoint")
-    labels = ", ".join(f"page {image.page_idx} region {image.region}" for image in images)
-    detail = (
-        "For detail images, mark a crop primary_content=true only when it contains the main body text. "
-        "Isolated signatures, marginal notes, stamps, headers, and blank areas are not primary body text."
-        if phase == "detail"
-        else "Classify the dominant main text body, not an isolated signature or marginal annotation."
-    )
-    prompt = (
-        "Classify the visible language and dominant writing style of each supplied PDF image. "
-        "Do not transcribe the document. Use only language=english|arabic|mixed|unknown and "
-        "writing_style=printed|handwritten|mixed|unknown. If evidence is ambiguous, use unknown. "
-        f"{detail} The images are in this order: {labels}. "
-        "Return exactly one vote per image, keyed by its page_idx and region, as JSON. "
-        "Include confidence from 0 to 1, primary_content as a boolean, and a short visual evidence note."
-    )
-    body = {
-        "model": settings.arabic_router_model,
-        "messages": [{
-            "role": "user",
-            "content": prompt,
-            "images": [base64.b64encode(image.image_bytes).decode("ascii") for image in images],
-        }],
-        "format": _request_schema(),
-        "stream": False,
-        "options": {
-            "temperature": 0,
-            "num_predict": 4096,
-            "num_ctx": min(32768, 2048 + 1536 * len(images)),
-        },
-    }
+    if phase == "scan":
+        image = images[0]
+        prompt = (
+            "Classify this PDF page. Reply with exactly these two labels and no explanation:\n"
+            "language: english|arabic|mixed|unknown\n"
+            "style: printed|handwritten|unknown"
+        )
+        body = {
+            "model": settings.arabic_router_model,
+            "messages": [{
+                "role": "user",
+                "content": prompt,
+                "images": [base64.b64encode(
+                    _downscale_image_bytes(image.image_bytes)
+                ).decode("ascii")],
+            }],
+            "stream": False,
+            "options": {
+                "temperature": 0,
+                "num_predict": 24,
+                "num_ctx": 4096,
+            },
+        }
+    else:
+        labels = ", ".join(
+            f"page {image.page_idx} region {image.region}" for image in images
+        )
+        detail = (
+            "For detail images, mark a crop primary_content=true only when it contains the main body text. "
+            "Isolated signatures, marginal notes, stamps, headers, and blank areas are not primary body text."
+            if phase == "detail"
+            else "Classify the dominant main text body, not an isolated signature or marginal annotation."
+        )
+        prompt = (
+            "Classify the visible language and dominant writing style of each supplied PDF image. "
+            "Do not transcribe the document. Use only language=english|arabic|mixed|unknown and "
+            "writing_style=printed|handwritten|mixed|unknown. If evidence is ambiguous, use unknown. "
+            f"{detail} The images are in this order: {labels}. "
+            "Return exactly one vote per image, keyed by its page_idx and region, as JSON. "
+            "Include confidence from 0 to 1, primary_content as a boolean, and a short visual evidence note."
+        )
+        body = {
+            "model": settings.arabic_router_model,
+            "messages": [{
+                "role": "user",
+                "content": prompt,
+                "images": [base64.b64encode(image.image_bytes).decode("ascii") for image in images],
+            }],
+            "format": _request_schema(),
+            "stream": False,
+            "options": {
+                "temperature": 0,
+                "num_predict": 4096,
+                "num_ctx": min(32768, 2048 + 1536 * len(images)),
+            },
+        }
     endpoint = f"{settings.arabic_router_base_url.rstrip('/')}/api/chat"
     try:
         response = httpx.post(
@@ -456,6 +587,8 @@ def call_local_router(
         content = response_body["message"]["content"]
     except (ValueError, TypeError, KeyError) as exc:
         raise ArabicClassifierResponseInvalid("Classifier response is missing message content") from exc
+    if phase == "scan":
+        return _parse_scan_vote(content, images[0])
     return _parse_votes(content, images)
 
 
@@ -743,34 +876,76 @@ def aggregate_votes(
     )
 
 
+def _decision_from_scan_votes(
+    votes: Sequence[PageStyleVote],
+) -> ClassificationDecision:
+    """Apply the scan rule: any Arabic vote routes Arabic, English needs unanimity."""
+    if not votes:
+        raise ArabicClassifierResponseInvalid("No readable pages were available to classify")
+
+    arabic_votes = [
+        vote for vote in votes if vote.language in {"arabic", "mixed"}
+    ]
+    if not arabic_votes:
+        if all(vote.language == "english" for vote in votes):
+            return ClassificationDecision(
+                route=DocumentRoute.ENGLISH,
+                language="english",
+                writing_style="unknown",
+                text_direction="ltr",
+                confidence=1.0,
+                classifier_model=settings.arabic_router_model,
+                votes=tuple(votes),
+            )
+        raise ArabicClassifierResponseInvalid(
+            "The sampled pages did not produce an agreed language classification"
+        )
+
+    language = (
+        "mixed"
+        if any(vote.language == "mixed" for vote in arabic_votes)
+        or any(vote.language == "english" for vote in votes)
+        else "arabic"
+    )
+    handwritten_votes = sum(
+        vote.writing_style == "handwritten" for vote in arabic_votes
+    )
+    writing_style = (
+        "handwritten"
+        if handwritten_votes > len(arabic_votes) / 2
+        else "printed"
+    )
+    agreeing_votes = sum(
+        vote.language in {"arabic", "mixed"}
+        and vote.writing_style == writing_style
+        for vote in votes
+    )
+    return ClassificationDecision(
+        route=(
+            DocumentRoute.ARABIC_HANDWRITTEN
+            if writing_style == "handwritten"
+            else DocumentRoute.ARABIC_PRINTED
+        ),
+        language=language,
+        writing_style=writing_style,
+        text_direction="rtl",
+        confidence=agreeing_votes / len(votes),
+        classifier_model=settings.arabic_router_model,
+        votes=tuple(votes),
+    )
+
+
 @tracing.traced("classify.document", tracing.CHAIN)
 def classify_document(
     pdf_path: Path,
     vision_call: VisionCall | None = None,
 ) -> ClassificationDecision:
-    """Classify every document page, abstaining on unresolved Arabic style."""
+    """Route text-backed PDFs directly and classify only a small scan sample."""
     evidence = inspect_text_layers(pdf_path)
-    if evidence.all_pages_are_clear_english:
-        return ClassificationDecision(
-            route=DocumentRoute.ENGLISH,
-            language="english",
-            writing_style="unknown",
-            text_direction="ltr",
-            confidence=1.0,
-            classifier_model="text_layer",
-        )
-
     arabic_text_pages = [
         page for page in evidence.pages if page.has_substantive_arabic_body
     ]
-    text_backed_pages = all(
-        page.has_clear_english_body or page.has_substantive_arabic_body
-        for page in evidence.pages
-    )
-    if arabic_text_pages and text_backed_pages:
-        # A PDF whose pages carry a real Arabic text layer was produced
-        # digitally (or already OCR'd), so its text is printed. Pages without
-        # a usable text layer are scans and continue through the vision path.
+    if arabic_text_pages:
         return ClassificationDecision(
             route=DocumentRoute.ARABIC_PRINTED,
             language="mixed" if evidence.has_latin_body else "arabic",
@@ -780,83 +955,32 @@ def classify_document(
             classifier_model="text_layer",
         )
 
-    call = vision_call or call_local_router
-    page_indices = [
-        page.page_idx
-        for page in evidence.pages
-        if not page.has_clear_english_body
-        and not page.has_substantive_arabic_body
-    ]
-    # Substantive Arabic text layers are printed evidence even when other
-    # pages are scans that still need a visual language/style decision.
-    screen_votes: list[PageStyleVote] = [
-        PageStyleVote(
-            page_idx=page.page_idx,
-            language=(
-                "mixed" if page.has_substantive_latin_body else "arabic"
-            ),
-            writing_style="printed",
-            confidence=1.0,
-            evidence="substantive Arabic text layer",
-            region="page",
-            primary_content=True,
-        )
-        for page in arabic_text_pages
-    ]
-    for start in range(0, len(page_indices), settings.arabic_classifier_batch_pages):
-        batch_pages = page_indices[start:start + settings.arabic_classifier_batch_pages]
-        images = render_page_images(pdf_path, batch_pages)
-        screen_votes.extend(call_in_batches(
-            images, settings.arabic_classifier_batch_pages, call, "page_screen"
-        ))
-
-    sparse_arabic_pages = [
-        vote.page_idx
-        for vote in screen_votes
-        if vote.region == "page"
-        and vote.language in {"arabic", "mixed"}
-        and not next(
-            page for page in evidence.pages if page.page_idx == vote.page_idx
-        ).has_substantive_arabic_body
-    ]
-    force_detail_pages = sparse_arabic_pages
-    if len(evidence.pages) == 1 and page_indices:
-        force_detail_pages.append(page_indices[0])
-    detail_votes: list[PageStyleVote] = []
-    for page_idx in _suspicious_page_indices(
-        screen_votes, force_pages=force_detail_pages
+    clear_english_pages = sum(
+        page.has_clear_english_body for page in evidence.pages
+    )
+    if (
+        clear_english_pages >= 3
+        or clear_english_pages * 2 >= len(evidence.pages)
     ):
-        detail_images = render_page_images(
-            pdf_path, [page_idx], include_regions=True
+        return ClassificationDecision(
+            route=DocumentRoute.ENGLISH,
+            language="english",
+            writing_style="unknown",
+            text_direction="ltr",
+            confidence=1.0,
+            classifier_model="text_layer",
         )
-        detail_votes.extend(call_in_batches(detail_images, 1, call, "detail"))
-    confirmed_languages = _confirmed_visual_languages(
-        evidence, screen_votes, detail_votes
+
+    call = vision_call or call_local_router
+    images = _render_scan_sample(
+        pdf_path,
+        _sample_page_indices(len(evidence.pages)),
     )
-    document_language = _derive_language(evidence, confirmed_languages)
-    screen_by_page = {vote.page_idx: vote for vote in screen_votes if vote.region == "page"}
-    style_pages = {
-        page_idx for page_idx in (page.page_idx for page in arabic_text_pages)
-        if page_idx in screen_by_page and screen_by_page[page_idx].primary_content
-    } | {
-        page_idx
-        for page_idx, language in confirmed_languages.items()
-        if language in {"arabic", "mixed"}
-    }
-    if document_language in {"arabic", "mixed"}:
-        style_pages.update(
-            vote.page_idx
-            for vote in screen_votes
-            if vote.region == "page"
-            and vote.primary_content
-            and vote.language in {"arabic", "mixed"}
-            and not next(
-                page for page in evidence.pages if page.page_idx == vote.page_idx
-            ).has_clear_english_body
+    if not images:
+        raise ArabicClassifierResponseInvalid(
+            "No readable pages were available to classify"
         )
-    return aggregate_votes(
-        evidence,
-        screen_votes,
-        detail_votes,
-        style_page_indices=style_pages,
-    )
+    votes: list[PageStyleVote] = []
+    for image in images:
+        votes.extend(_validate_call_result([image], call([image], "scan")))
+    return _decision_from_scan_votes(votes)
