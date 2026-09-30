@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+import pytest
 from sqlalchemy import text
 
 import app.summarization.section_summarizer_sync as summarizer
@@ -84,3 +85,87 @@ def test_deleted_summary_source_chunks_force_regeneration(db_session_sync, monke
     ).scalar_one()
     assert current_source_ids == new_chunk_ids
     assert not set(current_source_ids).intersection(old_chunk_ids)
+
+
+@pytest.mark.parametrize("stale_shape", ["empty_section", "overview_only", "foreign_chunk"])
+def test_incomplete_or_foreign_summary_sources_force_regeneration(
+    db_session_sync, monkeypatch, stale_shape
+):
+    document_id = _insert_document(db_session_sync)
+    current_chunk_ids = _insert_chunks(
+        db_session_sync, document_id, "مقدمة", "نص عن الحكاية."
+    )
+
+    chunks = summarizer._fetch_all_chunks_for_doc(db_session_sync, document_id)
+    source_text = "\n\n".join(
+        (chunk.get("markdown") or chunk.get("plain_text") or "").strip()
+        for chunk in chunks
+    )
+    section_prompt = summarizer._summary_prompt_for_source(
+        summarizer.SECTION_SUMMARY_PROMPT_V1, source_text
+    )
+    overview_prompt = summarizer._summary_prompt_for_source(
+        summarizer.PAPER_OVERVIEW_PROMPT_V1, source_text
+    )
+    prompt_hash = summarizer.hash_prompt(section_prompt + overview_prompt)
+    model = "stale-shape-test-model"
+
+    source_ids = []
+    if stale_shape == "foreign_chunk":
+        other_document_id = _insert_document(db_session_sync)
+        source_ids = _insert_chunks(
+            db_session_sync, other_document_id, "أخرى", "نص من وثيقة أخرى."
+        )
+
+    if stale_shape != "overview_only":
+        db_session_sync.execute(
+            text(
+                "INSERT INTO section_summaries "
+                "(document_id, section_id, level, heading_path, "
+                "summary_markdown, summary_plain, source_chunk_ids, model, prompt_hash) "
+                "VALUES (:document_id, 'stale-section', 1, ARRAY['مقدمة'], "
+                "'ملخص قديم', 'ملخص قديم', :source_ids, :model, :prompt_hash)"
+            ),
+            {
+                "document_id": document_id,
+                "source_ids": source_ids if stale_shape == "foreign_chunk" else [],
+                "model": model,
+                "prompt_hash": prompt_hash,
+            },
+        )
+
+    db_session_sync.execute(
+        text(
+            "INSERT INTO section_summaries "
+            "(document_id, section_id, level, heading_path, "
+            "summary_markdown, summary_plain, source_chunk_ids, model, prompt_hash) "
+            "VALUES (:document_id, 'paper_overview', 0, ARRAY[]::TEXT[], "
+            "'نظرة قديمة', 'نظرة قديمة', ARRAY[]::UUID[], :model, :prompt_hash)"
+        ),
+        {"document_id": document_id, "model": model, "prompt_hash": prompt_hash},
+    )
+    db_session_sync.commit()
+
+    calls = []
+
+    def fake_chat_sync(messages, **_kwargs):
+        calls.append(messages)
+        if len(calls) % 2:
+            return {"content": "### ملخص القسم: مقدمة\n\nملخص جديد."}
+        return {"content": "### نظرة عامة على العمل: الكتاب\n\nنظرة جديدة."}
+
+    monkeypatch.setattr(summarizer, "chat_sync", fake_chat_sync)
+    result = summarizer.generate_and_store_section_summaries_sync(
+        db_session_sync, document_id, model=model
+    )
+
+    assert result.get("skipped") is not True
+    assert len(calls) == 2
+    refreshed_source_ids = db_session_sync.execute(
+        text(
+            "SELECT source_chunk_ids FROM section_summaries "
+            "WHERE document_id = :document_id AND model = :model AND level = 1"
+        ),
+        {"document_id": document_id, "model": model},
+    ).scalar_one()
+    assert refreshed_source_ids == current_chunk_ids

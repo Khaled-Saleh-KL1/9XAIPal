@@ -481,15 +481,26 @@ def generate_and_store_section_summaries_sync(
         existing = session.execute(
             text("""
                 SELECT COUNT(*) AS n,
+                       COUNT(*) FILTER (
+                           WHERE summary.level IN (1, 2)
+                       ) AS section_n,
                        COALESCE(BOOL_AND(NOT EXISTS (
                            SELECT 1
-                           FROM unnest(summary.source_chunk_ids) AS stored(source_chunk_id)
-                           WHERE NOT EXISTS (
-                               SELECT 1
-                               FROM chunks AS current_chunk
-                               WHERE current_chunk.id = stored.source_chunk_id
-                                 AND current_chunk.document_id = summary.document_id
-                           )
+                           WHERE summary.level IN (1, 2)
+                             AND (
+                                 cardinality(summary.source_chunk_ids) = 0
+                                 OR EXISTS (
+                                     SELECT 1
+                                     FROM unnest(summary.source_chunk_ids)
+                                          AS stored(source_chunk_id)
+                                     WHERE NOT EXISTS (
+                                         SELECT 1
+                                         FROM chunks AS current_chunk
+                                         WHERE current_chunk.id = stored.source_chunk_id
+                                           AND current_chunk.document_id = summary.document_id
+                                     )
+                                 )
+                             )
                        )), FALSE) AS source_chunks_current
                 FROM section_summaries AS summary
                 WHERE summary.document_id = :doc_id
@@ -501,6 +512,7 @@ def generate_and_store_section_summaries_sync(
         if (
             existing
             and existing["n"] > 0
+            and existing["section_n"] > 0
             and existing["source_chunks_current"]
         ):
             logger.info(f"[summarizer] Summaries already exist for {document_id} with current prompt/model. Skipping.")
