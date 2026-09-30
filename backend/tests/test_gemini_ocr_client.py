@@ -31,7 +31,14 @@ def complete_validator(text: str, page_numbers: tuple[int, ...]) -> int:
     return complete
 
 
-def api_error(code: int, *, reason=None, quota_id=None, retry_after=None) -> errors.APIError:
+def api_error(
+    code: int,
+    *,
+    reason=None,
+    quota_id=None,
+    retry_after=None,
+    message="mock failure",
+) -> errors.APIError:
     details = []
     if reason:
         details.append({"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": reason})
@@ -50,7 +57,7 @@ def api_error(code: int, *, reason=None, quota_id=None, retry_after=None) -> err
     )
     return errors.APIError(
         code=code,
-        response_json={"error": {"code": code, "message": "mock failure", "details": details}},
+        response_json={"error": {"code": code, "message": message, "details": details}},
         response=response,
     )
 
@@ -73,12 +80,14 @@ class FakeModels:
         self.calls = 0
         self.last_config = None
         self.last_contents = None
+        self.requests = []
 
     def generate_content(self, *, model, contents, config):
         self.calls += 1
         self.last_model = model
         self.last_contents = contents
         self.last_config = config
+        self.requests.append({"model": model, "contents": contents, "config": config})
         if not self.outcomes:
             raise AssertionError("unexpected extra Gemini call")
         outcome = self.outcomes.popleft()
@@ -104,21 +113,34 @@ def fake_clients():
     }
 
 
-def make_client(keys: str, fake_clients, *, sleep=lambda _seconds: None, jitter=lambda low, _high: low, **settings_overrides):
+def make_client(
+    keys: str,
+    fake_clients,
+    *,
+    gateway_key="",
+    writing_style="printed",
+    sleep=lambda _seconds: None,
+    jitter=lambda low, _high: low,
+    **settings_overrides,
+):
     from app.core.config import Settings
 
     settings = Settings(
         gemini_api_keys_raw=keys,
+        modelgateway_api_key=gateway_key,
         arabic_gemini_printed_model="gemini-test-flash",
         arabic_ocr_max_output_tokens=1234,
         **settings_overrides,
     )
-    return GeminiOcrClient(
-        settings=settings,
-        client_factory=lambda api_key: fake_clients[api_key],
-        sleep=sleep,
-        jitter=jitter,
-    )
+    options = {
+        "settings": settings,
+        "client_factory": lambda api_key: fake_clients[api_key],
+        "sleep": sleep,
+        "jitter": jitter,
+    }
+    if writing_style != "printed":
+        options["writing_style"] = writing_style
+    return GeminiOcrClient(**options)
 
 
 def test_429_rotates_to_next_key_and_never_logs_key_material(fake_clients, caplog):
@@ -267,6 +289,158 @@ def test_default_client_factory_configures_request_timeout(monkeypatch):
     client.generate_batch([page(1)], validator=complete_validator)
 
     assert captured["http_options"].timeout == 2500
+    assert captured["http_options"].base_url is None
+
+
+def test_gateway_client_factory_uses_configured_base_url(monkeypatch):
+    from app.core.config import Settings
+    from app.extraction import gemini_ocr_client
+
+    captured = {}
+
+    def fake_sdk_client(*, api_key, http_options):
+        captured["api_key"] = api_key
+        captured["http_options"] = http_options
+        return FakeClient([response(PAGE_1)])
+
+    monkeypatch.setattr(gemini_ocr_client.genai, "Client", fake_sdk_client)
+    client = GeminiOcrClient(
+        settings=Settings(
+            modelgateway_api_key="gateway-secret",
+            modelgateway_base_url="https://gateway.example",
+        ),
+        sleep=lambda _seconds: None,
+    )
+
+    result = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert captured["api_key"] == "gateway-secret"
+    assert captured["http_options"].base_url == "https://gateway.example"
+    assert result.provider == "modelgateway_gemini"
+    assert result.model == "gemini-3.8-flash"
+
+
+def test_gateway_sends_one_page_without_optional_generation_options():
+    gateway = FakeClient([response(PAGE_1), response(PAGE_2)])
+    client = make_client(
+        "",
+        {"gateway-secret": gateway},
+        gateway_key="gateway-secret",
+    )
+
+    result = client.generate_batch([page(1), page(2)], validator=complete_validator)
+
+    assert result.provider == "modelgateway_gemini"
+    assert result.model == "gemini-3.8-flash"
+    assert [request["model"] for request in gateway.models.requests] == [
+        "gemini-3.8-flash",
+        "gemini-3.8-flash",
+    ]
+    assert [
+        len([part for part in request["contents"] if part.inline_data])
+        for request in gateway.models.requests
+    ] == [1, 1]
+    assert all(request["config"].thinking_config is None for request in gateway.models.requests)
+    assert all(request["config"].max_output_tokens == 1234 for request in gateway.models.requests)
+    assert all(
+        part.media_resolution is None
+        for request in gateway.models.requests
+        for part in request["contents"]
+        if part.inline_data
+    )
+
+
+def test_gateway_transient_upstream_403_retries_without_disabling_key():
+    gateway = FakeClient([
+        api_error(403, message="Upstream provider access denied; try another route"),
+        response(PAGE_1),
+        response(PAGE_1),
+    ])
+    sleeps = []
+    client = make_client(
+        "",
+        {"gateway-secret": gateway},
+        gateway_key="gateway-secret",
+        sleep=sleeps.append,
+        arabic_gemini_gateway_max_wait_seconds=1,
+    )
+
+    first = client.generate_batch([page(1)], validator=complete_validator)
+    second = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert first.provider == second.provider == "modelgateway_gemini"
+    assert first.attempt_metadata[0]["failure_kind"] == "transient_http"
+    assert first.attempt_metadata[0]["provider"] == "modelgateway_gemini"
+    assert sleeps == [0.25]
+    assert gateway.models.calls == 3
+
+
+def test_gateway_plain_403_is_authentication_and_skips_gateway_on_later_batches():
+    gateway = FakeClient([api_error(403, message="API key not valid")])
+    google = FakeClient([response(PAGE_1), response(PAGE_1)])
+    client = make_client(
+        "google-secret",
+        {"gateway-secret": gateway, "google-secret": google},
+        gateway_key="gateway-secret",
+    )
+
+    first = client.generate_batch([page(1)], validator=complete_validator)
+    second = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert first.provider == second.provider == "gemini_arabic_flash"
+    assert first.attempt_metadata[0]["failure_kind"] == "authentication"
+    assert gateway.models.calls == 1
+    assert google.models.calls == 2
+
+
+def test_gateway_honors_retry_after_beyond_google_retry_limit():
+    gateway = FakeClient([api_error(429, retry_after=30), response(PAGE_1)])
+    sleeps = []
+    client = make_client(
+        "",
+        {"gateway-secret": gateway},
+        gateway_key="gateway-secret",
+        sleep=sleeps.append,
+    )
+
+    result = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert result.provider == "modelgateway_gemini"
+    assert sleeps == [30.0]
+    assert gateway.models.calls == 2
+
+
+def test_gateway_retry_after_is_bounded_by_provider_wait_budget(fake_clients):
+    fake_clients["secret-key-1"] = FakeClient([response(PAGE_1)])
+    gateway = FakeClient([api_error(503, retry_after=2.1)])
+    sleeps = []
+    client = make_client(
+        "secret-key-1",
+        {**fake_clients, "gateway-secret": gateway},
+        gateway_key="gateway-secret",
+        sleep=sleeps.append,
+        arabic_gemini_gateway_max_wait_seconds=2,
+    )
+
+    result = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert result.provider == "gemini_arabic_flash"
+    assert gateway.models.calls == 1
+    assert sleeps == []
+
+
+def test_handwritten_gateway_and_google_use_their_respective_pro_models():
+    gateway = FakeClient([response(PAGE_1)])
+    result = make_client(
+        "google-secret",
+        {"gateway-secret": gateway, "google-secret": FakeClient([response(PAGE_1)])},
+        gateway_key="gateway-secret",
+        writing_style="handwritten",
+    ).generate_batch([page(1)], validator=complete_validator)
+
+    assert result.provider == "modelgateway_gemini"
+    assert gateway.models.last_model == "gemini-3.1-pro"
+    assert result.model == "gemini-3.1-pro"
 
 
 def test_timeout_uses_timeout_failure_kind_and_bounded_exponential_retry(fake_clients):

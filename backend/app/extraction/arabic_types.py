@@ -158,6 +158,7 @@ class GeminiKeysExhausted(RuntimeError):
         attempt_count: int | None = None,
         latency_ms: int = 0,
         attempt_metadata: Sequence[dict[str, Any]] = (),
+        final_provider: str | None = None,
     ) -> None:
         self.final_kind = final_kind
         self.best_partial = best_partial
@@ -167,6 +168,7 @@ class GeminiKeysExhausted(RuntimeError):
         )
         self.latency_ms = latency_ms
         self.attempt_metadata = tuple(attempt_metadata)
+        self.final_provider = final_provider
         super().__init__(f"Gemini OCR keys exhausted ({final_kind}).")
 
 
