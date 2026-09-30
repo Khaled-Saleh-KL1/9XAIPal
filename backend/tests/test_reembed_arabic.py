@@ -101,3 +101,22 @@ def test_reembed_document_id_filter_still_requires_arabic_side(monkeypatch):
     reembed_arabic.main(["--document-id", str(requested_id)])
 
     delay.assert_not_called()
+
+
+def test_reembed_cli_runs_main_when_executed_as_a_module():
+    # Without a __main__ guard, `python -m scripts.reembed_arabic` exited 0
+    # silently and queued nothing on production.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.reembed_arabic", "--help"],
+        cwd=Path(__file__).parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--document-id" in result.stdout

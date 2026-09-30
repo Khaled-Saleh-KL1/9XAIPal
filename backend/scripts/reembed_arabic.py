@@ -57,3 +57,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"queued Arabic document={row['id']} task={result.id}")
 
     print(f"Queued Arabic-side re-embedding for {len(rows)} document(s).")
+
+
+if __name__ == "__main__":
+    main()
