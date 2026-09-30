@@ -408,6 +408,75 @@ async def test_reextract_preserves_user_confirmed_classification(
 
 
 @pytest.mark.asyncio
+async def test_regenerate_summaries_dispatches_force_value(client, db_session, monkeypatch):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session,
+        await _user_id(db_session, email),
+        status="complete",
+    )
+    dispatched = []
+    monkeypatch.setattr(
+        documents_endpoint.generate_section_summaries,
+        "delay",
+        lambda *args, **kwargs: dispatched.append((args, kwargs)),
+    )
+
+    response = await client.post(
+        f"/api/v1/papers/{document_id}/regenerate-summaries?force=true"
+    )
+
+    assert response.status_code == 202
+    assert response.json()["force"] is True
+    assert dispatched == [((str(document_id),), {"force": True})]
+
+
+@pytest.mark.asyncio
+async def test_reextract_clears_summaries_for_every_model(
+    client, db_session, monkeypatch, tmp_path
+):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session,
+        await _user_id(db_session, email),
+        status="complete",
+    )
+    for model in ("summary-model-one", "summary-model-two"):
+        await db_session.execute(
+            text(
+                "INSERT INTO section_summaries "
+                "(document_id, section_id, level, heading_path, summary_markdown, "
+                "summary_plain, source_chunk_ids, model, prompt_hash) "
+                "VALUES (:document_id, :section_id, 1, ARRAY['Old section'], "
+                ":summary, :summary, ARRAY[]::UUID[], :model, 'old-prompt')"
+            ),
+            {
+                "document_id": document_id,
+                "section_id": f"section-{model}",
+                "summary": "An old summary.",
+                "model": model,
+            },
+        )
+    await db_session.commit()
+    monkeypatch.setattr(
+        documents_endpoint.process_ingestion, "delay", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        documents_endpoint, "extracted_dir", lambda: tmp_path / "extracted"
+    )
+    monkeypatch.setattr(documents_endpoint, "images_dir", lambda: tmp_path / "images")
+
+    response = await client.post(f"/api/v1/papers/{document_id}/reextract")
+
+    assert response.status_code == 202
+    summary_count = await db_session.execute(
+        text("SELECT COUNT(*) FROM section_summaries WHERE document_id=:id"),
+        {"id": document_id},
+    )
+    assert summary_count.scalar_one() == 0
+
+
+@pytest.mark.asyncio
 async def test_rechunk_cleans_arabic_plain_text_and_refreshes_token_count(
     client, db_session, monkeypatch, tmp_path
 ):

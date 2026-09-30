@@ -44,8 +44,16 @@ def _run_generation(monkeypatch, section_text, section_output, overview_output, 
         "sequence_end": 3,
         "source_chunk_ids": [str(uuid4())],
     }
-    monkeypatch.setattr(summarizer, "_fetch_all_chunks_for_doc", lambda *_args: [{}])
-    monkeypatch.setattr(summarizer, "group_chunks_into_sections", lambda _chunks: [section])
+    monkeypatch.setattr(
+        summarizer,
+        "_fetch_all_chunks_for_doc",
+        lambda *_args: [{"markdown": section_text}],
+    )
+    monkeypatch.setattr(
+        summarizer,
+        "group_chunks_into_sections",
+        lambda _chunks, **_kwargs: [section],
+    )
     stored_sections = []
     monkeypatch.setattr(
         summarizer,
@@ -99,10 +107,19 @@ def test_arabic_summaries_use_arabic_skeleton_and_repair_model_labels(monkeypatc
     assert "**المساهمة الأساسية:**" in overview_prompt
     assert "**أبرز النتائج:**" in overview_prompt
     assert "**الأسئلة المفتوحة / القيود التي ذكرها المؤلفون:**" in overview_prompt
+    assert "one major section of a document — a research paper, a book, a story or other text" in section_prompt
+    assert "scientific paper" not in section_prompt
+    assert "document, such as a research paper, a book, a story or other text" in overview_prompt
+    assert "scientific paper" not in overview_prompt
 
     section_markdown = stored_sections[0]["summary_md"]
     assert section_markdown.startswith("### ملخص القسم:")
     assert "**النقاط الرئيسية:**" in section_markdown
+    english_prompt_hash = summarizer.hash_prompt(
+        summarizer.SECTION_SUMMARY_PROMPT_V1 + summarizer.PAPER_OVERVIEW_PROMPT_V1
+    )
+    assert stored_sections[0]["prompt_hash"] != english_prompt_hash
+    assert overview_values[0]["prompt_hash"] == stored_sections[0]["prompt_hash"]
     overview_markdown = overview_values[0]["summary_markdown"]
     assert overview_markdown.startswith("### نظرة عامة على العمل:")
     assert "**المساهمة الأساسية:**" in overview_markdown
@@ -126,3 +143,37 @@ def test_english_summary_prompts_and_labels_remain_unchanged(monkeypatch):
     assert calls[1][0]["content"] == summarizer.PAPER_OVERVIEW_PROMPT_V1
     assert stored_sections[0]["summary_md"] == section_output
     assert overview_values[0]["summary_markdown"] == overview_output
+    assert stored_sections[0]["prompt_hash"] == summarizer.hash_prompt(
+        summarizer.SECTION_SUMMARY_PROMPT_V1 + summarizer.PAPER_OVERVIEW_PROMPT_V1
+    )
+
+
+@pytest.mark.parametrize(
+    "heading",
+    ["المحتويات", "الفهرس", "فهرس المحتويات", "فهرسُ المحتويات"],
+)
+def test_arabic_table_of_contents_sections_are_skipped(monkeypatch, heading):
+    calls, stored_sections, overview_values = _run_generation(
+        monkeypatch,
+        f"{heading}\nالفصل الأول: مدخل إلى الحكاية.",
+        "### ملخص القسم: قائمة\n\nقائمة فصول.",
+        "### نظرة عامة على العمل: كتاب\n\nنظرة عامة.",
+        heading,
+    )
+
+    assert calls == []
+    assert stored_sections == []
+    assert overview_values == []
+
+
+def test_english_contents_heading_is_still_summarized(monkeypatch):
+    calls, stored_sections, _overview_values = _run_generation(
+        monkeypatch,
+        "Table of Contents\nChapter One: An introduction to the story.",
+        "### Section Summary: Contents\n\nA list of chapters.",
+        "### Paper Overview: Book\n\nAn overview.",
+        "Table of Contents",
+    )
+
+    assert len(calls) == 2
+    assert len(stored_sections) == 1

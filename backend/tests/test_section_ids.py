@@ -91,3 +91,48 @@ def test_three_arabic_level1_headings_produce_three_distinct_section_ids():
     assert len(sections) == 3
     ids = [s["section_id"] for s in sections]
     assert len(set(ids)) == 3
+
+
+def test_repeated_arabic_h1_page_headers_stay_inside_one_story_section():
+    chunks = [
+        _heading_chunk("قصتان متوازيتان", 1),
+        _body_chunk("تمهيد يتحدث عن قصتين متوازيتين.", 2),
+        _heading_chunk("القيء", 3),
+        _body_chunk("نص الصفحة الأولى من القصة.", 4),
+        _heading_chunk("القيء", 5),  # Repeated OCR page header.
+        _body_chunk("نص الصفحة الثانية من القصة.", 6),
+        _heading_chunk("الخاتمة", 7),
+        _body_chunk("نهاية الكتاب.", 8),
+    ]
+
+    sections = group_chunks_into_sections(chunks)
+
+    story_sections = [section for section in sections if section["heading_text"] == "القيء"]
+    assert len(story_sections) == 1
+    assert "نص الصفحة الأولى من القصة." in story_sections[0]["text"]
+    assert "نص الصفحة الثانية من القصة." in story_sections[0]["text"]
+    assert "chunk-5" not in story_sections[0]["source_chunk_ids"]
+    assert [section["heading_text"] for section in sections] == [
+        "قصتان متوازيتان",
+        "القيء",
+        "الخاتمة",
+    ]
+
+
+def test_english_grouping_keeps_repeated_h1_boundaries_unchanged():
+    chunks = [
+        _heading_chunk("Introduction", 1),
+        _body_chunk("Opening paragraph.", 2),
+        _heading_chunk("Introduction", 3),
+        _body_chunk("Continued paragraph.", 4),
+        _heading_chunk("Methods", 5),
+        _body_chunk("Method details.", 6),
+    ]
+
+    sections = group_chunks_into_sections(chunks)
+
+    assert [section["heading_text"] for section in sections] == [
+        "Introduction",
+        "Introduction",
+        "Methods",
+    ]
