@@ -649,3 +649,56 @@ def test_invalid_validator_count_is_not_saved_as_partial(fake_clients):
 
     assert caught.value.final_kind == "rate_limited"
     assert caught.value.best_partial is None
+
+
+# Real ModelGateway replies captured from production on 2026-09-30. The gateway
+# hands each request to a marketplace seller; broken sellers answer 402/500/400
+# while the next attempt (another seller) succeeds. None of them means the
+# request or the key is bad.
+_SELLER_OUT_OF_CREDIT = (
+    "Upstream provider balance is insufficient. The upstream provider's account has "
+    "insufficient credits or billing quota. This is separate from your gateway balance."
+)
+_SELLER_CANNOT_CONVERT = (
+    "Gateway could not prepare the request. The gateway could not convert this request "
+    "into the selected provider's format."
+)
+
+
+@pytest.mark.parametrize("code,message", [
+    (402, _SELLER_OUT_OF_CREDIT),
+    (500, _SELLER_CANNOT_CONVERT),
+    (400, "Invalid argument"),
+])
+def test_gateway_seller_failures_are_retried_not_fatal(code, message):
+    gateway = FakeClient([api_error(code, message=message), response(PAGE_1)])
+    client = make_client(
+        "",
+        {"gateway-secret": gateway},
+        gateway_key="gateway-secret",
+        sleep=lambda _s: None,
+        arabic_gemini_gateway_max_wait_seconds=1,
+    )
+
+    result = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert result.provider == "modelgateway_gemini"
+    assert result.attempt_metadata[0]["failure_kind"] == "transient_http"
+    assert gateway.models.calls == 2
+
+
+def test_gateway_that_keeps_failing_falls_back_to_google_keys():
+    gateway = FakeClient([api_error(400, message="Invalid argument")] * 40)
+    google = FakeClient([response(PAGE_1)])
+    client = make_client(
+        "google-secret",
+        {"gateway-secret": gateway, "google-secret": google},
+        gateway_key="gateway-secret",
+        sleep=lambda _s: None,
+        arabic_gemini_gateway_max_wait_seconds=1,
+    )
+
+    result = client.generate_batch([page(1)], validator=complete_validator)
+
+    assert result.provider != "modelgateway_gemini"
+    assert google.models.calls == 1

@@ -825,11 +825,20 @@ class GeminiOcrClient:
         *,
         provider: str = "google",
     ) -> str:
-        if (
-            provider == "gateway"
-            and code in (400, 403, 502, 503, 504)
-            and "upstream provider" in GeminiOcrClient._api_error_message(error).lower()
-        ):
+        if provider == "gateway":
+            # ⚠ ModelGateway hands each request to a marketplace seller, and a
+            # broken seller answers 402 ("upstream provider balance is
+            # insufficient"), 500 ("could not convert this request"), 400 or
+            # 503 while the next attempt — another seller — succeeds (measured
+            # on production, 2026-09-30). So for the gateway only a rejected
+            # KEY is final; everything else is retried and, once the gateway's
+            # budget is spent, the batch moves on to the Google keys, then
+            # Gemma — never a hard stop.
+            message = GeminiOcrClient._api_error_message(error).lower()
+            if code == 401 or (code == 403 and "upstream provider" not in message):
+                return "authentication"
+            if code == 429:
+                return "rate_limited"
             return "transient_http"
         if code == 429:
             return "daily_quota" if quota.get("quota_scope") == "daily" else "rate_limited"
