@@ -1,5 +1,6 @@
 """pgvector operations: insert, search, and index management."""
 
+import re
 from uuid import UUID
 from typing import Optional
 
@@ -7,9 +8,49 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.language import is_primarily_arabic
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+_ARABIC_QUERY_MARKS = re.compile(r"[\u064B-\u065F\u0670\u0640]")
+_ARABIC_QUERY_FOLDS = str.maketrans({
+    "أ": "ا",
+    "إ": "ا",
+    "آ": "ا",
+    "ٱ": "ا",
+    "ة": "ه",
+    "ى": "ي",
+    "ـ": None,
+})
+_ARABIC_STOPWORDS = (
+    "في من على إلى عن ما ماذا لماذا كيف هل هو هي هذا هذه ذلك التي الذي "
+    "و أو ثم لا لم لن قد كان يكون مع بين كل"
+)
+
+
+def _normalize_arabic_query(query: str) -> str:
+    return _ARABIC_QUERY_MARKS.sub("", query.translate(_ARABIC_QUERY_FOLDS))
+
+
+_ARABIC_STOPWORD_SET = set(_normalize_arabic_query(_ARABIC_STOPWORDS).split())
+
+
+def _arabic_tsquery(query: str) -> str:
+    """Build a simple-config OR query with Arabic stopwords removed."""
+    words = re.findall(r"[^\W_]+", _normalize_arabic_query(query), flags=re.UNICODE)
+    terms: list[str] = []
+    for word in words:
+        if word in _ARABIC_STOPWORD_SET:
+            continue
+        variants = [word]
+        if any("\u0600" <= char <= "\u06FF" for char in word):
+            if word.startswith("ال") and len(word) > 2:
+                variants.append(word[2:])
+            elif word != "ال":
+                variants.append("ال" + word)
+        terms.extend(variants)
+    return " | ".join(terms)
 
 
 def _vector_literal(embedding: list[float]) -> str:
@@ -131,8 +172,8 @@ async def search_chunks_fulltext(
 
     Complements vector search: exact terms (equation numbers, acronyms, author
     names, dataset names) that embeddings blur are matched literally here.
-    ``websearch_to_tsquery`` safely parses arbitrary user input (no tsquery
-    syntax errors). The expression matches the GIN index created at startup.
+    English keeps ``websearch_to_tsquery('english', ...)`` and its existing
+    AND behavior. Arabic uses normalized simple-config lexemes joined with OR.
     """
     if not document_id and not document_ids:
         return []
@@ -152,6 +193,30 @@ async def search_chunks_fulltext(
     if max_sequence_id is not None:
         filters += " AND c.sequence_id <= :max_sequence_id"
         params["max_sequence_id"] = max_sequence_id
+
+    if is_primarily_arabic(query):
+        arabic_query = _arabic_tsquery(query)
+        if not arabic_query:
+            return []
+        params["q"] = arabic_query
+        result = await session.execute(
+            text(f"""
+                SELECT c.id, c.document_id, c.sequence_id, c.markdown, c.plain_text,
+                       c.page_start, c.page_end, c.chunk_type,
+                       ts_rank(
+                           to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
+                           to_tsquery('simple', :q)
+                       ) AS fts_rank
+                FROM chunks c
+                WHERE to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
+                      @@ to_tsquery('simple', :q)
+                {filters}
+                ORDER BY fts_rank DESC
+                LIMIT :limit
+            """),
+            params,
+        )
+        return [dict(r) for r in result.mappings().all()]
 
     result = await session.execute(
         text(f"""
@@ -210,6 +275,40 @@ async def search_documents_semantic(
         {"user_id": user_id, "embedding": _vector_literal(query_embedding), "limit": limit},
     )
     return [dict(r) for r in result.mappings().all()]
+
+
+async def search_documents_fulltext(
+    session: AsyncSession,
+    user_id: UUID,
+    query: str,
+    limit: int = 20,
+) -> list[dict]:
+    """Find this user's documents by Arabic chunk text, ranked by FTS rank."""
+    if not is_primarily_arabic(query):
+        return []
+    arabic_query = _arabic_tsquery(query)
+    if not arabic_query:
+        return []
+
+    result = await session.execute(
+        text("""
+            SELECT c.document_id AS id,
+                   MAX(ts_rank(
+                       to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
+                       to_tsquery('simple', :q)
+                   )) AS fts_rank
+            FROM chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE d.user_id = :user_id
+              AND to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
+                  @@ to_tsquery('simple', :q)
+            GROUP BY c.document_id
+            ORDER BY fts_rank DESC
+            LIMIT :limit
+        """),
+        {"user_id": user_id, "q": arabic_query, "limit": limit},
+    )
+    return [dict(row) for row in result.mappings().all()]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

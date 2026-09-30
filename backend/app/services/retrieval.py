@@ -8,11 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.core import tracing
+from app.core.language import is_primarily_arabic
 from app.chat.tracing_hooks import retrieval_output
 from app.database.repositories import embeddings as emb_repo
 from app.database.repositories import assets as asset_repo
 from app.database.pgvector import search_chunks_fulltext
 from app.embeddings.model import get_query_embedding
+from app.services.query_translation import translated_query
 
 logger = get_logger(__name__)
 
@@ -21,41 +23,70 @@ logger = get_logger(__name__)
 _RRF_K = 60
 
 
-@tracing.traced("retrieve", tracing.RETRIEVER, output=retrieval_output)
-async def search_chunks(
+def reciprocal_rank_fusion(ranked_lists: list[list[dict]], limit: int) -> list[dict]:
+    """Merge ranked result lists while preserving each row's first-seen data."""
+    scores: dict = {}
+    by_id: dict = {}
+    for rows in ranked_lists:
+        for rank, row in enumerate(rows):
+            row_id = row["id"]
+            scores[row_id] = scores.get(row_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+            by_id.setdefault(row_id, dict(row))
+
+    fused = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:limit]
+    results = []
+    for row_id, score in fused:
+        row = by_id[row_id]
+        row.setdefault("similarity", 0.0)
+        row["rrf_score"] = score
+        results.append(row)
+    return results
+
+
+def _document_language(row: dict) -> str:
+    direction = str(row.get("text_direction") or "").strip().lower()
+    detected = str(row.get("detected_language") or "").strip().lower()
+    return "arabic" if direction == "rtl" or detected in {"arabic", "mixed"} else "english"
+
+
+async def _get_document_languages(
+    session: AsyncSession,
+    document_id: Optional[UUID],
+    document_ids: Optional[list[UUID]],
+) -> dict:
+    if document_ids:
+        statement = text(
+            "SELECT id, text_direction, detected_language FROM documents "
+            "WHERE id = ANY(:document_ids)"
+        )
+        params = {"document_ids": list(document_ids)}
+    elif document_id:
+        statement = text(
+            "SELECT id, text_direction, detected_language FROM documents WHERE id = :document_id"
+        )
+        params = {"document_id": document_id}
+    else:
+        return {}
+
+    try:
+        result = await session.execute(statement, params)
+        return {row["id"]: _document_language(row) for row in result.mappings().all()}
+    except Exception:
+        logger.warning("document language lookup failed; using original query only", exc_info=True)
+        return {}
+
+
+async def _search_chunks_for_query(
     session: AsyncSession,
     query: str,
-    limit: int = 10,
-    document_id: Optional[UUID] = None,
-    document_ids: Optional[list[UUID]] = None,
-    max_sequence_id: Optional[int] = None,
+    limit: int,
+    document_id: Optional[UUID],
+    document_ids: Optional[list[UUID]],
+    max_sequence_id: Optional[int],
 ) -> list[dict]:
-    """Hybrid retrieval: pgvector cosine search + Postgres full-text search,
-    fused with reciprocal-rank fusion.
-
-    Vector search captures paraphrases and semantics; full-text captures exact
-    terms embeddings blur (equation numbers, acronyms, author/dataset names).
-    A chunk found by both legs ranks above a chunk found by only one.
-
-    Scope is one document (``document_id``) or several (``document_ids``) —
-    the latter is the desk, where a question is asked of a whole study at
-    once. Both legs already accepted a list underneath; only this entry point
-    did not, which is why the desk's agent had no semantic search at all.
-    """
-    # Over-fetch each leg so fusion has real candidates to reorder. Across a
-    # study this matters more, not less: one paper can otherwise fill the
-    # candidate list before fusion has seen the others.
+    """Run the existing vector + English/Arabic FTS hybrid for one query."""
     fetch_n = max(limit * 3, 15)
 
-    # ⚠ Both legs are individually optional, and the vector one has TWO ways
-    # to be unavailable that are entirely normal rather than exceptional:
-    # the embedding provider can be unreachable (Ollama down, no cloud key),
-    # and a document ingested on the fast profile has no whole-document chunk
-    # embeddings (figure-only vectors are used by image retrieval). Neither may
-    # take full-text down with it — this function is what
-    # the agents' SEARCH tool runs, so an Ollama hiccup would otherwise
-    # silently reduce every agent search in the app to a substring scan,
-    # with nothing in the answer to say retrieval had been crippled.
     vec_hits: list[dict] = []
     try:
         query_embedding = await get_query_embedding(query)
@@ -81,25 +112,71 @@ async def search_chunks(
         return vec_hits[:limit]
     if not vec_hits:
         return fts_hits[:limit]
+    return reciprocal_rank_fusion([vec_hits, fts_hits], limit)
 
-    scores: dict = {}
-    by_id: dict = {}
-    for rank, row in enumerate(vec_hits):
-        scores[row["id"]] = scores.get(row["id"], 0.0) + 1.0 / (_RRF_K + rank + 1)
-        by_id.setdefault(row["id"], dict(row))
-    for rank, row in enumerate(fts_hits):
-        scores[row["id"]] = scores.get(row["id"], 0.0) + 1.0 / (_RRF_K + rank + 1)
-        by_id.setdefault(row["id"], dict(row))
 
-    fused = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
-    results = []
-    for chunk_id, score in fused:
-        row = by_id[chunk_id]
-        # Chunks surfaced only by the keyword leg carry no cosine similarity.
-        row.setdefault("similarity", 0.0)
-        row["rrf_score"] = score
-        results.append(row)
-    return results
+@tracing.traced("retrieve", tracing.RETRIEVER, output=retrieval_output)
+async def search_chunks(
+    session: AsyncSession,
+    query: str,
+    limit: int = 10,
+    document_id: Optional[UUID] = None,
+    document_ids: Optional[list[UUID]] = None,
+    max_sequence_id: Optional[int] = None,
+) -> list[dict]:
+    """Hybrid retrieval: pgvector cosine search + Postgres full-text search,
+    fused with reciprocal-rank fusion.
+
+    Vector search captures paraphrases and semantics; full-text captures exact
+    terms embeddings blur (equation numbers, acronyms, author/dataset names).
+    A chunk found by both legs ranks above a chunk found by only one.
+
+    Scope is one document (``document_id``) or several (``document_ids``) —
+    the latter is the desk, where a question is asked of a whole study at
+    once. Both legs already accepted a list underneath; only this entry point
+    did not, which is why the desk's agent had no semantic search at all.
+    """
+    language_by_id = await _get_document_languages(session, document_id, document_ids)
+    query_language = "arabic" if is_primarily_arabic(query) else "english"
+    if document_ids:
+        opposite_ids = [
+            doc_id for doc_id in document_ids
+            if language_by_id.get(doc_id, "english") != query_language
+        ]
+    elif document_id and language_by_id.get(document_id, "english") != query_language:
+        opposite_ids = [document_id]
+    else:
+        opposite_ids = []
+
+    if not opposite_ids:
+        return await _search_chunks_for_query(
+            session, query, limit, document_id, document_ids, max_sequence_id
+        )
+
+    target_language = "english" if query_language == "arabic" else "arabic"
+    translated = await translated_query(query, target_language)
+    if not translated or not translated.strip():
+        return await _search_chunks_for_query(
+            session, query, limit, document_id, document_ids, max_sequence_id
+        )
+
+    # Each language-specific list gets enough candidates for the final RRF
+    # pass to combine matches that were not in the first few positions.
+    fetch_n = max(limit * 3, 15)
+    original_hits = await _search_chunks_for_query(
+        session, query, fetch_n, document_id, document_ids, max_sequence_id
+    )
+    translated_hits = await _search_chunks_for_query(
+        session, translated, fetch_n,
+        None if document_ids else opposite_ids[0],
+        opposite_ids if document_ids else None,
+        max_sequence_id,
+    )
+    if not original_hits:
+        return translated_hits[:limit]
+    if not translated_hits:
+        return original_hits[:limit]
+    return reciprocal_rank_fusion([original_hits, translated_hits], limit)
 
 
 @tracing.traced("retrieve.figures", tracing.RETRIEVER, output=retrieval_output)
