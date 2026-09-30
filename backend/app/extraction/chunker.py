@@ -1102,9 +1102,20 @@ def create_chunks_from_content_list(content_list_path: Path) -> list[dict]:
             if caption:
                 md_parts.append(caption)
             md = "\n\n".join(md_parts) if md_parts else f"[{etype}]"
+            # Arabic OCR crops use PDF-point bounds for optional reading-order
+            # reconstruction. Keep the existing MinerU/English figure shape
+            # unchanged; only OCR-tagged image entries carry this metadata.
+            figure_bbox_json = (
+                {"page_idx": page, "bbox": entry["bbox"]}
+                if etype == "image"
+                and entry.get("ocr_provider")
+                and entry.get("bbox")
+                else None
+            )
             chunks.append(_chunk(
                 sequence_id, "figure", md, caption, page_one_indexed,
                 heading_path, image_refs=[img_name] if img_name else [],
+                bbox_json=figure_bbox_json,
             ))
             continue
 

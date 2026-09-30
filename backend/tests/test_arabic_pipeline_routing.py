@@ -739,3 +739,102 @@ def test_arabic_chunks_store_markdown_free_plain_text(
     assert chunk["plain_text"] == "مقدمة مهمة نص مائل رمز رابط"
     for syntax in ("**", "_", "`", "[", "https://example.test"):
         assert syntax not in chunk["plain_text"]
+
+
+def test_arabic_embedded_figure_is_persisted_with_its_asset(
+    db_session_sync, tmp_path, monkeypatch
+):
+    from app.extraction.arabic_types import OcrBatchResult, OcrUsage
+
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
+    monkeypatch.setattr(pipeline_sync.settings, "generate_figure_descriptions", False)
+    monkeypatch.setattr(
+        pipeline_sync,
+        "classify_document",
+        MagicMock(
+            return_value=_decision(
+                DocumentRoute.ARABIC_PRINTED, "arabic", "printed", "rtl"
+            )
+        ),
+    )
+    extracted_root = tmp_path / "extracted"
+    stored_images = tmp_path / "stored-images"
+    monkeypatch.setattr(pipeline_sync, "extracted_dir", lambda: extracted_root)
+    monkeypatch.setattr(pipeline_sync, "images_dir", lambda: stored_images)
+    monkeypatch.setattr("app.extraction.assets.images_dir", lambda: stored_images)
+
+    class FakeGemini:
+        def __init__(self):
+            self.requested_pages = []
+
+        def generate_batch(self, pages, *, validator):
+            requested = [page.page_number for page in pages]
+            self.requested_pages.append(requested)
+            response = (
+                "<!-- PAGE:1 -->\n"
+                "نص عربي عن النظام\nالشكل 1: مخطط النظام\n"
+                "<!-- END_PAGE:1 -->"
+            )
+            assert validator(response, requested) == len(requested)
+            return OcrBatchResult(
+                text=response,
+                provider="gemini_arabic_flash",
+                model="gemini-3.7-flash",
+                key_index=0,
+                usage=OcrUsage(prompt_tokens=2, output_tokens=3, total_tokens=5),
+                latency_ms=1,
+            )
+
+    fake_gemini = FakeGemini()
+    monkeypatch.setattr(
+        pipeline_sync, "GeminiOcrClient", MagicMock(return_value=fake_gemini)
+    )
+    monkeypatch.setattr(
+        pipeline_sync, "GemmaArabicFallback", MagicMock(return_value=object())
+    )
+
+    document_id, job_id = _seed(db_session_sync)
+    pdf_path = tmp_path / "arabic-with-figure.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page()
+    figure = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 300, 200), False)
+    figure.clear_with(0)
+    page.insert_image(
+        fitz.Rect(80, 180, 380, 380), stream=figure.tobytes("png")
+    )
+    pdf.save(pdf_path)
+    pdf.close()
+
+    pipeline_sync.run_pipeline_sync(
+        db_session_sync,
+        document_id=document_id,
+        job_id=job_id,
+        pdf_path=pdf_path,
+    )
+
+    figures = db_session_sync.execute(
+        text(
+            "SELECT id, sequence_id, page_start, markdown, plain_text, bbox_json "
+            "FROM chunks WHERE document_id=:id AND chunk_type='figure'"
+        ),
+        {"id": document_id},
+    ).mappings().all()
+    assert len(figures) == 1
+    figure_chunk = figures[0]
+    assert figure_chunk["page_start"] == 1
+    assert figure_chunk["plain_text"] == "الشكل 1: مخطط النظام"
+    assert figure_chunk["bbox_json"]["page_idx"] == 0
+    assert figure_chunk["bbox_json"]["bbox"] == pytest.approx([80, 180, 380, 380])
+
+    assets = db_session_sync.execute(
+        text(
+            "SELECT asset_type, file_path, mime_type FROM chunk_assets "
+            "WHERE chunk_id=:id"
+        ),
+        {"id": figure_chunk["id"]},
+    ).mappings().all()
+    assert len(assets) == 1
+    assert assets[0]["asset_type"] == "image"
+    assert assets[0]["mime_type"] == "image/png"
+    assert (stored_images / assets[0]["file_path"]).is_file()
+    assert fake_gemini.requested_pages == [[1]]
