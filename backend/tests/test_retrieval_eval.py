@@ -12,9 +12,10 @@ def _eval_api():
 
 
 def test_eval_cli_advertises_cases_settings_and_json_output():
-    script = Path(__file__).parents[1] / "scripts" / "eval_retrieval.py"
+    backend_dir = Path(__file__).parents[1]
     result = subprocess.run(
-        [sys.executable, str(script), "--help"],
+        [sys.executable, "-m", "scripts.eval_retrieval", "--help"],
+        cwd=backend_dir,
         check=False,
         capture_output=True,
         text=True,
