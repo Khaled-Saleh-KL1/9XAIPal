@@ -40,9 +40,11 @@ def get_chunks_without_embeddings_sync(
     type_sql = "" if chunk_type is None else "AND c.chunk_type = :chunk_type"
     result = session.execute(
         text(f"""
-            SELECT c.id, c.plain_text, c.chunk_type,
+            SELECT c.id, c.plain_text, c.chunk_type, c.heading_path,
+                   d.title, d.original_filename, d.text_direction, d.detected_language,
                    fd.description_plain AS figure_description
             FROM chunks c
+            JOIN documents d ON d.id = c.document_id
             LEFT JOIN chunk_embeddings ce ON ce.chunk_id = c.id
             LEFT JOIN LATERAL (
                 SELECT description_plain
@@ -82,6 +84,24 @@ def _embed_text_for_chunk(chunk: dict) -> str:
         description = (chunk.get("figure_description") or "").strip()
         if description:
             txt = f"{txt}\n\nFigure description:\n{description}"
+    direction = str(chunk.get("text_direction") or "").strip().lower()
+    language = str(chunk.get("detected_language") or "").strip().lower()
+    is_arabic_side = direction == "rtl" or language in {"arabic", "mixed"}
+    if settings.contextual_embeddings_arabic_enabled and is_arabic_side:
+        title = (chunk.get("title") or chunk.get("original_filename") or "").strip()[:160]
+        raw_heading = chunk.get("heading_path") or ""
+        if isinstance(raw_heading, (list, tuple)):
+            heading = " › ".join(str(part).strip() for part in raw_heading if str(part).strip())
+        else:
+            heading = str(raw_heading).strip()
+        heading = heading[:240]
+        context_parts = []
+        if title:
+            context_parts.append(f"العنوان: {title}")
+        if heading:
+            context_parts.append(f"القسم: {heading}")
+        if context_parts:
+            txt = f"{' | '.join(context_parts)}\n\n{txt}"
     return txt[:settings.embed_max_chars]
 
 

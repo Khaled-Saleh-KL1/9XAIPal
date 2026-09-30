@@ -427,6 +427,7 @@ class Settings(BaseSettings):
     rerank_arabic_enabled: bool = True
     rerank_english_enabled: bool = False
     rerank_candidates: int = 30
+    contextual_embeddings_arabic_enabled: bool = True
 
     # ── Web search ──────────────────────────────────────────────────────────
     # Which provider(s) serve the EXTERNAL route, the research agent, and the
