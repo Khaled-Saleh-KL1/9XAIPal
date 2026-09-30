@@ -14,10 +14,20 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.pgvector import search_documents_semantic, set_document_search_embedding
+from app.core.language import is_primarily_arabic
+from app.core.logging import get_logger
+from app.database.pgvector import (
+    search_documents_fulltext,
+    search_documents_semantic,
+    set_document_search_embedding,
+)
 from app.database.repositories import chunks as chunk_repo
 from app.database.repositories import documents as doc_repo
 from app.embeddings.model import get_embeddings_batch, get_query_embedding
+from app.services.query_translation import translated_query
+from app.services.retrieval import reciprocal_rank_fusion
+
+logger = get_logger(__name__)
 
 # A cosine similarity below this is "not what you typed" more often than it
 # is a real hit — found empirically against a handful of real queries, not
@@ -56,6 +66,75 @@ async def semantic_search_documents(
     returned id as a genuine match rather than re-filtering itself.
     """
     await _backfill_missing_embeddings(session, user_id)
-    query_embedding = await get_query_embedding(query)
-    results = await search_documents_semantic(session, user_id, query_embedding, limit=limit)
-    return [r for r in results if r["similarity"] >= _MIN_SIMILARITY]
+    query_language = "arabic" if is_primarily_arabic(query) else "english"
+    target_language = "english" if query_language == "arabic" else "arabic"
+    translated = await translated_query(query, target_language)
+    if translated and not translated.strip():
+        translated = None
+
+    search_limit = max(limit * 3, 15) if translated else limit
+    original_embedding = await get_query_embedding(query)
+    original_results = await search_documents_semantic(
+        session, user_id, original_embedding, limit=search_limit
+    )
+    semantic_lists = [original_results]
+    if translated:
+        try:
+            translated_embedding = await get_query_embedding(translated)
+            translated_results = await search_documents_semantic(
+                session, user_id, translated_embedding, limit=search_limit
+            )
+            semantic_lists.append(translated_results)
+        except Exception:
+            logger.warning(
+                "translated library semantic search failed; keeping original results",
+                exc_info=True,
+            )
+
+    if len(semantic_lists) == 1:
+        semantic_results = original_results
+    else:
+        semantic_results = reciprocal_rank_fusion(semantic_lists, search_limit)
+
+    similarity_by_id: dict = {}
+    for rows in semantic_lists:
+        for row in rows:
+            doc_id = row["id"]
+            similarity_by_id[doc_id] = max(
+                similarity_by_id.get(doc_id, float("-inf")),
+                float(row.get("similarity") or 0.0),
+            )
+    semantic_results = [
+        {**row, "similarity": similarity_by_id[row["id"]]}
+        for row in semantic_results
+        if similarity_by_id.get(row["id"], 0.0) >= _MIN_SIMILARITY
+    ]
+
+    keyword_query = query if query_language == "arabic" else translated
+    keyword_results: list[dict] = []
+    if keyword_query and is_primarily_arabic(keyword_query):
+        try:
+            keyword_results = await search_documents_fulltext(
+                session, user_id, keyword_query, limit=search_limit
+            )
+        except Exception:
+            logger.warning("library Arabic full-text search failed", exc_info=True)
+
+    if semantic_results and keyword_results:
+        results = reciprocal_rank_fusion(
+            [semantic_results, keyword_results], limit
+        )
+    elif semantic_results:
+        results = semantic_results[:limit]
+    else:
+        results = keyword_results[:limit]
+
+    return [
+        {
+            "id": row["id"],
+            "similarity": similarity_by_id.get(
+                row["id"], float(row.get("similarity") or 0.0)
+            ),
+        }
+        for row in results
+    ]

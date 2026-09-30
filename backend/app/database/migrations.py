@@ -92,6 +92,22 @@ async def _ensure_recent_columns() -> None:
         "CREATE INDEX IF NOT EXISTS idx_conversation_turns_user_id ON conversation_turns(user_id)",
         # From the rich extraction / quality phase
         "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_json JSONB",
+        """CREATE OR REPLACE FUNCTION ar_normalize(input_text TEXT)
+            RETURNS TEXT
+            LANGUAGE SQL
+            IMMUTABLE
+            STRICT
+            PARALLEL SAFE
+            AS $$
+                SELECT translate(
+                    regexp_replace(input_text, U&'[\\064B-\\065F\\0670\\0640]', '', 'g'),
+                    U&'\\0623\\0625\\0622\\0671\\0629\\0649',
+                    U&'\\0627\\0627\\0627\\0627\\0647\\064A'
+                )
+            $$""",
+        """CREATE INDEX IF NOT EXISTS idx_chunks_fts_ar
+            ON chunks
+            USING gin (to_tsvector('simple', ar_normalize(coalesce(plain_text, ''))))""",
         # Reading order LLM correction (two-column papers)
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order JSONB",
         "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_model TEXT",
