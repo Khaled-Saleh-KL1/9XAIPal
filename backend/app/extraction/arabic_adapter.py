@@ -33,6 +33,9 @@ _MATH_FENCE_LANGUAGES = {"math", "latex", "tex", "equation", "display-math"}
 _MARKDOWN = MarkdownIt("gfm-like", {"html": True, "linkify": False})
 
 
+NO_TEXT_MARKER = "[NO_TEXT]"
+
+
 def parse_complete_page_prefix(
     raw_response: str,
     expected_pages: Sequence[int],
@@ -70,6 +73,23 @@ def parse_complete_page_prefix(
             break
 
         page_markdown = text[start_marker.end() : end_marker.start()].strip()
+        # ⚠ A cover picture, blank page or full-page image has no text. The
+        # prompts ask for an explicit NO_TEXT_MARKER there; without it every
+        # provider returned an empty page 1 for a real book (2026-09-30), the
+        # page was refused, and the whole document failed. A page that comes
+        # back silently empty is still refused.
+        if page_markdown.upper() == NO_TEXT_MARKER:
+            pages.append(
+                ArabicOcrPage(
+                    page_number=expected_number,
+                    raw_markdown=page_markdown,
+                    markdown="",
+                    provider=provider,
+                    model=model,
+                )
+            )
+            cursor = end_marker.end()
+            continue
         if not page_markdown or _has_large_repetition_loop(page_markdown):
             first_uncommitted = expected_number
             break
