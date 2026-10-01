@@ -45,6 +45,64 @@ def _figure_pdf(path: Path, image_rects: list[tuple[fitz.Rect, bytes]]) -> Path:
     return path
 
 
+def _draw_vector_chart(page, rect: fitz.Rect, count: int = 24) -> None:
+    """Draw enough distinct vector items to represent a chart region."""
+    for index in range(count):
+        x = rect.x0 + 12 + index * (rect.width - 24) / max(count - 1, 1)
+        color = (0.1 + (index % 20) * 0.025, 0.3, 0.5)
+        if index % 2:
+            page.draw_line(
+                fitz.Point(x, rect.y0 + 8),
+                fitz.Point(x, rect.y1 - 8),
+                color=color,
+                width=0.7,
+            )
+        else:
+            bar_height = 25 + (index % 5) * 9
+            page.draw_rect(
+                fitz.Rect(x - 3, rect.y1 - bar_height, x + 3, rect.y1),
+                color=color,
+                fill=(0.5, 0.65, 0.8),
+                width=0.7,
+            )
+    for index in range(4):
+        y = rect.y0 + 15 + index * (rect.height - 30) / 3
+        page.draw_line(
+            fitz.Point(rect.x0, y),
+            fitz.Point(rect.x1, y),
+            color=(0.2 + index * 0.1, 0.1, 0.7),
+            width=0.35 + index * 0.07,
+        )
+    assert len(page.get_drawings()) >= 20
+
+
+def _insert_actual_text_caption(
+    pdf_path: Path, anchor: str, caption: str
+) -> None:
+    """Give a generated PDF a Unicode text-layer caption without a font fixture."""
+    pending_path = pdf_path.with_name(f"{pdf_path.stem}-actual-text.pdf")
+    document = fitz.open(pdf_path)
+    page = document[0]
+    actual_text = caption.encode("utf-16-be").hex().upper()
+    anchor_marker = f"<{anchor.encode('ascii').hex()}>".encode("ascii")
+    for xref in page.get_contents():
+        stream = document.xref_stream(xref)
+        if anchor_marker not in stream:
+            continue
+        wrapped = (
+            f"/Span << /ActualText <FEFF{actual_text}> >> BDC\n".encode("ascii")
+            + stream
+            + b"\nEMC"
+        )
+        document.update_stream(xref, wrapped)
+        document.save(pending_path)
+        document.close()
+        pending_path.replace(pdf_path)
+        return
+    document.close()
+    raise AssertionError("inserted caption text stream was not found")
+
+
 def test_complete_prefix_survives_truncated_last_page():
     raw = """<!-- PAGE:5 -->
 # عنوان
@@ -400,6 +458,149 @@ def test_two_figures_pair_with_caption_lines_in_page_order(tmp_path):
     ]
     assert [figure["bbox"][1] for figure in figures] == [130, 480]
     assert len({figure["img_path"] for figure in figures}) == 2
+
+
+def test_vector_chart_above_pdf_caption_is_emitted_with_its_region(tmp_path):
+    caption = "Figure 1: Vector chart"
+    document = fitz.open()
+    page = document.new_page()
+    _draw_vector_chart(page, fitz.Rect(120, 160, 420, 350))
+    page.insert_text((120, 390), caption, fontsize=11)
+    drawing_bounds = fitz.Rect()
+    for drawing in page.get_drawings():
+        drawing_bounds |= drawing["rect"]
+    pdf_path = tmp_path / "vector-chart.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, caption)],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "vector-chart-extract",
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert len(figures) == 1
+    figure = figures[0]
+    assert figure["img_caption"] == [caption]
+    assert figure["bbox"][0] <= drawing_bounds.x0
+    assert figure["bbox"][1] <= drawing_bounds.y0
+    assert figure["bbox"][2] >= drawing_bounds.x1
+    assert figure["bbox"][3] >= drawing_bounds.y1
+
+
+def test_vector_chart_below_pdf_caption_is_emitted(tmp_path):
+    caption = "Fig. 1: Chart below its caption"
+    document = fitz.open()
+    page = document.new_page()
+    page.insert_text((100, 130), caption, fontsize=11)
+    _draw_vector_chart(page, fitz.Rect(120, 170, 420, 350))
+    drawing_bounds = fitz.Rect()
+    for drawing in page.get_drawings():
+        drawing_bounds |= drawing["rect"]
+    pdf_path = tmp_path / "caption-before-vector-chart.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, caption)],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "caption-before-vector-chart-extract",
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert len(figures) == 1
+    assert figures[0]["img_caption"] == [caption]
+    assert figures[0]["bbox"][1] <= drawing_bounds.y0
+    assert figures[0]["bbox"][3] >= drawing_bounds.y1
+
+
+def test_table_rules_and_table_caption_do_not_create_a_figure(tmp_path):
+    document = fitz.open()
+    page = document.new_page()
+    for row in range(12):
+        y = 150 + row * 12
+        page.draw_line(fitz.Point(90, y), fitz.Point(500, y), width=0.6)
+    for column in range(4):
+        x = 90 + column * 130
+        page.draw_line(fitz.Point(x, 150), fitz.Point(x, 282), width=0.6)
+    page.insert_text((90, 320), "Table 1: Benchmark scores", fontsize=11)
+    pdf_path = tmp_path / "table-rules.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, "Table 1: Benchmark scores")],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "table-rules-extract",
+        dpi=200,
+    )
+
+    assert not any(block["type"] == "image" for block in blocks)
+
+
+def test_embedded_image_and_vector_figure_pair_with_nearest_pdf_captions(tmp_path):
+    document = fitz.open()
+    page = document.new_page()
+    image_rect = fitz.Rect(70, 120, 330, 290)
+    page.insert_image(image_rect, stream=_png_bytes(260, 170, 80))
+    image_caption = "Figure 1: Embedded image"
+    vector_caption = "Figure 2: Vector chart"
+    page.insert_text((70, 320), image_caption, fontsize=11)
+    vector_rect = fitz.Rect(120, 420, 420, 610)
+    _draw_vector_chart(page, vector_rect)
+    drawing_bounds = fitz.Rect()
+    for drawing in page.get_drawings():
+        drawing_bounds |= drawing["rect"]
+    page.insert_text((120, 650), vector_caption, fontsize=11)
+    pdf_path = tmp_path / "image-and-vector.pdf"
+    document.save(pdf_path)
+    document.close()
+
+    # Provider Markdown is intentionally in the opposite order from the PDF
+    # geometry. Captions with text-layer bboxes must follow their nearest crop.
+    blocks = pages_to_content_list(
+        [ocr_page(1, f"{vector_caption}\n{image_caption}")],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "image-and-vector-extract",
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert len(figures) == 2
+    assert [figure["img_caption"] for figure in figures] == [
+        [image_caption],
+        [vector_caption],
+    ]
+    assert figures[0]["bbox"] == pytest.approx(list(image_rect))
+    assert figures[1]["bbox"][1] <= drawing_bounds.y0
+    assert figures[1]["bbox"][3] >= drawing_bounds.y1
+
+
+def test_arabic_indic_figure_caption_is_found_from_pdf_text_layer(tmp_path):
+    caption = "شكل ١: مخطط متجهي"
+    anchor = "Arabic caption anchor"
+    document = fitz.open()
+    page = document.new_page()
+    _draw_vector_chart(page, fitz.Rect(120, 160, 420, 350))
+    page.insert_text((120, 390), anchor, fontsize=11)
+    pdf_path = tmp_path / "arabic-vector-chart.pdf"
+    document.save(pdf_path)
+    document.close()
+    _insert_actual_text_caption(pdf_path, anchor, caption)
+
+    blocks = pages_to_content_list(
+        [ocr_page(1, caption)],
+        pdf_path=pdf_path,
+        output_dir=tmp_path / "arabic-vector-chart-extract",
+        dpi=200,
+    )
+
+    figures = [block for block in blocks if block["type"] == "image"]
+    assert len(figures) == 1
+    assert figures[0]["img_caption"] == [caption]
 
 
 @pytest.mark.parametrize(

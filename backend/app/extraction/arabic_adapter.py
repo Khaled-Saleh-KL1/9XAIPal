@@ -32,9 +32,15 @@ _EQUATION_ENV_RE = re.compile(
 )
 _MATH_FENCE_LANGUAGES = {"math", "latex", "tex", "equation", "display-math"}
 _FIGURE_CAPTION_RE = re.compile(
-    r"^\s*(?:الشكل|شكل|Figure|Fig\.?)\s*[\d٠-٩]+[^\n]*$",
+    r"^\s*(?:الشكل|شكل|صورة|Figure|Fig\.?)\s*[\d٠-٩]+[^\n]*$",
     re.IGNORECASE,
 )
+_TABLE_CAPTION_RE = re.compile(
+    r"^\s*(?:Table|جدول)\s*[\d٠-٩]+[^\n]*$", re.IGNORECASE
+)
+_VECTOR_FIGURE_MIN_DRAWINGS = 16
+_FIGURE_CAPTION_NEARBY_PT = 72.0
+_FIGURE_REGION_MARGIN_PT = 5.0
 _MARKDOWN = MarkdownIt("gfm-like", {"html": True, "linkify": False})
 
 
@@ -178,7 +184,7 @@ def _extract_embedded_pdf_figures(
     output_dir: Path,
     dpi: int,
 ) -> dict[int, list[dict[str, Any]]]:
-    """Render substantial embedded page images as MinerU-compatible figures."""
+    """Render embedded images and captioned vector figures as image blocks."""
     if dpi < 1:
         raise ValueError("dpi must be positive")
     if not pages:
@@ -200,50 +206,71 @@ def _extract_embedded_pdf_figures(
             if page_area <= 0:
                 continue
 
-            candidates = []
-            seen_xrefs: set[int] = set()
-            for image_info in page.get_images(full=True):
-                xref = int(image_info[0])
-                if xref in seen_xrefs:
-                    continue
-                seen_xrefs.add(xref)
-                for image_rect in page.get_image_rects(xref):
-                    # get_image_rects reports unrotated page coordinates;
-                    # page.rect and get_pixmap clips use displayed coordinates.
-                    rect = (fitz.Rect(image_rect) * page.rotation_matrix) & page_rect
-                    area = float(rect.width * rect.height)
-                    area_share = area / page_area
-                    if area_share < 0.05:
-                        continue
-                    # A full-page scan is page content, not a separate figure.
-                    # Scanned documents with only these images are out of scope.
-                    if area_share > 0.90:
-                        continue
-                    if (
-                        rect.width * dpi / 72.0 < 80
-                        or rect.height * dpi / 72.0 < 80
-                    ):
-                        continue
-                    pixmap = page.get_pixmap(matrix=matrix, clip=rect)
-                    if pixmap.width < 80 or pixmap.height < 80:
-                        continue
-                    candidates.append((rect, pixmap))
-
-            # Arabic OCR pages read top-to-bottom, then right-to-left.
-            candidates.sort(
-                key=lambda candidate: (candidate[0].y0, -candidate[0].x1)
+            text_lines, has_text_layer = _pdf_text_lines(page, fitz)
+            pdf_captions = [line for line in text_lines if line["kind"]]
+            image_rects = _embedded_image_rects(page, fitz, page_rect)
+            image_regions = _embedded_image_regions(
+                image_rects,
+                page_area,
+                page,
+                matrix,
+                dpi,
+                merge_tiles=has_text_layer,
             )
-            if not candidates:
+
+            vector_regions = []
+            if has_text_layer:
+                drawing_rects = _pdf_drawing_rects(page, fitz, page_rect)
+                for caption in pdf_captions:
+                    if caption["kind"] != "figure":
+                        continue
+                    region = _vector_region_for_caption(
+                        page_rect,
+                        caption,
+                        pdf_captions,
+                        text_lines,
+                        drawing_rects,
+                        image_rects,
+                        image_regions,
+                        dpi,
+                        fitz,
+                    )
+                    if region is not None:
+                        vector_regions.append(region)
+
+            regions = vector_regions + [
+                region
+                for region in image_regions
+                if not any(
+                    _rect_intersection_ratio(region["bbox"], vector["bbox"]) >= 0.5
+                    for vector in vector_regions
+                )
+            ]
+            regions.sort(key=lambda region: (region["bbox"].y0, -region["bbox"].x1))
+            if not regions:
                 continue
 
-            captions = [
-                line.strip()
-                for line in ocr_page.markdown.splitlines()
-                if _FIGURE_CAPTION_RE.match(line)
-            ]
+            ocr_captions = _ocr_caption_lines(ocr_page.markdown)
+            has_pdf_captions = bool(pdf_captions)
+            if has_pdf_captions:
+                caption_assignments = _pair_regions_with_pdf_captions(regions, pdf_captions)
+            else:
+                caption_assignments = [
+                    ocr_captions[index] if index < len(ocr_captions) else None
+                    for index in range(len(regions))
+                ]
+
             page_figures = []
             image_dir.mkdir(parents=True, exist_ok=True)
-            for image_number, (rect, pixmap) in enumerate(candidates, start=1):
+            for image_number, (region, caption) in enumerate(
+                zip(regions, caption_assignments), start=1
+            ):
+                if caption is not None and caption["kind"] == "table":
+                    continue
+                rect = region["bbox"]
+                pixmap = page.get_pixmap(matrix=matrix, clip=rect)
+                if pixmap.width < 80 or pixmap.height < 80:
+                    continue
                 filename = (
                     f"arabic-page-{ocr_page.page_number:04d}-"
                     f"figure-{image_number:03d}.png"
@@ -259,16 +286,310 @@ def _extract_embedded_pdf_figures(
                             float(rect.x1),
                             float(rect.y1),
                         ],
-                        "img_caption": (
-                            [captions[image_number - 1]]
-                            if image_number <= len(captions)
-                            else []
-                        ),
+                        "img_caption": [caption["text"]]
+                        if caption is not None and caption["kind"] == "figure"
+                        else [],
                     }
                 )
-            figures_by_page[ocr_page.page_number] = page_figures
+            if page_figures:
+                figures_by_page[ocr_page.page_number] = page_figures
 
     return figures_by_page
+
+
+def _pdf_text_lines(page: Any, fitz: Any) -> tuple[list[dict[str, Any]], bool]:
+    """Read caption candidates and body lines from the PDF text layer."""
+    lines: list[dict[str, Any]] = []
+    has_text_layer = False
+    rotation = page.rotation_matrix
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+            if not text:
+                continue
+            has_text_layer = True
+            bbox = (fitz.Rect(line["bbox"]) * rotation) & page.rect
+            kind = (
+                "figure"
+                if _FIGURE_CAPTION_RE.match(text)
+                else "table"
+                if _TABLE_CAPTION_RE.match(text)
+                else None
+            )
+            lines.append({"text": text, "bbox": bbox, "kind": kind})
+    return lines, has_text_layer
+
+
+def _ocr_caption_lines(markdown: str) -> list[dict[str, Any]]:
+    captions = []
+    for line in markdown.splitlines():
+        text = line.strip()
+        if _FIGURE_CAPTION_RE.match(text):
+            captions.append({"text": text, "bbox": None, "kind": "figure"})
+        elif _TABLE_CAPTION_RE.match(text):
+            captions.append({"text": text, "bbox": None, "kind": "table"})
+    return captions
+
+
+def _embedded_image_rects(page: Any, fitz: Any, page_rect: Any) -> list[Any]:
+    rects = []
+    seen_xrefs: set[int] = set()
+    for image_info in page.get_images(full=True):
+        xref = int(image_info[0])
+        if xref in seen_xrefs:
+            continue
+        seen_xrefs.add(xref)
+        for image_rect in page.get_image_rects(xref):
+            # Image placement APIs use unrotated coordinates; clips use the
+            # displayed page coordinates used for all output bboxes.
+            rect = (fitz.Rect(image_rect) * page.rotation_matrix) & page_rect
+            if not rect.is_empty:
+                rects.append(rect)
+    return rects
+
+
+def _embedded_image_regions(
+    image_rects: list[Any],
+    page_area: float,
+    page: Any,
+    matrix: Any,
+    dpi: int,
+    *,
+    merge_tiles: bool,
+) -> list[dict[str, Any]]:
+    """Merge adjacent text-page tiles before applying the legacy size filters."""
+    import fitz
+
+    if merge_tiles:
+        clusters: list[dict[str, Any]] = []
+        for rect in image_rects:
+            pending = {"bbox": fitz.Rect(rect), "rects": [fitz.Rect(rect)]}
+            index = 0
+            while index < len(clusters):
+                cluster = clusters[index]
+                expanded = _expand_rect(pending["bbox"], 3, fitz)
+                if any(expanded.intersects(member) for member in cluster["rects"]):
+                    pending["bbox"] |= cluster["bbox"]
+                    pending["rects"].extend(cluster["rects"])
+                    clusters.pop(index)
+                    index = 0
+                else:
+                    index += 1
+            clusters.append(pending)
+    else:
+        clusters = [
+            {"bbox": fitz.Rect(rect), "rects": [fitz.Rect(rect)]}
+            for rect in image_rects
+        ]
+
+    regions = []
+    for cluster in clusters:
+        rect = cluster["bbox"]
+        area_share = (rect.width * rect.height) / page_area
+        # Keep the existing icon/decoration and full-page-scan filters. Tiles
+        # are assessed by their combined bounds so a split figure can survive.
+        if area_share < 0.05 or area_share > 0.90:
+            continue
+        if rect.width * dpi / 72.0 < 80 or rect.height * dpi / 72.0 < 80:
+            continue
+        pixmap = page.get_pixmap(matrix=matrix, clip=rect)
+        if pixmap.width < 80 or pixmap.height < 80:
+            continue
+        regions.append({"bbox": rect, "image_rects": cluster["rects"], "kind": "image"})
+    return regions
+
+
+def _pdf_drawing_rects(page: Any, fitz: Any, page_rect: Any) -> list[Any]:
+    rects = []
+    for drawing in page.get_drawings():
+        rect = (fitz.Rect(drawing["rect"]) * page.rotation_matrix) & page_rect
+        if rect.width < 1.0:
+            rect.x0 -= 0.5
+            rect.x1 += 0.5
+        if rect.height < 1.0:
+            rect.y0 -= 0.5
+            rect.y1 += 0.5
+        rect &= page_rect
+        if not rect.is_empty:
+            rects.append(rect)
+    return rects
+
+
+def _rect_intersection_ratio(first: Any, second: Any) -> float:
+    intersection = first & second
+    first_area = first.width * first.height
+    if intersection.is_empty or first_area <= 0:
+        return 0.0
+    return (intersection.width * intersection.height) / first_area
+
+
+def _expand_rect(rect: Any, margin: float, fitz: Any) -> Any:
+    return fitz.Rect(
+        rect.x0 - margin,
+        rect.y0 - margin,
+        rect.x1 + margin,
+        rect.y1 + margin,
+    )
+
+
+def _same_caption_column(first: Any, second: Any) -> bool:
+    return max(first.x0, second.x0) < min(first.x1, second.x1)
+
+
+def _vector_region_for_caption(
+    page_rect: Any,
+    caption: dict[str, Any],
+    captions: list[dict[str, Any]],
+    text_lines: list[dict[str, Any]],
+    drawing_rects: list[Any],
+    image_rects: list[Any],
+    existing_image_regions: list[dict[str, Any]],
+    dpi: int,
+    fitz: Any,
+) -> dict[str, Any] | None:
+    """Collect substantial vector artwork adjacent to one PDF caption."""
+    caption_rect = caption["bbox"]
+    column_margin = min(60.0, max(18.0, page_rect.width * 0.10))
+    column = fitz.Rect(
+        max(page_rect.x0, caption_rect.x0 - column_margin),
+        page_rect.y0,
+        min(page_rect.x1, caption_rect.x1 + column_margin),
+        page_rect.y1,
+    )
+    previous_caps = [
+        other["bbox"].y1
+        for other in captions
+        if other is not caption
+        and other["bbox"].y1 <= caption_rect.y0
+        and _same_caption_column(other["bbox"], column)
+    ]
+    next_caps = [
+        other["bbox"].y0
+        for other in captions
+        if other is not caption
+        and other["bbox"].y0 >= caption_rect.y1
+        and _same_caption_column(other["bbox"], column)
+    ]
+    page_before = max([page_rect.y0, *previous_caps])
+    page_after = min([page_rect.y1, *next_caps])
+
+    def prepare(direction: str) -> dict[str, Any] | None:
+        if direction == "above":
+            start, end = page_before, caption_rect.y0
+        else:
+            start, end = caption_rect.y1, page_after
+        if end <= start:
+            return None
+
+        def in_window(rect: Any) -> bool:
+            return (
+                rect.y1 > start
+                and rect.y0 < end
+                and _same_caption_column(rect, column)
+                and not any(rect.intersects(item["bbox"]) for item in captions)
+            )
+
+        rough_drawings = [rect for rect in drawing_rects if in_window(rect)]
+        if len(rough_drawings) < _VECTOR_FIGURE_MIN_DRAWINGS:
+            return None
+        rough_bounds = fitz.Rect(rough_drawings[0])
+        for rect in rough_drawings[1:]:
+            rough_bounds |= rect
+        if rough_bounds.width * dpi / 72.0 < 80 or rough_bounds.height * dpi / 72.0 < 80:
+            return None
+
+        # Chart labels are text-layer lines too. Exclude lines within the
+        # preliminary drawing bounds when finding the body-text boundary.
+        body_lines = [
+            line
+            for line in text_lines
+            if line["kind"] is None
+            and _same_caption_column(line["bbox"], caption_rect)
+            and not line["bbox"].intersects(_expand_rect(rough_bounds, 2, fitz))
+        ]
+        if direction == "above":
+            preceding = [line["bbox"].y1 for line in body_lines if line["bbox"].y1 <= caption_rect.y0]
+            start = max([start, *preceding])
+        else:
+            following = [line["bbox"].y0 for line in body_lines if line["bbox"].y0 >= caption_rect.y1]
+            end = min([end, *following])
+        if end <= start:
+            return None
+
+        drawings = [rect for rect in drawing_rects if in_window(rect)]
+        if len(drawings) < _VECTOR_FIGURE_MIN_DRAWINGS:
+            return None
+        bounds = fitz.Rect(drawings[0])
+        for rect in drawings[1:]:
+            bounds |= rect
+
+        associated_images = [
+            rect
+            for rect in image_rects
+            if rect.y1 > start
+            and rect.y0 < end
+            and _same_caption_column(rect, column)
+            and rect.intersects(_expand_rect(bounds, 8, fitz))
+        ]
+        for rect in associated_images:
+            bounds |= rect
+        region = _expand_rect(bounds, _FIGURE_REGION_MARGIN_PT, fitz) & page_rect
+        if region.width * dpi / 72.0 < 80 or region.height * dpi / 72.0 < 80:
+            return None
+        return {"bbox": region, "image_rects": associated_images, "kind": "vector"}
+
+    above = prepare("above")
+    if above is not None:
+        return above
+
+    # A nearby raster crop above this caption already represents it. Search
+    # below only when there is no such crop; if a below-side vector group is
+    # found, its own image overlays are merged into that region.
+    near_image_above = any(
+        rect.y1 <= caption_rect.y0
+        and caption_rect.y0 - rect.y1 <= _FIGURE_CAPTION_NEARBY_PT
+        and _same_caption_column(rect, column)
+        for rect in (image["bbox"] for image in existing_image_regions)
+    )
+    if near_image_above:
+        return None
+    return prepare("below")
+
+
+def _pair_regions_with_pdf_captions(
+    regions: list[dict[str, Any]],
+    captions: list[dict[str, Any]],
+) -> list[dict[str, Any] | None]:
+    available = list(captions)
+    assignments = []
+    for region in regions:
+        rect = region["bbox"]
+        candidates = []
+        for caption in available:
+            caption_rect = caption["bbox"]
+            if not _same_caption_column(rect, caption_rect):
+                continue
+            horizontal_gap = max(0.0, caption_rect.x0 - rect.x1, rect.x0 - caption_rect.x1)
+            if horizontal_gap > 18:
+                continue
+            if caption_rect.y0 >= rect.y1:
+                direction, vertical_gap = "below", caption_rect.y0 - rect.y1
+            elif caption_rect.y1 <= rect.y0:
+                direction, vertical_gap = "above", rect.y0 - caption_rect.y1
+            else:
+                direction, vertical_gap = "below", 0.0
+            if vertical_gap <= _FIGURE_CAPTION_NEARBY_PT:
+                candidates.append((direction != "below", vertical_gap, horizontal_gap, caption))
+        if not candidates:
+            assignments.append(None)
+            continue
+        candidates.sort(key=lambda candidate: candidate[:3])
+        selected = candidates[0][3]
+        available.remove(selected)
+        assignments.append(selected)
+    return assignments
 
 
 def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
