@@ -786,3 +786,31 @@ def test_ocr_prompts_explain_the_no_text_marker():
 
     assert "[NO_TEXT]" in gemini_ocr_client.batch_prompt([])
     assert "[NO_TEXT]" in open(arabic_fallback.__file__, encoding="utf-8").read()
+
+
+def test_ocr_image_links_are_dropped_from_page_text():
+    # OCR models invent image URLs (seen on production: cdn.upstage.ai/...);
+    # Arabic-route figures come only from PDF crops, so any OCR image link is fake.
+    markdown = (
+        "نص الصفحة الأول.\n\n"
+        "![Figure 3: Benchmark size](https://cdn.example.org/qimma/figure3.png)\n\n"
+        "Figure 3: Benchmark size versus discard rate.\n\n"
+        "قبل ![شكل](figure.png) بعد"
+    )
+
+    blocks = pages_to_content_list([ocr_page(1, markdown)])
+    text = json.dumps(blocks, ensure_ascii=False)
+
+    assert "![" not in text
+    assert "cdn.example.org" not in text
+    assert "figure.png" not in text
+    assert "Figure 3: Benchmark size versus discard rate." in text
+    assert "نص الصفحة الأول." in text
+    assert "قبل" in text and "بعد" in text
+
+
+def test_ocr_prompts_forbid_image_links():
+    from app.extraction import arabic_fallback, gemini_ocr_client
+
+    assert "image links" in gemini_ocr_client.batch_prompt([])
+    assert "image links" in open(arabic_fallback.__file__, encoding="utf-8").read()

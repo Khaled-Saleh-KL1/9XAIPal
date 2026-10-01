@@ -132,6 +132,16 @@ def parse_complete_page_prefix(
     )
 
 
+# Arabic-route figures come only from PDF crops, so an image link in OCR text
+# is invented (seen on production: cdn URLs that never existed).
+# The alt text (the model's description of the figure) is kept as plain text.
+_OCR_IMAGE_LINK_RE = re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)")
+
+
+def _strip_ocr_image_links(markdown: str) -> str:
+    return _OCR_IMAGE_LINK_RE.sub(r"\1", markdown)
+
+
 def pages_to_content_list(
     pages: Sequence[ArabicOcrPage],
     *,
@@ -153,7 +163,7 @@ def pages_to_content_list(
     for page in pages:
         if page.page_number < 1:
             raise ValueError("Arabic OCR page numbers must be 1-based")
-        for block in _markdown_blocks(page.markdown):
+        for block in _markdown_blocks(_strip_ocr_image_links(page.markdown)):
             if not _has_block_content(block):
                 continue
             content_list.append(
