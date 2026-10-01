@@ -829,13 +829,13 @@ def test_ocr_prompts_forbid_image_links():
     (r'![شكل](https://cdn.example.org/figure\(4\).png "a (title)")', 'شكل'),
     ('![Figure 4][1]\n\n[1]: https://cdn.example.org/missing.png', 'Figure 4'),
     ('![Figure 4]\n\n[Figure 4]: https://cdn.example.org/missing.png', 'Figure 4'),
-    ('![# Figure 4](x)', '# Figure 4'),
-    ('![1. Caption](x)', '1. Caption'),
-    ('![$$x=1$$](x)', r'\$\$x=1\$\$'),
-    ('![<b> & *caption*](x)', r'&lt;b&gt; &amp; \*caption\*'),
+    ('![# Figure 4](x.png)', '# Figure 4'),
+    ('![1. Caption](x.png)', '1. Caption'),
+    ('![$$x=1$$](x.png)', r'\$\$x=1\$\$'),
+    ('![<b> & *caption*](x.png)', r'&lt;b&gt; &amp; \*caption\*'),
     ('<img src="https://cdn.example.org/missing.png" alt="Figure 4">', 'Figure 4'),
-    ("<IMG alt='Figure 4' src='x' />", 'Figure 4'),
-    ('before <img alt=Figure src=x> after', 'before Figure after'),
+    ("<IMG alt='Figure 4' src='x.png' />", 'Figure 4'),
+    ('before <img alt=Figure src=x.png> after', 'before Figure after'),
 ])
 def test_parsed_images_become_exact_plain_captions(source, caption):
     blocks = pages_to_content_list([ocr_page(1, source)])
@@ -846,17 +846,17 @@ def test_parsed_images_become_exact_plain_captions(source, caption):
     assert not any(marker in blocks[0]["text"] for marker in ('![', 'https://', '<img'))
 
 
-@pytest.mark.parametrize("source", ['![](x)', '<img src=x>', '<img alt="" src=x>'])
+@pytest.mark.parametrize("source", ['![](x.png)', '<img src=x.png>', '<img alt="" src=x.png>'])
 def test_empty_parsed_images_are_removed(source):
     assert pages_to_content_list([ocr_page(1, source)]) == []
 
 
 @pytest.mark.parametrize("source,kind,field,expected", [
-    ('# Title ![caption [12]](x)', 'text', 'text', 'Title caption [12]'),
-    ('- Item ![caption [12]](x)', 'list', 'list_items', ['Item caption [12]']),
+    ('# Title ![caption [12]](x.png)', 'text', 'text', 'Title caption [12]'),
+    ('- Item ![caption [12]](x.png)', 'list', 'list_items', ['Item caption [12]']),
     ('| Figure |\n| --- |\n| ![Figure 4][1] |\n\n[1]: https://cdn.example.org/missing.png',
      'table', 'table_body', '<table>\n<thead>\n<tr>\n<th>Figure</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Figure 4</td>\n</tr>\n</tbody>\n</table>'),
-    ('<table><tr><td><img src=x alt="Figure 4"></td></tr></table>',
+    ('<table><tr><td><img src=x.png alt="Figure 4"></td></tr></table>',
      'table', 'table_body', '<table><tr><td>Figure 4</td></tr></table>'),
 ])
 def test_images_preserve_surrounding_block_structure(source, kind, field, expected):
@@ -875,22 +875,22 @@ def test_images_preserve_surrounding_block_structure(source, kind, field, expect
     (r'\![12](https://example.org/paper)', 'text'),
     ('$$n![k](n-k)$$', 'equation'),
     ('$n![k](n-k)$', 'text'),
-    ('before $$n![k](n-k)$$ after ![caption](x)', 'text'),
+    ('before $$n![k](n-k)$$ after ![caption](x.png)', 'text'),
     ('[text](url)', 'text'),
 ])
 def test_non_image_syntax_is_preserved(source, kind):
     blocks = pages_to_content_list([ocr_page(1, source)])
     assert len(blocks) == 1
     assert blocks[0]['type'] == kind
-    expected = source.strip().replace('after ![caption](x)', 'after caption')
+    expected = source.strip().replace('after ![caption](x.png)', 'after caption')
     assert blocks[0]['text'] == expected
 
 
 @pytest.mark.parametrize("source,expected", [
-    ('before ![one](x) middle ![two](y) after', 'before one middle two after'),
-    ('![outer ![inner](y)](x)', 'outer inner'),
-    ('![\\[literal\\]](x)', '[literal]'),
-    ('<img src=x alt="&lt;b&gt; &amp; *caption*">\n<table><tr><td>value</td></tr></table>',
+    ('before ![one](x.png) middle ![two](y.png) after', 'before one middle two after'),
+    ('![outer ![inner](y.png)](x.png)', 'outer inner'),
+    ('![\\[literal\\]](x.png)', '[literal]'),
+    ('<img src=x.png alt="&lt;b&gt; &amp; *caption*">\n<table><tr><td>value</td></tr></table>',
      r'&lt;b&gt; &amp; \*caption\*'),
 ])
 def test_literal_captions_survive_multiple_nodes_and_html_table_splitting(source, expected):
@@ -900,8 +900,8 @@ def test_literal_captions_survive_multiple_nodes_and_html_table_splitting(source
 
 
 @pytest.mark.parametrize("source", [
-    '| Figure |\n| --- |\n| <img src=x alt="*caption* &amp; &lt;b&gt;"> |',
-    '<table><tr><td><img src=x alt="*caption* &amp; &lt;b&gt;"></td></tr></table>',
+    '| Figure |\n| --- |\n| <img src=x.png alt="*caption* &amp; &lt;b&gt;"> |',
+    '<table><tr><td><img src=x.png alt="*caption* &amp; &lt;b&gt;"></td></tr></table>',
 ])
 def test_html_image_captions_in_tables_stay_literal_after_html_extraction(source):
     blocks = pages_to_content_list([ocr_page(1, source)])
@@ -910,20 +910,20 @@ def test_html_image_captions_in_tables_stay_literal_after_html_extraction(source
     assert '<img' not in blocks[0]['table_body']
 
 
-def test_html_image_syntax_inside_math_is_preserved_in_html_blocks():
+def test_non_image_html_src_is_preserved_even_with_dollars():
     source = '<div>$$n<img src=x alt=k>$$</div>'
     blocks = pages_to_content_list([ocr_page(1, source)])
     assert blocks[0]['text'] == source
 
 
 def test_code_span_dollars_do_not_protect_a_real_image_as_math():
-    blocks = pages_to_content_list([ocr_page(1, '`$` ![caption](x) `$`')])
+    blocks = pages_to_content_list([ocr_page(1, '`$` ![caption](x.png) `$`')])
     assert blocks[0]['text'] == '`$` caption `$`'
 
 
 @pytest.mark.parametrize("source", [
-    '| Figure |\n| --- |\n| ![$$x=1$$ *caption*](x) |',
-    '| Figure |\n| --- |\n| ![outer ![inner](y)](x) |',
+    '| Figure |\n| --- |\n| ![$$x=1$$ *caption*](x.png) |',
+    '| Figure |\n| --- |\n| ![outer ![inner](y.png)](x.png) |',
 ])
 def test_markdown_image_table_captions_are_literal_for_the_reader(source):
     blocks = pages_to_content_list([ocr_page(1, source)])
@@ -936,8 +936,8 @@ def test_markdown_image_table_captions_are_literal_for_the_reader(source):
 
 
 @pytest.mark.parametrize("source", [
-    '<img src=y alt="&lt;img src=x&gt;">\n<table><tr><td>A</td></tr></table>',
-    '<table><tr><td>A</td></tr></table>\n<img src=y alt="&lt;img src=x&gt;">',
+    '<img src=y.png alt="&lt;img src=x&gt;">\n<table><tr><td>A</td></tr></table>',
+    '<table><tr><td>A</td></tr></table>\n<img src=y.png alt="&lt;img src=x&gt;">',
 ])
 def test_html_table_splitting_does_not_unescape_a_caption_into_an_image(source):
     blocks = pages_to_content_list([ocr_page(1, source)])
@@ -946,5 +946,371 @@ def test_html_table_splitting_does_not_unescape_a_caption_into_an_image(source):
 
 
 def test_html_alt_link_syntax_is_literal_text():
-    blocks = pages_to_content_list([ocr_page(1, '<img src=x alt="[caption](destination)">')])
+    blocks = pages_to_content_list([ocr_page(1, '<img src=x.png alt="[caption](destination)">')])
     assert blocks[0]['text'] == r'\[caption\](destination)'
+
+
+# Literal outputs computed once from origin/main (06aadab), not imported at test time.
+@pytest.mark.parametrize("source,expected", [['# نتائج\n\n- القيمة محفوظة\n\n| صيغة |\n| --- |\n| \\[x\\] |',
+  [{'type': 'text',
+    'text_level': 1,
+    'text': 'نتائج',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'list',
+    'list_items': ['القيمة محفوظة'],
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'table',
+    'table_body': '<table>\n'
+                  '<thead>\n'
+                  '<tr>\n'
+                  '<th>صيغة</th>\n'
+                  '</tr>\n'
+                  '</thead>\n'
+                  '<tbody>\n'
+                  '<tr>\n'
+                  '<td>[x]</td>\n'
+                  '</tr>\n'
+                  '</tbody>\n'
+                  '</table>',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['# نتائج mixed\n'
+  '\n'
+  'النص $a *b* c$ و \\(x+y\\).\n'
+  '\n'
+  '1. القيمة الأولى\n'
+  '2. English value\n'
+  '\n'
+  '| صيغة | قيمة |\n'
+  '| --- | --- |\n'
+  '| $a *b* c$ | \\[x\\] |\n'
+  '\n'
+  '```python\n'
+  'print("$x$")\n'
+  '```\n'
+  '\n'
+  '$$x^2=1$$',
+  [{'type': 'text',
+    'text_level': 1,
+    'text': 'نتائج mixed',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'text',
+    'text': 'النص $a *b* c$ و \\(x+y\\).',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'list',
+    'list_items': ['1. القيمة الأولى', '2. English value'],
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'table',
+    'table_body': '<table>\n'
+                  '<thead>\n'
+                  '<tr>\n'
+                  '<th>صيغة</th>\n'
+                  '<th>قيمة</th>\n'
+                  '</tr>\n'
+                  '</thead>\n'
+                  '<tbody>\n'
+                  '<tr>\n'
+                  '<td>$a <em>b</em> c$</td>\n'
+                  '<td>[x]</td>\n'
+                  '</tr>\n'
+                  '</tbody>\n'
+                  '</table>',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'text',
+    'text': '```python\nprint("$x$")\n```',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'equation',
+    'text': '$$x^2=1$$',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['## الدرس\n'
+  '\n'
+  '- عنصر\n'
+  '  - nested\n'
+  '\n'
+  '`$a$` و [رابط](notes)\n'
+  '\n'
+  '\\[x+y\\]\n'
+  '\n'
+  '<div><code>$</code>نص &amp; text</div>\n'
+  '\n'
+  '<table><tr><td>$a *b* c$</td></tr></table>',
+  [{'type': 'text',
+    'text_level': 2,
+    'text': 'الدرس',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'list',
+    'list_items': ['عنصر', 'nested'],
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'text',
+    'text': '`$a$` و [رابط](notes)',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'equation',
+    'text': '$$\nx+y\n$$',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'text',
+    'text': '<div><code>$</code>نص &amp; text</div>',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False},
+   {'type': 'table',
+    'table_body': '<table><tr><td>$a *b* c$</td></tr></table>',
+    'table_caption': [],
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['$$n![k](n-k)$$',
+  [{'type': 'equation',
+    'text': '$$n![k](n-k)$$',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['$n![k](n-k)$',
+  [{'type': 'text',
+    'text': '$n![k](n-k)$',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['القيمة \\(n![k](n-k)\\)',
+  [{'type': 'text',
+    'text': 'القيمة \\(n![k](n-k)\\)',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['- القيمة \\(n![k](n-k)\\)',
+  [{'type': 'list',
+    'list_items': ['القيمة \\(n![k](n-k)\\)'],
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['| صيغة |\n| --- |\n| القيمة \\(n![k](n-k)\\) |',
+  [{'type': 'table',
+    'table_body': '<table>\n'
+                  '<thead>\n'
+                  '<tr>\n'
+                  '<th>صيغة</th>\n'
+                  '</tr>\n'
+                  '</thead>\n'
+                  '<tbody>\n'
+                  '<tr>\n'
+                  '<td>القيمة (n<img src="n-k" alt="k" />)</td>\n'
+                  '</tr>\n'
+                  '</tbody>\n'
+                  '</table>',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['| صيغة |\n| --- |\n| $n![k](n-k)$ |\n| $$n![k](n-k)$$ |',
+  [{'type': 'table',
+    'table_body': '<table>\n'
+                  '<thead>\n'
+                  '<tr>\n'
+                  '<th>صيغة</th>\n'
+                  '</tr>\n'
+                  '</thead>\n'
+                  '<tbody>\n'
+                  '<tr>\n'
+                  '<td>$n<img src="n-k" alt="k" />$</td>\n'
+                  '</tr>\n'
+                  '<tr>\n'
+                  '<td>$$n<img src="n-k" alt="k" />$$</td>\n'
+                  '</tr>\n'
+                  '</tbody>\n'
+                  '</table>',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]]])
+def test_image_free_and_non_image_destinations_equal_origin_main(source, expected):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert blocks == expected
+    assert json.dumps(blocks, ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("source,expected", [
+    ('<div><code>$</code><img src="https://cdn.example.org/missing.png" alt="Figure 4"><code>$</code></div>',
+     '<div><code>$</code>Figure 4<code>$</code></div>'),
+    ('<div>$$<img src="figure.PNG?size=2#crop" alt=k>$$</div>', '<div>$$k$$</div>'),
+])
+def test_html_images_are_selected_by_destination_not_math(source, expected):
+    assert pages_to_content_list([ocr_page(1, source)])[0]['text'] == expected
+
+
+@pytest.mark.parametrize("source", [
+    '![k](n-k)', '![k][factor]\n\n[factor]: n-k',
+    '<img src=x alt="Figure 4">', '<div><img src=n-k alt=k></div>',
+])
+def test_non_image_destinations_are_untouched(source):
+    assert pages_to_content_list([ocr_page(1, source)])[0]['text'] == source.split('\n\n')[0]
+
+
+@pytest.mark.parametrize("destination", [
+    'http://example.org/figure', 'https://example.org/figure', '//example.org/figure',
+    'data:image/png;base64,AAAA', 'figure.PNG?width=1#crop', 'a.jpg', 'a.jpeg',
+    'a.gif', 'a.webp', 'a.svg', 'a.bmp', 'a.tif', 'a.tiff',
+])
+def test_image_destination_forms_remove_markdown_and_html_images(destination):
+    for source in (f'![caption]({destination})', f'<img src="{destination}" alt=caption>'):
+        assert pages_to_content_list([ocr_page(1, source)])[0]['text'] == 'caption'
+
+
+def test_malformed_html_parser_failure_removes_only_image_references(monkeypatch):
+    from app.extraction import arabic_adapter
+
+    def reject(self, source):
+        raise AssertionError('unknown status keyword in marked section')
+
+    monkeypatch.setattr(arabic_adapter._HtmlImageCaptions, 'feed', reject)
+    source = '<div><![bogus]><img src=x alt="Figure 4"><IMG SRC="a.PNG?x=1" alt="ignored > alt"><img src="https://cdn.example.org/missing.png"></div>'
+    expected = '<div><![bogus]><img src=x alt="Figure 4"></div>'
+    assert pages_to_content_list([ocr_page(1, source)])[0]['text'] == expected
+
+
+def test_review_malformed_html_is_tolerated():
+    source = '<div><![bogus]><img src=x alt="Figure 4"></div>'
+    assert pages_to_content_list([ocr_page(1, source)])[0]['text'] == source
+
+
+def _convert_with_two_second_deadline(source):
+    # A deadline makes pathological regressions fail instead of hanging CI.
+    import signal
+    from time import perf_counter
+
+    def expired(signum, frame):
+        raise AssertionError('OCR conversion exceeded two seconds')
+
+    previous = signal.signal(signal.SIGALRM, expired)
+    started = perf_counter()
+    signal.setitimer(signal.ITIMER_REAL, 2)
+    try:
+        blocks = pages_to_content_list([ocr_page(1, source)])
+        elapsed = perf_counter() - started
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+    assert elapsed < 2
+    return blocks
+
+
+@pytest.mark.parametrize('html', [False, True])
+def test_review_incomplete_dollar_math_with_escapes_finishes_unchanged(html):
+    source = '$' + r'\a' * 40
+    if html:
+        source = '<div>' + source + '</div>'
+    assert _convert_with_two_second_deadline(source)[0]['text'] == source
+
+
+@pytest.mark.parametrize('html', [False, True])
+def test_200kb_page_with_2000_images_and_10000_unterminated_delimiters_is_linear(html):
+    source = 'word ' * 36000 + r'\[' * 10000
+    source += (' $x$<img src=a.png alt=k>' if html else ' ![k](a.png)') * 2000
+    if html:
+        source = '<div>' + source + '</div>'
+    assert len(source.encode()) >= 200000
+    blocks = _convert_with_two_second_deadline(source)
+    text = blocks[0]['text']
+    assert text.count('k') == 2000
+    assert 'a.png' not in text
+    assert text.count(r'\[') == 10000
+
+
+def test_review_html_math_spans_with_non_image_src_are_unchanged_in_linear_time():
+    source = '<div>' + '$x$<img src=x alt=k>' * 2000 + '</div>'
+    assert _convert_with_two_second_deadline(source)[0]['text'] == source
+
+
+def test_fallback_scan_handles_many_images_and_unterminated_tags(monkeypatch):
+    from app.extraction import arabic_adapter
+
+    def reject(self):
+        raise ValueError('malformed HTML')
+
+    monkeypatch.setattr(arabic_adapter._HtmlImageCaptions, 'close', reject)
+    prefix = '<div><![bogus]><img-widget src=a.png><!-- <img src=a.png> -->'
+    suffix = '<img src="unterminated.png'
+    source = prefix + '<img src=a.png alt="quoted > value">' * 2000 + suffix
+    assert _convert_with_two_second_deadline(source)[0]['text'] == prefix + suffix
+
+
+@pytest.mark.parametrize("source,expected", [['| صيغة |\n| --- |\n| ![outer ![inner](inner.png)](n-k) |',
+  [{'type': 'table',
+    'table_body': '<table>\n'
+                  '<thead>\n'
+                  '<tr>\n'
+                  '<th>صيغة</th>\n'
+                  '</tr>\n'
+                  '</thead>\n'
+                  '<tbody>\n'
+                  '<tr>\n'
+                  '<td><img src="n-k" alt="outer inner" /></td>\n'
+                  '</tr>\n'
+                  '</tbody>\n'
+                  '</table>',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]],
+ ['| صيغة |\n| --- |\n| ![outer <img src="inner.png" alt="inner">](n-k) |',
+  [{'type': 'table',
+    'table_body': '<table>\n'
+                  '<thead>\n'
+                  '<tr>\n'
+                  '<th>صيغة</th>\n'
+                  '</tr>\n'
+                  '</thead>\n'
+                  '<tbody>\n'
+                  '<tr>\n'
+                  '<td><img src="n-k" alt="outer " /></td>\n'
+                  '</tr>\n'
+                  '</tbody>\n'
+                  '</table>',
+    'page_idx': 0,
+    'ocr_provider': 'gemini_arabic_flash',
+    'ocr_model': 'gemini-3.7-flash',
+    'ocr_repaired': False}]]])
+def test_non_image_outer_nodes_retain_baseline_label_rendering(source, expected):
+    assert pages_to_content_list([ocr_page(1, source)]) == expected

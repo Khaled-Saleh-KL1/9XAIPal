@@ -45,6 +45,7 @@ _VECTOR_FIGURE_MIN_DRAWINGS = 16
 _FIGURE_CAPTION_NEARBY_PT = 72.0
 _FIGURE_REGION_MARGIN_PT = 5.0
 _MARKDOWN = MarkdownIt("gfm-like", {"html": True, "linkify": False})
+_BASELINE_MARKDOWN = MarkdownIt("gfm-like", {"html": True, "linkify": False})
 
 
 NO_TEXT_MARKER = "[NO_TEXT]"
@@ -147,20 +148,15 @@ def _escaped_caption(text: str) -> str:
     return text
 
 
-_INLINE_MATH_RE = re.compile(r"(?<![\\$])\$(?!\$)(?:\\.|[^$\n])+?(?<!\\)\$(?!\$)")
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff")
 
 
-def _caption_math_rule(state: Any, silent: bool) -> bool:
-    """Consume math before image/link/HTML rules, respecting code and escapes."""
-    match = _DISPLAY_MATH_RE.match(state.src, state.pos, state.posMax)
-    if match is None:
-        match = _INLINE_MATH_RE.match(state.src, state.pos, state.posMax)
-    if match is None:
-        return False
-    if not silent:
-        state.push("text", "", 0).content = match.group(0)
-    state.pos = match.end()
-    return True
+def _looks_like_image(destination: str) -> bool:
+    destination = destination.lower()
+    if destination.startswith(("http://", "https://", "//", "data:image/")):
+        return True
+    path = destination.split("?", 1)[0].split("#", 1)[0]
+    return path.endswith(_IMAGE_EXTENSIONS)
 
 
 def _replace_spans(
@@ -171,7 +167,8 @@ def _replace_spans(
 ) -> str:
     parts: list[str] = []
     cursor = 0
-    for start, end, replacement in sorted(replacements):
+    # Callers collect disjoint spans in source order.
+    for start, end, replacement in replacements:
         unchanged = source[cursor:start]
         parts.extend((unescape(unchanged) if decode_source else unchanged, replacement))
         cursor = end
@@ -189,11 +186,6 @@ class _HtmlImageCaptions(HTMLParser):
         for line in source.split("\n")[:-1]:
             self.line_offsets.append(self.line_offsets[-1] + len(line) + 1)
         self.table_depth = 0
-        self.math_spans = [
-            match.span()
-            for pattern in (_DISPLAY_MATH_RE, _INLINE_MATH_RE)
-            for match in pattern.finditer(source)
-        ]
         self.replacements: list[tuple[int, int, str]] = []
         self.literal_captions: list[tuple[int, int, str]] = []
 
@@ -204,7 +196,8 @@ class _HtmlImageCaptions(HTMLParser):
             return
         line, column = self.getpos()
         start = self.line_offsets[line - 1] + column
-        if any(begin <= start < end for begin, end in self.math_spans):
+        src = next((value or "" for name, value in attrs if name == "src"), "")
+        if not _looks_like_image(src):
             return
         raw = self.get_starttag_text() or ""
         alt = next((value or "" for name, value in attrs if name == "alt"), "")
@@ -226,11 +219,100 @@ class _HtmlImageCaptions(HTMLParser):
             self.table_depth = max(0, self.table_depth - 1)
 
 
+def _fallback_image_removals(source: str) -> list[tuple[int, int, str]]:
+    """Scan tags/attributes once; malformed declarations cannot abort a page.
+
+    Quotes delimit attribute values, so a quoted '>' does not end a tag.
+    Every cursor advances, including on unterminated tags and attributes.
+    Only image-looking img tags are removed; all other bytes are retained.
+    """
+    replacements: list[tuple[int, int, str]] = []
+    cursor = 0
+    length = len(source)
+    while cursor < length:
+        start = source.find("<", cursor)
+        if start < 0:
+            break
+        if source.startswith("<!--", start):
+            end = source.find("-->", start + 4)
+            cursor = length if end < 0 else end + 3
+            continue
+        cursor = start + 1
+        name_start = cursor
+        while cursor < length and source[cursor].isalnum():
+            cursor += 1
+        is_image = (
+            source[name_start:cursor].lower() == "img"
+            and (cursor == length or source[cursor].isspace() or source[cursor] in "/>")
+        )
+        src: str | None = None
+        while cursor < length and source[cursor] != ">":
+            if source[cursor].isspace() or source[cursor] == "/":
+                cursor += 1
+                continue
+            attr_start = cursor
+            while (
+                cursor < length
+                and not source[cursor].isspace()
+                and source[cursor] not in "=/>\"'"
+            ):
+                cursor += 1
+            attr = source[attr_start:cursor].lower()
+            if cursor == attr_start:
+                cursor += 1
+                continue
+            while cursor < length and source[cursor].isspace():
+                cursor += 1
+            value = ""
+            if cursor < length and source[cursor] == "=":
+                cursor += 1
+                while cursor < length and source[cursor].isspace():
+                    cursor += 1
+                if cursor < length and source[cursor] in "\"'":
+                    quote = source[cursor]
+                    cursor += 1
+                    value_start = cursor
+                    while cursor < length and source[cursor] != quote:
+                        cursor += 1
+                    value = source[value_start:cursor]
+                    if cursor < length:
+                        cursor += 1
+                else:
+                    value_start = cursor
+                    while (
+                        cursor < length
+                        and not source[cursor].isspace()
+                        and source[cursor] != ">"
+                    ):
+                        cursor += 1
+                    value = source[value_start:cursor]
+            if is_image and attr == "src" and src is None:
+                src = unescape(value)
+        if cursor < length:
+            cursor += 1
+            if is_image and _looks_like_image(src or ""):
+                replacements.append((start, cursor, ""))
+    return replacements
+
+
+def _html_caption_spans(source: str) -> tuple[
+    list[tuple[int, int, str]], list[tuple[int, int, str]], bool
+]:
+    try:
+        parser = _HtmlImageCaptions(source)
+        parser.feed(source)
+        parser.close()
+    except Exception:
+        removals = _fallback_image_removals(source)
+        return removals, removals, True
+    return parser.replacements, parser.literal_captions, False
+
+
 def _html_image_captions(source: str, *, decode_source: bool = False) -> str:
-    parser = _HtmlImageCaptions(source)
-    parser.feed(source)
-    parser.close()
-    return _replace_spans(source, parser.replacements, decode_source=decode_source)
+    replacements, _, failed = _html_caption_spans(source)
+    return _replace_spans(
+        source, replacements, decode_source=decode_source and not failed
+    )
 
 
 def _image_caption(token: Any) -> str:
@@ -242,7 +324,7 @@ def _image_caption(token: Any) -> str:
     ]
     parts: list[str] = []
     cursor = 0
-    for start, end, caption in sorted(replacements):
+    for start, end, caption in replacements:
         parts.extend((unescapeAll(token.content[cursor:start]), caption))
         cursor = end
     parts.append(unescapeAll(token.content[cursor:]))
@@ -255,6 +337,14 @@ def _caption_image_rule(state: Any, silent: bool) -> bool:
         return False
     if not silent:
         token = state.tokens[-1]
+        if not _looks_like_image(token.attrGet("src") or ""):
+            # The upstream image rule recursively parses its label using our
+            # caption hooks. Restore ordinary label tokens for an untouched
+            # outer image so its standard alt renderer stays byte-identical.
+            if any("ocr_caption_span" in child.meta for child in token.children or []):
+                baseline = _BASELINE_MARKDOWN.parseInline(token.content, state.env)
+                token.children = baseline[0].children
+            return True
         caption = _image_caption(token)
         token.meta["ocr_caption_span"] = (start, state.pos, _escaped_caption(caption))
         token.meta["ocr_caption_literal"] = caption
@@ -274,13 +364,11 @@ def _caption_html_rule(state: Any, silent: bool) -> bool:
         return False
     if not silent:
         token = state.tokens[-1]
-        parser = _HtmlImageCaptions(token.content)
-        parser.feed(token.content)
-        parser.close()
-        if parser.replacements:
-            replacement = _replace_spans(token.content, parser.replacements)
+        replacements, literals, _ = _html_caption_spans(token.content)
+        if replacements:
+            replacement = _replace_spans(token.content, replacements)
             token.meta["ocr_caption_span"] = (start, state.pos, replacement)
-            token.meta["ocr_caption_literal"] = _replace_spans(token.content, parser.literal_captions)
+            token.meta["ocr_caption_literal"] = _replace_spans(token.content, literals)
             token.content = escape(replacement, quote=False)
     return True
 
@@ -298,7 +386,6 @@ def _render_caption(tokens: Sequence[Any], index: int, options: Any, env: Any) -
 
 
 _MARKDOWN.renderer.rules["ocr_caption"] = _render_caption
-_MARKDOWN.inline.ruler.before("escape", "ocr_math", _caption_math_rule)
 _MARKDOWN.inline.ruler.at("image", _caption_image_rule)
 _MARKDOWN.inline.ruler.at("html_inline", _caption_html_rule)
 
