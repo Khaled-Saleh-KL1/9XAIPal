@@ -1314,3 +1314,71 @@ def test_fallback_scan_handles_many_images_and_unterminated_tags(monkeypatch):
     'ocr_repaired': False}]]])
 def test_non_image_outer_nodes_retain_baseline_label_rendering(source, expected):
     assert pages_to_content_list([ocr_page(1, source)]) == expected
+
+
+@pytest.mark.parametrize("destination", [
+    ' https://cdn.example.org/missing.png ',
+    ' figure.PNG ',
+    '&#32;https://cdn.example.org/x.png&#32;',
+    '\tfigure.PNG\t',
+    '\rfigure.PNG\r',
+    '\nfigure.PNG\n',
+    '\ffigure.PNG\f',
+])
+@pytest.mark.parametrize("template,kind,field,expected", [
+    ('{image}', 'text', 'text', 'Figure 4'),
+    ('<div>{image}</div>', 'text', 'text', '<div>Figure 4</div>'),
+    ('before {image} after', 'text', 'text', 'before Figure 4 after'),
+    ('<table><tr><td>{image}</td></tr></table>', 'table', 'table_body',
+     '<table><tr><td>Figure 4</td></tr></table>'),
+])
+def test_whitespace_padded_html_images_become_exact_captions(
+    destination, template, kind, field, expected
+):
+    source = template.format(image=f'<img src="{destination}" alt="Figure 4">')
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert len(blocks) == 1
+    assert blocks[0]['type'] == kind
+    assert blocks[0][field] == expected
+
+
+@pytest.mark.parametrize("destination", [
+    ' https://cdn.example.org/missing.png ',
+    ' figure.PNG ',
+    '&#32;https://cdn.example.org/x.png&#32;',
+    '&#9;&#13;&#10;&#12;figure.PNG&#12;&#10;&#13;&#9;',
+])
+def test_parser_failure_removes_whitespace_padded_html_images(monkeypatch, destination):
+    from app.extraction import arabic_adapter
+
+    def reject(self, source):
+        raise ValueError('forced HTML parser failure')
+
+    monkeypatch.setattr(arabic_adapter._HtmlImageCaptions, 'feed', reject)
+    source = f'<div>before <img src="{destination}" alt="Figure 4"> after</div>'
+    assert pages_to_content_list([ocr_page(1, source)])[0]['text'] == '<div>before  after</div>'
+
+
+@pytest.mark.parametrize("destination", [
+    ' https://cdn.example.org/missing.png ', ' figure.PNG ',
+])
+def test_whitespace_padded_markdown_images_become_exact_captions(destination):
+    source = f'![Figure 4](<{destination}>)'
+    assert pages_to_content_list([ocr_page(1, source)])[0]['text'] == 'Figure 4'
+
+
+@pytest.mark.parametrize("parser_fails", [False, True])
+@pytest.mark.parametrize("destination", [
+    ' n-k ', '\t\r\n\fn-k\f\n\r\t', '&#32;n-k&#32;',
+    '\u00a0figure.PNG\u00a0', '\vfigure.PNG\v',
+])
+def test_padded_non_image_html_destinations_stay_byte_identical(monkeypatch, parser_fails, destination):
+    from app.extraction import arabic_adapter
+
+    if parser_fails:
+        def reject(self, source):
+            raise ValueError('forced HTML parser failure')
+
+        monkeypatch.setattr(arabic_adapter._HtmlImageCaptions, 'feed', reject)
+    source = f'<div><img src="{destination}" alt="Figure 4"></div>'
+    assert arabic_adapter._html_image_captions(source) == source

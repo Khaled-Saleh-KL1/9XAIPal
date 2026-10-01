@@ -152,7 +152,7 @@ _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", "
 
 
 def _looks_like_image(destination: str) -> bool:
-    destination = destination.lower()
+    destination = destination.strip(" \t\r\n\f").lower()
     if destination.startswith(("http://", "https://", "//", "data:image/")):
         return True
     path = destination.split("?", 1)[0].split("#", 1)[0]
