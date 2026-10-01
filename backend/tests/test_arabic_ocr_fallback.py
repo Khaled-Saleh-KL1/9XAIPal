@@ -154,6 +154,7 @@ def test_fallback_request_is_direct_ollama_chat_with_absolute_page_and_png():
         "summarize", "spelling correction", "diacritics", "historical spelling",
         "headings", "lists", "tables", "displayed equations", "captions", "[غير واضح]",
         "running headers", "running footers", "bare page numbers", "Keep footnotes",
+        "Do not output image links or image URLs", "caption as plain text",
     ):
         assert instruction in prompt
     assert payload["messages"][0]["images"] == [base64.b64encode(b"png-bytes").decode()]
