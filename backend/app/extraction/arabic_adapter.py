@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from html import unescape
+from html import escape, unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
 from markdown_it import MarkdownIt
+from markdown_it.common.utils import unescapeAll
+from markdown_it.rules_inline import html_inline, image
 
 from app.extraction.arabic_types import ArabicOcrPage, ParsedPagePrefix
 
@@ -132,14 +135,172 @@ def parse_complete_page_prefix(
     )
 
 
-# Arabic-route figures come only from PDF crops, so an image link in OCR text
-# is invented (seen on production: cdn URLs that never existed).
-# The alt text (the model's description of the figure) is kept as plain text.
-_OCR_IMAGE_LINK_RE = re.compile(r"!\[([^\]\n]*)\]\([^)\n]*\)")
+def _escaped_caption(text: str) -> str:
+    """Keep captions literal without exposing inline markup or formulas."""
+    text = escape(text, quote=False)
+    for character in ("\\", "`", "*", "_", "$", "!"):
+        text = text.replace(character, "\\" + character)
+    # Bare nested brackets (e.g. Figure 4 [12]) are literal caption text.
+    # Escape brackets when they could instead introduce a link destination.
+    if "](" in text or "][" in text:
+        text = text.replace("[", "\\[").replace("]", "\\]")
+    return text
 
 
-def _strip_ocr_image_links(markdown: str) -> str:
-    return _OCR_IMAGE_LINK_RE.sub(r"\1", markdown)
+_INLINE_MATH_RE = re.compile(r"(?<![\\$])\$(?!\$)(?:\\.|[^$\n])+?(?<!\\)\$(?!\$)")
+
+
+def _caption_math_rule(state: Any, silent: bool) -> bool:
+    """Consume math before image/link/HTML rules, respecting code and escapes."""
+    match = _DISPLAY_MATH_RE.match(state.src, state.pos, state.posMax)
+    if match is None:
+        match = _INLINE_MATH_RE.match(state.src, state.pos, state.posMax)
+    if match is None:
+        return False
+    if not silent:
+        state.push("text", "", 0).content = match.group(0)
+    state.pos = match.end()
+    return True
+
+
+def _replace_spans(
+    source: str,
+    replacements: Sequence[tuple[int, int, str]],
+    *,
+    decode_source: bool = False,
+) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for start, end, replacement in sorted(replacements):
+        unchanged = source[cursor:start]
+        parts.extend((unescape(unchanged) if decode_source else unchanged, replacement))
+        cursor = end
+    remaining = source[cursor:]
+    parts.append(unescape(remaining) if decode_source else remaining)
+    return "".join(parts)
+
+
+class _HtmlImageCaptions(HTMLParser):
+    """Replace parsed img tags while retaining other source and escaped alts."""
+
+    def __init__(self, source: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self.line_offsets = [0]
+        for line in source.split("\n")[:-1]:
+            self.line_offsets.append(self.line_offsets[-1] + len(line) + 1)
+        self.table_depth = 0
+        self.math_spans = [
+            match.span()
+            for pattern in (_DISPLAY_MATH_RE, _INLINE_MATH_RE)
+            for match in pattern.finditer(source)
+        ]
+        self.replacements: list[tuple[int, int, str]] = []
+        self.literal_captions: list[tuple[int, int, str]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "table":
+            self.table_depth += 1
+        if tag != "img":
+            return
+        line, column = self.getpos()
+        start = self.line_offsets[line - 1] + column
+        if any(begin <= start < end for begin, end in self.math_spans):
+            return
+        raw = self.get_starttag_text() or ""
+        alt = next((value or "" for name, value in attrs if name == "alt"), "")
+        caption = _escaped_caption(alt)
+        # Table cells are decoded from HTML and then rendered as Markdown.
+        # Preserve both layers of escaping through that existing conversion.
+        if self.table_depth:
+            caption = escape(caption, quote=False)
+        self.replacements.append((start, start + len(raw), caption))
+        self.literal_captions.append((start, start + len(raw), alt))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag == "table":
+            self.table_depth -= 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "table":
+            self.table_depth = max(0, self.table_depth - 1)
+
+
+def _html_image_captions(source: str, *, decode_source: bool = False) -> str:
+    parser = _HtmlImageCaptions(source)
+    parser.feed(source)
+    parser.close()
+    return _replace_spans(source, parser.replacements, decode_source=decode_source)
+
+
+def _image_caption(token: Any) -> str:
+    """Decode label escapes and replace nested parsed images with literal alts."""
+    replacements = [
+        (*child.meta["ocr_caption_span"][:2], child.meta["ocr_caption_literal"])
+        for child in token.children or []
+        if "ocr_caption_span" in child.meta
+    ]
+    parts: list[str] = []
+    cursor = 0
+    for start, end, caption in sorted(replacements):
+        parts.extend((unescapeAll(token.content[cursor:start]), caption))
+        cursor = end
+    parts.append(unescapeAll(token.content[cursor:]))
+    return "".join(parts)
+
+
+def _caption_image_rule(state: Any, silent: bool) -> bool:
+    start = state.pos
+    if not image(state, silent):
+        return False
+    if not silent:
+        token = state.tokens[-1]
+        caption = _image_caption(token)
+        token.meta["ocr_caption_span"] = (start, state.pos, _escaped_caption(caption))
+        token.meta["ocr_caption_literal"] = caption
+        # A distinct literal-text token survives markdown-it text merging,
+        # which would otherwise discard the source-span metadata.
+        token.type = "ocr_caption"
+        token.tag = ""
+        token.attrs = {}
+        token.children = None
+        token.content = caption
+    return True
+
+
+def _caption_html_rule(state: Any, silent: bool) -> bool:
+    start = state.pos
+    if not html_inline(state, silent):
+        return False
+    if not silent:
+        token = state.tokens[-1]
+        parser = _HtmlImageCaptions(token.content)
+        parser.feed(token.content)
+        parser.close()
+        if parser.replacements:
+            replacement = _replace_spans(token.content, parser.replacements)
+            token.meta["ocr_caption_span"] = (start, state.pos, replacement)
+            token.meta["ocr_caption_literal"] = _replace_spans(token.content, parser.literal_captions)
+            token.content = escape(replacement, quote=False)
+    return True
+
+
+def _inline_caption_content(inline: Any) -> str:
+    return _replace_spans(inline.content, [
+        child.meta["ocr_caption_span"]
+        for child in inline.children or []
+        if "ocr_caption_span" in child.meta
+    ]).strip()
+
+
+def _render_caption(tokens: Sequence[Any], index: int, options: Any, env: Any) -> str:
+    return escape(_escaped_caption(tokens[index].content), quote=False)
+
+
+_MARKDOWN.renderer.rules["ocr_caption"] = _render_caption
+_MARKDOWN.inline.ruler.before("escape", "ocr_math", _caption_math_rule)
+_MARKDOWN.inline.ruler.at("image", _caption_image_rule)
+_MARKDOWN.inline.ruler.at("html_inline", _caption_html_rule)
 
 
 def pages_to_content_list(
@@ -163,7 +324,7 @@ def pages_to_content_list(
     for page in pages:
         if page.page_number < 1:
             raise ValueError("Arabic OCR page numbers must be 1-based")
-        for block in _markdown_blocks(_strip_ocr_image_links(page.markdown)):
+        for block in _markdown_blocks(page.markdown):
             if not _has_block_content(block):
                 continue
             content_list.append(
@@ -619,7 +780,7 @@ def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
             if inline is not None:
                 level = int(token.tag[1:])
                 result.append(
-                    {"type": "text", "text_level": level, "text": inline.content.strip()}
+                    {"type": "text", "text_level": level, "text": _inline_caption_content(inline)}
                 )
                 index += 3
                 continue
@@ -627,7 +788,7 @@ def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
         if token.type == "paragraph_open":
             inline = _next_inline(tokens, index + 1)
             if inline is not None:
-                content = inline.content.strip()
+                content = _inline_caption_content(inline)
                 if content:
                     result.extend(_paragraph_blocks(content))
                 index += 3
@@ -679,7 +840,7 @@ def _markdown_blocks(markdown: str) -> list[dict[str, Any]]:
             continue
 
         if token.type == "inline" and token.content.strip():
-            result.extend(_paragraph_blocks(token.content.strip()))
+            result.extend(_paragraph_blocks(_inline_caption_content(token)))
             index += 1
             continue
 
@@ -718,16 +879,18 @@ def _canonical_display_math(content: str) -> str | None:
 def _html_blocks(content: str) -> list[dict[str, Any]]:
     tables = list(_TABLE_RE.finditer(content))
     if not tables:
-        text = content.strip()
+        text = _html_image_captions(content).strip()
         return [{"type": "text", "text": text}] if text else []
 
     blocks: list[dict[str, Any]] = []
     cursor = 0
     for match in tables:
-        before = unescape(content[cursor : match.start()].strip())
+        before = _html_image_captions(
+            content[cursor : match.start()].strip(), decode_source=True
+        )
         if before:
             blocks.append({"type": "text", "text": before})
-        table_html = match.group(0).strip()
+        table_html = _html_image_captions(match.group(0).strip())
         captions = _CAPTION_RE.findall(table_html)
         caption_texts = [
             text
@@ -741,7 +904,7 @@ def _html_blocks(content: str) -> list[dict[str, Any]]:
             "table_caption": caption_texts,
         })
         cursor = match.end()
-    after = unescape(content[cursor:].strip())
+    after = _html_image_captions(content[cursor:].strip(), decode_source=True)
     if after:
         blocks.append({"type": "text", "text": after})
     return blocks
@@ -786,7 +949,9 @@ def _list_items(tokens: Sequence[Any], root_list: Any) -> list[str]:
             item_prefix = None
             continue
         if token.type == "inline" and token.content.strip():
-            items.append(f"{item_prefix or ''}{token.content.strip()}")
+            content = _inline_caption_content(token)
+            if content:
+                items.append(f"{item_prefix or ''}{content}")
             item_prefix = None
     return items
 

@@ -813,4 +813,138 @@ def test_ocr_prompts_forbid_image_links():
     from app.extraction import arabic_fallback, gemini_ocr_client
 
     assert "image links" in gemini_ocr_client.batch_prompt([])
-    assert "image links" in open(arabic_fallback.__file__, encoding="utf-8").read()
+    from app.core.config import Settings
+    from app.extraction.arabic_types import RenderedPage
+
+    payload = arabic_fallback.GemmaArabicFallback(settings=Settings())._payload(
+        RenderedPage(page_number=1, png=b"png"), "png"
+    )
+    assert "image links" in payload["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("source,caption", [
+    ('![Figure 4 [12]](https://cdn.example.org/missing.png)', 'Figure 4 [12]'),
+    ('![Figure 4:\ncaption](https://cdn.example.org/missing.png)', 'Figure 4:\ncaption'),
+    ('![شكل](https://cdn.example.org/figure(4).png)', 'شكل'),
+    (r'![شكل](https://cdn.example.org/figure\(4\).png "a (title)")', 'شكل'),
+    ('![Figure 4][1]\n\n[1]: https://cdn.example.org/missing.png', 'Figure 4'),
+    ('![Figure 4]\n\n[Figure 4]: https://cdn.example.org/missing.png', 'Figure 4'),
+    ('![# Figure 4](x)', '# Figure 4'),
+    ('![1. Caption](x)', '1. Caption'),
+    ('![$$x=1$$](x)', r'\$\$x=1\$\$'),
+    ('![<b> & *caption*](x)', r'&lt;b&gt; &amp; \*caption\*'),
+    ('<img src="https://cdn.example.org/missing.png" alt="Figure 4">', 'Figure 4'),
+    ("<IMG alt='Figure 4' src='x' />", 'Figure 4'),
+    ('before <img alt=Figure src=x> after', 'before Figure after'),
+])
+def test_parsed_images_become_exact_plain_captions(source, caption):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "text"
+    assert "text_level" not in blocks[0]
+    assert blocks[0]["text"] == caption
+    assert not any(marker in blocks[0]["text"] for marker in ('![', 'https://', '<img'))
+
+
+@pytest.mark.parametrize("source", ['![](x)', '<img src=x>', '<img alt="" src=x>'])
+def test_empty_parsed_images_are_removed(source):
+    assert pages_to_content_list([ocr_page(1, source)]) == []
+
+
+@pytest.mark.parametrize("source,kind,field,expected", [
+    ('# Title ![caption [12]](x)', 'text', 'text', 'Title caption [12]'),
+    ('- Item ![caption [12]](x)', 'list', 'list_items', ['Item caption [12]']),
+    ('| Figure |\n| --- |\n| ![Figure 4][1] |\n\n[1]: https://cdn.example.org/missing.png',
+     'table', 'table_body', '<table>\n<thead>\n<tr>\n<th>Figure</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Figure 4</td>\n</tr>\n</tbody>\n</table>'),
+    ('<table><tr><td><img src=x alt="Figure 4"></td></tr></table>',
+     'table', 'table_body', '<table><tr><td>Figure 4</td></tr></table>'),
+])
+def test_images_preserve_surrounding_block_structure(source, kind, field, expected):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == kind
+    assert blocks[0][field] == expected
+    if source.startswith('#'):
+        assert blocks[0]['text_level'] == 1
+
+
+@pytest.mark.parametrize("source,kind", [
+    ('```markdown\n![example](https://example.org/image.png)\n```', 'text'),
+    ('    ![example](https://example.org/image.png)', 'text'),
+    ('`![example](image.png)`', 'text'),
+    (r'\![12](https://example.org/paper)', 'text'),
+    ('$$n![k](n-k)$$', 'equation'),
+    ('$n![k](n-k)$', 'text'),
+    ('before $$n![k](n-k)$$ after ![caption](x)', 'text'),
+    ('[text](url)', 'text'),
+])
+def test_non_image_syntax_is_preserved(source, kind):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert len(blocks) == 1
+    assert blocks[0]['type'] == kind
+    expected = source.strip().replace('after ![caption](x)', 'after caption')
+    assert blocks[0]['text'] == expected
+
+
+@pytest.mark.parametrize("source,expected", [
+    ('before ![one](x) middle ![two](y) after', 'before one middle two after'),
+    ('![outer ![inner](y)](x)', 'outer inner'),
+    ('![\\[literal\\]](x)', '[literal]'),
+    ('<img src=x alt="&lt;b&gt; &amp; *caption*">\n<table><tr><td>value</td></tr></table>',
+     r'&lt;b&gt; &amp; \*caption\*'),
+])
+def test_literal_captions_survive_multiple_nodes_and_html_table_splitting(source, expected):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert blocks[0]['type'] == 'text'
+    assert blocks[0]['text'] == expected
+
+
+@pytest.mark.parametrize("source", [
+    '| Figure |\n| --- |\n| <img src=x alt="*caption* &amp; &lt;b&gt;"> |',
+    '<table><tr><td><img src=x alt="*caption* &amp; &lt;b&gt;"></td></tr></table>',
+])
+def test_html_image_captions_in_tables_stay_literal_after_html_extraction(source):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert blocks[0]['type'] == 'table'
+    assert r'<td>\*caption\* &amp;amp; &amp;lt;b&amp;gt;</td>' in blocks[0]['table_body']
+    assert '<img' not in blocks[0]['table_body']
+
+
+def test_html_image_syntax_inside_math_is_preserved_in_html_blocks():
+    source = '<div>$$n<img src=x alt=k>$$</div>'
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    assert blocks[0]['text'] == source
+
+
+def test_code_span_dollars_do_not_protect_a_real_image_as_math():
+    blocks = pages_to_content_list([ocr_page(1, '`$` ![caption](x) `$`')])
+    assert blocks[0]['text'] == '`$` caption `$`'
+
+
+@pytest.mark.parametrize("source", [
+    '| Figure |\n| --- |\n| ![$$x=1$$ *caption*](x) |',
+    '| Figure |\n| --- |\n| ![outer ![inner](y)](x) |',
+])
+def test_markdown_image_table_captions_are_literal_for_the_reader(source):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    body = blocks[0]['table_body']
+    if '$$' in source:
+        assert r'<td>\$\$x=1\$\$ \*caption\*</td>' in body
+    else:
+        assert '<td>outer inner</td>' in body
+    assert '<img' not in body
+
+
+@pytest.mark.parametrize("source", [
+    '<img src=y alt="&lt;img src=x&gt;">\n<table><tr><td>A</td></tr></table>',
+    '<table><tr><td>A</td></tr></table>\n<img src=y alt="&lt;img src=x&gt;">',
+])
+def test_html_table_splitting_does_not_unescape_a_caption_into_an_image(source):
+    blocks = pages_to_content_list([ocr_page(1, source)])
+    text = next(block['text'] for block in blocks if block['type'] == 'text')
+    assert text == '&lt;img src=x&gt;'
+
+
+def test_html_alt_link_syntax_is_literal_text():
+    blocks = pages_to_content_list([ocr_page(1, '<img src=x alt="[caption](destination)">')])
+    assert blocks[0]['text'] == r'\[caption\](destination)'
