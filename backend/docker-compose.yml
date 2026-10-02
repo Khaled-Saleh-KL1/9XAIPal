@@ -52,12 +52,12 @@ services:
       postgres:
         condition: service_healthy
 
-  celery_worker:
+  celery_worker: &ingest-worker
     build:
       context: .
       dockerfile: Dockerfile.mineru
     container_name: 9xaipal-celery-worker
-    command: sh -c 'python -m app.extraction.arabic_capability && exec celery -A app.core.celery_app worker --loglevel=info'
+    command: sh -c 'python -m app.extraction.arabic_capability && exec celery -A app.core.celery_app worker --loglevel=info -Q ingest --hostname=celery@%h'
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -172,6 +172,12 @@ services:
       - "host.docker.internal:host-gateway"
     # Auto-recover the worker if MinerU OOMs on a large book (exit 137). Without
     # this, an OOM-killed worker stays dead and uploads silently queue forever.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping --destination celery@$$HOSTNAME --timeout 5 | grep -q OK"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     # Cap worker memory so an OOM kills *this container* cleanly (and it restarts)
     # instead of pressuring the host. Tune to your machine; MinerU extraction is
@@ -185,6 +191,17 @@ services:
           # VM is only ~8GB — raise it to 16-24GB for 500+ page books, then
           # WORKER_MEM_LIMIT can go higher.
           memory: ${WORKER_MEM_LIMIT:-12G}
+
+  # Shares the ingest worker's image, environment, storage and network.
+  # "celery" is the light/default queue, retained to drain the old backlog.
+  celery_worker_light:
+    <<: *ingest-worker
+    container_name: 9xaipal-celery-worker-light
+    command: sh -c 'exec celery -A app.core.celery_app worker --loglevel=info -Q celery --hostname=celery@%h --concurrency=${LIGHT_WORKER_CONCURRENCY:-2}'
+    deploy:
+      resources:
+        limits:
+          memory: ${LIGHT_WORKER_MEM_LIMIT:-2G}
 
   # ------------------------------------------------------------------
   # API service — the heart of the "your computer is the server" model.

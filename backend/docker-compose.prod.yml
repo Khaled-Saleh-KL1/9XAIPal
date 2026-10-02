@@ -1,7 +1,7 @@
 # 9XAIPal — production deployment (6 CPU / 11GB RAM / x86_64, no GPU)
 # ---------------------------------------------------------------------------
 # The one and only deployment target — a self-contained stack running the
-# WHOLE backend (API + Celery worker + Postgres + Redis) on one box, so the
+# WHOLE backend (API + two Celery workers + Postgres + Redis) on one box, so the
 # app is "entirely on the web" and does NOT depend on your local machine.
 #   • Web search: a 5-provider cascade (tavily, linkup, exa,
 #     serpapi, duckduckgo — see app/search/web.py), no self-hosted search
@@ -26,6 +26,8 @@
 #     bounds peak RAM (an unbatched extraction of a huge book can OOM-kill
 #     the worker) and doubles as the granularity of the real
 #     extraction-progress reporting the UI shows.
+#   • LIGHT_WORKER_CONCURRENCY (2) and LIGHT_WORKER_MEM_LIMIT (2G) configure
+#     celery_worker_light, which consumes the legacy default queue "celery".
 #   • WORKER_MEM_LIMIT caps celery_worker's own memory so a huge PDF OOMs
 #     only that one container (which then auto-restarts, see the
 #     `restart: unless-stopped` + `autoheal` note below) instead of
@@ -146,7 +148,7 @@ services:
   # for real local extraction (full table/equation/figure fidelity), same as
   # local dev.
   # ------------------------------------------------------------------
-  celery_worker:
+  celery_worker: &ingest-worker
     build:
       context: .
       dockerfile: Dockerfile.mineru
@@ -160,7 +162,7 @@ services:
     logging: *default-logging
     # 2 on a 6-core / 11 GB box: each extraction runs its own MinerU server
     # (~2-3 GB, ~3 cores); a third would starve the API and risk OOM.
-    command: sh -c 'python -m app.extraction.arabic_capability && exec celery -A app.core.celery_app worker --loglevel=info --concurrency=2'
+    command: sh -c 'python -m app.extraction.arabic_capability && exec celery -A app.core.celery_app worker --loglevel=info -Q ingest --hostname=celery@%h --concurrency=2'
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -289,7 +291,7 @@ services:
     # running worker (deadlock, a stuck connection) would otherwise sit
     # silently dead-in-place forever with nothing watching it.
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping --timeout 5 | grep -q OK"]
+      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping --destination celery@$$HOSTNAME --timeout 5 | grep -q OK"]
       interval: 30s
       timeout: 15s
       retries: 3
@@ -308,13 +310,25 @@ services:
     # services feel starved.
     #
     # 7G, not 6: raised after a 58-page paper (DeepSeek-V4) to give long-paper
-    # MinerU extraction headroom. Still leaves ~4G of the box's 11G for
-    # postgres/redis/api/autoheal/OS and whatever else shares it. Overridable
+    # MinerU extraction headroom. With the light worker's default 2G cap,
+    # ~2G of the box's 11G remains for postgres/redis/api/autoheal/OS and
+    # whatever else shares it; memory limits are ceilings, not reservations. Overridable
     # per box with WORKER_MEM_LIMIT for anywhere with a different budget.
     deploy:
       resources:
         limits:
           memory: ${WORKER_MEM_LIMIT:-7G}
+
+  # Shares the ingest worker's image, environment, storage and network.
+  # "celery" is the light/default queue, retained to drain the old backlog.
+  celery_worker_light:
+    <<: *ingest-worker
+    container_name: 9xaipal-celery-worker-light
+    command: sh -c 'exec celery -A app.core.celery_app worker --loglevel=info -Q celery --hostname=celery@%h --concurrency=${LIGHT_WORKER_CONCURRENCY:-2}'
+    deploy:
+      resources:
+        limits:
+          memory: ${LIGHT_WORKER_MEM_LIMIT:-2G}
 
   # ------------------------------------------------------------------
   # API — FastAPI backend. Does NOT serve the SPA (SERVE_FRONTEND=false);
