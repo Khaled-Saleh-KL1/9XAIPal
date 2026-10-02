@@ -21,7 +21,7 @@ if docker inspect 9xaipal-celery-worker-light >/dev/null 2>&1; then
   docker rm -f 9xaipal-celery-worker-light
 fi
 
-# Each RPOPLPUSH is atomic and preserves the exact serialized queued payload.
+# Migration rewrites delivery routes atomically, preserving body/headers.
 # Redis queues use LPUSH/RPOP (oldest on the right). Append migrated work after
 # the existing default backlog; retain FIFO within each priority bucket.
 # Recover ingest's reserved deliveries too: a killed worker may not have
@@ -31,8 +31,35 @@ prefix="${CELERY_QUEUE_PREFIX:-}"
 lua=$(cat <<'LUA'
 local prefix = ARGV[1]
 local moved = 0
+local function rewrite(message)
+  message.properties = message.properties or {}
+  message.properties.delivery_info = message.properties.delivery_info or {}
+  message.properties.delivery_info.exchange = 'celery'
+  message.properties.delivery_info.routing_key = 'celery'
+  -- Restore uses the envelope delivery_info, plus the unacked tuple below.
+  if message.delivery_info then
+    message.delivery_info.exchange = 'celery'
+    message.delivery_info.routing_key = 'celery'
+  end
+  return message
+end
 for _, suffix in ipairs({'', '\006\0223', '\006\0226', '\006\0229'}) do
-  while redis.call('RPOPLPUSH', prefix .. 'ingest' .. suffix, prefix .. 'celery' .. suffix) do
+  local source = prefix .. 'ingest' .. suffix
+  -- Decode all candidates before mutating any queue: malformed messages
+  -- abort rollback without partially draining the source.
+  for _, raw in ipairs(redis.call('LRANGE', source, 0, -1)) do
+    rewrite(cjson.decode(raw))
+  end
+end
+for _, raw in ipairs(redis.call('HVALS', prefix .. 'unacked')) do
+  local delivery = cjson.decode(raw)
+  if delivery[3] == 'ingest' then rewrite(delivery[1]) end
+end
+for _, suffix in ipairs({'', '\006\0223', '\006\0226', '\006\0229'}) do
+  local source = prefix .. 'ingest' .. suffix
+  while redis.call('LLEN', source) > 0 do
+    local message = rewrite(cjson.decode(redis.call('RPOP', source)))
+    redis.call('LPUSH', prefix .. 'celery' .. suffix, cjson.encode(message))
     moved = moved + 1
   end
 end
@@ -44,7 +71,7 @@ for _, tag in ipairs(redis.call('ZRANGE', index, 0, -1)) do
   if raw then
     local delivery = cjson.decode(raw)
     if delivery[3] == 'ingest' then
-      local message = delivery[1]
+      local message = rewrite(delivery[1])
       local priority = tonumber(message.properties.priority) or 0
       local suffix = ''
       if priority >= 9 then suffix = '\006\0229'
@@ -55,6 +82,13 @@ for _, tag in ipairs(redis.call('ZRANGE', index, 0, -1)) do
       redis.call('ZREM', index, tag)
       moved = moved + 1
     end
+  end
+end
+-- Once every message has its pre-split route, remove only the ingest
+-- binding. Keep other queues/exchanges and all unrelated unacked entries.
+for _, binding in ipairs(redis.call('SMEMBERS', prefix .. '_kombu.binding.celery')) do
+  if string.sub(binding, -8) == '\006\022ingest' then
+    redis.call('SREM', prefix .. '_kombu.binding.celery', binding)
   end
 end
 return moved
