@@ -6,6 +6,7 @@ async coroutine in ``asyncio.run(...)`` — see ``app.workers.tasks``.
 """
 
 import json
+import os
 
 from celery import Celery
 from kombu import Queue
@@ -78,7 +79,7 @@ from celery.signals import worker_init, worker_ready
 @worker_init.connect
 def _sweep_extraction_scratch(sender=None, **_kwargs) -> None:
     # A light-worker restart must not delete a live ingest worker's scratch.
-    if sender is not None and "ingest" not in sender.app.amqp.queues.consume_from:
+    if os.environ.get("WORKER_ROLE") != "ingest":
         return
     # Before the pool forks, so no extraction is running yet — see
     # sweep_stale_scratch_dirs for why it must not run from inside a task.

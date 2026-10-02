@@ -163,7 +163,8 @@ services:
     # 2 on a 6-core / 11 GB box: each extraction runs its own MinerU server
     # (~2-3 GB, ~3 cores); a third would starve the API and risk OOM.
     command: sh -c 'python -m app.extraction.arabic_capability && exec celery -A app.core.celery_app worker --loglevel=info -Q ingest --hostname=celery@%h --concurrency=2'
-    environment:
+    environment: &worker-environment
+      WORKER_ROLE: ingest
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-9xaipal}
@@ -324,6 +325,9 @@ services:
   celery_worker_light:
     <<: *ingest-worker
     container_name: 9xaipal-celery-worker-light
+    environment:
+      <<: *worker-environment
+      WORKER_ROLE: light
     command: sh -c 'exec celery -A app.core.celery_app worker --loglevel=info -Q celery --hostname=celery@%h --concurrency=${LIGHT_WORKER_CONCURRENCY:-2}'
     deploy:
       resources:

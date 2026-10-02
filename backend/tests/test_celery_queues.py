@@ -45,6 +45,9 @@ def test_workers_consume_separate_queues(compose_file, heavy_memory, heavy_concu
         assert "inspect ping" in worker["healthcheck"]["test"][1]
         assert "--destination celery@$$HOSTNAME" in worker["healthcheck"]["test"][1]
         assert worker["restart"] == "unless-stopped"
+    assert heavy["environment"]["WORKER_ROLE"] == "ingest"
+    assert light["environment"]["WORKER_ROLE"] == "light"
+    assert {k: v for k, v in heavy["environment"].items() if k != "WORKER_ROLE"} == {k: v for k, v in light["environment"].items() if k != "WORKER_ROLE"}
     assert "python -m app.extraction.arabic_capability &&" in heavy["command"]
     assert "arabic_capability" not in light["command"]
     assert light["container_name"] == "9xaipal-celery-worker-light"
@@ -56,7 +59,7 @@ def test_workers_consume_separate_queues(compose_file, heavy_memory, heavy_concu
         assert "--concurrency" not in heavy["command"]
     assert heavy["deploy"]["resources"]["limits"]["memory"] == heavy_memory
     assert light["deploy"]["resources"]["limits"]["memory"] == "${LIGHT_WORKER_MEM_LIMIT:-2G}"
-    for key in ("build", "environment", "volumes", "depends_on", "extra_hosts", "networks"):
+    for key in ("build", "volumes", "depends_on", "extra_hosts", "networks"):
         assert light.get(key) == heavy.get(key)
 
 

@@ -14,7 +14,7 @@ import pytest
 from app.core.celery_app import celery_app, _restore_interrupted_tasks, _sweep_extraction_scratch
 
 
-def _fake_unacked(channel, client, task_name: str, args: list, queue: str = "celery") -> str:
+def _fake_unacked(channel, client, task_name: str, args: list, queue: str = "celery", task_id: str | None = None) -> str:
     """Put a message in `unacked` the way kombu does when a consumer has
     received but not acknowledged it."""
     tag = str(uuid4())
@@ -22,7 +22,7 @@ def _fake_unacked(channel, client, task_name: str, args: list, queue: str = "cel
         "body": json.dumps([args, {}, {"callbacks": None, "errbacks": None, "chain": None, "chord": None}]),
         "content-encoding": "utf-8",
         "content-type": "application/json",
-        "headers": {"task": task_name, "id": str(uuid4()), "lang": "py"},
+        "headers": {"task": task_name, "id": task_id or str(uuid4()), "lang": "py"},
         "properties": {
             "correlation_id": str(uuid4()),
             "delivery_info": {"exchange": "", "routing_key": queue},
@@ -98,6 +98,8 @@ def test_restart_restores_only_its_own_queue(queue, other):
 def test_only_ingest_worker_sweeps_extraction_scratch(queue, should_exist, tmp_path, monkeypatch):
     from app.extraction import mineru_client
 
+    monkeypatch.setenv("WORKER_ROLE", "ingest" if queue == "ingest" else "light")
+
     monkeypatch.setattr(mineru_client, "extracted_dir", lambda: tmp_path)
     scratch = tmp_path / ".mineru-api-active"
     scratch.mkdir()
@@ -111,9 +113,22 @@ def test_real_worker_startup_respects_selected_queue(queue, should_exist, tmp_pa
     from celery.contrib.testing.worker import start_worker
     from app.extraction import mineru_client
 
+    monkeypatch.setenv("WORKER_ROLE", "ingest" if queue == "ingest" else "light")
+
     monkeypatch.setattr(mineru_client, "extracted_dir", lambda: tmp_path)
     scratch = tmp_path / ".mineru-api-active"
     scratch.mkdir()
     with start_worker(celery_app, queues=[queue], perform_ping_check=False,
                       pool="solo", loglevel="WARNING", shutdown_timeout=15):
         assert scratch.exists() is should_exist
+
+
+def test_light_role_never_sweeps_even_without_sender(tmp_path, monkeypatch):
+    from app.extraction import mineru_client
+
+    monkeypatch.setenv("WORKER_ROLE", "light")
+    monkeypatch.setattr(mineru_client, "extracted_dir", lambda: tmp_path)
+    scratch = tmp_path / ".mineru-api-active"
+    scratch.mkdir()
+    _sweep_extraction_scratch()
+    assert scratch.exists()

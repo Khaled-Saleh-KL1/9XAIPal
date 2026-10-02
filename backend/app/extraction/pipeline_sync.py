@@ -1085,7 +1085,7 @@ def run_article_pipeline_sync(
     a page count, or glyph repair (none of those apply to an article).
 
     ⚠ Despite the name, this is the entry point for every URL import, and a
-    URL that turns out to be a PDF is handed to run_pipeline_sync instead —
+    URL that turns out to be a PDF is published to the ingest worker instead —
     see _adopt_pdf_from_url.
 
     ``kind`` ("book"/"paper") is the intent behind a link pasted through
@@ -1156,12 +1156,18 @@ def run_article_pipeline_sync(
         raise e
 
     if resource is not None and resource.is_pdf:
-        run_pipeline_sync(
-            session,
-            document_id=document_id,
-            job_id=job_id,
-            pdf_path=documents_dir() / f"{document_id}.pdf",
-        )
+        # Adoption has committed the PDF filename/kind and written its bytes.
+        # URL imports run on light; extraction must run on ingest instead.
+        from app.workers.tasks import process_ingestion
+
+        try:
+            process_ingestion.apply_async(
+                args=[str(document_id), str(job_id), f"{document_id}.pdf"],
+                queue="ingest",
+            )
+        except Exception as e:
+            _handle_ingestion_failure(session, document_id, job_id, e)
+            raise
         return False
 
     try:

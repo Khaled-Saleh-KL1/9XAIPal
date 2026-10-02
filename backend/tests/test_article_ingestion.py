@@ -176,7 +176,7 @@ def test_pdf_url_is_routed_to_the_pdf_pipeline(db_session_sync, tmp_path, monkey
 
     with patch(
         "app.services.article_extraction.fetch_resource", return_value=_pdf_resource()
-    ), patch.object(ps, "run_pipeline_sync") as run_pdf:
+    ), patch("app.workers.tasks.process_ingestion.apply_async") as publish_pdf, patch.object(ps, "run_pipeline_sync") as inline_pdf:
         run_article_pipeline_sync(
             db_session_sync,
             document_id=doc_id,
@@ -184,9 +184,11 @@ def test_pdf_url_is_routed_to_the_pdf_pipeline(db_session_sync, tmp_path, monkey
             url="https://arxiv.org/pdf/1706.03762",
         )
 
-    # The PDF pipeline ran, pointed at the file just written.
-    run_pdf.assert_called_once()
-    assert run_pdf.call_args.kwargs["pdf_path"] == tmp_path / f"{doc_id}.pdf"
+    # The PDF pipeline is published with the same ids and adopted file.
+    inline_pdf.assert_not_called()
+    publish_pdf.assert_called_once_with(
+        args=[str(doc_id), str(job_id), f"{doc_id}.pdf"], queue="ingest",
+    )
 
     # Bytes landed where the pipeline reads them AND where /raw serves them.
     assert (tmp_path / f"{doc_id}.pdf").read_bytes().startswith(b"%PDF-")
@@ -251,7 +253,7 @@ def test_pdf_url_with_book_kind_becomes_doc_kind_book(db_session_sync, tmp_path,
 
     with patch(
         "app.services.article_extraction.fetch_resource", return_value=_pdf_resource()
-    ), patch.object(ps, "run_pipeline_sync") as run_pdf:
+    ), patch("app.workers.tasks.process_ingestion.apply_async") as publish_pdf, patch.object(ps, "run_pipeline_sync") as inline_pdf:
         run_article_pipeline_sync(
             db_session_sync,
             document_id=doc_id,
@@ -260,7 +262,8 @@ def test_pdf_url_with_book_kind_becomes_doc_kind_book(db_session_sync, tmp_path,
             kind="book",
         )
 
-    run_pdf.assert_called_once()
+    inline_pdf.assert_not_called()
+    publish_pdf.assert_called_once_with(args=[str(doc_id), str(job_id), f"{doc_id}.pdf"], queue="ingest")
     doc = db_session_sync.execute(
         text("SELECT doc_kind FROM documents WHERE id = :id"), {"id": doc_id}
     ).mappings().one()

@@ -12,6 +12,7 @@ from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import text
 
 from app.core.celery_app import celery_app
+from app.workers.forwarding import forward_heavy_task
 from app.core.logging import get_logger
 from app.core.paths import documents_dir
 from app.api.errors import InsufficientStorage
@@ -112,6 +113,9 @@ def _mark_document_and_job_failed(session, doc_uuid: UUID, error_message: str) -
 )
 def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dict:
     """Run MinerU extraction → structural chunking → asset linking pipeline synchronously."""
+    if forward_heavy_task(self):
+        return {"document_id": document_id, "job_id": job_id, "status": "forwarded", "queue": "ingest"}
+
     logger.info(f"[celery] process_ingestion start document={document_id} job={job_id}")
     
     # Dispose of engine connection pool to avoid sharing sockets across forked Celery processes
@@ -425,6 +429,9 @@ def reconstruct_reading_order(self, document_id: str) -> dict:
     human reading flow on two-column papers and tricky layouts.
     Triggered from the UI when the user clicks "Reconstruct Reading Order (AI)".
     """
+    if forward_heavy_task(self):
+        return {"document_id": document_id, "status": "forwarded", "queue": "ingest"}
+
     logger.info(f"[celery] reconstruct_reading_order start document={document_id}")
 
     sync_engine.dispose()
