@@ -501,15 +501,42 @@ restarted, since dockerd's state is stale once it cannot write.
 environment and storage, and consumes the light/default queue named `celery`
 (article imports, embeddings, section summaries and figure descriptions). The
 original `celery` name is retained so queued messages survive deployment.
-Both Compose files set `WORKER_ROLE=ingest` on the heavy worker and
-`WORKER_ROLE=light` on the light worker. Heavy tasks arriving on light (including
-legacy backlog and restored deliveries) atomically forward to `ingest` before
-accessing the database or extraction scratch. PDF URL imports adopt the PDF and
-publish its existing document/job ids to `ingest`; HTML imports stay on light.
-Forwarding stores a non-expiring `9xaipal:forward:<task-id>:<retry>` receipt in
-broker Redis in the same atomic operation as publication. Do not remove these
-receipts while a source delivery can be redelivered. They prevent a crash
-between publication and acknowledgment from publishing the job twice.
+Both Compose files assign `WORKER_ROLE=ingest` / `WORKER_ROLE=light`.
+A heavy task delivered to light uses Celery `Task.replace` on `ingest` before
+any database, disk or extraction work. The original task id, callbacks,
+errbacks, chains and chord membership follow the replacement; no placeholder
+success result runs continuations early. Publication can be duplicated after
+an ambiguous broker reply. There is no Redis forwarding receipt to retain.
+
+Heavy consumers claim Postgres rows before work: ingestion by job id,
+reading-order reconstruction by document id. Execution state is separate from
+pipeline progress. A token and a 600-second lease are renewed every 60 seconds
+by a heartbeat thread, including during long OCR calls. A session advisory lock
+also fences live owners across lease expiry. An independent watchdog terminates
+a worker if renewal stalls for 120 seconds, well before its lease expires. Duplicate deliveries are logged,
+traced and acknowledged without changing status or running continuations.
+Heavy outcomes are checkpointed durably before returning to Celery; terminal
+claims are committed in `after_return`, after canvas publication/result storage.
+A crash in between replays the saved result or error without re-extraction,
+then resumes callbacks/chains/chords/errbacks. Continuation publication remains
+at least once across ambiguous broker replies; exactly-once Redis publication
+is not claimed.
+Completed ingestion jobs and completed reading-order delivery ids remain
+suppressed; a fresh reading-order request may execute after the previous one.
+A crashed owner's restored delivery is requeued until lease expiry, then
+reclaims the job. Database admission/finalization failures retain the delivery;
+Heavy and article tasks reject late-ack work on prefork child loss;
+loss of heartbeat fencing terminates the worker process so it cannot keep
+writing without ownership. Late-ack recovery resumes the job.
+
+URL source deliveries hold a document advisory lock across fetch, adoption
+and failure handling. A concurrent delivery waits, then rechecks adoption, so
+its delayed HTML response or fetch failure cannot clean up an adopted PDF.
+PDF URL imports commit adoption and publish the same document/job ids to
+`ingest`. Redelivery reuses the committed PDF before fetching or changing
+status. Concurrent adoption locks the document row and preserves existing
+bytes. An ambiguous publication requeues the article instead of failing an
+already-running ingest job. HTML article processing stays on light.
 
 `LIGHT_WORKER_CONCURRENCY` defaults to `2`; `LIGHT_WORKER_MEM_LIMIT` defaults to
 `2G`. `WORKER_MEM_LIMIT` still caps the ingest worker (Compose defaults: `7G`
@@ -518,16 +545,20 @@ development keeps Celery's existing automatic concurrency. Backend/both deploys
 build and update `api`, `celery_worker` and `celery_worker_light` together.
 
 Startup recovery restores only messages for the restarting worker's queue;
-only an ingest-role worker sweeps extraction scratch directories. Light never
-extracts a PDF, including during backlog recovery, so an ingest restart cannot
-delete scratch belonging to light.
+only an ingest-role worker sweeps extraction scratch. Light never extracts
+PDFs, including legacy or restored deliveries.
 
 Automatic rollback runs `scripts/rollback-celery-queues.sh` from the new tree
 before restoring the old revision: it stops autoheal, the API and both workers,
 removes the introduced light container by name, and atomically moves every
-`ingest` queue entry back to `celery` (including Redis priority buckets). It also
+`ingest` queue entry back to `celery` (including Redis priority buckets),
+rewriting exchange and routing metadata to `celery`/`celery` so subsequent
+restoration and retries remain on the old queue. It also
 recovers reserved ingest messages from the broker's unacked hash/index, leaving
-reserved default messages for the old worker's startup recovery. Queued payloads
-are byte-preserved, FIFO within each priority is retained, and repeated helper
+reserved default messages for the old worker's startup recovery. Message bodies,
+headers, task ids and priorities are preserved. FIFO within each priority is
+retained, and repeated helper
 execution does not duplicate migrated work. The restored full deploy restarts
 the stack; current full deploys also remove Compose orphans.
+
+The helper removes the ingest exchange binding only after all queued and reserved messages have moved.
