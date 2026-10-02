@@ -194,6 +194,11 @@ class ExecutionClaim:
 
 class HeavyTask(Task):
     abstract = True
+    # Celery writes STARTED before calling our consumer guard. A duplicate
+    # failed delivery would otherwise overwrite FAILURE and then be ignored,
+    # leaving the original AsyncResult permanently STARTED. Progress lives
+    # in Postgres; keep pre-claim result writes disabled for heavy tasks.
+    track_started = False
 
     def after_return(self, status, retval, task_id, args, kwargs, einfo):
         claim = getattr(self.request, "heavy_claim", None)

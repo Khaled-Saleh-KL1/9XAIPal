@@ -515,6 +515,9 @@ by a heartbeat thread, including during long OCR calls. A session advisory lock
 also fences live owners across lease expiry. An independent watchdog terminates
 a worker if renewal stalls for 120 seconds, well before its lease expires. Duplicate deliveries are logged,
 traced and acknowledged without changing status or running continuations.
+Heavy tasks disable Celery's pre-body `STARTED` result write so a dropped
+failed duplicate cannot overwrite the original failure; Postgres still reports
+pipeline progress. Other task settings and retry budgets remain unchanged.
 Heavy outcomes are checkpointed durably before returning to Celery; terminal
 claims are committed in `after_return`, after canvas publication/result storage.
 A crash in between replays the saved result or error without re-extraction,

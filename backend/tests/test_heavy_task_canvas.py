@@ -21,7 +21,7 @@ def wait_for(predicate, timeout=25):
     raise AssertionError("worker condition timed out")
 
 
-@pytest.mark.parametrize("fails", [False, True, "crash", "canvas-crash", "errback-crash", "chain", "chord"])
+@pytest.mark.parametrize("fails", [False, True, "crash", "canvas-crash", "errback-crash", "chain", "chord", "duplicate-failure"])
 def test_replacement_preserves_callback_order_and_original_errback(db_session_sync, tmp_path, fails):
     from test_article_ingestion import _insert_document_and_job
     doc, job = uuid4(), uuid4()
@@ -55,7 +55,7 @@ def pipeline(*args, **kwargs):
     while not client.exists(prefix+'release'):
         if time.monotonic()>deadline: raise RuntimeError('gate timeout')
         time.sleep(.05)
-    if fails in ('True', 'errback-crash'): raise RuntimeError('heavy failure')
+    if fails in ('True', 'errback-crash', 'duplicate-failure'): raise RuntimeError('heavy failure')
     client.rpush(prefix+'events', 'heavy-done')
 tasks.run_pipeline_sync = pipeline
 if fails == 'canvas-crash' and role == 'ingest':
@@ -77,6 +77,11 @@ def errback(request, exc, traceback):
         client.rpush(prefix+'events', 'errback-crash')
         os._exit(4)
     client.rpush(prefix+'events', json.dumps({'errback':str(exc), 'id':request.id}))
+from celery.signals import task_postrun
+@task_postrun.connect
+def record_drop(sender=None, state=None, **kwargs):
+    if role == 'ingest' and state == 'IGNORED':
+        client.rpush(prefix+'events', 'duplicate-drop')
 app.conf.worker_lost_wait = .1
 app.worker_main(['worker', '--pool='+('prefork' if fails in ('crash', 'canvas-crash', 'errback-crash') and role=='ingest' else 'solo'), '--concurrency=1', '-Q', 'celery' if role=='light' else 'ingest', '--hostname='+role+'@%h', '--without-gossip', '--without-mingle', '--without-heartbeat', '--loglevel=WARNING'])
 ''')
@@ -124,14 +129,19 @@ app.worker_main(['worker', '--pool='+('prefork' if fails in ('crash', 'canvas-cr
             wait_for(lambda: client.exists(prefix + "errback-crashed"))
             db_session_sync.execute(text("UPDATE ingestion_jobs SET claim_expires_at=now()-interval '1 second' WHERE id=:id"), {"id": job})
             db_session_sync.commit()
-        events = wait_for(lambda: (events if len(events := client.lrange(prefix + "events", 0, -1)) >= (4 if fails in ("crash", "canvas-crash") else 3 if fails == "errback-crash" else 2 if fails is True else 3) else None))
-        if fails is True or fails == "errback-crash":
+        events = wait_for(lambda: (events if len(events := client.lrange(prefix + "events", 0, -1)) >= (4 if fails in ("crash", "canvas-crash") else 3 if fails == "errback-crash" else 2 if fails is True or fails == "duplicate-failure" else 3) else None))
+        if fails is True or fails in ("errback-crash", "duplicate-failure"):
             if fails == "errback-crash":
                 assert events[:-1] == [b"heavy-start", b"errback-crash"]
             error = json.loads(events[-1])
             assert error == {"errback": "heavy failure", "id": result.id}
             assert wait_for(lambda: result.ready())
             assert result.failed()
+            if fails == "duplicate-failure":
+                app.send_task("9xaipal.process_ingestion", args=[str(doc), str(job), "x.pdf"], task_id=result.id, queue="ingest")
+                wait_for(lambda: client.lindex(prefix + "events", -1) == b"duplicate-drop")
+                assert app.AsyncResult(result.id).state == "FAILURE"
+                assert client.lrange(prefix + "events", 0, -2) == events
         else:
             assert events[:-1] == ([b"heavy-start", b"heavy-start", b"heavy-done"] if fails == "crash" else [b"heavy-start", b"heavy-done", b"canvas-crash"] if fails == "canvas-crash" else [b"heavy-start", b"heavy-done"])
             expected = {"document_id": str(doc), "job_id": str(job), "status": "complete"}
