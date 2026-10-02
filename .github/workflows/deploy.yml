@@ -155,6 +155,11 @@ jobs:
           GOOD_SHA=$(cat "$DEPLOY_DIR/.last-good-sha")
           echo "::warning::Deploy of ${{ github.event.workflow_run.head_sha }} failed its health check. Rolling back to last known-good commit $GOOD_SHA."
 
+          # The helper must run from the new tree: the old revision may not
+          # know about the light service or the ingest queue. Fail closed if
+          # recovery fails; never start the old worker against stranded work.
+          bash "$DEPLOY_DIR/scripts/rollback-celery-queues.sh"
+
           git worktree add /tmp/rollback-src "$GOOD_SHA"
           rsync -a --delete \
             --exclude='.git/' \

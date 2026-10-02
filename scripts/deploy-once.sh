@@ -88,7 +88,7 @@ ensure_phoenix() {
 case "$SCOPE" in
   full)
     echo "Building and restarting every container..."
-    (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build)
+    (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build --remove-orphans)
     ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
     prune_build_cache || echo "::warning::Build-cache cleanup failed; disk use may keep growing" >&2
     ;;

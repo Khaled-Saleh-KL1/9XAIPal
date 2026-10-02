@@ -500,8 +500,16 @@ restarted, since dockerd's state is stale once it cannot write.
 `reconstruct_reading_order`). `celery_worker_light` uses the same worker image,
 environment and storage, and consumes the light/default queue named `celery`
 (article imports, embeddings, section summaries and figure descriptions). The
-original `celery` name is retained so queued messages survive deployment; old
-PDF jobs in that backlog temporarily run on the light worker.
+original `celery` name is retained so queued messages survive deployment.
+Both Compose files set `WORKER_ROLE=ingest` on the heavy worker and
+`WORKER_ROLE=light` on the light worker. Heavy tasks arriving on light (including
+legacy backlog and restored deliveries) atomically forward to `ingest` before
+accessing the database or extraction scratch. PDF URL imports adopt the PDF and
+publish its existing document/job ids to `ingest`; HTML imports stay on light.
+Forwarding stores a non-expiring `9xaipal:forward:<task-id>:<retry>` receipt in
+broker Redis in the same atomic operation as publication. Do not remove these
+receipts while a source delivery can be redelivered. They prevent a crash
+between publication and acknowledgment from publishing the job twice.
 
 `LIGHT_WORKER_CONCURRENCY` defaults to `2`; `LIGHT_WORKER_MEM_LIMIT` defaults to
 `2G`. `WORKER_MEM_LIMIT` still caps the ingest worker (Compose defaults: `7G`
@@ -510,6 +518,16 @@ development keeps Celery's existing automatic concurrency. Backend/both deploys
 build and update `api`, `celery_worker` and `celery_worker_light` together.
 
 Startup recovery restores only messages for the restarting worker's queue;
-only the ingest worker sweeps extraction scratch directories. During migration,
-an old PDF running from `celery` still shares scratch storage with ingest, so
-ingest-worker restarts can affect that legacy extraction.
+only an ingest-role worker sweeps extraction scratch directories. Light never
+extracts a PDF, including during backlog recovery, so an ingest restart cannot
+delete scratch belonging to light.
+
+Automatic rollback runs `scripts/rollback-celery-queues.sh` from the new tree
+before restoring the old revision: it stops autoheal, the API and both workers,
+removes the introduced light container by name, and atomically moves every
+`ingest` queue entry back to `celery` (including Redis priority buckets). It also
+recovers reserved ingest messages from the broker's unacked hash/index, leaving
+reserved default messages for the old worker's startup recovery. Queued payloads
+are byte-preserved, FIFO within each priority is retained, and repeated helper
+execution does not duplicate migrated work. The restored full deploy restarts
+the stack; current full deploys also remove Compose orphans.
