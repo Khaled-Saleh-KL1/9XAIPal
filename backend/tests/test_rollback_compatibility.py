@@ -121,6 +121,7 @@ app.worker_main(['worker','--pool=prefork','--concurrency=2','-Q','celery','--wi
         assert [json.loads(e) for e in events] == [expected]*len(ids)
         assert db_session_sync.execute(text('SELECT execution_state FROM ingestion_jobs WHERE id=:id'),{'id':job}).scalar_one() == 'complete'
     finally:
+        print('rollback broker state', {name: client.llen(prefix+name) for name in ('celery','ingest','events')}, client.hgetall(prefix+'unacked'))
         client.set(prefix+'release','1')
         if process:
             process.terminate()

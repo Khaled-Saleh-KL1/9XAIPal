@@ -14,15 +14,23 @@ from uuid import UUID, uuid4
 
 from celery import Task
 from celery.exceptions import Ignore, Reject, Retry
-from celery.signals import task_postrun
+from celery.signals import task_postrun, worker_process_init
 from sqlalchemy import text
 
 from app.core import tracing
 from app.core.logging import get_logger
 from app.database.connection import sync_engine
 from app.workers.forwarding import forward_heavy_task
+from app.workers.owned_subprocess import subprocess_scope
 
 logger = get_logger(__name__)
+
+
+@worker_process_init.connect
+def _discard_inherited_database_pool(**kwargs):
+    # Worker startup/schema checks may have opened pooled DB sockets before
+    # prefork. A child must neither use them nor close another child's socket.
+    sync_engine.dispose(close=False)
 
 
 class ExecutionClaim:
@@ -37,6 +45,7 @@ class ExecutionClaim:
         self.prefix = "" if kind == "ingestion" else "reading_order_"
         self.token = uuid4()
         self.lock_key = int.from_bytes(hashlib.sha256(f"{kind}:{row_id}".encode()).digest()[:8], "big", signed=True)
+        self.children_key = int.from_bytes(hashlib.sha256(f"children:{kind}:{row_id}".encode()).digest()[:8], "big", signed=True)
         self.stop = threading.Event()
         self.mutex = threading.RLock()
         self.thread = None
@@ -60,6 +69,11 @@ class ExecutionClaim:
             self.connection.commit()
             if not locked:
                 raise Reject("live execution owner", requeue=True)
+            reaped = self.connection.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": self.children_key}).scalar_one()
+            if not reaped:
+                raise Reject("previous extraction descendants are still being reaped", requeue=True)
+            self.connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": self.children_key})
+            self.connection.commit()
             if self.kind == "reading_order":
                 seen = self.connection.execute(text("SELECT 1 FROM reading_order_executions WHERE document_id=:id AND task_id=:delivery"), {"id": self.row_id, "delivery": self.delivery_id}).first()
                 self.connection.commit()
@@ -81,8 +95,11 @@ class ExecutionClaim:
                     {p}execution_state='running', {p}execution_task_id=:delivery
                 WHERE id=:id
                   AND {"execution_generation=:generation" if self.kind == "ingestion" else "TRUE"}
-                  AND ({p}execution_state IS NULL OR {p}execution_state='pending'
-                       OR ({p}execution_state IN ('running','finalizing') AND {p}claim_expires_at < clock_timestamp())
+                  AND ({p}execution_state IS NULL
+                       OR ({p}execution_state='pending' AND (NOT :is_reading
+                           OR {p}execution_task_id IS NULL OR {p}execution_task_id=:delivery))
+                       OR ({p}execution_state IN ('running','finalizing') AND {p}claim_expires_at < clock_timestamp()
+                           AND (NOT :is_reading OR {p}execution_task_id=:delivery))
                        OR (:is_reading AND {p}execution_state IN ('complete','failed')
                            AND {p}execution_task_id IS DISTINCT FROM :delivery)
                        OR (NOT :is_reading AND {p}execution_state IN ('complete','failed')
@@ -95,7 +112,7 @@ class ExecutionClaim:
             if row is None:
                 state = self.connection.execute(text(f"SELECT {p}execution_state FROM {self.table} WHERE id=:id"), {"id": self.row_id}).scalar()
                 self.connection.commit()
-                if state in ("running", "finalizing"):
+                if state in ("running", "finalizing") or (self.kind == "reading_order" and state == "pending"):
                     # The previous process died, but its durable lease has not
                     # expired. ACKing this restored delivery would lose the job.
                     raise Reject("execution lease has not expired", requeue=True)
@@ -255,7 +272,8 @@ def guarded_heavy(kind):
             claim = ExecutionClaim(kind, row_id, task.request.id or str(uuid4()), generation)
             if task.request.called_directly:
                 with claim:
-                    result = function(task, document_id, *args, **kwargs)
+                    with subprocess_scope(claim.children_key):
+                        result = function(task, document_id, *args, **kwargs)
                     if result.get("status") == "failed":
                         claim.finish("failed")
                     return result
@@ -267,7 +285,8 @@ def guarded_heavy(kind):
                 if claim.outcome is not None:
                     return claim.outcome
                 try:
-                    result = function(task, document_id, *args, **kwargs)
+                    with subprocess_scope(claim.children_key):
+                        result = function(task, document_id, *args, **kwargs)
                 except (Ignore, Reject, Retry) as exc:
                     claim.__exit__(type(exc), exc, exc.__traceback__)
                     task.request.heavy_claim = None
