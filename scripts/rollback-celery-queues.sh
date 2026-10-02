@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Run from the NEW deployment tree before restoring a pre-split revision.
 # Quiesce publishers and consumers first, then return ingest work to celery.
+# Before starting a pre-split consumer, install prepare-celery-rollback.py
+# from the saved new tree; migrated copies require its Postgres fencing.
 set -euo pipefail
 
 # Stop autoheal first so it cannot restart workers during queue recovery.

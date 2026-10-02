@@ -158,6 +158,17 @@ jobs:
           # The helper must run from the new tree: the old revision may not
           # know about the light service or the ingest queue. Fail closed if
           # recovery fails; never start the old worker against stranded work.
+          # Preserve the guard outside the rsync target. The pre-split tree
+          # must not consume reconnect/handoff copies without DB fencing.
+          COMPAT_TREE=$(mktemp -d /tmp/celery-rollback-compat.XXXXXX)
+          mkdir -p "$COMPAT_TREE/backend/app/workers" "$COMPAT_TREE/backend/app/services" "$COMPAT_TREE/backend/app/database" "$COMPAT_TREE/backend/app/extraction" "$COMPAT_TREE/backend/app/core" "$COMPAT_TREE/scripts"
+          cp "$DEPLOY_DIR/backend/app/workers/"{execution_claims,forwarding,rollback_compatibility}.py "$COMPAT_TREE/backend/app/workers/"
+          cp "$DEPLOY_DIR/backend/app/core/celery_app.py" "$COMPAT_TREE/backend/app/core/"
+          cp "$DEPLOY_DIR/backend/app/workers/tasks.py" "$COMPAT_TREE/backend/app/workers/"
+          cp "$DEPLOY_DIR/backend/app/database/migrations.py" "$COMPAT_TREE/backend/app/database/"
+          cp "$DEPLOY_DIR/backend/app/extraction/pipeline_sync.py" "$COMPAT_TREE/backend/app/extraction/"
+          cp "$DEPLOY_DIR/backend/app/services/ingestion.py" "$COMPAT_TREE/backend/app/services/"
+          cp "$DEPLOY_DIR/scripts/prepare-celery-rollback.py" "$COMPAT_TREE/scripts/"
           bash "$DEPLOY_DIR/scripts/rollback-celery-queues.sh"
 
           git worktree add /tmp/rollback-src "$GOOD_SHA"
@@ -170,6 +181,11 @@ jobs:
             --exclude='.last-good-sha' \
             /tmp/rollback-src/ "$DEPLOY_DIR"/
           git worktree remove /tmp/rollback-src --force
+
+          # Fail closed if the compatibility overlay cannot be installed.
+          # API/frontend/pipeline roll back; consumers retain lease fencing.
+          python3 "$COMPAT_TREE/scripts/prepare-celery-rollback.py" "$COMPAT_TREE" "$DEPLOY_DIR"
+          rm -rf "$COMPAT_TREE"
 
           # Always a full deploy: the failed attempt may have rebuilt any
           # subset of the stack, so the restored tree has to be rebuilt in
