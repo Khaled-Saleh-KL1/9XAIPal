@@ -1,6 +1,7 @@
 """Synchronous extraction pipeline: PDF -> MinerU -> structural chunks -> assets -> bulk db injection."""
 
 import hashlib
+import fcntl
 import os
 import tempfile
 import json
@@ -1013,29 +1014,6 @@ def _pdf_name_from_url(url: str) -> str:
     return name[:500]
 
 
-def _store_url_pdf_once(directory: Path, filename: str, pdf: bytes) -> Path:
-    """Publish complete immutable bytes without ever truncating an adopted file.
-
-    A stale source can finish its private write after losing its DB connection.
-    Atomic no-overwrite linking keeps those bytes away from another owner's PDF.
-    """
-    destination = directory / filename
-    fd, temporary = tempfile.mkstemp(prefix=".url-pdf-", dir=directory)
-    os.close(fd)
-    staged = Path(temporary)
-    try:
-        staged.write_bytes(pdf)
-        with staged.open("rb") as stored:
-            os.fsync(stored.fileno())
-        try:
-            os.link(staged, destination)
-        except FileExistsError:
-            pass
-        return destination
-    finally:
-        staged.unlink(missing_ok=True)
-
-
 def _adopt_pdf_from_url(
     session: Session, *, document_id: UUID, url: str, pdf: bytes, kind: Optional[str] = None,
 ) -> None:
@@ -1054,27 +1032,55 @@ def _adopt_pdf_from_url(
     pre-existing behavior by defaulting to "paper" here, exactly as before
     this parameter existed.
     """
+    # Stage without holding filesystem/row locks. A stalled source may lose
+    # its connection while writing; it must recheck ownership before publish.
+    ensure_storage_dirs()
+    fd, temporary = tempfile.mkstemp(prefix=".url-pdf-", dir=documents_dir())
+    os.close(fd)
+    staged = Path(temporary)
+    try:
+        staged.write_bytes(pdf)
+        with staged.open("rb") as stored:
+            os.fsync(stored.fileno())
+        # This lock survives DB connection loss until publication has stopped.
+        # A successor cannot commit adoption while a stale source is replacing
+        # legacy residue. Keep the stable lock inode; never unlink it.
+        with (documents_dir() / f".url-pdf-{document_id}.lock").open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            _commit_url_pdf(session, document_id=document_id, url=url, staged=staged, pdf=pdf, kind=kind)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def _commit_url_pdf(session, *, document_id, url, staged, pdf, kind):
     # Concurrent source deliveries may both finish their fetch before the
     # first adoption commits. Serialize the row transition and check again.
     existing = session.execute(
         text("SELECT filename, doc_kind FROM documents WHERE id=:id FOR UPDATE"),
         {"id": document_id},
     ).mappings().first()
-    if existing and existing["filename"] == f"{document_id}.pdf" and (documents_dir() / existing["filename"]).is_file():
+    if existing and existing["doc_kind"] in ("book", "paper") and existing["filename"] == f"{document_id}.pdf" and (documents_dir() / existing["filename"]).is_file():
         session.commit()
         return
-
-    ensure_storage_dirs()
 
     # documents_dir() name is derived from the id (not a fresh uuid) so the
     # path stays reconstructible from the row alone, the way assets_dir()
     # already keys the raw copy by document id.
-    path = _store_url_pdf_once(documents_dir(), f"{document_id}.pdf", pdf)
-    # The first fully-written canonical file wins even if its source died
-    # before committing adoption. Raw storage must use those same bytes.
-    pdf = path.read_bytes()
+    # An article row has never committed adoption. Old direct writers could
+    # leave either file truncated; replace both with the complete fetched
+    # bytes. The filesystem lock fences publication even if the DB lock dies.
+    os.replace(staged, documents_dir() / f"{document_id}.pdf")
     if assets_dir() != documents_dir():
-        _store_url_pdf_once(assets_dir(), f"{document_id}.pdf", pdf)
+        fd, temporary = tempfile.mkstemp(prefix=".url-pdf-", dir=assets_dir())
+        os.close(fd)
+        raw = Path(temporary)
+        try:
+            raw.write_bytes(pdf)
+            with raw.open("rb") as stored:
+                os.fsync(stored.fileno())
+            os.replace(raw, assets_dir() / f"{document_id}.pdf")
+        finally:
+            raw.unlink(missing_ok=True)
 
     # Clamped, not just defaulted. Every other doc_kind write is filtered
     # through a whitelist (repositories/documents.py's create_document, and
@@ -1178,14 +1184,27 @@ def _check_article_owner(session):
 def _fail_article(session, document_id, job_id, error):
     """Never let an adopted source clean the heavy consumer's document."""
     from celery.exceptions import Reject
-    session.rollback()
-    _check_article_owner(session)
-    row = session.execute(text("SELECT doc_kind FROM documents WHERE id=:id FOR UPDATE"), {"id": document_id}).first()
-    if row is None or row.doc_kind != "article":
+    # Article failure is one transaction under the row/ownership locks.
+    # Unlike the PDF failure path, inability to persist is a recovery signal,
+    # never a best-effort log followed by an ACK of the original fetch error.
+    try:
         session.rollback()
-        raise Reject("article already adopted or removed", requeue=True) from error
-    # The source's advisory lock remains held across the cleanup commits.
-    _handle_ingestion_failure(session, document_id, job_id, error)
+        _check_article_owner(session)
+        row = session.execute(text("SELECT doc_kind FROM documents WHERE id=:id FOR UPDATE"), {"id": document_id}).first()
+        if row is None or row.doc_kind != "article":
+            raise Reject("article already adopted or removed", requeue=True) from error
+        clean_slate_sync(session, document_id)
+        safe_error = _sanitize_error_for_user(error)
+        update_job_status_sync(session, job_id, JobStatus.FAILED, error_message=safe_error,
+                               error_code=error.error_code if isinstance(error, ArabicRoutingError) else None)
+        update_document_status_sync(session, document_id, "failed", error_message=safe_error)
+        session.commit()
+    except Exception as exc:
+        try:
+            session.rollback()
+        except Exception:
+            pass  # A dead rollback connection must not replace the requeue.
+        raise Reject(f"article failure transition not persisted: {exc}", requeue=True) from exc
 
 
 @tracing.traced("ingest.article", tracing.CHAIN)

@@ -76,10 +76,10 @@ def prepare(source, target):
         pipeline = target / 'backend/app/extraction/pipeline_sync.py'
         old = pipeline.read_text()
         current = (source / 'backend/app/extraction/pipeline_sync.py').read_text()
-        names = ('_store_url_pdf_once', '_adopt_pdf_from_url', '_publish_adopted_pdf', '_serialized_url_import', '_check_article_owner', '_fail_article', 'run_article_pipeline_sync')
+        names = ('_adopt_pdf_from_url', '_commit_url_pdf', '_publish_adopted_pdf', '_serialized_url_import', '_check_article_owner', '_fail_article', 'run_article_pipeline_sync')
         # Install the whole article group in dependency order. Earlier split
         # trees lack the decorator: appending it after its use breaks import.
-        for name in names:
+        for name in (*names, '_store_url_pdf_once'):
             try:
                 (start, end), _ = function_source(old, name, decorators=True)
                 lines = old.splitlines(keepends=True)
@@ -97,7 +97,7 @@ def prepare(source, target):
             else:
                 break
         lines = old.splitlines(keepends=True)
-        old = ''.join(lines[:insertion]) + '\nimport hashlib\nimport os\nimport tempfile\nfrom functools import wraps\nfrom sqlalchemy import event\n' + ''.join(lines[insertion:])
+        old = ''.join(lines[:insertion]) + '\nimport fcntl\nimport hashlib\nimport os\nimport tempfile\nfrom functools import wraps\nfrom sqlalchemy import event\n' + ''.join(lines[insertion:])
         pipeline.write_text(old)
         # Retain queue-scoped restore and ingest-only scratch startup in early
         # split revisions, which originally had neither guard nor worker roles.

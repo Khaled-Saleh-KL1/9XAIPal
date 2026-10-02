@@ -68,12 +68,20 @@ Finished ingestion delivery ids remain suppressed within a retry generation. Del
 Arabic confirmation advances the generation and clears ownership/outcome transactionally;
 old-generation deliveries cannot execute the confirmed job. A distinct ingestion source
 replays the saved result/error without heavy work. Completed reading-order delivery ids
-remain suppressed; a fresh reading-order request may execute after the previous one.
+remain suppressed; a fresh reading-order request is retained until the unfinished
+prior delivery has executed or replayed its checkpoint and completed Celery
+finalization. Pending retries also retain the original delivery’s ownership.
+The newer request then executes without replacing the saved outcome.
 A crashed owner's restored delivery is requeued until lease expiry, then
 reclaims the job. Database admission/finalization failures retain the delivery;
 Heavy and article tasks reject late-ack work on prefork child loss;
 loss of heartbeat fencing terminates the worker process so it cannot keep
-writing without ownership. Late-ack recovery resumes the job.
+writing without ownership. Subprocesses spawned inside the heavy claim run through
+Linux supervisors which observe the pool child with a pidfd, adopt orphaned
+descendants as subreapers, and kill/reap the entire extraction tree on owner death.
+A separate shared Postgres descendants lock prevents recovery until reaping
+finishes, even after the original lease expires. The rollback overlay carries
+the same supervisor. Late-ack recovery resumes the job after both fences permit it.
 
 URL source deliveries hold a document advisory lock on the same pinned connection used
 for every persistence statement across fetch, adoption and failure handling. SQL verifies
@@ -115,11 +123,17 @@ copies with different source ids/canvases and already-finished jobs. The API's d
 confirmation retry also retains generation advancement. Overlay failure aborts rollback
 before any consumer starts. This is a compatibility rollback, not a byte-identical old tree.
 
-URL PDF storage uses a private staged write followed by an atomic no-overwrite link.
-The first complete canonical file is immutable; stale sources cannot truncate it, and
-raw storage uses those same winning bytes. Connection loss during adoption therefore
-cannot corrupt a PDF being extracted by an adopted owner. Abandoned private stage files
-can remain after a process crash; they are never admitted as canonical PDFs.
+URL PDF storage stages complete bytes privately, then serializes publication and
+row adoption with a stable filesystem lock plus a checked Postgres row lock.
+Committed PDFs remain immutable. When the row still describes an article,
+canonical/raw files are uncommitted residue and both are replaced atomically
+with the freshly fetched complete bytes, including truncated files left by
+pre-split writers. The filesystem lock survives DB connection loss until the
+stale publisher stops, so a successor cannot commit adoption before publication
+is fenced. Raw storage uses the same bytes as the canonical PDF. Article failure
+cleanup/status writes commit together; ownership/persistence failure requeues
+the source instead of acknowledging the original fetch error. Abandoned private
+stage files can remain after a crash; they are never admitted as canonical PDFs.
 
 Compatibility rollback carries queue-only schema DDL into API migrations and checks it
 before worker startup, even if the failed deployment never reached migrations. Schema
