@@ -111,3 +111,11 @@
 2026-09-19  Chose: the disk watchdog and prune jobs as plain cron + a stdlib Python script in `backend/host/`, installed by hand like `backend/nginx/`.  Because: the box has no MTA (OVH blocks port 25) and no monitoring stack; Gmail SMTP on 587 from 150 lines of stdlib is the whole dependency, and `deploy.yml` already has the pattern for hand-installed host files (a notice when they change).
 
 2026-09-19  Kept: BuildKit's `reservedSpace` *and* `maxUsedSpace` in daemon.json, after shipping `reservedSpace` alone.  Because: `reservedSpace` (and the `keepStorage` it replaced) is the floor GC prunes back to, not a cap — under a 40 GB one the cache reached 41.8 GB, and under the 20 GB that replaced it, 30.3 GB in a day. Only `maxUsedSpace` triggers GC. The floor is sized above the measured ~15.3 GB warm set, or GC shaves it and every deploy goes cold (§9).
+
+## Current worker configuration (supersedes the historical single-worker references)
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

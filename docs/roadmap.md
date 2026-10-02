@@ -150,7 +150,7 @@ The application code is more mature than the tooling around it. These are the ch
   `9xaipal.process_ingestion`, and Celery **discarded the message**. A live ingestion sat at
   "queued · 0%" indefinitely with nothing in the UI to suggest the task was gone. If it is renamed,
   `POSTGRES_DB`, the role, container names, volume names and the Celery app all have to move
-  together, and `api` + `celery_worker` must be recreated in the same step.
+  together, and `api` + `celery_worker` + `celery_worker_light` must be recreated in the same step.
 
 ## Planned direction
 
@@ -185,3 +185,11 @@ The application code is more mature than the tooling around it. These are the ch
   `_normalize_math_glyphs` repairs **1,930** Unicode glyphs inside math on the PyMuPDF fallback
   path. Both stay.
 - `[planned]` Reference-manager integration (Zotero, Semantic Scholar) as a document source.
+
+## Celery queue split
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

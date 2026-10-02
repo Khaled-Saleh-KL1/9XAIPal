@@ -32,3 +32,23 @@ The original design used FastAPI BackgroundTasks + an in-memory asyncio.Queue + 
 
 `workers` depends on `extraction`, `embeddings`, `services`, and `database` (both async and sync session layers).
 
+
+## Celery queue split
+
+`celery_worker` consumes only `ingest` (`process_ingestion` and
+`reconstruct_reading_order`). `celery_worker_light` uses the same worker image,
+environment and storage, and consumes the light/default queue named `celery`
+(article imports, embeddings, section summaries and figure descriptions). The
+original `celery` name is retained so queued messages survive deployment; old
+PDF jobs in that backlog temporarily run on the light worker.
+
+`LIGHT_WORKER_CONCURRENCY` defaults to `2`; `LIGHT_WORKER_MEM_LIMIT` defaults to
+`2G`. `WORKER_MEM_LIMIT` still caps the ingest worker (Compose defaults: `7G`
+production, `12G` development). Production ingest concurrency stays `2`;
+development keeps Celery's existing automatic concurrency. Backend/both deploys
+build and update `api`, `celery_worker` and `celery_worker_light` together.
+
+Startup recovery restores only messages for the restarting worker's queue;
+only the ingest worker sweeps extraction scratch directories. During migration,
+an old PDF running from `celery` still shares scratch storage with ingest, so
+ingest-worker restarts can affect that legacy extraction.

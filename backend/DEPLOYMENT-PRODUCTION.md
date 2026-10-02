@@ -85,7 +85,7 @@ Worth knowing about what it does, since none of it is obvious from the file alon
   [`pipeline_sync.py`](app/extraction/pipeline_sync.py)'s `update_job_progress_sync`), a
   smaller value means more visible progress movement during a long extraction, not just OOM
   safety. `0` disables batching entirely.
-- `WORKER_MEM_LIMIT` (default `6G`) caps `celery_worker`'s memory so a huge PDF OOMs only that
+- `WORKER_MEM_LIMIT` (Compose default `7G`; `.env.prod` example `6G`) caps `celery_worker`'s memory so a huge PDF OOMs only that
   one container (which then auto-restarts, see §4) instead of pressuring postgres/redis/api on
   the same box. There is no swap on this box, so a real overrun hits this hard rather than
   degrading gracefully; that's deliberate, the same isolation tradeoff as the paragraph above.
@@ -205,7 +205,7 @@ sudo systemctl restart nginx actions.runner.Khaled-Saleh-KL1-9XAIPal.ovh-server.
 
 ### What a restart does to a running ingestion
 
-Every backend deploy recreates the worker (`up -d --build api celery_worker`), and so does
+Every backend deploy recreates the worker (`up -d --build api celery_worker celery_worker_light`), and so does
 autoheal after a hung health check. A task running at that moment — a MinerU extraction is
 minutes long — dies with the process. Its message is `acks_late`, so Redis still holds it, but
 Redis only re-delivers an unacked message after the visibility timeout (Celery's default: one
@@ -215,10 +215,8 @@ its message in `unacked`). `core/celery_app.py::_restore_interrupted_tasks` now 
 `worker_ready` and hands every unacked message straight back to the queue — the same thing kombu
 does on a warm shutdown, which a container stop never gets for a long task. The interrupted
 document starts over within seconds of the new worker coming up; the reader sees its progress bar
-restart, nothing else. Assumes the single worker *container* this box runs (with several, another
-worker's in-flight task would be restored too and run twice — the pipelines survive that, it is
-only wasted work); `--concurrency=2` inside that one container is fine, the restore happens in the
-main process before either pool child takes anything.
+restart, nothing else. Recovery is scoped to the starting worker's consumed queue, so starting one worker
+does not restore the other worker's active tasks.
 
 **The visibility timeout is now 7 days, and there are no task time limits — on purpose.** The
 same one-hour re-delivery bit the other way on 2026-09-17: a 916-page book takes ~68 min to
@@ -281,7 +279,7 @@ short API outage to ship a README fix. `scripts/deploy-scope.sh` now diffs the r
 (`.last-good-sha`) against the one CI validated and the workflow passes the answer to
 `deploy-once.sh` as `DEPLOY_SCOPE`: `none` (docs, tests, CI, samples — files synced, health
 confirmed, nothing built or restarted), `frontend` (Vite build only; no container touched),
-`backend` (api + celery_worker rebuilt and restarted; the SPA untouched), `both`, or `full` (the
+`backend` (api + both Celery workers rebuilt and restarted; the SPA untouched), `both`, or `full` (the
 first deploy, or no diffable sha — and always the rollback path, since the failed attempt may have
 rebuilt any subset). The rules mirror `ci.yml`'s "detect changes" filters, with two deliberate
 differences: `backend/` means everything the images and their runtime config are built from
@@ -495,3 +493,23 @@ it gives the daemons room to write again), then `docker builder prune -af` (this
 the writable layer with `docker ps -s`. Postgres data is on a named volume and recovers on
 `docker start`; the worker needs `docker compose up -d celery_worker` after Docker itself is
 restarted, since dockerd's state is stale once it cannot write.
+
+## Celery queue split
+
+`celery_worker` consumes only `ingest` (`process_ingestion` and
+`reconstruct_reading_order`). `celery_worker_light` uses the same worker image,
+environment and storage, and consumes the light/default queue named `celery`
+(article imports, embeddings, section summaries and figure descriptions). The
+original `celery` name is retained so queued messages survive deployment; old
+PDF jobs in that backlog temporarily run on the light worker.
+
+`LIGHT_WORKER_CONCURRENCY` defaults to `2`; `LIGHT_WORKER_MEM_LIMIT` defaults to
+`2G`. `WORKER_MEM_LIMIT` still caps the ingest worker (Compose defaults: `7G`
+production, `12G` development). Production ingest concurrency stays `2`;
+development keeps Celery's existing automatic concurrency. Backend/both deploys
+build and update `api`, `celery_worker` and `celery_worker_light` together.
+
+Startup recovery restores only messages for the restarting worker's queue;
+only the ingest worker sweeps extraction scratch directories. During migration,
+an old PDF running from `celery` still shares scratch storage with ingest, so
+ingest-worker restarts can affect that legacy extraction.

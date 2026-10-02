@@ -171,3 +171,11 @@ ran CPU-only. MinerU's `vlm-engine` routes to MLX on Apple Silicon when run on t
 Levers, in rough order of effect: set `CLASSIFIER_MODEL` to a small model; keep
 `OLLAMA_KEEP_ALIVE` long enough that the big model stays resident; lower `LOCAL_CONTEXT_WINDOW`;
 raise Celery `--concurrency`.
+
+## Celery queue split
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

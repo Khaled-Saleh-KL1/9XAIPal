@@ -21,7 +21,7 @@ docker compose up frontend-build
 docker compose up -d api
 
 # 4. (Optional but recommended for heavy ingestion)
-docker compose up -d celery_worker
+docker compose up -d celery_worker celery_worker_light
 ```
 
 Then open **http://localhost:8000** in your browser. Everything (library, reader, chat, sub-threads, research images, etc.) is served from the container.
@@ -32,7 +32,7 @@ Then open **http://localhost:8000** in your browser. Everything (library, reader
 - **frontend-build** (one-shot): Builds the Vite/React app and leaves dist in a volume.
 - postgres, redis: unchanged.
 - Web search: a cascade of 5 providers (tavily, linkup, exa, serpapi, then duckduckgo — see `app/search/web.py`), no local service. Tavily rotates across a comma-separated list of keys first. The last needs no key, so web search is never fully off.
-- celery_worker: unchanged (uses the same image).
+- celery_worker: ingest queue; celery_worker_light: light/default queue, same worker image.
 
 ## Networking for Ollama (Your LLM)
 
@@ -61,7 +61,7 @@ call (`LLM_PROVIDER=auto`, default) — not just a single pick:
    backend/.env…"*.
 
 So "adding a fallback" is just: paste another key into `.env`, `docker compose up -d api
-celery_worker`, done — no code change, and it's used automatically the moment Ollama or an
+celery_worker celery_worker_light`, done — no code change, and it's used automatically the moment Ollama or an
 earlier-in-line key fails. Pin a single backend explicitly with
 `LLM_PROVIDER=openai|anthropic|xai|deepseek|ollama|custom` if you want to force exactly one with
 no fallback (debugging only). See [ai-backend.md](../docs/02-architecture/ai-backend.md) for the
@@ -74,7 +74,7 @@ Embeddings follow the same chain (only OpenAI offers an embedding API among thes
 
 Two layers, both already wired in `docker-compose.yml`:
 
-1. **`restart: unless-stopped`** on every long-running service (postgres, redis, celery_worker, api, autoheal). A container that crashes or exits, e.g. the worker OOM-killed by a 700-page book (exit 137), restarts automatically; queued uploads resume.
+1. **`restart: unless-stopped`** on every long-running service (postgres, redis, celery_worker, celery_worker_light, api, autoheal). A container that crashes or exits, e.g. the worker OOM-killed by a 700-page book (exit 137), restarts automatically; queued uploads resume.
 2. **`autoheal` watchdog** (`willfarrell/autoheal`, Docker socket mounted): restarts any container labeled `autoheal=true` (api, postgres, redis) whose healthcheck turns **unhealthy**: the "running but hung" case that restart policies can't see.
 
 Neither mechanism touches data volumes. A deliberate `docker compose down` (or stopping the LAN script) is final: nothing restarts after that.
@@ -120,3 +120,23 @@ The frontend-build step only needs re-running when you change UI code.
 - Port 8000 conflict: make sure no host uvicorn is running.
 
 This is the productionized "my computer = server" experience you asked for. All non-LLM components are now first-class container citizens, the async path is hardened for concurrency, and the door is open for any LLM provider later.
+
+## Celery queue split
+
+`celery_worker` consumes only `ingest` (`process_ingestion` and
+`reconstruct_reading_order`). `celery_worker_light` uses the same worker image,
+environment and storage, and consumes the light/default queue named `celery`
+(article imports, embeddings, section summaries and figure descriptions). The
+original `celery` name is retained so queued messages survive deployment; old
+PDF jobs in that backlog temporarily run on the light worker.
+
+`LIGHT_WORKER_CONCURRENCY` defaults to `2`; `LIGHT_WORKER_MEM_LIMIT` defaults to
+`2G`. `WORKER_MEM_LIMIT` still caps the ingest worker (Compose defaults: `7G`
+production, `12G` development). Production ingest concurrency stays `2`;
+development keeps Celery's existing automatic concurrency. Backend/both deploys
+build and update `api`, `celery_worker` and `celery_worker_light` together.
+
+Startup recovery restores only messages for the restarting worker's queue;
+only the ingest worker sweeps extraction scratch directories. During migration,
+an old PDF running from `celery` still shares scratch storage with ingest, so
+ingest-worker restarts can affect that legacy extraction.
