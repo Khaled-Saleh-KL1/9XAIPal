@@ -2,6 +2,7 @@
 import base64
 import json
 from unittest.mock import patch
+from celery.exceptions import Ignore, Reject
 from uuid import uuid4
 
 import pytest
@@ -21,9 +22,6 @@ def broker():
         client.delete("ingest", "celery")
         yield channel, client
         client.delete("ingest", "celery")
-        # Receipts are unique per test delivery; never delete other receipts.
-        for key in client.scan_iter("9xaipal:forward:test-M2-*"):
-            client.delete(key)
 
 
 def _decode(payload):
@@ -34,7 +32,7 @@ def _decode(payload):
 
 @pytest.mark.parametrize("name", ["process_ingestion", "reconstruct_reading_order"])
 @pytest.mark.parametrize("source", ["queued", "restored"])
-def test_light_forwards_heavy_delivery_once_without_work(name, source, broker, db_session_sync, tmp_path, monkeypatch):
+def test_light_replaces_heavy_delivery_without_work(name, source, broker, db_session_sync, tmp_path, monkeypatch):
     channel, client = broker
     task = getattr(tasks, name)
     doc, job = uuid4(), uuid4()
@@ -60,9 +58,14 @@ def test_light_forwards_heavy_delivery_once_without_work(name, source, broker, d
          patch.object(tasks, "sync_session") as session, \
          patch.object(tasks.sync_engine, "dispose") as dispose:
         for redelivered in (False, True):
-            result = task.apply(args=args, kwargs=kwargs, task_id=task_id,
-                                delivery_info={"redelivered": redelivered}).get()
-            assert result["status"] == "forwarded"
+            task.push_request(id=task_id, args=args, kwargs=kwargs, retries=0,
+                              called_directly=False, is_eager=False,
+                              delivery_info={"redelivered": redelivered})
+            try:
+                with pytest.raises(Ignore):
+                    task.run(*args, **kwargs)
+            finally:
+                task.pop_request()
         pipeline.assert_not_called()
         reorder.assert_not_called()
         session.assert_not_called()
@@ -70,13 +73,12 @@ def test_light_forwards_heavy_delivery_once_without_work(name, source, broker, d
     assert list(tmp_path.iterdir()) == []
     assert db_session_sync.execute(text("SELECT status FROM ingestion_jobs WHERE id=:id"), {"id": job}).scalar_one() == before
     assert db_session_sync.execute(text("SELECT status FROM documents WHERE id=:id"), {"id": doc}).scalar_one() == "queued"
-    assert client.llen("ingest") == 1
+    assert client.llen("ingest") == 2
     forwarded, forwarded_args, forwarded_kwargs = _decode(client.rpop("ingest"))
     assert forwarded["headers"]["task"] == task.name
-    # A light-task result must not overwrite the heavy execution result.
-    assert forwarded["headers"]["id"] != task_id
+    # Celery replacement retains result identity and the original canvas.
+    assert forwarded["headers"]["id"] == task_id
     assert forwarded_args == args and forwarded_kwargs == kwargs
-    client.delete(f"9xaipal:forward:{task_id}:0")
 
 
 def test_ingest_role_runs_pipeline(broker, db_session_sync, tmp_path, monkeypatch):
@@ -85,6 +87,7 @@ def test_ingest_role_runs_pipeline(broker, db_session_sync, tmp_path, monkeypatc
     monkeypatch.setattr(tasks, "check_disk_headroom", lambda: None)
     (tmp_path / "x.pdf").write_bytes(b"%PDF-")
     doc, job = uuid4(), uuid4()
+    _insert_document_and_job(db_session_sync, doc, job)
     with patch.object(tasks, "run_pipeline_sync") as pipeline:
         result = tasks.process_ingestion.apply(args=[str(doc), str(job), "x.pdf"]).get()
     pipeline.assert_called_once()
@@ -93,10 +96,11 @@ def test_ingest_role_runs_pipeline(broker, db_session_sync, tmp_path, monkeypatc
     assert broker[1].llen("ingest") == 0
 
 
-def test_ingest_role_reconstructs(broker, monkeypatch):
+def test_ingest_role_reconstructs(broker, db_session_sync, monkeypatch):
     from unittest.mock import AsyncMock
     monkeypatch.setenv("WORKER_ROLE", "ingest")
     doc = uuid4()
+    _insert_document_and_job(db_session_sync, doc, uuid4())
     with patch.object(tasks, "reconstruct_reading_order_for_document", new_callable=AsyncMock, return_value={"reordered": 2}) as reorder:
         result = tasks.reconstruct_reading_order.apply(args=[str(doc)]).get()
     assert reorder.await_args.args[1] == doc
@@ -111,7 +115,13 @@ def test_forwarded_deleted_document_keeps_pipeline_guard(broker, tmp_path, monke
     (tmp_path / "x.pdf").write_bytes(b"%PDF-")
     monkeypatch.setenv("WORKER_ROLE", "light")
     task_id = f"test-M2-{uuid4()}"
-    tasks.process_ingestion.apply(args=[str(uuid4()), str(uuid4()), "x.pdf"], task_id=task_id).get()
+    args = [str(uuid4()), str(uuid4()), "x.pdf"]
+    tasks.process_ingestion.push_request(id=task_id, args=args, kwargs={}, retries=0, called_directly=False)
+    try:
+        with pytest.raises(Ignore):
+            tasks.process_ingestion.run(*args)
+    finally:
+        tasks.process_ingestion.pop_request()
     message, args, kwargs = _decode(broker[1].rpop("ingest"))
     monkeypatch.setenv("WORKER_ROLE", "ingest")
     with patch.object(pipeline_sync, "extract_pdf_sync") as extract:
@@ -144,7 +154,7 @@ def test_failed_forward_is_requeued_and_can_be_published_later(broker, monkeypat
     monkeypatch.setenv("WORKER_ROLE", "light")
     task_id = f"test-M2-{uuid4()}"
     args = [str(uuid4()), str(uuid4()), "x.pdf"]
-    tasks.process_ingestion.push_request(id=task_id, args=args, kwargs={}, retries=0)
+    tasks.process_ingestion.push_request(id=task_id, args=args, kwargs={}, retries=0, called_directly=False)
     try:
         with patch.object(tasks.process_ingestion, "apply_async", side_effect=RuntimeError("broker unavailable")):
             with pytest.raises(Reject) as exc:
@@ -154,7 +164,12 @@ def test_failed_forward_is_requeued_and_can_be_published_later(broker, monkeypat
         assert broker[1].llen("ingest") == 0
     finally:
         tasks.process_ingestion.pop_request()
-    assert tasks.process_ingestion.apply(args=args, task_id=task_id).get()["status"] == "forwarded"
+    tasks.process_ingestion.push_request(id=task_id, args=args, kwargs={}, retries=0, called_directly=False)
+    try:
+        with pytest.raises(Ignore):
+            tasks.process_ingestion.run(*args)
+    finally:
+        tasks.process_ingestion.pop_request()
     assert broker[1].llen("ingest") == 1
 
 
@@ -163,9 +178,9 @@ def test_connection_failure_before_publication_is_requeued(broker, monkeypatch):
     monkeypatch.setenv("WORKER_ROLE", "light")
     task_id = f"test-M2-{uuid4()}"
     args = [str(uuid4()), str(uuid4()), "x.pdf"]
-    tasks.process_ingestion.push_request(id=task_id, args=args, kwargs={}, retries=0)
+    tasks.process_ingestion.push_request(id=task_id, args=args, kwargs={}, retries=0, called_directly=False)
     try:
-        with patch.object(celery_app, "connection_for_write", side_effect=RuntimeError("cannot connect")):
+        with patch.object(celery_app, "producer_or_acquire", side_effect=RuntimeError("cannot connect")):
             with pytest.raises(Reject) as exc:
                 tasks.process_ingestion.run(*args)
         assert exc.value.requeue is True
@@ -174,22 +189,52 @@ def test_connection_failure_before_publication_is_requeued(broker, monkeypatch):
         tasks.process_ingestion.pop_request()
 
 
-def test_concurrent_redeliveries_publish_only_one_ingest_run(broker, monkeypatch, tmp_path):
+def test_publish_reply_loss_reconnect_duplicates_are_harmless(db_session_sync, tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
-    monkeypatch.setenv("WORKER_ROLE", "light")
-    task_id = f"test-M2-{uuid4()}"
-    args = [str(uuid4()), str(uuid4()), "x.pdf"]
-    def forward(_):
-        return tasks.process_ingestion.apply(args=args, task_id=task_id).get()
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        assert all(r["status"] == "forwarded" for r in pool.map(forward, range(2)))
-    assert broker[1].llen("ingest") == 1
-    monkeypatch.setenv("WORKER_ROLE", "ingest")
-    monkeypatch.setattr(tasks, "documents_dir", lambda: tmp_path)
-    monkeypatch.setattr(tasks, "check_disk_headroom", lambda: None)
-    (tmp_path / "x.pdf").write_bytes(b"%PDF-")
-    message, forwarded_args, kwargs = _decode(broker[1].rpop("ingest"))
-    with patch.object(tasks, "run_pipeline_sync") as pipeline:
-        tasks.process_ingestion.apply(args=forwarded_args, kwargs=kwargs, task_id=message["headers"]["id"]).get()
-    pipeline.assert_called_once()
-    assert broker[1].llen("ingest") == 0
+    from threading import Event
+    from kombu import Connection
+    from kombu.transport.redis import Channel
+    import redis
+    doc, job = uuid4(), uuid4()
+    _insert_document_and_job(db_session_sync, doc, job)
+    broker_url = "redis://host.docker.internal:55440/14"
+    prefix = f"m3-reconnect-{uuid4()}:"
+    client = redis.Redis.from_url(broker_url)
+    args = [str(doc), str(job), "x.pdf"]
+    original_put = Channel._put
+    attempts = []
+    def ambiguous(channel, queue, message, **kwargs):
+        original_put(channel, queue, message, **kwargs)
+        attempts.append(message["headers"]["id"])
+        if len(attempts) == 1:
+            raise redis.ConnectionError("lost reply after Redis LPUSH")
+    started, finish = Event(), Event()
+    def pipeline(*args, **kwargs):
+        started.set()
+        assert finish.wait(10)
+    try:
+        with Connection(broker_url, transport_options={"global_keyprefix": prefix}) as connection:
+            with patch.object(Channel, "_put", ambiguous):
+                tasks.process_ingestion.apply_async(args=args, queue="ingest", connection=connection, retry_policy={"interval_start": 0, "interval_step": 0, "interval_max": 0})
+        assert len(attempts) == 2
+        assert client.llen(prefix + "ingest") == 2
+        candidates = [_decode(client.rpop(prefix + "ingest")) for _ in range(2)]
+        monkeypatch.setenv("WORKER_ROLE", "ingest")
+        monkeypatch.setattr(tasks, "documents_dir", lambda: tmp_path)
+        monkeypatch.setattr(tasks, "check_disk_headroom", lambda: None)
+        (tmp_path / "x.pdf").write_bytes(b"%PDF-")
+        with patch.object(tasks, "run_pipeline_sync", side_effect=pipeline) as run:
+            with ThreadPoolExecutor() as pool:
+                first = pool.submit(tasks.process_ingestion.run, *candidates[0][1])
+                assert started.wait(10)
+                try:
+                    with pytest.raises(Ignore):
+                        tasks.process_ingestion.run(*candidates[1][1])
+                finally:
+                    finish.set()
+                first.result()
+            assert run.call_count == 1
+    finally:
+        keys = list(client.scan_iter(prefix + "*"))
+        if keys:
+            client.delete(*keys)

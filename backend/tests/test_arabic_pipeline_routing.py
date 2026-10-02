@@ -251,6 +251,10 @@ def test_imported_url_pdf_reaches_the_shared_classifier(
     monkeypatch.setattr(pipeline_sync, "classify_document", classifier)
     document_id, job_id = _seed(db_session_sync)
 
+    from app.workers import tasks
+    publish = MagicMock()
+    monkeypatch.setattr(tasks.process_ingestion, "apply_async", publish)
+    monkeypatch.setenv("WORKER_ROLE", "light")
     is_article = pipeline_sync.run_article_pipeline_sync(
         db_session_sync,
         document_id=document_id,
@@ -259,6 +263,13 @@ def test_imported_url_pdf_reaches_the_shared_classifier(
     )
 
     assert is_article is False
+    classifier.assert_not_called()
+    mocks.resolver.assert_not_called()
+    publish.assert_called_once_with(args=[str(document_id), str(job_id), f"{document_id}.pdf"], queue="ingest")
+    monkeypatch.setenv("WORKER_ROLE", "ingest")
+    monkeypatch.setattr(tasks, "documents_dir", lambda: documents)
+    monkeypatch.setattr(tasks, "check_disk_headroom", lambda: None)
+    tasks.process_ingestion.apply(args=publish.call_args.kwargs["args"]).get()
     classifier.assert_called_once_with(documents / f"{document_id}.pdf")
     mocks.resolver.assert_called_once()
     mocks.arabic_extractor.assert_not_called()

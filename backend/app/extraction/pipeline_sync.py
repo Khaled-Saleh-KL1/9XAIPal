@@ -1,6 +1,8 @@
 """Synchronous extraction pipeline: PDF -> MinerU -> structural chunks -> assets -> bulk db injection."""
 
+import hashlib
 import json
+from functools import wraps
 import uuid
 from pathlib import Path
 from uuid import UUID
@@ -1027,6 +1029,16 @@ def _adopt_pdf_from_url(
     pre-existing behavior by defaulting to "paper" here, exactly as before
     this parameter existed.
     """
+    # Concurrent source deliveries may both finish their fetch before the
+    # first adoption commits. Serialize the row transition and check again.
+    existing = session.execute(
+        text("SELECT filename, doc_kind FROM documents WHERE id=:id FOR UPDATE"),
+        {"id": document_id},
+    ).mappings().first()
+    if existing and existing["filename"] == f"{document_id}.pdf" and (documents_dir() / existing["filename"]).is_file():
+        session.commit()
+        return
+
     ensure_storage_dirs()
 
     # documents_dir() name is derived from the id (not a fresh uuid) so the
@@ -1066,7 +1078,51 @@ def _adopt_pdf_from_url(
     )
 
 
+def _publish_adopted_pdf(document_id: UUID, job_id: UUID, filename: str) -> None:
+    """An ambiguous publish must retain the article's late-ack delivery.
+
+    Adoption is durable. A repeated publication is safe at the consumer and
+    must not mark a job failed while its first heavy delivery is extracting.
+    """
+    from celery.exceptions import Reject
+    from app.workers.tasks import process_ingestion
+
+    try:
+        process_ingestion.apply_async(
+            args=[str(document_id), str(job_id), filename], queue="ingest",
+        )
+    except Exception as exc:
+        raise Reject(str(exc), requeue=True) from exc
+
+
+def _serialized_url_import(function):
+    """Only one source delivery may fetch/adopt/fail a document at a time.
+
+    The lock uses a separate connection so existing pipeline commits keep
+    their semantics. Death releases it; the next source rechecks adoption.
+    """
+    @wraps(function)
+    def run(session, *, document_id, **kwargs):
+        from celery.exceptions import Reject
+        key = int.from_bytes(hashlib.sha256(f"article:{document_id}".encode()).digest()[:8], "big", signed=True)
+        connection = None
+        try:
+            try:
+                connection = session.get_bind().connect()
+                connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": key})
+                connection.commit()
+            except Exception as exc:
+                raise Reject(f"article ownership failed: {exc}", requeue=True) from exc
+            return function(session, document_id=document_id, **kwargs)
+        finally:
+            if connection is not None:
+                connection.invalidate()
+                connection.close()
+    return run
+
+
 @tracing.traced("ingest.article", tracing.CHAIN)
+@_serialized_url_import
 def run_article_pipeline_sync(
     session: Session,
     *,
@@ -1105,6 +1161,26 @@ def run_article_pipeline_sync(
         fetch_resource,
         try_tavily_extract_fallback,
     )
+
+    # A source late-ack redelivery can arrive while ingest is reading the
+    # adopted PDF. Reuse the committed row/file before any fetch or status
+    # write. The job's execution claim makes repeated publication harmless.
+    adopted = session.execute(
+        text("SELECT d.filename, d.doc_kind, j.execution_state "
+             "FROM documents d JOIN ingestion_jobs j ON j.document_id=d.id "
+             "WHERE d.id=:document_id AND j.id=:job_id"),
+        {"document_id": document_id, "job_id": job_id},
+    ).mappings().first()
+    session.commit()
+    if adopted and adopted["doc_kind"] in ("book", "paper") and adopted["filename"].endswith(".pdf"):
+        if adopted["execution_state"] in ("complete", "failed"):
+            return False
+        if (documents_dir() / adopted["filename"]).is_file():
+            _publish_adopted_pdf(document_id, job_id, adopted["filename"])
+            return False
+        if adopted["execution_state"] == "running":
+            from celery.exceptions import Reject
+            raise Reject("adopted PDF missing during heavy execution", requeue=True)
 
     # What the link turned out to be decides which pipeline runs. A PDF URL
     # (an arXiv link, a journal's "Download PDF") is one of the most natural
@@ -1156,18 +1232,7 @@ def run_article_pipeline_sync(
         raise e
 
     if resource is not None and resource.is_pdf:
-        # Adoption has committed the PDF filename/kind and written its bytes.
-        # URL imports run on light; extraction must run on ingest instead.
-        from app.workers.tasks import process_ingestion
-
-        try:
-            process_ingestion.apply_async(
-                args=[str(document_id), str(job_id), f"{document_id}.pdf"],
-                queue="ingest",
-            )
-        except Exception as e:
-            _handle_ingestion_failure(session, document_id, job_id, e)
-            raise
+        _publish_adopted_pdf(document_id, job_id, f"{document_id}.pdf")
         return False
 
     try:
