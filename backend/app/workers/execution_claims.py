@@ -30,8 +30,9 @@ class ExecutionClaim:
     renew_interval = 60
     heartbeat_timeout = 120
 
-    def __init__(self, kind, row_id, delivery_id):
+    def __init__(self, kind, row_id, delivery_id, generation=0):
         self.kind, self.row_id, self.delivery_id = kind, row_id, delivery_id
+        self.generation = generation
         self.table = "ingestion_jobs" if kind == "ingestion" else "documents"
         self.prefix = "" if kind == "ingestion" else "reading_order_"
         self.token = uuid4()
@@ -58,12 +59,18 @@ class ExecutionClaim:
             locked = self.connection.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": self.lock_key}).scalar_one()
             self.connection.commit()
             if not locked:
-                self._ignore("live owner")
+                raise Reject("live execution owner", requeue=True)
             if self.kind == "reading_order":
                 seen = self.connection.execute(text("SELECT 1 FROM reading_order_executions WHERE document_id=:id AND task_id=:delivery"), {"id": self.row_id, "delivery": self.delivery_id}).first()
                 self.connection.commit()
                 if seen:
                     self._ignore("finished delivery")
+            if self.kind == "ingestion":
+                current = self.connection.execute(text("SELECT execution_generation FROM ingestion_jobs WHERE id=:id"), {"id": self.row_id}).scalar()
+                seen = self.connection.execute(text("SELECT 1 FROM ingestion_executions WHERE job_id=:id AND generation=:generation AND task_id=:delivery"), {"id": self.row_id, "generation": self.generation, "delivery": self.delivery_id}).first()
+                self.connection.commit()
+                if current != self.generation or seen:
+                    self._ignore("obsolete generation or finished delivery")
             row = self.connection.execute(text(f"""
                 UPDATE {self.table} SET {p}claim_token=:token,
                     {p}claim_expires_at=clock_timestamp()+make_interval(secs => :lease),
@@ -73,13 +80,17 @@ class ExecutionClaim:
                         THEN NULL ELSE {p}execution_error END,
                     {p}execution_state='running', {p}execution_task_id=:delivery
                 WHERE id=:id
+                  AND {"execution_generation=:generation" if self.kind == "ingestion" else "TRUE"}
                   AND ({p}execution_state IS NULL OR {p}execution_state='pending'
                        OR ({p}execution_state IN ('running','finalizing') AND {p}claim_expires_at < clock_timestamp())
                        OR (:is_reading AND {p}execution_state IN ('complete','failed')
+                           AND {p}execution_task_id IS DISTINCT FROM :delivery)
+                       OR (NOT :is_reading AND {p}execution_state IN ('complete','failed')
+                           AND ({p}execution_result IS NOT NULL OR {p}execution_error IS NOT NULL)
                            AND {p}execution_task_id IS DISTINCT FROM :delivery))
                 RETURNING id, {p}execution_result, {p}execution_error
             """), {"token": self.token, "lease": self.lease_seconds, "id": self.row_id,
-                     "delivery": self.delivery_id, "is_reading": self.kind == "reading_order"}).mappings().first()
+                     "delivery": self.delivery_id, "generation": self.generation, "is_reading": self.kind == "reading_order"}).mappings().first()
             self.connection.commit()
             if row is None:
                 state = self.connection.execute(text(f"SELECT {p}execution_state FROM {self.table} WHERE id=:id"), {"id": self.row_id}).scalar()
@@ -170,6 +181,8 @@ class ExecutionClaim:
             updated = self.connection.execute(text(f"UPDATE {self.table} SET {p}execution_state=:state, {p}claim_token=NULL, {p}claim_expires_at=NULL WHERE id=:id AND {p}claim_token=:token RETURNING id"), {"id": self.row_id, "token": self.token, "state": state}).first()
             if updated is not None and self.kind == "reading_order" and state in ("complete", "failed"):
                 self.connection.execute(text("INSERT INTO reading_order_executions (document_id, task_id, status) VALUES (:id, :delivery, :state) ON CONFLICT DO NOTHING"), {"id": self.row_id, "delivery": self.delivery_id, "state": state})
+            if updated is not None and self.kind == "ingestion" and state in ("complete", "failed"):
+                self.connection.execute(text("INSERT INTO ingestion_executions (job_id, generation, task_id) VALUES (:id, :generation, :delivery) ON CONFLICT DO NOTHING"), {"id": self.row_id, "generation": self.generation, "delivery": self.delivery_id})
             self.connection.commit()
             self.finished = True
             return updated is not None
@@ -238,7 +251,8 @@ def guarded_heavy(kind):
             forward_heavy_task(task)
             sync_engine.dispose()
             row_id = UUID(args[0] if args else kwargs["job_id"]) if kind == "ingestion" else UUID(document_id)
-            claim = ExecutionClaim(kind, row_id, task.request.id or str(uuid4()))
+            generation = kwargs.pop("execution_generation", 0) if kind == "ingestion" else 0
+            claim = ExecutionClaim(kind, row_id, task.request.id or str(uuid4()), generation)
             if task.request.called_directly:
                 with claim:
                     result = function(task, document_id, *args, **kwargs)

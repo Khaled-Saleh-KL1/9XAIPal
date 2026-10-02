@@ -110,7 +110,7 @@ def _restore_interrupted_tasks(sender=None, **_kwargs) -> None:
             if restored:
                 logger.warning(
                     f"[celery] restored {restored} task(s) a previous worker was running when it stopped; "
-                    "they start over now instead of after the broker's visibility timeout"
+                    "execution admission may wait for the outstanding claim lease"
                 )
     except Exception as exc:  # never keep a worker from starting over this
         logger.exception(f"[celery] could not restore interrupted tasks: {exc}")

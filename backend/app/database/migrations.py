@@ -75,6 +75,13 @@ async def _ensure_recent_columns() -> None:
             completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             PRIMARY KEY (document_id, task_id)
         )""",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_generation INTEGER NOT NULL DEFAULT 0",
+        """CREATE TABLE IF NOT EXISTS ingestion_executions (
+            job_id UUID NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+            generation INTEGER NOT NULL,
+            task_id TEXT NOT NULL,
+            PRIMARY KEY (job_id, generation, task_id)
+        )""",
         # Durable heavy-work claims, separate from pipeline progress.
         "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_result JSONB",
         "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_error TEXT",

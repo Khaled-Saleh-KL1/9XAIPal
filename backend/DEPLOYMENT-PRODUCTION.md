@@ -214,8 +214,12 @@ hour): the document sat at "extracting" for an hour, then started over (verified
 its message in `unacked`). `core/celery_app.py::_restore_interrupted_tasks` now runs on
 `worker_ready` and hands every unacked message straight back to the queue — the same thing kombu
 does on a warm shutdown, which a container stop never gets for a long task. The interrupted
-document starts over within seconds of the new worker coming up; the reader sees its progress bar
-restart, nothing else. Recovery is scoped to the starting worker's consumed queue, so starting one worker
+message is restored within seconds of the new worker coming up. Execution admission is
+separate: the restored delivery is retained/requeued until the dead owner's outstanding
+lease expires, at most 600 seconds (ten minutes) after its last renewal. During this wait
+the document still shows its last status (for example "extracting") and progress; the
+progress bar restarts when extraction is admitted. This delay is expected, not a lost job.
+Recovery is scoped to the starting worker's consumed queue, so starting one worker
 does not restore the other worker's active tasks.
 
 **The visibility timeout is now 7 days, and there are no task time limits — on purpose.** The
@@ -513,8 +517,9 @@ reading-order reconstruction by document id. Execution state is separate from
 pipeline progress. A token and a 600-second lease are renewed every 60 seconds
 by a heartbeat thread, including during long OCR calls. A session advisory lock
 also fences live owners across lease expiry. An independent watchdog terminates
-a worker if renewal stalls for 120 seconds, well before its lease expires. Duplicate deliveries are logged,
-traced and acknowledged without changing status or running continuations.
+a worker if renewal stalls for 120 seconds, well before its lease expires. Live-owner deliveries are rejected/requeued so a restored reservation remains recoverable
+if its owner later dies. Finished delivery ids are logged, traced and acknowledged without
+re-extraction. Distinct ingestion delivery ids replay the saved outcome for their own canvas.
 Heavy tasks disable Celery's pre-body `STARTED` result write so a dropped
 failed duplicate cannot overwrite the original failure; Postgres still reports
 pipeline progress. Other task settings and retry budgets remain unchanged.
@@ -524,19 +529,25 @@ A crash in between replays the saved result or error without re-extraction,
 then resumes callbacks/chains/chords/errbacks. Continuation publication remains
 at least once across ambiguous broker replies; exactly-once Redis publication
 is not claimed.
-Completed ingestion jobs and completed reading-order delivery ids remain
-suppressed; a fresh reading-order request may execute after the previous one.
+Finished ingestion delivery ids remain suppressed within a retry generation. Deliberate
+Arabic confirmation advances the generation and clears ownership/outcome transactionally;
+old-generation deliveries cannot execute the confirmed job. A distinct ingestion source
+replays the saved result/error without heavy work. Completed reading-order delivery ids
+remain suppressed; a fresh reading-order request may execute after the previous one.
 A crashed owner's restored delivery is requeued until lease expiry, then
 reclaims the job. Database admission/finalization failures retain the delivery;
 Heavy and article tasks reject late-ack work on prefork child loss;
 loss of heartbeat fencing terminates the worker process so it cannot keep
 writing without ownership. Late-ack recovery resumes the job.
 
-URL source deliveries hold a document advisory lock across fetch, adoption
-and failure handling. A concurrent delivery waits, then rechecks adoption, so
+URL source deliveries hold a document advisory lock on the same pinned connection used
+for every persistence statement across fetch, adoption and failure handling. SQL verifies
+that physical connection still owns the lock; connection loss rejects/requeues the source
+without failure cleanup or an HTML persistence tail. A concurrent delivery waits, then rechecks adoption, so
 its delayed HTML response or fetch failure cannot clean up an adopted PDF.
-PDF URL imports commit adoption and publish the same document/job ids to
-`ingest`. Redelivery reuses the committed PDF before fetching or changing
+PDF URL tasks commit adoption and use native `Task.replace` to transfer their id and
+callbacks/errbacks/chains/chords to `process_ingestion` on `ingest`. The source cannot
+complete its canvas before extraction. Direct pipeline callers publish the same document/job ids. Redelivery reuses the committed PDF before fetching or changing
 status. Concurrent adoption locks the document row and preserves existing
 bytes. An ambiguous publication requeues the article instead of failing an
 already-running ingest job. HTML article processing stays on light.
@@ -565,3 +576,27 @@ execution does not duplicate migrated work. The restored full deploy restarts
 the stack; current full deploys also remove Compose orphans.
 
 The helper removes the ingest exchange binding only after all queued and reserved messages have moved.
+
+Rollback to a pre-split revision keeps a compatibility consumer: the workflow saves the
+current claim/forwarding/compatibility modules outside the rsync target, restores the old
+tree, then runs `scripts/prepare-celery-rollback.py` before rebuilding. The old worker
+consumes `celery` with current Postgres fencing, outcome replay and retry generations;
+its original extraction code stays in use. Adopted PDF source copies reuse the committed
+file and replace onto `celery`. Queued and reserved duplicates remain safe, including
+copies with different source ids/canvases and already-finished jobs. The API's deliberate
+confirmation retry also retains generation advancement. Overlay failure aborts rollback
+before any consumer starts. This is a compatibility rollback, not a byte-identical old tree.
+
+URL PDF storage uses a private staged write followed by an atomic no-overwrite link.
+The first complete canonical file is immutable; stale sources cannot truncate it, and
+raw storage uses those same winning bytes. Connection loss during adoption therefore
+cannot corrupt a PDF being extracted by an adopted owner. Abandoned private stage files
+can remain after a process crash; they are never admitted as canonical PDFs.
+
+Compatibility rollback carries queue-only schema DDL into API migrations and checks it
+before worker startup, even if the failed deployment never reached migrations. Schema
+failure stops the worker. Queue-aware rollback revisions retain their separate roles,
+current guards and native article handoff without wrapping guards twice. Early split
+revisions also receive queue-scoped recovery and explicit roles. English/PDF extraction
+functions are retained from the restored revision; only the URL adoption/handoff phase
+is refreshed for queue-aware revisions.

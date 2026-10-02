@@ -1,6 +1,8 @@
 """Synchronous extraction pipeline: PDF -> MinerU -> structural chunks -> assets -> bulk db injection."""
 
 import hashlib
+import os
+import tempfile
 import json
 from functools import wraps
 import uuid
@@ -11,7 +13,7 @@ from typing import Callable, Optional
 import re
 import shutil
 
-from sqlalchemy import text, Table, MetaData, Column, String, Integer, JSON, insert
+from sqlalchemy import event, text, Table, MetaData, Column, String, Integer, JSON, insert
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PG_UUID
 from sqlalchemy.orm import Session
 
@@ -1011,6 +1013,29 @@ def _pdf_name_from_url(url: str) -> str:
     return name[:500]
 
 
+def _store_url_pdf_once(directory: Path, filename: str, pdf: bytes) -> Path:
+    """Publish complete immutable bytes without ever truncating an adopted file.
+
+    A stale source can finish its private write after losing its DB connection.
+    Atomic no-overwrite linking keeps those bytes away from another owner's PDF.
+    """
+    destination = directory / filename
+    fd, temporary = tempfile.mkstemp(prefix=".url-pdf-", dir=directory)
+    os.close(fd)
+    staged = Path(temporary)
+    try:
+        staged.write_bytes(pdf)
+        with staged.open("rb") as stored:
+            os.fsync(stored.fileno())
+        try:
+            os.link(staged, destination)
+        except FileExistsError:
+            pass
+        return destination
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def _adopt_pdf_from_url(
     session: Session, *, document_id: UUID, url: str, pdf: bytes, kind: Optional[str] = None,
 ) -> None:
@@ -1044,8 +1069,12 @@ def _adopt_pdf_from_url(
     # documents_dir() name is derived from the id (not a fresh uuid) so the
     # path stays reconstructible from the row alone, the way assets_dir()
     # already keys the raw copy by document id.
-    (documents_dir() / f"{document_id}.pdf").write_bytes(pdf)
-    (assets_dir() / f"{document_id}.pdf").write_bytes(pdf)
+    path = _store_url_pdf_once(documents_dir(), f"{document_id}.pdf", pdf)
+    # The first fully-written canonical file wins even if its source died
+    # before committing adoption. Raw storage must use those same bytes.
+    pdf = path.read_bytes()
+    if assets_dir() != documents_dir():
+        _store_url_pdf_once(assets_dir(), f"{document_id}.pdf", pdf)
 
     # Clamped, not just defaulted. Every other doc_kind write is filtered
     # through a whitelist (repositories/documents.py's create_document, and
@@ -1096,29 +1125,67 @@ def _publish_adopted_pdf(document_id: UUID, job_id: UUID, filename: str) -> None
 
 
 def _serialized_url_import(function):
-    """Only one source delivery may fetch/adopt/fail a document at a time.
+    """Pin article writes to the session that owns the advisory lock.
 
-    The lock uses a separate connection so existing pipeline commits keep
-    their semantics. Death releases it; the next source rechecks adoption.
+    Commits retain a session lock. A dead connection cannot silently reconnect
+    and write as a stale source: every SQL statement verifies lock ownership on
+    that same physical connection, including failure cleanup after rollback.
     """
     @wraps(function)
     def run(session, *, document_id, **kwargs):
         from celery.exceptions import Reject
         key = int.from_bytes(hashlib.sha256(f"article:{document_id}".encode()).digest()[:8], "big", signed=True)
         connection = None
+        check = None
         try:
+            session.commit()
             try:
                 connection = session.get_bind().connect()
                 connection.execute(text("SELECT pg_advisory_lock(:key)"), {"key": key})
                 connection.commit()
             except Exception as exc:
                 raise Reject(f"article ownership failed: {exc}", requeue=True) from exc
-            return function(session, document_id=document_id, **kwargs)
+
+            def check(conn, *unused):
+                try:
+                    owned = conn.exec_driver_sql(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' "
+                        "AND pid=pg_backend_pid() AND classid=%s AND objid=%s AND granted)",
+                        ((key >> 32) & 0xffffffff, key & 0xffffffff),
+                    ).scalar_one()
+                    if not owned:
+                        raise RuntimeError("article advisory lock lost")
+                except Exception as exc:
+                    raise Reject(f"article ownership lost: {exc}", requeue=True) from exc
+
+            event.listen(connection, "before_execute", check)
+            with Session(bind=connection) as owned_session:
+                owned_session.info["article_owner_check"] = lambda: owned_session.execute(text("SELECT 1"))
+                return function(owned_session, document_id=document_id, **kwargs)
         finally:
             if connection is not None:
+                if check is not None:
+                    event.remove(connection, "before_execute", check)
                 connection.invalidate()
                 connection.close()
     return run
+
+
+def _check_article_owner(session):
+    session.info["article_owner_check"]()
+
+
+def _fail_article(session, document_id, job_id, error):
+    """Never let an adopted source clean the heavy consumer's document."""
+    from celery.exceptions import Reject
+    session.rollback()
+    _check_article_owner(session)
+    row = session.execute(text("SELECT doc_kind FROM documents WHERE id=:id FOR UPDATE"), {"id": document_id}).first()
+    if row is None or row.doc_kind != "article":
+        session.rollback()
+        raise Reject("article already adopted or removed", requeue=True) from error
+    # The source's advisory lock remains held across the cleanup commits.
+    _handle_ingestion_failure(session, document_id, job_id, error)
 
 
 @tracing.traced("ingest.article", tracing.CHAIN)
@@ -1130,6 +1197,7 @@ def run_article_pipeline_sync(
     job_id: UUID,
     url: str,
     kind: Optional[str] = None,
+    pdf_handoff: Optional[Callable] = None,
 ) -> bool:
     """Fetch and extract a web article, then hand off to the same
     chunk/asset/dispatch tail the PDF pipeline uses (_finish_ingestion).
@@ -1162,6 +1230,8 @@ def run_article_pipeline_sync(
         try_tavily_extract_fallback,
     )
 
+    handoff = pdf_handoff or _publish_adopted_pdf
+
     # A source late-ack redelivery can arrive while ingest is reading the
     # adopted PDF. Reuse the committed row/file before any fetch or status
     # write. The job's execution claim makes repeated publication harmless.
@@ -1173,10 +1243,8 @@ def run_article_pipeline_sync(
     ).mappings().first()
     session.commit()
     if adopted and adopted["doc_kind"] in ("book", "paper") and adopted["filename"].endswith(".pdf"):
-        if adopted["execution_state"] in ("complete", "failed"):
-            return False
         if (documents_dir() / adopted["filename"]).is_file():
-            _publish_adopted_pdf(document_id, job_id, adopted["filename"])
+            handoff(document_id, job_id, adopted["filename"])
             return False
         if adopted["execution_state"] == "running":
             from celery.exceptions import Reject
@@ -1202,6 +1270,7 @@ def run_article_pipeline_sync(
         try:
             resource = fetch_resource(url)
         except ArticleExtractionError as fetch_exc:
+            _check_article_owner(session)
             # Absolute last resort: every HTML-capable provider — Firecrawl,
             # CRW, and this box's own free direct fetch, in that order (see
             # article_extraction.fetch_resource) — has already failed.
@@ -1213,6 +1282,7 @@ def run_article_pipeline_sync(
             tavily_article = try_tavily_extract_fallback(url)
             if tavily_article is None:
                 raise fetch_exc  # the original, more informative failure
+        _check_article_owner(session)
         if resource is not None and resource.is_pdf:
             # final_url, not url: after a redirect the pasted link is no
             # longer where the bytes came from, and _pdf_name_from_url reads
@@ -1228,11 +1298,14 @@ def run_article_pipeline_sync(
                 kind=kind,
             )
     except Exception as e:
-        _handle_ingestion_failure(session, document_id, job_id, e)
-        raise e
+        from celery.exceptions import Ignore, Reject
+        if isinstance(e, (Ignore, Reject)):
+            raise
+        _fail_article(session, document_id, job_id, e)
+        raise
 
     if resource is not None and resource.is_pdf:
-        _publish_adopted_pdf(document_id, job_id, f"{document_id}.pdf")
+        handoff(document_id, job_id, f"{document_id}.pdf")
         return False
 
     try:
@@ -1317,5 +1390,8 @@ def run_article_pipeline_sync(
         return True
 
     except Exception as e:
-        _handle_ingestion_failure(session, document_id, job_id, e)
-        raise e
+        from celery.exceptions import Ignore, Reject
+        if isinstance(e, (Ignore, Reject)):
+            raise
+        _fail_article(session, document_id, job_id, e)
+        raise

@@ -228,7 +228,7 @@ def test_publish_reply_loss_reconnect_duplicates_are_harmless(db_session_sync, t
                 first = pool.submit(tasks.process_ingestion.run, *candidates[0][1])
                 assert started.wait(10)
                 try:
-                    with pytest.raises(Ignore):
+                    with pytest.raises(Reject):
                         tasks.process_ingestion.run(*candidates[1][1])
                 finally:
                     finish.set()

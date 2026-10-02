@@ -114,7 +114,7 @@ def _mark_document_and_job_failed(session, doc_uuid: UUID, error_message: str) -
     reject_on_worker_lost=True,
 )
 @guarded_heavy("ingestion")
-def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dict:
+def process_ingestion(self, document_id: str, job_id: str, filename: str, *, execution_generation: int = 0) -> dict:
     """Run MinerU extraction → structural chunking → asset linking pipeline synchronously."""
     logger.info(f"[celery] process_ingestion start document={document_id} job={job_id}")
     
@@ -159,6 +159,7 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dic
 
 @celery_app.task(
     name="9xaipal.process_article_ingestion",
+    track_started=False,
     bind=True,
     max_retries=0,
     acks_late=True,
@@ -186,6 +187,16 @@ def process_article_ingestion(
     doc_uuid = UUID(document_id)
     job_uuid = UUID(job_id)
 
+    def handoff(doc, job, filename):
+        from celery.exceptions import Ignore, Reject
+        signature = process_ingestion.s(str(doc), str(job), filename).set(queue="ingest")
+        try:
+            raise self.replace(signature)
+        except Ignore:
+            raise
+        except Exception as exc:
+            raise Reject(f"PDF replacement failed: {exc}", requeue=True) from exc
+
     try:
         with sync_session() as session:
             run_article_pipeline_sync(
@@ -194,6 +205,7 @@ def process_article_ingestion(
                 job_id=job_uuid,
                 url=url,
                 kind=kind,
+                pdf_handoff=handoff,
             )
     except Exception as exc:
         logger.exception(f"[celery] process_article_ingestion failed document={document_id}: {exc}")

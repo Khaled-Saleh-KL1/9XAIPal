@@ -472,6 +472,7 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     execution_error TEXT,
     execution_state TEXT,
     execution_task_id TEXT,
+    execution_generation INTEGER NOT NULL DEFAULT 0,
     claim_token UUID,
     claim_expires_at TIMESTAMPTZ,
     -- Fraction (0-1) of progress *within* the current status, e.g. pages
@@ -829,3 +830,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_members_personal
 -- applies the style field to existing caches and is a no-op before creation.
 ALTER TABLE IF EXISTS paper_references
     ADD COLUMN IF NOT EXISTS citation_style TEXT;
+
+-- Finished canvas deliveries, scoped to deliberate same-job retry generations.
+CREATE TABLE IF NOT EXISTS ingestion_executions (
+    job_id UUID NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL,
+    task_id TEXT NOT NULL,
+    PRIMARY KEY (job_id, generation, task_id)
+);

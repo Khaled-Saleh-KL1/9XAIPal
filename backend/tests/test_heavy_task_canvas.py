@@ -21,8 +21,9 @@ def wait_for(predicate, timeout=25):
     raise AssertionError("worker condition timed out")
 
 
-@pytest.mark.parametrize("fails", [False, True, "crash", "canvas-crash", "errback-crash", "chain", "chord", "duplicate-failure"])
-def test_replacement_preserves_callback_order_and_original_errback(db_session_sync, tmp_path, fails):
+@pytest.mark.parametrize("source", ["heavy", "article"])
+@pytest.mark.parametrize("fails", [False, True, "crash", "canvas-crash", "errback-crash", "chain", "chord", "duplicate-failure", "publish-reply-loss"])
+def test_replacement_preserves_callback_order_and_original_errback(db_session_sync, tmp_path, fails, source):
     from test_article_ingestion import _insert_document_and_job
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
@@ -58,6 +59,24 @@ def pipeline(*args, **kwargs):
     if fails in ('True', 'errback-crash', 'duplicate-failure'): raise RuntimeError('heavy failure')
     client.rpush(prefix+'events', 'heavy-done')
 tasks.run_pipeline_sync = pipeline
+from app.extraction import pipeline_sync as ps
+from app.services import article_extraction as ae
+ps.documents_dir = lambda: Path(directory)
+ps.assets_dir = lambda: Path(directory)
+ps.ensure_storage_dirs = lambda: None
+def fetch(url):
+    client.rpush(prefix+'fetches', url)
+    return ae.FetchedResource(content=b'%PDF-fixture', content_type='application/pdf', final_url=url)
+ae.fetch_resource = fetch
+if fails == 'publish-reply-loss' and role == 'light':
+    from kombu.transport.redis import Channel
+    put = Channel._put
+    def ambiguous(channel, queue, message, **kw):
+        put(channel, queue, message, **kw)
+        if queue == 'ingest' and client.set(prefix+'lost-reply', '1', nx=True):
+            raise redis.ConnectionError('lost reply after Redis LPUSH')
+    Channel._put = ambiguous
+
 if fails == 'canvas-crash' and role == 'ingest':
     from celery.canvas import Signature
     original_apply = Signature.apply_async
@@ -93,9 +112,11 @@ app.worker_main(['worker', '--pool='+('prefork' if fails in ('crash', 'canvas-cr
         processes.append(process)
     try:
         start("light")
+        source_name = "9xaipal.process_ingestion" if source == "heavy" else "9xaipal.process_article_ingestion"
+        source_args = [str(doc), str(job), "x.pdf" if source == "heavy" else "https://example.test/x.pdf"]
         if fails in ("chain", "chord"):
             from celery import chain, chord
-            heavy_signature = app.signature("9xaipal.process_ingestion", args=[str(doc), str(job), "x.pdf"], queue="celery")
+            heavy_signature = app.signature(source_name, args=source_args, queue="celery")
             if fails == "chain":
                 result = chain(heavy_signature, app.signature("m3.callback")).apply_async()
                 heavy_result = result.parent
@@ -103,9 +124,13 @@ app.worker_main(['worker', '--pool='+('prefork' if fails in ('crash', 'canvas-cr
                 result = chord([heavy_signature], app.signature("m3.callback")).apply_async()
                 heavy_result = result.parent.results[0]
         else:
-            result = app.send_task("9xaipal.process_ingestion", args=[str(doc), str(job), "x.pdf"], queue="celery", link=app.signature("m3.callback"), link_error=app.signature("m3.errback"))
+            result = app.send_task(source_name, args=source_args, queue="celery", link=app.signature("m3.callback"), link_error=app.signature("m3.errback"))
             heavy_result = result
         wait_for(lambda: client.llen(prefix + "ingest") or client.llen(prefix + "events"))
+        if fails == "publish-reply-loss":
+            wait_for(lambda: client.llen(prefix + "ingest") == 2)
+            if source == "article":
+                assert client.llen(prefix + "fetches") == 1
         assert not client.lrange(prefix + "events", 0, -1)
         envelope = json.loads(client.lindex(prefix + "ingest", 0))
         assert envelope["headers"]["id"] == heavy_result.id
@@ -138,11 +163,14 @@ app.worker_main(['worker', '--pool='+('prefork' if fails in ('crash', 'canvas-cr
             assert wait_for(lambda: result.ready())
             assert result.failed()
             if fails == "duplicate-failure":
-                app.send_task("9xaipal.process_ingestion", args=[str(doc), str(job), "x.pdf"], task_id=result.id, queue="ingest")
+                app.send_task(source_name, args=source_args, task_id=result.id, queue="ingest" if source == "heavy" else "celery")
                 wait_for(lambda: client.lindex(prefix + "events", -1) == b"duplicate-drop")
                 assert app.AsyncResult(result.id).state == "FAILURE"
                 assert client.lrange(prefix + "events", 0, -2) == events
         else:
+            if fails == "publish-reply-loss":
+                wait_for(lambda: b"duplicate-drop" in client.lrange(prefix + "events", 0, -1))
+                events = [e for e in client.lrange(prefix + "events", 0, -1) if e != b"duplicate-drop"]
             assert events[:-1] == ([b"heavy-start", b"heavy-start", b"heavy-done"] if fails == "crash" else [b"heavy-start", b"heavy-done", b"canvas-crash"] if fails == "canvas-crash" else [b"heavy-start", b"heavy-done"])
             expected = {"document_id": str(doc), "job_id": str(job), "status": "complete"}
             assert json.loads(events[-1])["callback"] == ([expected] if fails == "chord" else expected)

@@ -29,7 +29,7 @@ def test_duplicate_deliveries_admit_one_pipeline(db_session_sync, tmp_path, monk
             future = pool.submit(tasks.process_ingestion.run, str(doc), str(job), "x.pdf")
             assert started.wait(10)
             try:
-                with pytest.raises(Ignore):
+                with pytest.raises(Reject):
                     tasks.process_ingestion.run(str(doc), str(job), "x.pdf")
             finally:
                 finish.set()
@@ -76,7 +76,7 @@ def test_expired_lease_does_not_overlap_live_owner(db_session_sync):
     with ExecutionClaim("ingestion", job, "first"):
         db_session_sync.execute(text("UPDATE ingestion_jobs SET claim_expires_at=now()-interval '1 second' WHERE id=:id"), {"id": job})
         db_session_sync.commit()
-        with pytest.raises(Ignore):
+        with pytest.raises(Reject):
             with ExecutionClaim("ingestion", job, "second"):
                 pytest.fail("concurrent admission")
 
@@ -98,7 +98,7 @@ def test_reading_order_claim_is_per_document_and_delivery(db_session_sync):
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
     with ExecutionClaim("reading_order", doc, "first"):
-        with pytest.raises(Ignore):
+        with pytest.raises(Reject):
             with ExecutionClaim("reading_order", doc, "second"):
                 pytest.fail("concurrent admission")
     with pytest.raises(Ignore):
@@ -157,7 +157,7 @@ def test_article_redelivery_reuses_pdf_while_ingest_runs(db_session_sync, tmp_pa
                         assert ps.run_article_pipeline_sync(db_session_sync, document_id=doc, job_id=job, url="https://example.test/pdf") is False
                         second = json.loads(client.rpop(prefix + "ingest"))
                         second_args, _, _ = json.loads(base64.b64decode(second["body"]))
-                        with pytest.raises(Ignore):
+                        with pytest.raises(Reject):
                             tasks.process_ingestion.run(*second_args)
                         assert before == (path.read_bytes(), path.stat().st_mtime_ns)
                     finally:
