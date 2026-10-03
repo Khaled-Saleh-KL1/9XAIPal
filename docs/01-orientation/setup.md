@@ -224,3 +224,11 @@ Collected because each one has cost someone an hour:
 | Ingestion fails with `MinerUError` | MinerU missing from the worker's `$PATH` | Install it, or run the worker in compose |
 | Chat 503 `NO_LLM_CONFIGURED` | No Ollama and no cloud key | Start Ollama or paste one API key |
 | Setting seems to do nothing | Typo'd env key: `extra="ignore"` swallows unknown keys silently | Check spelling against [configuration.md](../03-reference/configuration.md) |
+
+## Celery queue split
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

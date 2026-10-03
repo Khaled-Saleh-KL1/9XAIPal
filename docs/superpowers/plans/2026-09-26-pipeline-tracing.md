@@ -2140,3 +2140,11 @@ Upload one small English PDF and ask one question about it in `https://9xaipal.k
 - Spec coverage: §4.1 → Task 1; §4.2 chat rows → Task 5, LLM → Task 4, ingestion/tasks → Tasks 3 and 6; §5 shapes → Tasks 3–6 tests; §5.2 caps/redaction → Task 1; §5.3 Celery linking → Task 3; §6 Phoenix → Task 8; §7 security → Tasks 2, 8, 9; §8 rollout → Task 9; §9.1 → Task 1; §9.2 → Tasks 1–7.
 - Block names are defined once per task table and pinned by that task's structural test; later tasks do not rename them.
 - The one spec change (loopback-published Phoenix port) is applied in Task 8, Step 6.
+
+## Current worker configuration (supersedes the historical single-worker references)
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

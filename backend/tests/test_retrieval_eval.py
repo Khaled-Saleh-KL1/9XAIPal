@@ -1,7 +1,8 @@
 import subprocess
 import sys
 import importlib
-from pathlib import Path
+
+from _queue_test_helpers import python_subprocess_options
 
 
 def _eval_api():
@@ -12,10 +13,9 @@ def _eval_api():
 
 
 def test_eval_cli_advertises_cases_settings_and_json_output():
-    backend_dir = Path(__file__).parents[1]
     result = subprocess.run(
         [sys.executable, "-m", "scripts.eval_retrieval", "--help"],
-        cwd=backend_dir,
+        **python_subprocess_options(),
         check=False,
         capture_output=True,
         text=True,

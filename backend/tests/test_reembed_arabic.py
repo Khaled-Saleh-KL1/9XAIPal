@@ -3,6 +3,8 @@ from unittest.mock import Mock
 
 from sqlalchemy import text
 
+from _queue_test_helpers import python_subprocess_options
+
 
 def _insert_document_with_chunk(session, *, language, direction):
     document_id = uuid4()
@@ -108,11 +110,10 @@ def test_reembed_cli_runs_main_when_executed_as_a_module():
     # silently and queued nothing on production.
     import subprocess
     import sys
-    from pathlib import Path
 
     result = subprocess.run(
         [sys.executable, "-m", "scripts.reembed_arabic", "--help"],
-        cwd=Path(__file__).parents[1],
+        **python_subprocess_options(),
         check=False,
         capture_output=True,
         text=True,

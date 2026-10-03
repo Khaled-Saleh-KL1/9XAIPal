@@ -1164,7 +1164,8 @@ async def confirm_arabic_writing_style(
 
     try:
         process_ingestion.delay(
-            str(paper_id), str(queued_job["id"]), document["filename"]
+            str(paper_id), str(queued_job["id"]), document["filename"],
+            execution_generation=queued_job["execution_generation"],
         )  # type: ignore[attr-defined]
     except Exception as dispatch_exc:
         logger.error(

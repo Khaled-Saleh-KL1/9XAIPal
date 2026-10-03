@@ -12,8 +12,8 @@
 ## 101. The Docker Compose stack
 
 **What it does.** The whole backend on one box, self-contained: `api` (FastAPI, uvicorn
-`--workers 2`, bound to `127.0.0.1:8000`), `celery_worker` (`--concurrency=1`, its own memory
-limit), `postgres` (pgvector/pgvector:pg16, named volume), `redis` (persistent volume),
+`--workers 2`, bound to `127.0.0.1:8000`), `celery_worker` (`--concurrency=2`, ingest queue, its own memory
+limit), `celery_worker_light` (light/default queue), `postgres` (pgvector/pgvector:pg16, named volume), `redis` (persistent volume),
 `autoheal`.
 
 **Where.** [`backend/docker-compose.prod.yml`](../../backend/docker-compose.prod.yml) (production),
@@ -193,3 +193,11 @@ the commands compose, which a mock would only restate.
 build passed while the component threw on first render; the export wizard's first version sent
 zero requests to the API. A component split into a pure render and a thin stateful wrapper can
 have every state asserted without clicking through it.
+
+## Celery queue split
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

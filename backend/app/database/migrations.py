@@ -68,6 +68,33 @@ async def _ensure_recent_columns() -> None:
     partially failed due to the fragile split-on-; runner.
     """
     critical_alters = [
+        """CREATE TABLE IF NOT EXISTS reading_order_executions (
+            document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            task_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (document_id, task_id)
+        )""",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_generation INTEGER NOT NULL DEFAULT 0",
+        """CREATE TABLE IF NOT EXISTS ingestion_executions (
+            job_id UUID NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+            generation INTEGER NOT NULL,
+            task_id TEXT NOT NULL,
+            PRIMARY KEY (job_id, generation, task_id)
+        )""",
+        # Durable heavy-work claims, separate from pipeline progress.
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_result JSONB",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_error TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_execution_result JSONB",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_execution_error TEXT",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_state TEXT",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS execution_task_id TEXT",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS claim_token UUID",
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMPTZ",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_execution_state TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_execution_task_id TEXT",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_claim_token UUID",
+        "ALTER TABLE documents ADD COLUMN IF NOT EXISTS reading_order_claim_expires_at TIMESTAMPTZ",
         # Multi-user support. users must be created (and its email index)
         # before any of the ALTER ... REFERENCES users(id) statements below —
         # order in this list matters, they run in one transaction in order.

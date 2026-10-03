@@ -12,6 +12,7 @@ from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import text
 
 from app.core.celery_app import celery_app
+from app.workers.execution_claims import HeavyTask, guarded_heavy
 from app.core.logging import get_logger
 from app.core.paths import documents_dir
 from app.api.errors import InsufficientStorage
@@ -106,17 +107,17 @@ def _mark_document_and_job_failed(session, doc_uuid: UUID, error_message: str) -
 
 @celery_app.task(
     name="9xaipal.process_ingestion",
+    base=HeavyTask,
     bind=True,
     max_retries=0,
     acks_late=True,
+    reject_on_worker_lost=True,
 )
-def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dict:
+@guarded_heavy("ingestion")
+def process_ingestion(self, document_id: str, job_id: str, filename: str, *, execution_generation: int = 0) -> dict:
     """Run MinerU extraction → structural chunking → asset linking pipeline synchronously."""
     logger.info(f"[celery] process_ingestion start document={document_id} job={job_id}")
     
-    # Dispose of engine connection pool to avoid sharing sockets across forked Celery processes
-    sync_engine.dispose()
-
     doc_uuid = UUID(document_id)
     job_uuid = UUID(job_id)
     pdf_path = documents_dir() / filename
@@ -158,9 +159,11 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str) -> dic
 
 @celery_app.task(
     name="9xaipal.process_article_ingestion",
+    track_started=False,
     bind=True,
     max_retries=0,
     acks_late=True,
+    reject_on_worker_lost=True,
 )
 def process_article_ingestion(
     self, document_id: str, job_id: str, url: str, kind: str | None = None,
@@ -184,6 +187,16 @@ def process_article_ingestion(
     doc_uuid = UUID(document_id)
     job_uuid = UUID(job_id)
 
+    def handoff(doc, job, filename):
+        from celery.exceptions import Ignore, Reject
+        signature = process_ingestion.s(str(doc), str(job), filename).set(queue="ingest")
+        try:
+            raise self.replace(signature)
+        except Ignore:
+            raise
+        except Exception as exc:
+            raise Reject(f"PDF replacement failed: {exc}", requeue=True) from exc
+
     try:
         with sync_session() as session:
             run_article_pipeline_sync(
@@ -192,6 +205,7 @@ def process_article_ingestion(
                 job_id=job_uuid,
                 url=url,
                 kind=kind,
+                pdf_handoff=handoff,
             )
     except Exception as exc:
         logger.exception(f"[celery] process_article_ingestion failed document={document_id}: {exc}")
@@ -415,10 +429,13 @@ def generate_figure_descriptions(self, document_id: str) -> dict:
 
 @celery_app.task(
     name="9xaipal.reconstruct_reading_order",
+    base=HeavyTask,
     bind=True,
     max_retries=1,
     acks_late=True,
+    reject_on_worker_lost=True,
 )
+@guarded_heavy("reading_order")
 def reconstruct_reading_order(self, document_id: str) -> dict:
     """
     Use the LLM (gemma4:26b) to intelligently reorder chunks for better
@@ -427,7 +444,6 @@ def reconstruct_reading_order(self, document_id: str) -> dict:
     """
     logger.info(f"[celery] reconstruct_reading_order start document={document_id}")
 
-    sync_engine.dispose()
     doc_uuid = UUID(document_id)
 
     try:

@@ -179,3 +179,11 @@ EMBEDDING_MODEL: ${EMBEDDING_MODEL:-qwen3-embedding:8b}  # was qwen3-embedding
 `server` profile. Until then, **a `docker compose up` run will use different models than
 `uvicorn` on the host**, which is exactly the kind of divergence that produces "it works on my
 machine" bug reports against this repo.
+
+## Current worker configuration (supersedes the historical single-worker references)
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.
