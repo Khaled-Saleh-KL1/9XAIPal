@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import yaml
 
-from _queue_test_helpers import redis_test_url
+from _queue_test_helpers import python_subprocess_options, redis_test_url
 from app.core.config import settings
 from app.core.celery_app import celery_app
 
@@ -65,7 +65,7 @@ print(client.execute_command(*sys.argv[2:]))
             client.hset(prefix + "unacked", "heavy", json.dumps([reserved, "", "ingest"]))
             client.hset(prefix + "unacked", "light", json.dumps([reserved, "", "celery"]))
             client.zadd(prefix + "unacked_index", {"heavy": 1, "light": 2})
-            subprocess.run(["bash", str(helper)], env=env, check=True)
+            subprocess.run(["bash", str(helper)], **python_subprocess_options(env=env), check=True)
             assert client.llen(prefix + "ingest") == 0
             assert client.rpop(prefix + "celery") == b"existing"
             for payload in payloads:
@@ -80,7 +80,7 @@ print(client.execute_command(*sys.argv[2:]))
             assert not client.hexists(prefix + "unacked", "heavy")
             assert client.hexists(prefix + "unacked", "light")
             assert client.zscore(prefix + "unacked_index", "heavy") is None
-            subprocess.run(["bash", str(helper)], env=env, check=True)
+            subprocess.run(["bash", str(helper)], **python_subprocess_options(env=env), check=True)
             assert client.llen(prefix + "celery") == 0
             commands = log.read_text()
             assert commands.index("stop 9xaipal-api 9xaipal-celery-worker 9xaipal-celery-worker-light") < commands.index("rm -f 9xaipal-celery-worker-light") < commands.index("exec 9xaipal-redis")
@@ -100,7 +100,7 @@ esac
     docker.chmod(0o755)
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/rollback-celery-queues.sh")],
-        env=dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}"),
+        **python_subprocess_options(env=dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}")),
         capture_output=True, text=True,
     )
     assert result.returncode != 0

@@ -6,7 +6,7 @@ import pytest
 from celery.exceptions import Reject
 from sqlalchemy import text
 
-from _queue_test_helpers import redis_test_url
+from _queue_test_helpers import python_subprocess_options, redis_test_url
 from app.workers import tasks
 from app.workers.execution_claims import ExecutionClaim
 from test_article_ingestion import _insert_document_and_job
@@ -75,7 +75,7 @@ prefix=os.environ['M5_PREFIX']
 role=sys.argv[1] if len(sys.argv)>1 else 'server'
 client.set(prefix+role, os.getpid())
 if role=='server':
-    subprocess.Popen([sys.executable, os.environ['M5_WRITER'], 'grandchild'], start_new_session=True)
+    subprocess.Popen([sys.executable, os.environ['M5_WRITER'], 'grandchild'], cwd=os.environ['M5_BACKEND_DIR'], env=dict(os.environ), start_new_session=True)
 while True:
     client.set(prefix+role+'-tick', time.monotonic_ns())
     with open(os.environ['M5_SHARED'], 'a') as output: output.write(role+'\\n')
@@ -130,7 +130,7 @@ def pipeline(*a,**kw):
             if path.exists() and path.read_text().split()[2] not in ('Z','X'):
                 client.rpush(prefix+'overlap',role)
         client.delete(prefix+'die',prefix+'server')
-    env=dict(os.environ,M5_BROKER=broker,M5_PREFIX=prefix,M5_WRITER=directory+'/writer.py',M5_SHARED=directory+'/shared',M5_ATTEMPT=str(attempt),PYTHONPATH=directory+':'+os.environ['PYTHONPATH'])
+    env=dict(os.environ,M5_BROKER=broker,M5_PREFIX=prefix,M5_WRITER=directory+'/writer.py',M5_SHARED=directory+'/shared',M5_ATTEMPT=str(attempt),M5_BACKEND_DIR=os.getcwd(),PYTHONPATH=directory+os.pathsep+os.environ['PYTHONPATH'])
     url,proc,log,root=mc._start_mineru_api_server(env)
     client.set(prefix+'guardian',proc.pid)
     try:
@@ -141,7 +141,7 @@ tasks.run_pipeline_sync=pipeline
 app.worker_main(['worker','--pool=prefork','--concurrency=2','-Q','ingest','--without-gossip','--without-mingle','--without-heartbeat','--loglevel=WARNING'])
 ''')
     log = open(tmp_path / 'worker.log', 'w+')
-    worker = subprocess.Popen([sys.executable, str(script), broker, prefix, str(tmp_path), death], stdout=log, stderr=log)
+    worker = subprocess.Popen([sys.executable, str(script), broker, prefix, str(tmp_path), death], stdout=log, stderr=log, **python_subprocess_options())
     pids = []
     stopped_guardian = None
     try:
@@ -236,7 +236,7 @@ def callback(result):client.rpush(prefix+'results',json.dumps(result));return re
 app.worker_main(['worker','--pool=solo','-Q','ingest,celery','--without-gossip','--without-mingle','--without-heartbeat','--loglevel=WARNING'])
 ''')
     log = open(tmp_path / 'worker.log', 'w+')
-    worker = subprocess.Popen([sys.executable, str(script), broker, prefix], stdout=log, stderr=log)
+    worker = subprocess.Popen([sys.executable, str(script), broker, prefix], stdout=log, stderr=log, **python_subprocess_options())
     try:
         b = app.send_task('9xaipal.reconstruct_reading_order', args=[str(doc)], task_id=second, queue='ingest', link=app.signature('m5.reading_callback'))
         wait_for(lambda: client.exists(prefix+'rejected'))

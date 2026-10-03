@@ -8,7 +8,7 @@ import pytest
 from celery.exceptions import Ignore, Reject
 from sqlalchemy import text
 
-from _queue_test_helpers import redis_test_url
+from _queue_test_helpers import python_subprocess_options, redis_test_url
 from app.database.connection import sync_engine
 from app.workers import tasks
 from test_article_ingestion import _insert_document_and_job
@@ -204,7 +204,7 @@ def test_worker_process_crash_is_recoverable(db_session_sync, tmp_path):
     from app.workers.execution_claims import ExecutionClaim
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
-    process = subprocess.run([sys.executable, "-c", "from uuid import UUID; import os; from app.workers.execution_claims import ExecutionClaim; claim=ExecutionClaim('ingestion',UUID('" + str(job) + "'),'crashed'); claim.__enter__(); os._exit(4)"], capture_output=True, timeout=15)
+    process = subprocess.run([sys.executable, "-c", "from uuid import UUID; import os; from app.workers.execution_claims import ExecutionClaim; claim=ExecutionClaim('ingestion',UUID('" + str(job) + "'),'crashed'); claim.__enter__(); os._exit(4)"], capture_output=True, timeout=15, **python_subprocess_options())
     assert process.returncode == 4, process.stderr.decode()
     with pytest.raises(Reject):
         with ExecutionClaim("ingestion", job, "restored"):
@@ -287,7 +287,8 @@ ExecutionClaim.renew = lambda self: time.sleep(10)
 with ExecutionClaim('ingestion', UUID('%s'), 'blocked-heartbeat'):
     time.sleep(10)
 """ % job
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=4)
+    # Include interpreter/import startup; the child still must fail closed (rc=1).
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=15, **python_subprocess_options())
     assert result.returncode == 1, result.stderr.decode()
 
 

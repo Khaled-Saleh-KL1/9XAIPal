@@ -10,10 +10,11 @@ from celery import Celery
 import pytest
 import redis
 
-from _queue_test_helpers import redis_test_url
+from _queue_test_helpers import python_subprocess_options, redis_test_url
 
 
-def wait_for(predicate, timeout=25):
+def wait_for(predicate, timeout=60):
+    # Worker imports and broker recovery can take longer on a shared CI runner.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
@@ -110,7 +111,7 @@ app.worker_main(['worker', '--pool='+('prefork' if fails in ('crash', 'canvas-cr
     def start(role):
         log = open(tmp_path / (role + ".log"), "w+")
         logs.append(log)
-        process = subprocess.Popen([sys.executable, str(script), broker, prefix, role, str(tmp_path), str(fails)], stdout=log, stderr=log, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        process = subprocess.Popen([sys.executable, str(script), broker, prefix, role, str(tmp_path), str(fails)], stdout=log, stderr=log, **python_subprocess_options(env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1")))
         processes.append(process)
     try:
         start("light")

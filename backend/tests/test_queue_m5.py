@@ -6,7 +6,7 @@ import pytest
 from celery.exceptions import Reject
 from sqlalchemy import text
 
-from _queue_test_helpers import redis_test_url
+from _queue_test_helpers import python_subprocess_options, redis_test_url
 from app.workers import tasks
 from test_article_ingestion import _insert_document_and_job, _pdf_resource
 
@@ -115,7 +115,7 @@ def errback(request,exc,tb): client.rpush(prefix+'errors',str(exc))
 app.worker_main(['worker','--pool=solo','-Q','celery','--without-gossip','--without-mingle','--without-heartbeat','--loglevel=WARNING'])
 ''')
     log = open(tmp_path / 'worker.log', 'w+')
-    worker = subprocess.Popen([sys.executable, str(script), broker, prefix, boundary], stdout=log, stderr=log)
+    worker = subprocess.Popen([sys.executable, str(script), broker, prefix, boundary], stdout=log, stderr=log, **python_subprocess_options())
     try:
         result = app.send_task('9xaipal.process_article_ingestion', args=[str(doc), str(job), 'https://example.test/failure'], queue='celery', link_error=app.signature('m5.article_errback'))
         wait_for(lambda: client.llen(prefix+'states'))

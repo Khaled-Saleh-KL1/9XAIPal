@@ -8,7 +8,7 @@ import pytest
 from celery.exceptions import Ignore, Reject
 from sqlalchemy import text
 
-from _queue_test_helpers import redis_test_url
+from _queue_test_helpers import python_subprocess_options, redis_test_url
 from app.database.connection import async_session_factory, sync_session
 from app.workers import tasks
 from test_article_ingestion import _insert_document_and_job, _pdf_resource, _html_resource
@@ -160,7 +160,7 @@ def observed(state=None, **kw):
 app.worker_main(['worker','--pool=prefork','--concurrency=2','-Q','ingest','--without-gossip','--without-mingle','--without-heartbeat','--loglevel=WARNING'])
 ''')
     log = open(tmp_path / 'restore.log', 'w+')
-    process = subprocess.Popen([sys.executable, str(script), broker, prefix, str(tmp_path)], stdout=log, stderr=log)
+    process = subprocess.Popen([sys.executable, str(script), broker, prefix, str(tmp_path)], stdout=log, stderr=log, **python_subprocess_options())
     try:
         app.send_task('9xaipal.process_ingestion', args=[str(doc), str(job), 'x.pdf'], queue='ingest')
         owner = int(wait_for(lambda: client.lindex(prefix+'starts', 0)))

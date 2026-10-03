@@ -15,7 +15,7 @@ import pytest
 import redis
 from sqlalchemy import text
 
-from _queue_test_helpers import redis_test_url
+from _queue_test_helpers import python_subprocess_options, redis_test_url
 from test_article_ingestion import _insert_document_and_job
 from test_heavy_task_canvas import wait_for
 
@@ -60,7 +60,7 @@ def test_pre_split_rollback_retains_fencing_and_distinct_canvases(db_session_syn
     # A concrete old tree, overlaid only through the production installer.
     installer = ROOT / 'scripts/prepare-celery-rollback.py'
     if installer.exists():
-        subprocess.run([sys.executable, str(installer), str(ROOT), str(old)], check=True)
+        subprocess.run([sys.executable, str(installer), str(ROOT), str(old)], check=True, **python_subprocess_options())
     (old / 'backend/.env').write_text('')
     filename = f'{doc}.pdf' if adopted else 'x.pdf'
     (tmp_path / filename).write_bytes(b'%PDF-')
@@ -119,7 +119,7 @@ app.worker_main(['worker','--pool=prefork','--concurrency=2','-Q','celery','--wi
                 message = connection.default_channel.basic_get('celery', no_ack=False)
                 assert message is not None
             assert client.eval(lua, 0, prefix) == 3
-        process = subprocess.Popen([sys.executable, str(script), broker,prefix,str(tmp_path)], cwd=old/'backend', env=dict(os.environ,PYTHONPATH=str(old/'backend'),WORKER_ROLE='ingest'),stdout=log,stderr=log)
+        process = subprocess.Popen([sys.executable, str(script), broker,prefix,str(tmp_path)], **python_subprocess_options(backend_dir=old/'backend', env=dict(os.environ,WORKER_ROLE='ingest')),stdout=log,stderr=log)
         wait_for(lambda: client.llen(prefix+'events'))
         # Wait long enough for the second pool slot to receive a duplicate.
         import time
@@ -167,7 +167,7 @@ def test_overlay_already_fenced_revision_does_not_wrap_it_twice(tmp_path, db_ses
         with tarfile.open(Path(archives) / f'{revision}.tar') as archive:
             archive.extractall(target, filter='data')
     original_pipeline = (target/'backend/app/extraction/pipeline_sync.py').read_text()
-    subprocess.run([sys.executable, str(ROOT / 'scripts/prepare-celery-rollback.py'), str(ROOT),str(target)],check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/prepare-celery-rollback.py'), str(ROOT),str(target)],check=True, **python_subprocess_options())
     if revision != 'current':
         import yaml
         for filename in ('docker-compose.prod.yml','docker-compose.yml'):
@@ -199,7 +199,7 @@ result=tasks.process_ingestion.apply(args=sys.argv[2:]+['x.pdf'])
 assert result.state=='SUCCESS', result.result
 assert calls==['ran']
 """)
-    result = subprocess.run([sys.executable,str(script),str(tmp_path),str(doc),str(job)],cwd=target/'backend',env=dict(os.environ,PYTHONPATH=str(target/'backend')),capture_output=True,text=True)
+    result = subprocess.run([sys.executable,str(script),str(tmp_path),str(doc),str(job)],**python_subprocess_options(backend_dir=target/'backend'),capture_output=True,text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -208,7 +208,7 @@ async def test_overlay_schema_is_available_after_pre_migration_failure(tmp_path)
     from app.database.connection import engine
     target=tmp_path/'old'
     extract_pre_split_tree(target)
-    subprocess.run([sys.executable,str(ROOT/'scripts/prepare-celery-rollback.py'),str(ROOT),str(target)],check=True)
+    subprocess.run([sys.executable,str(ROOT/'scripts/prepare-celery-rollback.py'),str(ROOT),str(target)],check=True, **python_subprocess_options())
     # Recreate only minimal pre-split tables in this test's private schema.
     schema='m4_'+uuid4().hex
     source=(target/'backend/app/database/migrations.py').read_text()
