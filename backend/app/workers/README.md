@@ -64,6 +64,11 @@ A crash in between replays the saved result or error without re-extraction,
 then resumes callbacks/chains/chords/errbacks. Continuation publication remains
 at least once across ambiguous broker replies; exactly-once Redis publication
 is not claimed.
+Every physical Redis receipt gets a fresh reservation tag before acknowledgment
+bookkeeping. Restored or lost-reply copies retain their logical task/canvas IDs,
+but a stale owner’s ACK cannot erase a newer reservation. Admission rejects
+release their DB locks and pause 250 ms before requeueing, avoiding a hot loop
+through new DB/TCP connections while an unfinished owner or lease is unchanged.
 Finished ingestion delivery ids remain suppressed within a retry generation. Deliberate
 Arabic confirmation advances the generation and clears ownership/outcome transactionally;
 old-generation deliveries cannot execute the confirmed job. A distinct ingestion source

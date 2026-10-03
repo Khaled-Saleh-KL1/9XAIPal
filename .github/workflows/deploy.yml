@@ -162,7 +162,7 @@ jobs:
           # must not consume reconnect/handoff copies without DB fencing.
           COMPAT_TREE=$(mktemp -d /tmp/celery-rollback-compat.XXXXXX)
           mkdir -p "$COMPAT_TREE/backend/app/workers" "$COMPAT_TREE/backend/app/services" "$COMPAT_TREE/backend/app/database" "$COMPAT_TREE/backend/app/extraction" "$COMPAT_TREE/backend/app/core" "$COMPAT_TREE/scripts"
-          cp "$DEPLOY_DIR/backend/app/workers/"{execution_claims,owned_subprocess,forwarding,rollback_compatibility}.py "$COMPAT_TREE/backend/app/workers/"
+          cp "$DEPLOY_DIR/backend/app/workers/"{execution_claims,owned_subprocess,redis_reservations,forwarding,rollback_compatibility}.py "$COMPAT_TREE/backend/app/workers/"
           cp "$DEPLOY_DIR/backend/app/core/celery_app.py" "$COMPAT_TREE/backend/app/core/"
           cp "$DEPLOY_DIR/backend/app/workers/tasks.py" "$COMPAT_TREE/backend/app/workers/"
           cp "$DEPLOY_DIR/backend/app/database/migrations.py" "$COMPAT_TREE/backend/app/database/"

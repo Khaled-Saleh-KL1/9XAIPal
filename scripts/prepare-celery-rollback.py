@@ -38,7 +38,7 @@ def queue_schema(source):
 def prepare(source, target):
     source, target = Path(source), Path(target)
     workers = target / 'backend/app/workers'
-    for name in ('execution_claims.py', 'owned_subprocess.py', 'forwarding.py', 'rollback_compatibility.py'):
+    for name in ('execution_claims.py', 'owned_subprocess.py', 'redis_reservations.py', 'forwarding.py', 'rollback_compatibility.py'):
         shutil.copyfile(source / 'backend/app/workers' / name, workers / name)
 
     # A deploy can fail before the new API ever applies migrations. Carry

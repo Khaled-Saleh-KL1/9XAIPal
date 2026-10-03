@@ -14,6 +14,8 @@ from test_article_ingestion import _insert_document_and_job
 def test_new_reading_request_retains_unfinished_checkpoint(db_session_sync, monkeypatch):
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
+    db_session_sync.execute(text("INSERT INTO chunks (document_id,sequence_id,markdown,plain_text) VALUES (:id,0,'first','first'),(:id,1,'second','second'),(:id,2,'third','third')"), {'id': doc})
+    db_session_sync.commit()
     first, second = str(uuid4()), str(uuid4())
     saved = {'document_id': str(doc), 'reordered': 2}
     claim = ExecutionClaim('reading_order', doc, first)
@@ -26,7 +28,8 @@ def test_new_reading_request_retains_unfinished_checkpoint(db_session_sync, monk
     calls = []
     async def reorder(*args, **kwargs):
         calls.append('B')
-        db_session_sync.execute(text("UPDATE documents SET title='new reading order' WHERE id=:id"), {'id': doc})
+        db_session_sync.execute(text('UPDATE chunks SET sequence_id=102-sequence_id WHERE document_id=:id'), {'id': doc})
+        db_session_sync.execute(text('UPDATE chunks SET sequence_id=sequence_id-100 WHERE document_id=:id'), {'id': doc})
         db_session_sync.commit()
         return {'reordered': 3}
     with patch.object(tasks, 'reconstruct_reading_order_for_document', side_effect=reorder):
@@ -39,7 +42,7 @@ def test_new_reading_request_retains_unfinished_checkpoint(db_session_sync, monk
         assert tasks.reconstruct_reading_order.apply(args=[str(doc)], task_id=second).get()['reordered'] == 3
         assert tasks.reconstruct_reading_order.apply(args=[str(doc)], task_id=first).state == 'IGNORED'
     assert calls == ['B']
-    assert db_session_sync.execute(text('SELECT title FROM documents WHERE id=:id'), {'id': doc}).scalar_one() == 'new reading order'
+    assert list(db_session_sync.execute(text('SELECT plain_text FROM chunks WHERE document_id=:id ORDER BY sequence_id'), {'id': doc}).scalars()) == ['third', 'second', 'first']
 
 
 
@@ -158,13 +161,14 @@ app.worker_main(['worker','--pool=prefork','--concurrency=2','-Q','ingest','--wi
             os.kill(owner, signal.SIGKILL)
         else:
             client.set(prefix+'die', '1')
-        wait_for(lambda: client.llen(prefix+'starts') >= 2)
+        wait_for(lambda: client.llen(prefix+'starts') >= 2, timeout=75)
         assert not client.lrange(prefix+'overlap', 0, -1), 'old MinerU descendants were still executing on recovery'
         assert wait_for(lambda: result.ready())
         assert result.get(timeout=5)['status'] == 'complete'
         for pid in pids:
             assert not (tmp_path.__class__('/proc') / str(pid)).exists(), 'supervisor must reap descendants before recovery'
     finally:
+        print('descendant recovery broker', client.llen(prefix+'ingest'), client.hgetall(prefix+'unacked'), client.lrange(prefix+'starts',0,-1))
         if stopped_guardian is not None:
             try: os.kill(stopped_guardian, signal.SIGCONT)
             except ProcessLookupError: pass
@@ -177,7 +181,7 @@ app.worker_main(['worker','--pool=prefork','--concurrency=2','-Q','ingest','--wi
         for pid in set(pids):
             try: os.kill(pid, signal.SIGKILL)
             except ProcessLookupError: pass
-        log.flush(); log.seek(0); print(log.read()[-4000:]); log.close()
+        log.flush(); log.seek(0); print(log.read()[-6000:]); log.close()
         keys = list(client.scan_iter(prefix+'*'))
         if keys: client.delete(*keys)
 
@@ -192,6 +196,8 @@ def test_reading_checkpoint_continuation_precedes_new_request(db_session_sync, t
     from test_heavy_task_canvas import wait_for
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
+    db_session_sync.execute(text("INSERT INTO chunks (document_id,sequence_id,markdown,plain_text) VALUES (:id,0,'first','first'),(:id,1,'second','second'),(:id,2,'third','third')"), {'id': doc})
+    db_session_sync.commit()
     first, second = str(uuid4()), str(uuid4())
     saved = {'document_id': str(doc), 'reordered': 2}
     claim = ExecutionClaim('reading_order', doc, first)
@@ -216,7 +222,8 @@ client=redis.Redis.from_url(broker)
 app.conf.update(broker_url=broker,result_backend=broker,broker_transport_options={'global_keyprefix':prefix},result_backend_transport_options={'global_keyprefix':prefix})
 async def reorder(session,document_id):
     client.incr(prefix+'calls')
-    await session.execute(text("UPDATE documents SET title='new order' WHERE id=:id"),{'id':document_id})
+    await session.execute(text('UPDATE chunks SET sequence_id=102-sequence_id WHERE document_id=:id'),{'id':document_id})
+    await session.execute(text('UPDATE chunks SET sequence_id=sequence_id-100 WHERE document_id=:id'),{'id':document_id})
     await session.commit()
     return {'reordered':3}
 tasks.reconstruct_reading_order_for_document=reorder
@@ -240,7 +247,7 @@ app.worker_main(['worker','--pool=solo','-Q','ingest,celery','--without-gossip',
         wait_for(lambda: client.llen(prefix+'results') == 2)
         assert sorted(json.loads(value)['reordered'] for value in client.lrange(prefix+'results', 0, -1)) == [2, 3]
         assert client.get(prefix+'calls') == b'1'
-        assert db_session_sync.execute(text('SELECT title FROM documents WHERE id=:id'), {'id': doc}).scalar_one() == 'new order'
+        assert list(db_session_sync.execute(text('SELECT plain_text FROM chunks WHERE document_id=:id ORDER BY sequence_id'), {'id': doc}).scalars()) == ['third', 'second', 'first']
     finally:
         worker.terminate()
         try: worker.wait(timeout=10)

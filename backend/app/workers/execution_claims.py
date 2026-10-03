@@ -22,6 +22,7 @@ from app.core.logging import get_logger
 from app.database.connection import sync_engine
 from app.workers.forwarding import forward_heavy_task
 from app.workers.owned_subprocess import subprocess_scope
+from app.workers import redis_reservations  # noqa: F401 — install before Redis consumption
 
 logger = get_logger(__name__)
 
@@ -125,11 +126,17 @@ class ExecutionClaim:
             self.watchdog = threading.Thread(target=self._watchdog, name="heavy-claim-watchdog", daemon=True)
             self.watchdog.start()
             return self
-        except (Ignore, Reject):
+        except (Ignore, Reject) as exc:
             self._close()
+            if isinstance(exc, Reject):
+                # Immediate requeue otherwise hot-spins through new DB/TCP
+                # sessions while a lease/live owner is unchanged. Release
+                # all locks first, then let the broker/worker settle.
+                time.sleep(.25)
             raise
         except Exception as exc:
             self._close()
+            time.sleep(.25)
             raise Reject(f"claim admission failed: {exc}", requeue=True) from exc
 
     def renew(self):

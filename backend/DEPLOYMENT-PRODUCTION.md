@@ -216,7 +216,9 @@ its message in `unacked`). `core/celery_app.py::_restore_interrupted_tasks` now 
 does on a warm shutdown, which a container stop never gets for a long task. The interrupted
 message is restored within seconds of the new worker coming up. Execution admission is
 separate: the restored delivery is retained/requeued until the dead owner's outstanding
-lease expires, at most 600 seconds (ten minutes) after its last renewal. During this wait
+lease expires, at most 600 seconds (ten minutes) after its last renewal. Admission also
+waits for surviving subprocess supervisors to terminate and reap their descendants;
+this safety wait can outlast the lease. During this wait
 the document still shows its last status (for example "extracting") and progress; the
 progress bar restarts when extraction is admitted. This delay is expected, not a lost job.
 Recovery is scoped to the starting worker's consumed queue, so starting one worker
@@ -529,6 +531,11 @@ A crash in between replays the saved result or error without re-extraction,
 then resumes callbacks/chains/chords/errbacks. Continuation publication remains
 at least once across ambiguous broker replies; exactly-once Redis publication
 is not claimed.
+Every physical Redis receipt gets a fresh reservation tag before acknowledgment
+bookkeeping. Restored or lost-reply copies retain their logical task/canvas IDs,
+but a stale owner’s ACK cannot erase a newer reservation. Admission rejects
+release their DB locks and pause 250 ms before requeueing, avoiding a hot loop
+through new DB/TCP connections while an unfinished owner or lease is unchanged.
 Finished ingestion delivery ids remain suppressed within a retry generation. Deliberate
 Arabic confirmation advances the generation and clears ownership/outcome transactionally;
 old-generation deliveries cannot execute the confirmed job. A distinct ingestion source
