@@ -22,7 +22,8 @@
 | Vite dev server | `http://localhost:5173` | Dev only | Proxies `/api` and `/static` to `:8000` |
 | PostgreSQL | `localhost:5432` | Yes | `pgvector/pgvector:pg16`; needs `vector` + `uuid-ossp` |
 | Redis | `localhost:6379` | Yes | Celery broker **and** result backend |
-| Celery worker | n/a | Yes | No port; consumes from Redis |
+| Celery ingest worker | n/a | Yes | `celery_worker`, queue `ingest` |
+| Celery light worker | n/a | Yes | `celery_worker_light`, queue `celery` |
 | Ollama | `http://localhost:11434` | Optional* | Chat / VLM / classifier / embedding host |
 | MinerU CLI | binary on `$PATH` | Yes | Subprocess, not a service. `ALLOW_PYMUPDF_FALLBACK=true` degrades gracefully |
 | Web search | n/a | Optional | Cascade of 5 providers (tavily, linkup, exa, serpapi, then duckduckgo — see `search/web.py`); no local service. Tavily rotates across a list of keys first. The last needs no key, so this is never fully off. |
@@ -161,3 +162,11 @@ Two mechanisms, covering two different failure modes:
 The worker has a memory limit (`WORKER_MEM_LIMIT`, default 12 G) so a MinerU OOM on a large book
 kills *that container* cleanly and it restarts, rather than pressuring the host. ⚠ This limit must
 stay below Docker Desktop's total VM memory or the worker is OOM-killed mid-extraction every time.
+
+## Celery queue split
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

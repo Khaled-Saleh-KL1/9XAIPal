@@ -139,9 +139,13 @@ async def requeue_failed_job(session: AsyncSession, job_id: UUID) -> dict:
         UPDATE ingestion_jobs
         SET status='queued', error_code=NULL, error_message=NULL,
             started_at=NULL, completed_at=NULL, progress_fraction=NULL,
-            created_at=NOW()
+            created_at=NOW(), execution_generation=execution_generation+1,
+            execution_state='pending', execution_task_id=NULL,
+            execution_result=NULL, execution_error=NULL,
+            claim_token=NULL, claim_expires_at=NULL
         WHERE id=:id AND status='failed'
-        RETURNING id, document_id, status, created_at
+          AND (execution_state IS NULL OR execution_state IN ('failed','pending'))
+        RETURNING id, document_id, status, created_at, execution_generation
     """), {"id": job_id})
     row = result.mappings().first()
     if not row:

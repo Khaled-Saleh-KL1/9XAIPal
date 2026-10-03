@@ -7,13 +7,14 @@ Runs against the real Redis broker the test env points at."""
 import json
 import time
 from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
 
-from app.core.celery_app import celery_app, _restore_interrupted_tasks
+from app.core.celery_app import celery_app, _restore_interrupted_tasks, _sweep_extraction_scratch
 
 
-def _fake_unacked(channel, client, task_name: str, args: list) -> str:
+def _fake_unacked(channel, client, task_name: str, args: list, queue: str = "celery", task_id: str | None = None) -> str:
     """Put a message in `unacked` the way kombu does when a consumer has
     received but not acknowledged it."""
     tag = str(uuid4())
@@ -21,10 +22,10 @@ def _fake_unacked(channel, client, task_name: str, args: list) -> str:
         "body": json.dumps([args, {}, {"callbacks": None, "errbacks": None, "chain": None, "chord": None}]),
         "content-encoding": "utf-8",
         "content-type": "application/json",
-        "headers": {"task": task_name, "id": str(uuid4()), "lang": "py"},
+        "headers": {"task": task_name, "id": task_id or str(uuid4()), "lang": "py"},
         "properties": {
             "correlation_id": str(uuid4()),
-            "delivery_info": {"exchange": "", "routing_key": "celery"},
+            "delivery_info": {"exchange": "", "routing_key": queue},
             "delivery_mode": 2,
             "delivery_tag": tag,
             "body_encoding": "base64",
@@ -32,7 +33,7 @@ def _fake_unacked(channel, client, task_name: str, args: list) -> str:
     }
     import base64
     message["body"] = base64.b64encode(message["body"].encode()).decode()
-    client.hset(channel.unacked_key, tag, json.dumps([message, "", "celery"]))
+    client.hset(channel.unacked_key, tag, json.dumps([message, "", queue]))
     client.zadd(channel.unacked_index_key, {tag: time.time()})
     return tag
 
@@ -66,3 +67,68 @@ def test_nothing_to_restore_is_a_no_op():
         client.delete("celery", channel.unacked_key, channel.unacked_index_key)
         _restore_interrupted_tasks()
         assert client.llen("celery") == 0
+
+
+def _worker_sender(queue):
+    return SimpleNamespace(app=SimpleNamespace(amqp=SimpleNamespace(
+        queues=SimpleNamespace(consume_from={queue: None}),
+    )))
+
+
+@pytest.mark.parametrize("queue,other", [("ingest", "celery"), ("celery", "ingest")])
+def test_restart_restores_only_its_own_queue(queue, other):
+    with celery_app.connection_for_write() as conn:
+        channel = conn.default_channel
+        client = channel.client
+        client.delete("celery", "ingest", channel.unacked_key, channel.unacked_index_key)
+        try:
+            own_tag = _fake_unacked(channel, client, "tests.own_task", [], queue)
+            other_tag = _fake_unacked(channel, client, "tests.active_task", [], other)
+            _restore_interrupted_tasks(sender=_worker_sender(queue))
+            assert client.llen(queue) == 1
+            assert client.llen(other) == 0
+            assert not client.hexists(channel.unacked_key, own_tag)
+            assert client.hexists(channel.unacked_key, other_tag)
+            assert client.zscore(channel.unacked_index_key, other_tag) is not None
+        finally:
+            client.delete("celery", "ingest", channel.unacked_key, channel.unacked_index_key)
+
+
+@pytest.mark.parametrize("queue,should_exist", [("celery", True), ("ingest", False)])
+def test_only_ingest_worker_sweeps_extraction_scratch(queue, should_exist, tmp_path, monkeypatch):
+    from app.extraction import mineru_client
+
+    monkeypatch.setenv("WORKER_ROLE", "ingest" if queue == "ingest" else "light")
+
+    monkeypatch.setattr(mineru_client, "extracted_dir", lambda: tmp_path)
+    scratch = tmp_path / ".mineru-api-active"
+    scratch.mkdir()
+    (scratch / "page.md").write_text("extraction in progress")
+    _sweep_extraction_scratch(sender=_worker_sender(queue))
+    assert scratch.exists() is should_exist
+
+
+@pytest.mark.parametrize("queue,should_exist", [("celery", True), ("ingest", False)])
+def test_real_worker_startup_respects_selected_queue(queue, should_exist, tmp_path, monkeypatch):
+    from celery.contrib.testing.worker import start_worker
+    from app.extraction import mineru_client
+
+    monkeypatch.setenv("WORKER_ROLE", "ingest" if queue == "ingest" else "light")
+
+    monkeypatch.setattr(mineru_client, "extracted_dir", lambda: tmp_path)
+    scratch = tmp_path / ".mineru-api-active"
+    scratch.mkdir()
+    with start_worker(celery_app, queues=[queue], perform_ping_check=False,
+                      pool="solo", loglevel="WARNING", shutdown_timeout=15):
+        assert scratch.exists() is should_exist
+
+
+def test_light_role_never_sweeps_even_without_sender(tmp_path, monkeypatch):
+    from app.extraction import mineru_client
+
+    monkeypatch.setenv("WORKER_ROLE", "light")
+    monkeypatch.setattr(mineru_client, "extracted_dir", lambda: tmp_path)
+    scratch = tmp_path / ".mineru-api-active"
+    scratch.mkdir()
+    _sweep_extraction_scratch()
+    assert scratch.exists()

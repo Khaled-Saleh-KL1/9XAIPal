@@ -75,7 +75,7 @@ Set tracing on and restart the API and worker:
 cd backend
 # Edit .env and set TRACE_ENABLED=true
 echo 'TRACE_ENABLED=true' >> .env
-docker compose -f docker-compose.prod.yml up -d api celery_worker
+docker compose -f docker-compose.prod.yml up -d api celery_worker celery_worker_light
 ```
 
 Verify that one upload and one chat question each produce a complete trace:
@@ -92,7 +92,7 @@ If tracing needs to be turned off temporarily (e.g., for performance tuning or t
 ```bash
 cd backend
 echo 'TRACE_ENABLED=false' >> .env
-docker compose -f docker-compose.prod.yml up -d api celery_worker
+docker compose -f docker-compose.prod.yml up -d api celery_worker celery_worker_light
 ```
 
 The Phoenix service stays running. Existing traces remain visible. The app stops recording new traces immediately.
@@ -113,7 +113,7 @@ sed -i '' 's/^PHOENIX_API_KEY=.*/PHOENIX_API_KEY=<new-key>/' .env
 3. Restart the API and worker:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d api celery_worker
+docker compose -f docker-compose.prod.yml up -d api celery_worker celery_worker_light
 ```
 
 ## Changing retention policy
@@ -165,3 +165,11 @@ docker stats 9xaipal-phoenix
 ## Verification
 
 Verified 2026-09-27 by running the real PDF ingestion pipeline from `main` and from this branch on 15 recorded MinerU outputs with their source PDFs (17,559 chunks, 4,203 image assets, one MinerU-failure case), replacing only the MinerU subprocess. Persisted chunks, assets, document and job rows, stored files and dispatched tasks were identical to `main` (random stored image filenames normalized) with tracing off, with tracing on (99 spans recorded to an in-memory exporter: ingest.pdf, chunk, glyph_repair, heading_repair, code_crops, assets.find, persist), and on the book (full-embedding) path.
+
+## Celery queue split
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

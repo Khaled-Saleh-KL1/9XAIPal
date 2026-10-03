@@ -15,8 +15,8 @@
 # scripts/deploy-scope.sh, which computes it from the diff between the
 # running commit and the new one:
 #   full      SPA build + `compose up -d --build` of every service
-#   both      SPA build + rebuild/restart of api and celery_worker only
-#   backend   rebuild/restart of api and celery_worker; the SPA is untouched
+#   both      SPA build + rebuild/restart of api and both Celery workers only
+#   backend   rebuild/restart of api and both Celery workers; the SPA is untouched
 #   frontend  SPA build only; no container is rebuilt or restarted
 #   none      nothing built, nothing restarted — the files were synced and
 #             the health check confirms the site is still up
@@ -88,17 +88,17 @@ ensure_phoenix() {
 case "$SCOPE" in
   full)
     echo "Building and restarting every container..."
-    (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build)
+    (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build --remove-orphans)
     ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
     prune_build_cache || echo "::warning::Build-cache cleanup failed; disk use may keep growing" >&2
     ;;
   both|backend)
-    # Only the two services built from this repo. postgres, redis and
+    # Only the three services built from this repo. postgres, redis and
     # autoheal are pinned images with nothing to rebuild, and `up -d` on
     # them would still be a no-op — but naming the services keeps the
     # intent explicit and the output short.
-    echo "Rebuilding and restarting api + celery_worker..."
-    (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build api celery_worker)
+    echo "Rebuilding and restarting api + celery_worker + celery_worker_light..."
+    (cd "$DEPLOY_DIR/backend" && docker compose -f docker-compose.prod.yml up -d --build api celery_worker celery_worker_light)
     ensure_phoenix || echo "::warning::Phoenix setup failed; continuing deploy without updating the trace viewer" >&2
     prune_build_cache || echo "::warning::Build-cache cleanup failed; disk use may keep growing" >&2
     ;;

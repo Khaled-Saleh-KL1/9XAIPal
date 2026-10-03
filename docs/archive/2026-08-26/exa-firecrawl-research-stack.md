@@ -475,3 +475,11 @@ SEARCH_PROVIDER=exa curl -s "http://localhost:8000/api/v1/search/web?q=speculati
 # confirm a real read happened (not a snippet)
 #   the answer should contain phrasing that exists only in the page body
 ```
+
+## Current worker configuration (supersedes the historical single-worker references)
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

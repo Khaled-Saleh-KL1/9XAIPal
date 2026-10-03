@@ -500,3 +500,11 @@ accelerate.
 **Not in scope:** replacing MinerU for books, adopting Docling, the `effort=medium` figure-analysis
 regression (file it separately if S0 surfaces it), and any change to chunking semantics. This plan
 adds an extractor and deletes one workaround. It does not redesign extraction.
+
+## Current worker configuration (supersedes the historical single-worker references)
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.

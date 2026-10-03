@@ -105,7 +105,7 @@ async def test_confirm_printed_requeues_same_job(client, db_session, monkeypatch
     monkeypatch.setattr(
         documents_endpoint.process_ingestion,
         "delay",
-        lambda *args: dispatch.append(args),
+        lambda *args, **kwargs: dispatch.append((args, kwargs)),
     )
 
     response = await client.post(
@@ -129,7 +129,7 @@ async def test_confirm_printed_requeues_same_job(client, db_session, monkeypatch
     )
     assert count.scalar_one() == 1
     assert response.json()["status"] == "arabic_ocr_queued"
-    assert dispatch == [(str(document_id), str(job_id), f"{document_id}.pdf")]
+    assert dispatch == [((str(document_id), str(job_id), f"{document_id}.pdf"), {"execution_generation": 1})]
 
 
 @pytest.mark.asyncio
@@ -151,7 +151,7 @@ async def test_confirm_handwritten_does_not_dispatch(client, db_session, monkeyp
     monkeypatch.setattr(
         documents_endpoint.process_ingestion,
         "delay",
-        lambda *args: dispatch.append(args),
+        lambda *args, **kwargs: dispatch.append((args, kwargs)),
     )
 
     response = await client.post(
@@ -291,7 +291,7 @@ async def test_dispatch_failure_restores_typed_failed_state_without_leaking_erro
         db_session, await _user_id(db_session, email)
     )
 
-    def _fail_dispatch(*_args):
+    def _fail_dispatch(*_args, **_kwargs):
         raise RuntimeError("private broker credential")
 
     monkeypatch.setattr(documents_endpoint.process_ingestion, "delay", _fail_dispatch)
@@ -313,11 +313,11 @@ async def test_dispatch_failure_restores_typed_failed_state_without_leaking_erro
     monkeypatch.setattr(
         documents_endpoint.process_ingestion,
         "delay",
-        lambda *args: dispatched.append(args),
+        lambda *args, **kwargs: dispatched.append((args, kwargs)),
     )
     retry = await client.post(
         f"/api/v1/papers/{document_id}/arabic-writing-style",
         json={"writing_style": "printed"},
     )
     assert retry.status_code == 202
-    assert dispatched == [(str(document_id), str(job_id), f"{document_id}.pdf")]
+    assert dispatched == [((str(document_id), str(job_id), f"{document_id}.pdf"), {"execution_generation": 2})]

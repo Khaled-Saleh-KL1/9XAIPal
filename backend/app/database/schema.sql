@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS documents (
 
     -- LLM-corrected reading order for complex layouts (two-column papers, etc.)
     -- Stores an array of original sequence_ids in the correct logical reading order.
+    reading_order_execution_result JSONB,
+    reading_order_execution_error TEXT,
+    reading_order_execution_state TEXT,
+    reading_order_execution_task_id TEXT,
+    reading_order_claim_token UUID,
+    reading_order_claim_expires_at TIMESTAMPTZ,
     reading_order JSONB,
     reading_order_model TEXT,
     reading_order_updated_at TIMESTAMPTZ,
@@ -448,11 +454,27 @@ CREATE TABLE IF NOT EXISTS ask_traces (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Completed reading-order deliveries stay deduplicated across newer requests.
+CREATE TABLE IF NOT EXISTS reading_order_executions (
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (document_id, task_id)
+);
+
 -- Ingestion jobs
 CREATE TABLE IF NOT EXISTS ingestion_jobs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'queued',
+    execution_result JSONB,
+    execution_error TEXT,
+    execution_state TEXT,
+    execution_task_id TEXT,
+    execution_generation INTEGER NOT NULL DEFAULT 0,
+    claim_token UUID,
+    claim_expires_at TIMESTAMPTZ,
     -- Fraction (0-1) of progress *within* the current status, e.g. pages
     -- extracted so far / total pages while status='extracting'. NULL when no
     -- finer-grained signal is available than the status itself (the normal
@@ -808,3 +830,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_members_personal
 -- applies the style field to existing caches and is a no-op before creation.
 ALTER TABLE IF EXISTS paper_references
     ADD COLUMN IF NOT EXISTS citation_style TEXT;
+
+-- Finished canvas deliveries, scoped to deliberate same-job retry generations.
+CREATE TABLE IF NOT EXISTS ingestion_executions (
+    job_id UUID NOT NULL REFERENCES ingestion_jobs(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL,
+    task_id TEXT NOT NULL,
+    PRIMARY KEY (job_id, generation, task_id)
+);

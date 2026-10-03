@@ -1751,3 +1751,11 @@ plan does not authorize a VPS deployment.
   <https://googleapis.github.io/python-genai/>
 - W3C bidirectional text guidance:
   <https://www.w3.org/International/docs/bp-html-bidi/>
+
+## Current worker configuration (supersedes the historical single-worker references)
+
+Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
+consumes the light/default queue `celery` (retaining the old backlog).
+`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
+Rebuild/update `api` and both workers together. See [deployment queue details](../../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
+for routing, ingest limits, startup recovery and migration caveats.
