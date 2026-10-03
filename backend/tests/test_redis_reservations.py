@@ -6,11 +6,12 @@ from uuid import uuid4
 from kombu import Connection
 import redis
 
+from _queue_test_helpers import redis_test_url
 from app.workers import tasks
 
 
 def test_restored_reservation_survives_original_delivery_ack():
-    broker, prefix = 'redis://host.docker.internal:55440/14', f'm5-tags-{uuid4()}:'
+    broker, prefix = redis_test_url(), f'm5-tags-{uuid4()}:'
     client = redis.Redis.from_url(broker)
     try:
         with Connection(broker, transport_options={'global_keyprefix': prefix}) as original, Connection(broker, transport_options={'global_keyprefix': prefix}) as recovery:
@@ -32,7 +33,7 @@ def test_restored_reservation_survives_original_delivery_ack():
 
 
 def test_lost_publish_reply_copies_have_independent_reservations():
-    broker, prefix = 'redis://host.docker.internal:55440/14', f'm5-tags-{uuid4()}:'
+    broker, prefix = redis_test_url(), f'm5-tags-{uuid4()}:'
     client = redis.Redis.from_url(broker)
     try:
         with Connection(broker, transport_options={'global_keyprefix': prefix}) as one, Connection(broker, transport_options={'global_keyprefix': prefix}) as two:

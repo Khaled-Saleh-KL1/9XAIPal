@@ -6,6 +6,7 @@ import pytest
 from celery.exceptions import Reject
 from sqlalchemy import text
 
+from _queue_test_helpers import redis_test_url
 from app.workers import tasks
 from app.workers.execution_claims import ExecutionClaim
 from test_article_ingestion import _insert_document_and_job
@@ -57,7 +58,7 @@ def test_mineru_descendants_stop_before_automatic_recovery(db_session_sync, tmp_
     from test_heavy_task_canvas import wait_for
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
-    broker, prefix = 'redis://host.docker.internal:55440/14', f'm5-tree-{uuid4()}:'
+    broker, prefix = redis_test_url(), f'm5-tree-{uuid4()}:'
     client = redis.Redis.from_url(broker)
     app = Celery('tree-client', broker=broker, backend=broker)
     app.conf.update(broker_transport_options={'global_keyprefix': prefix}, result_backend_transport_options={'global_keyprefix': prefix})
@@ -204,7 +205,7 @@ def test_reading_checkpoint_continuation_precedes_new_request(db_session_sync, t
     claim.__enter__(); claim.save_outcome(saved); claim.abandon()
     db_session_sync.execute(text("UPDATE documents SET reading_order_claim_expires_at=now()-interval '1 second' WHERE id=:id"), {'id': doc})
     db_session_sync.commit()
-    broker, prefix = 'redis://host.docker.internal:55440/14', f'm5-reading-{uuid4()}:'
+    broker, prefix = redis_test_url(), f'm5-reading-{uuid4()}:'
     client = redis.Redis.from_url(broker)
     app = Celery('reading-client', broker=broker, backend=broker)
     app.conf.update(broker_transport_options={'global_keyprefix': prefix}, result_backend_transport_options={'global_keyprefix': prefix})

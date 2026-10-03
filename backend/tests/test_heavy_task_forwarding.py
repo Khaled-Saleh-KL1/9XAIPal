@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
+from _queue_test_helpers import redis_test_url
 from app.core.celery_app import celery_app, _restore_interrupted_tasks
 from app.workers import tasks
 from test_article_ingestion import _insert_document_and_job, _pdf_resource
@@ -197,7 +198,7 @@ def test_publish_reply_loss_reconnect_duplicates_are_harmless(db_session_sync, t
     import redis
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
-    broker_url = "redis://host.docker.internal:55440/14"
+    broker_url = redis_test_url()
     prefix = f"m3-reconnect-{uuid4()}:"
     client = redis.Redis.from_url(broker_url)
     args = [str(doc), str(job), "x.pdf"]

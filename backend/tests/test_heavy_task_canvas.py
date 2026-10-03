@@ -10,6 +10,8 @@ from celery import Celery
 import pytest
 import redis
 
+from _queue_test_helpers import redis_test_url
+
 
 def wait_for(predicate, timeout=25):
     deadline = time.monotonic() + timeout
@@ -27,7 +29,7 @@ def test_replacement_preserves_callback_order_and_original_errback(db_session_sy
     from test_article_ingestion import _insert_document_and_job
     doc, job = uuid4(), uuid4()
     _insert_document_and_job(db_session_sync, doc, job)
-    broker = "redis://host.docker.internal:55440/14"
+    broker = redis_test_url()
     prefix = f"m3-canvas-{uuid4()}:"
     client = redis.Redis.from_url(broker)
     app = Celery("m3-client", broker=broker, backend=broker)

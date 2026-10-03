@@ -8,6 +8,7 @@ import pytest
 from celery.exceptions import Ignore, Reject
 from sqlalchemy import text
 
+from _queue_test_helpers import redis_test_url
 from app.database.connection import sync_engine
 from app.workers import tasks
 from test_article_ingestion import _insert_document_and_job
@@ -128,7 +129,7 @@ def test_article_redelivery_reuses_pdf_while_ingest_runs(db_session_sync, tmp_pa
     import json
     from kombu import Connection
     import redis
-    broker_url = "redis://host.docker.internal:55440/14"
+    broker_url = redis_test_url()
     client = redis.Redis.from_url(broker_url)
     prefix = f"m3-pdf-{uuid4()}:"
     with Connection(broker_url, transport_options={"global_keyprefix": prefix}) as connection:

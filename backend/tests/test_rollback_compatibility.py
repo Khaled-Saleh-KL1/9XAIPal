@@ -1,9 +1,12 @@
 """Actual pre-split worker plus rollback overlay, real test Redis/Postgres."""
 import json
+import io
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tarfile
 from uuid import uuid4
 
 from celery import Celery
@@ -12,10 +15,38 @@ import pytest
 import redis
 from sqlalchemy import text
 
+from _queue_test_helpers import redis_test_url
 from test_article_ingestion import _insert_document_and_job
 from test_heavy_task_canvas import wait_for
 
 ROOT = Path(__file__).resolve().parents[2]
+PRE_SPLIT_REVISION = '224051d4e8fb1b0c1e9615fe6e35e458c966f4e6'
+
+
+def extract_pre_split_tree(target):
+    """Prefer a supplied archive; otherwise use the immutable pre-split tree."""
+    archive_path = os.environ.get('M4_PRE_SPLIT_ARCHIVE')
+    if archive_path:
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(target, filter='data')
+        return
+    if not shutil.which('git'):
+        pytest.skip('git is absent; supply M4_PRE_SPLIT_ARCHIVE to test pre-split rollback')
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(ROOT), 'archive', PRE_SPLIT_REVISION],
+            capture_output=True, check=True,
+        )
+    except FileNotFoundError:
+        pytest.skip('git is absent; supply M4_PRE_SPLIT_ARCHIVE to test pre-split rollback')
+    except subprocess.CalledProcessError as exc:
+        pytest.skip(
+            f'pre-split revision {PRE_SPLIT_REVISION} is unavailable: '
+            f'{exc.stderr.decode(errors="replace").strip()}; '
+            'fetch full history or supply M4_PRE_SPLIT_ARCHIVE'
+        )
+    with tarfile.open(fileobj=io.BytesIO(result.stdout)) as archive:
+        archive.extractall(target, filter='data')
 
 
 @pytest.mark.parametrize('finished', [False, True])
@@ -25,19 +56,7 @@ def test_pre_split_rollback_retains_fencing_and_distinct_canvases(db_session_syn
     _insert_document_and_job(db_session_sync, doc, job)
     old = tmp_path / 'old'
     old.mkdir()
-    archive_path = os.environ.get('M4_PRE_SPLIT_ARCHIVE')
-    if archive_path:
-        import tarfile
-        with tarfile.open(archive_path) as archive:
-            archive.extractall(old, filter='data')
-    else:
-        import shutil
-        if not shutil.which('git'):
-            pytest.skip('Supply M4_PRE_SPLIT_ARCHIVE when git is absent from the test image')
-        archive = subprocess.Popen(['git', '-C', str(ROOT), 'archive', 'origin/main'], stdout=subprocess.PIPE)
-        subprocess.run(['tar', '-x', '-C', str(old)], stdin=archive.stdout, check=True)
-        archive.stdout.close()
-        assert archive.wait() == 0
+    extract_pre_split_tree(old)
     # A concrete old tree, overlaid only through the production installer.
     installer = ROOT / 'scripts/prepare-celery-rollback.py'
     if installer.exists():
@@ -48,7 +67,7 @@ def test_pre_split_rollback_retains_fencing_and_distinct_canvases(db_session_syn
     if adopted:
         db_session_sync.execute(text("UPDATE documents SET filename=:filename,doc_kind='paper' WHERE id=:id"), {'filename':filename,'id':doc})
         db_session_sync.commit()
-    broker, prefix = 'redis://host.docker.internal:55440/14', f'm4-rollback-{uuid4()}:'
+    broker, prefix = redis_test_url(), f'm4-rollback-{uuid4()}:'
     client = redis.Redis.from_url(broker)
     app = Celery('rollback-client', broker=broker, backend=broker)
     app.conf.update(broker_transport_options={'global_keyprefix':prefix}, result_backend_transport_options={'global_keyprefix':prefix})
@@ -187,11 +206,8 @@ assert calls==['ran']
 async def test_overlay_schema_is_available_after_pre_migration_failure(tmp_path):
     import ast
     from app.database.connection import engine
-    archive_path = os.environ['M4_PRE_SPLIT_ARCHIVE']
-    import tarfile
     target=tmp_path/'old'
-    with tarfile.open(archive_path) as archive:
-        archive.extractall(target, filter='data')
+    extract_pre_split_tree(target)
     subprocess.run([sys.executable,str(ROOT/'scripts/prepare-celery-rollback.py'),str(ROOT),str(target)],check=True)
     # Recreate only minimal pre-split tables in this test's private schema.
     schema='m4_'+uuid4().hex

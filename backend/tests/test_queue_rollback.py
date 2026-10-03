@@ -8,6 +8,8 @@ from uuid import uuid4
 
 import yaml
 
+from _queue_test_helpers import redis_test_url
+from app.core.config import settings
 from app.core.celery_app import celery_app
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,13 +45,13 @@ esac
     # The test image has redis-py rather than redis-cli. Keep the helper's
     # shell/command path real, substituting only the local client executable.
     cli = tmp_path / "redis-cli"
-    cli.write_text(f"#!{sys.executable}\n" + """import sys
+    cli.write_text(f"#!{sys.executable}\n" + """import os, sys
 import redis
-client = redis.Redis(host='host.docker.internal', port=55440, db=0)
+client = redis.Redis.from_url(os.environ['M6_TEST_REDIS_URL'])
 print(client.execute_command(*sys.argv[2:]))
 """)
     cli.chmod(0o755)
-    env = dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}", FAKE_DOCKER_LOG=str(log), CELERY_QUEUE_PREFIX=prefix)
+    env = dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}", FAKE_DOCKER_LOG=str(log), CELERY_QUEUE_PREFIX=prefix, M6_TEST_REDIS_URL=settings.redis_url)
     with celery_app.connection_for_write() as connection:
         client = connection.default_channel.client
         keys = [prefix + key for key in ("ingest", "celery", "ingest\x06\x163", "celery\x06\x163", "unacked", "unacked_index")]
@@ -111,7 +113,7 @@ def test_migrated_delivery_restores_and_retries_on_pre_split_queue():
     from celery.exceptions import Retry
     import pytest
     prefix = f"m3-restore-{uuid4()}:"
-    broker = "redis://host.docker.internal:55440/14"
+    broker = redis_test_url()
     lua = (ROOT / "scripts/rollback-celery-queues.sh").read_text().split("<<'LUA'\n")[1].split("\nLUA")[0]
     old = Celery("pre-split", broker=broker)
     old.conf.update(broker_transport_options={"global_keyprefix": prefix}, task_default_queue="celery", task_queues=(Queue("celery", Exchange("celery"), routing_key="celery"),))
