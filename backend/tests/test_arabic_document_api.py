@@ -200,6 +200,38 @@ async def test_direct_pdf_upload_reaches_the_shared_classifier(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["english", "arabic", "mixed", None])
+async def test_reextract_response_is_route_neutral(
+    client, db_session, monkeypatch, tmp_path, language
+):
+    email = await _signup(client)
+    document_id = await _document(
+        db_session, await _user_id(db_session, email), language=language
+    )
+    monkeypatch.setattr(documents_endpoint, "extracted_dir", lambda: tmp_path / "extracted")
+    monkeypatch.setattr(documents_endpoint, "images_dir", lambda: tmp_path / "images")
+    monkeypatch.setattr(documents_endpoint.process_ingestion, "delay", lambda *_args: None)
+
+    response = await client.post(f"/api/v1/papers/{document_id}/reextract")
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert set(payload) == {"paper_id", "status", "job_id", "message"}
+    assert payload["paper_id"] == str(document_id)
+    assert payload["status"] == "reextract_queued"
+    job_document_id = (await db_session.execute(
+        text("SELECT document_id FROM ingestion_jobs WHERE id=:id"),
+        {"id": UUID(payload["job_id"])},
+    )).scalar_one()
+    assert job_document_id == document_id
+    assert "MinerU" not in payload["message"]
+    assert "original PDF" in payload["message"]
+    assert "automatically" in payload["message"]
+    assert "language" in payload["message"]
+    assert "Poll /progress" in payload["message"]
+
+
+@pytest.mark.asyncio
 async def test_reextract_dispatch_reaches_the_shared_classifier(
     client, db_session, db_session_sync, monkeypatch, tmp_path
 ):

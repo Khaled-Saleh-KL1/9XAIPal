@@ -2170,9 +2170,10 @@ export function ArticleReader({
               extractor={doc.extractor}
               onReextract={async () => {
                 if (!(await confirm({
-                  title: 'Re-extract this paper with MinerU?',
+                  title: 'Re-extract this paper?',
                   body: 'This will wipe the cached chunks/embeddings and re-run '
-                      + 'MinerU from the original PDF.',
+                      + 'extraction from the original PDF. The pipeline is chosen '
+                      + 'automatically: English-only → MinerU; Arabic or mixed → Arabic OCR.',
                   confirmLabel: 'Re-extract',
                   tone: 'danger',
                 }))) return;

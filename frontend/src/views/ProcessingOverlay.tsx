@@ -46,7 +46,7 @@ const EXTRACT_STEPS: StepDef[] = [
   {
     id: 1,
     title: 'Extracting structure',
-    sub: 'MinerU is parsing layout, math, and figures',
+    sub: 'Reading layout, text, math, and figures — the pipeline is chosen automatically',
     matches: ['queued', 'extracting'],
   },
   {
@@ -145,6 +145,13 @@ interface Props {
 const QUEUE_FULL_RETRY_SECONDS = 45;
 const HANDWRITTEN_UNAVAILABLE_MESSAGE = 'Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.';
 
+function extractionSub(extractor: string | null | undefined): string {
+  if (extractor === 'mineru') return 'MinerU is parsing layout, math, and figures';
+  if (extractor === 'gemini_arabic_flash') return 'Arabic OCR (Gemini Flash) is reading the pages';
+  if (extractor === 'gemini_arabic_pro') return 'Arabic OCR (Gemini Pro) is reading the handwriting';
+  return EXTRACT_STEPS[0].sub;
+}
+
 function extractorLabel(ex: string | null | undefined): { label: string; tone: 'good' | 'warn' | 'pending' } {
   if (ex === 'mineru') return { label: 'MinerU (full layout + math + footnotes)', tone: 'good' };
   if (ex === 'pymupdf_fallback') return { label: 'PyMuPDF fallback (degraded: no math LaTeX, no table structure)', tone: 'warn' };
@@ -205,7 +212,9 @@ export function ProcessingOverlay({
   // paper" narrates "MinerU is parsing layout, math, and figures" for a run
   // where MinerU never executes, and labels the host "· runs locally".
   const effectiveKind = extractor === 'trafilatura' ? 'article' : kind;
-  const steps = effectiveKind === 'article' ? [...ARTICLE_EXTRACT_STEPS, ...INDEX_STEPS] : [...EXTRACT_STEPS, ...INDEX_STEPS];
+  const steps = effectiveKind === 'article'
+    ? [...ARTICLE_EXTRACT_STEPS, ...INDEX_STEPS]
+    : [{ ...EXTRACT_STEPS[0], sub: extractionSub(extractor) }, ...EXTRACT_STEPS.slice(1), ...INDEX_STEPS];
   const overall = failed || declined ? 0 : stageProgress(status, null, progressFraction);
 
   return (
