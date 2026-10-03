@@ -819,7 +819,8 @@ async def rechunk_paper(
             status_code=409,
             detail=(
                 "No cached extraction on disk for this paper — "
-                "delete and re-upload to re-run MinerU."
+                "delete and re-upload to extract the original PDF again "
+                "with an automatically chosen pipeline."
             ),
         )
 
@@ -1224,12 +1225,12 @@ async def reextract_paper(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Wipe cached extraction artifacts and re-run the full pipeline (MinerU + chunker).
+    """Wipe cached extraction artifacts and re-run extraction, chunking, and embedding.
 
     Distinct from /rechunk, which only re-runs the chunker on already-extracted
-    markdown. /reextract is the one to use after MinerU was installed (or fixed),
-    or to migrate papers that were initially processed by the PyMuPDF fallback
-    onto MinerU's higher-fidelity output.
+    markdown. /reextract routes the original PDF again at extraction time:
+    English-only documents use MinerU; Arabic or mixed documents use the
+    Arabic OCR route (printed uses Flash, handwritten uses Pro).
     """
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
@@ -1290,7 +1291,7 @@ async def reextract_paper(
     job = await create_ingestion_job(db, paper_id)
     await db.commit()
 
-    # Wipe cached extraction + extracted images so MinerU runs fresh.
+    # Wipe cached extraction + extracted images so the selected pipeline runs fresh.
     extract_path = extracted_dir() / str(paper_id)
     try:
         if extract_path.exists():
@@ -1337,7 +1338,9 @@ async def reextract_paper(
         "status": "reextract_queued",
         "job_id": str(job["id"]),
         "message": (
-            "Cached extraction wiped; MinerU is re-running from the original PDF. "
+            "Cached extraction wiped; the document is being extracted again from "
+            "the original PDF. The pipeline is chosen automatically based on "
+            "document language. "
             "Poll /progress to watch extracting → chunking → embedding."
         ),
     }

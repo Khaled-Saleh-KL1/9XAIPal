@@ -872,10 +872,11 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
               extractor={meta.extractor}
               onReextract={async () => {
                 if (!(await confirm({
-                  title: 'Re-extract this paper with MinerU?',
+                  title: 'Re-extract this paper?',
                   body: 'This will wipe the cached chunks/embeddings and re-run '
-                      + 'MinerU from the original PDF. For a large book this can '
-                      + 'take a while.',
+                      + 'extraction from the original PDF. The pipeline is chosen '
+                      + 'automatically: English-only → MinerU; Arabic or mixed → Arabic OCR. '
+                      + 'For a large book this can take a while.',
                   confirmLabel: 'Re-extract',
                   tone: 'danger',
                 }))) return;
@@ -1521,7 +1522,7 @@ function GranularUnit({
 // ── Extractor pill ──────────────────────────────────────────────────────────
 // Shows whether the paper was parsed by MinerU (full fidelity) or by the
 // PyMuPDF fallback (degraded). For fallback docs, exposes a one-click
-// "Re-extract with MinerU" button so users can upgrade the parse in place.
+// "Re-extract" button so users can rerun the automatically routed pipeline.
 
 // ── Chapter picker (book mode) ────────────────────────────────────────────────
 // Lets the reader jump straight to a chapter (incl. the introduction / front
@@ -1627,7 +1628,7 @@ export function ExtractorPill({
   const title = isMineru
     ? 'Parsed by MinerU: typed equations, footnotes, table structure.'
     : isFallback
-    ? 'Parsed by PyMuPDF fallback (no math LaTeX, no table structure). Click to re-extract with MinerU.'
+    ? 'Parsed by PyMuPDF fallback (no math LaTeX, no table structure). Click to re-extract with an automatically chosen pipeline.'
     : `Extractor: ${extractor}`;
 
   return (
