@@ -852,6 +852,15 @@ def test_one_unreadable_page_in_a_long_document_is_marked_not_fatal(tmp_path):
             "the methods for future research.",
             id="decorated-furniture-with-body",
         ),
+        pytest.param(
+            "North Valley Center for Public Policy and Civic Research\n"
+            "Office of Regional Coordination and Academic Development\n"
+            "Directorate of Research Administration and Strategic Planning\n"
+            "Ministry of Education, Culture, Public Service, and Regional Affairs\n"
+            "Annual Governance and Public Policy Research Review\n"
+            "Page 7 of 90",
+            id="header-heavy-page-with-enough-latin-letters",
+        ),
     ],
 )
 def test_english_pdf_text_layer_recovers_page_and_records_its_provider(tmp_path, text):
@@ -977,20 +986,32 @@ def test_pdf_page_number_line_does_not_count_toward_body_letter_threshold(
     )
     text = body + "\n" + page_line
 
-    assert _usable_pdf_text_layer(text, settings=Settings(_env_file=None)) is None
+    assert _usable_pdf_text_layer(text) is None
 
 
-def test_pdf_text_layer_requires_two_sentence_like_lines():
+def test_pdf_text_layer_accepts_exactly_200_latin_letters_after_page_number_drop():
     from app.extraction.arabic_ocr import _usable_pdf_text_layer
 
-    text = "information" * 9 + "\n" + "research " * 12 + "evidence."
+    text = "research " * 25 + "\nPage 1 of 100"
 
-    assert _usable_pdf_text_layer(text, settings=Settings(_env_file=None)) is None
+    assert _usable_pdf_text_layer(text) == text.strip()
+
+
+def test_pdf_text_layer_accepts_latin_at_the_80_percent_boundary():
+    from app.extraction.arabic_ocr import _usable_pdf_text_layer
+
+    text = "research " * 25 + "\n" + "العربية " * 7 + "ا"
+
+    assert _usable_pdf_text_layer(text) == text.strip()
 
 
 @pytest.mark.parametrize(
     "bad_text",
     [
+        pytest.param(
+            "هذا النص العربي واضح ومقروء من الجميع\n" + _ARABIC_TEXT_LAYER_BODY,
+            id="good-arabic-layer",
+        ),
         pytest.param(
             "ﻫﺬﺍ ﺍﻟﻨﺺ ﺍﻟﻌﺮﺑﻲ ﻭﺍﺿﺢ ﻭﻣﻘﺮﻭﺀ ﻣﻦ "
             "ﺍﻟﺠﻤﻴﻊ\n"
@@ -1023,9 +1044,15 @@ def test_pdf_text_layer_requires_two_sentence_like_lines():
             ),
             id="reversed-arabic-common-words",
         ),
+        pytest.param(
+            _ENGLISH_TEXT_LAYER_BODY + "\n" + _ARABIC_TEXT_LAYER_BODY,
+            id="mixed-latin-and-arabic",
+        ),
     ],
 )
-def test_broken_arabic_text_layer_keeps_unreadable_marker(tmp_path, bad_text):
+def test_arabic_dominant_or_mixed_pdf_text_layers_keep_unreadable_marker(
+    tmp_path, bad_text
+):
     from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
 
     pdf = _make_pdf_with_text_layers(tmp_path / "broken-arabic.pdf", [bad_text])
@@ -1039,7 +1066,7 @@ def test_broken_arabic_text_layer_keeps_unreadable_marker(tmp_path, bad_text):
 
     result = extract(
         pdf,
-        tmp_path / "broken-arabic-out",
+        tmp_path / "rejected-language-text-layer-out",
         FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
         FakeGemma({1: GemmaKeysExhausted("provider_error", ())}),
         settings=settings,
@@ -1080,50 +1107,7 @@ def test_mojibake_arabic_text_layer_keeps_unreadable_marker(tmp_path):
     assert result.pages[0].provider == "gemma4_arabic_fallback"
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        pytest.param(
-            "هذا النص العربي واضح ومقروء من الجميع\n" + _ARABIC_TEXT_LAYER_BODY,
-            id="existing-readable-arabic",
-        ),
-        pytest.param(
-            "دخل رجل ثم طلب كتاب حساب ثم درس.\n" + _ARABIC_TEXT_LAYER_BODY,
-            id="valid-common-words-not-reversed",
-        ),
-        pytest.param(
-            "كتاب جديد كبير جميل واضح للاستخدام حديث مفيد ثابت.\n"
-            + _ARABIC_TEXT_LAYER_BODY,
-            id="valid-content-words-not-reversed",
-        ),
-    ],
-)
-def test_good_arabic_pdf_text_layer_recovers_page(tmp_path, text):
-    pdf = _make_pdf_with_text_layers(tmp_path / "good-arabic-text-layer.pdf", [text])
-    settings = Settings(
-        _env_file=None,
-        arabic_ocr_enabled=True,
-        arabic_ocr_single_request_max_pages=4,
-        arabic_ocr_batch_pages=4,
-        arabic_ocr_max_unreadable_page_share=0.0,
-    )
-
-    result = extract(
-        pdf,
-        tmp_path / "good-arabic-text-layer-out",
-        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
-        FakeGemma({1: GemmaKeysExhausted("provider_error", ())}),
-        settings=settings,
-    )
-
-    assert result.pages[0].markdown == text
-    assert result.pages[0].provider == "pdf_text_layer"
-    assert result.provider_summary == [
-        {"provider": "pdf_text_layer", "pages": [1]}
-    ]
-
-
-def test_mostly_english_text_layer_survives_a_small_presentation_form_fragment(
+def test_latin_dominant_text_layer_survives_a_small_presentation_form_fragment(
     tmp_path,
 ):
     text = (

@@ -23,7 +23,6 @@ from app.extraction.arabic_adapter import (
     pages_to_content_list,
     parse_complete_page_prefix,
 )
-from app.extraction.arabic_classifier import count_arabic_letters, count_latin_letters
 from app.extraction.arabic_repair import repair_gemma_page
 from app.extraction.arabic_types import (
     ArabicExtractionResult,
@@ -115,10 +114,6 @@ _ARABIC_BASE_MARK_GAP_RE = re.compile(
     rf"(?P<base>[{_ARABIC_OCR_LETTERS}]){_ARABIC_OCR_HSPACE}+"
     rf"(?P<marks>{_ARABIC_OCR_MARK_RUN})"
 )
-_PDF_TEXT_WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
-_PDF_ARABIC_WORD_RE = re.compile(
-    rf"[{_ARABIC_OCR_LETTERS}{_ARABIC_OCR_MARKS}]+"
-)
 _PDF_PAGE_NUMBER_LINE_RE = re.compile(
     r"(?:(?:page|صفحة)\s+\d+(?:\s+(?:of|من|/)\s+\d+)?|"
     r"\d+(?:\s+(?:of|من|/)\s+\d+)?)",
@@ -126,47 +121,6 @@ _PDF_PAGE_NUMBER_LINE_RE = re.compile(
 )
 _PDF_MOJIBAKE_RE = re.compile(
     r"[\u00c2\u00c3\u00d0\u00d8\u00d9\u00de][\u0080-\u00bf]"
-)
-_COMMON_ARABIC_WORDS = frozenset(
-    {
-        "هذا", "هذه", "هذان", "هؤلاء", "ذلك", "تلك", "الذي", "التي",
-        "الذين", "اللاتي", "من", "في", "على", "إلى", "الى", "عن", "أن",
-        "ان", "إن", "لا", "ما", "هو", "هي", "كان", "كانت", "يكون",
-        "تكون", "مع", "بين", "بعد", "قبل", "قد", "لم", "لن", "كل",
-        "كما", "حيث", "عند", "أي", "او", "أو", "ثم", "و", "نص", "النص",
-        "عربي", "العربي", "واضح", "قابل", "صفحة", "دخل", "رجل",
-        "طلب", "كتاب", "حساب", "درس", "جديد", "كبير", "جميل",
-        "للاستخدام", "حديث", "مفيد", "ثابت",
-    }
-)
-# PyMuPDF generally returns base Arabic letters rather than contextual glyph
-# forms, so compare common letters at word edges as a direction signal.
-_ARABIC_WORD_INITIAL_SCORES = {
-    "ا": 1.0, "أ": 1.0, "إ": 1.0, "آ": 0.8, "ب": 0.8, "ت": 0.8,
-    "ج": 0.15, "ح": 0.2, "د": 0.15, "ر": 0.1, "س": 0.65, "ش": 0.3,
-    "ع": 0.6, "ف": 0.5, "ق": 0.4, "ك": 0.6, "ل": 0.8, "م": 1.0,
-    "ن": 0.6, "ه": 0.4, "و": 0.8, "ي": 0.7, "ث": 0.05, "ذ": 0.05,
-    "ز": 0.15, "ص": 0.2, "ض": 0.15, "ط": 0.1, "ظ": 0.05, "غ": 0.15,
-    "ء": 0.1, "ة": -2.0, "ى": -1.5,
-}
-_ARABIC_WORD_FINAL_SCORES = {
-    "ء": 0.2, "ا": 1.0, "ب": 0.2, "ت": 0.8, "ث": 0.05, "ج": 0.1,
-    "ح": 0.1, "د": 0.8, "ذ": 0.05, "ر": 0.8, "ز": 0.1, "س": 0.4,
-    "ش": 0.1, "ص": 0.15, "ض": 0.1, "ط": 0.1, "ظ": 0.05, "ع": 0.4,
-    "غ": 0.1, "ف": 0.4, "ق": 0.3, "ك": 0.15, "ل": 0.8, "م": 0.6,
-    "ن": 0.9, "ه": 0.8, "و": 0.25, "ي": 1.0, "ى": 0.8, "ة": 1.5,
-}
-_ARABIC_WORD_PREFIX_WEIGHTS = (
-    ("وال", 2.0), ("بال", 2.0), ("كال", 2.0), ("فال", 2.0),
-    ("ولل", 2.0), ("لل", 1.8), ("ال", 1.8),
-    ("و", 0.5), ("ف", 0.5), ("ب", 0.5), ("ك", 0.5), ("ل", 0.5),
-    ("س", 0.4),
-)
-_ARABIC_WORD_SUFFIX_WEIGHTS = (
-    ("هما", 1.4), ("كما", 1.4), ("ات", 1.5), ("ون", 1.5), ("ين", 1.5),
-    ("ان", 1.3), ("ها", 1.2), ("هم", 1.2), ("هن", 1.2), ("نا", 1.2),
-    ("ني", 1.2), ("كم", 1.2), ("كن", 1.2), ("وا", 1.2), ("تم", 1.0),
-    ("تن", 1.0), ("ة", 1.4), ("ه", 0.6), ("ي", 0.5), ("ت", 0.5),
 )
 
 
@@ -401,9 +355,7 @@ def extract_arabic_document(
     )
 
     def _mark_unreadable(page_number: int) -> bool:
-        text_layer = _usable_pdf_text_layer(
-            source_texts[page_number - 1], settings=settings
-        )
+        text_layer = _usable_pdf_text_layer(source_texts[page_number - 1])
         if text_layer is not None:
             page_map[page_number] = ArabicOcrPage(
                 page_number=page_number,
@@ -609,26 +561,28 @@ def _extractor_from_pages(
     raise ArabicExtractionFailed("The Arabic OCR provider provenance is invalid.")
 
 
-def _usable_pdf_text_layer(text: str, *, settings: Settings) -> str | None:
-    """Return substantive, readable page text or reject the PDF text layer."""
+def _usable_pdf_text_layer(text: str) -> str | None:
+    """Return a substantial, Latin-dominant PDF text layer or reject it."""
     candidate = text.strip()
     if not candidate or "\ufffd" in candidate:
         return None
 
-    presentation_forms = sum(
-        1
-        for character in candidate
-        if 0xFB50 <= ord(character) <= 0xFDFF
-        or 0xFE70 <= ord(character) <= 0xFEFF
-    )
-    arabic_letters = count_arabic_letters(candidate)
-    latin_letters = count_latin_letters(candidate)
-    if presentation_forms and presentation_forms / max(
-        1, presentation_forms + arabic_letters + latin_letters
-    ) >= 0.5:
-        return None
     mojibake_pairs = len(_PDF_MOJIBAKE_RE.findall(candidate))
     if mojibake_pairs >= 3 and mojibake_pairs / len(candidate) >= 0.03:
+        return None
+
+    letters = [
+        character
+        for character in candidate
+        if unicodedata.category(character).startswith("L")
+    ]
+    if not letters:
+        return None
+    latin_letters = sum(
+        unicodedata.name(character, "").startswith("LATIN")
+        for character in letters
+    )
+    if latin_letters * 5 < len(letters) * 4:
         return None
 
     body_lines = [
@@ -638,86 +592,11 @@ def _usable_pdf_text_layer(text: str, *, settings: Settings) -> str | None:
         and not _PDF_PAGE_NUMBER_LINE_RE.fullmatch(line.strip())
     ]
     body_text = "\n".join(body_lines)
-    if count_arabic_letters(body_text) + count_latin_letters(body_text) < 200:
-        return None
-    sentence_like_lines = sum(
-        len(_PDF_TEXT_WORD_RE.findall(line)) >= 8
-        or line.endswith((".", "!", "?", "؟", "۔", ":"))
-        for line in body_lines
+    body_letter_count = sum(
+        unicodedata.category(character).startswith("L")
+        for character in body_text
     )
-    if sentence_like_lines < 2:
-        return None
-    if arabic_letters >= settings.arabic_min_body_char_count and (
-        _has_reversed_arabic_words(candidate)
-    ):
-        return None
-    return candidate
-
-
-def _has_reversed_arabic_words(text: str) -> bool:
-    words = [
-        "".join(
-            character
-            for character in word
-            if not unicodedata.category(character).startswith("M")
-        )
-        for word in _PDF_ARABIC_WORD_RE.findall(text)
-    ]
-    words = [word for word in words if word]
-    if not words:
-        return False
-    impossible_starts = sum(word.startswith(("ة", "ى")) for word in words)
-    if impossible_starts >= 2:
-        return True
-    normal_matches = sum(word in _COMMON_ARABIC_WORDS for word in words)
-    reversed_matches = sum(word[::-1] in _COMMON_ARABIC_WORDS for word in words)
-    if reversed_matches >= 3 and reversed_matches >= normal_matches + 2:
-        return True
-    if normal_matches >= 3 and normal_matches >= reversed_matches + 2:
-        return False
-
-    positioned_words = [word for word in words if len(word) >= 3]
-    if len(positioned_words) < 6:
-        return False
-
-    forward_score, _ = _arabic_word_orientation_score(positioned_words)
-    reverse_score, reverse_cues = _arabic_word_orientation_score(
-        [word[::-1] for word in positioned_words]
-    )
-    # Single-letter clitics can also be ordinary root letters. Require a
-    # multi-character affix cue and a larger positional score gap.
-    return reverse_cues >= 1 and reverse_score >= forward_score + 5.0
-
-
-def _arabic_word_orientation_score(words: Sequence[str]) -> tuple[float, int]:
-    score = 0.0
-    morphology_cues = 0
-    for word in words:
-        score += _ARABIC_WORD_INITIAL_SCORES.get(word[0], 0.0)
-        score += _ARABIC_WORD_FINAL_SCORES.get(word[-1], 0.0)
-
-        prefix, prefix_score = next(
-            (
-                (prefix, weight)
-                for prefix, weight in _ARABIC_WORD_PREFIX_WEIGHTS
-                if word.startswith(prefix)
-            ),
-            ("", 0.0),
-        )
-        suffix, suffix_score = next(
-            (
-                (suffix, weight)
-                for suffix, weight in _ARABIC_WORD_SUFFIX_WEIGHTS
-                if word.endswith(suffix)
-            ),
-            ("", 0.0),
-        )
-        score += prefix_score + suffix_score
-        morphology_cues += int(len(prefix) > 1 and prefix_score >= 1.0)
-        morphology_cues += int(
-            (len(suffix) > 1 or suffix == "ة") and suffix_score >= 1.0
-        )
-    return score, morphology_cues
+    return candidate if body_letter_count >= 200 else None
 
 
 def _render_document(pdf_path: Path, dpi: int) -> tuple[list[RenderedPage], list[str]]:
