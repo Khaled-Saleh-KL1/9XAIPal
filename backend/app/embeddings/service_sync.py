@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core import tracing
 from app.core.logging import get_logger
 from app.core.config import settings
+from app.embeddings.bulk_semaphore import bulk_embedding_permit
 from app.embeddings.model import active_embedding_model_sync, get_embeddings_batch_sync
 
 logger = get_logger(__name__)
@@ -109,7 +110,8 @@ def _embed_batch(batch: list[dict]) -> tuple[list[dict], list[list[float]] | Non
     """Embed one sub-batch. Isolated per-batch so one failure doesn't kill the pool."""
     texts = [_embed_text_for_chunk(c) for c in batch]
     try:
-        return batch, get_embeddings_batch_sync(texts), None
+        with bulk_embedding_permit():
+            return batch, get_embeddings_batch_sync(texts), None
     except Exception as exc:
         return batch, None, exc
 
@@ -142,19 +144,16 @@ def _persist_batch(session: Session, model_name: str, batch: list[dict], embeddi
 def embed_document_chunks_sync(
     session: Session,
     document_id: UUID,
-    batch_size: int = 20,
+    batch_size: int | None = None,
     *,
     force: bool = False,
     chunk_type: str | None = None,
 ) -> int:
     """Generate embeddings for all un-embedded chunks of a document in committed batches.
 
-    Sub-batches run concurrently against the embedding backend. Measured on
-    this deployment's local Ollama (qwen3-embedding:0.6b, 6 CPU cores): a
-    single batch request only occupies ~2.8 cores, and one-request-per-chunk
-    is ~13x slower than batching — so a few requests in flight at once uses
-    the box's other idle cores, the same reasoning already applied to VLM
-    figure descriptions (see figure_describer_sync.py / vlm_max_concurrency).
+    The local thread pool may prepare sub-batches concurrently, but each
+    outbound request holds the Redis-backed bulk permit. The shared permit
+    limits Ollama work across all API and Celery processes.
 
     Persistence still happens one sub-batch at a time, each on its own commit
     — a Session isn't thread-safe, so writes can't happen from the pool
@@ -166,6 +165,8 @@ def embed_document_chunks_sync(
     keeps the original guarantee: a crash mid-document only loses the batch
     that was actually in flight, not batches that already finished.
     """
+    if batch_size is None:
+        batch_size = settings.bulk_embedding_batch_size
     total_embedded = 0
     workers = max(1, settings.embedding_max_concurrency)
 

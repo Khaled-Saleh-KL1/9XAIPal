@@ -251,6 +251,10 @@ class Settings(BaseSettings):
     # Bound interactive query embedding so library search can degrade to
     # full-text search while the local embedding model is under load.
     query_embedding_timeout_s: float = Field(default=8.0, gt=0)
+    bulk_embedding_max_inflight: int = Field(default=1, gt=0)
+    bulk_embedding_batch_size: int = Field(default=4, gt=0)
+    # Must outlive the synchronous embedding HTTP timeout (300 seconds).
+    bulk_embedding_semaphore_ttl_s: int = Field(default=360, gt=300)
 
     # How many embedding batches (see embed_document_chunks_sync's batch_size)
     # run concurrently against the embedding backend. Measured directly on

@@ -85,3 +85,18 @@ def test_sample_and_production_compose_use_the_production_ingestion_defaults():
 
     development = _load_compose("docker-compose.yml")["services"]
     assert development["celery_worker"]["environment"]["MINERU_PAGE_BATCH_SIZE"] == "${MINERU_PAGE_BATCH_SIZE:-100}"
+
+
+def test_query_and_bulk_embedding_limits_reach_api_and_all_celery_workers():
+    expected = {
+        "QUERY_EMBEDDING_TIMEOUT_S": "${QUERY_EMBEDDING_TIMEOUT_S:-8}",
+        "BULK_EMBEDDING_MAX_INFLIGHT": "${BULK_EMBEDDING_MAX_INFLIGHT:-1}",
+        "BULK_EMBEDDING_BATCH_SIZE": "${BULK_EMBEDDING_BATCH_SIZE:-4}",
+        "BULK_EMBEDDING_SEMAPHORE_TTL_S": "${BULK_EMBEDDING_SEMAPHORE_TTL_S:-360}",
+    }
+
+    for name in COMPOSE_FILES:
+        services = _load_compose(name)["services"]
+        for service_name in ("api", "celery_worker", "celery_worker_light"):
+            environment = services[service_name]["environment"]
+            assert {key: environment.get(key) for key in expected} == expected
