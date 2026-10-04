@@ -184,6 +184,106 @@ async def test_library_arabic_fulltext_is_scoped_to_the_requesting_user(db_sessi
     assert [row["id"] for row in results] == [document_ids[0]]
 
 
+async def test_library_english_fulltext_finds_matching_document_and_scopes_user(db_session):
+    user_ids = [uuid4(), uuid4()]
+    document_ids = [uuid4(), uuid4()]
+    for index, (user_id, document_id) in enumerate(zip(user_ids, document_ids)):
+        await db_session.execute(
+            text("INSERT INTO users (id, email, password_hash) VALUES (:id, :email, 'x')"),
+            {"id": user_id, "email": f"english-library-{index}-{user_id}@example.test"},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO documents (id, user_id, filename, original_filename, status)
+                VALUES (:id, :user_id, 'paper.pdf', 'paper.pdf', 'complete')
+            """),
+            {"id": document_id, "user_id": user_id},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO chunks (document_id, sequence_id, markdown, plain_text)
+                VALUES (:document_id, 1, :content, :content)
+            """),
+            {
+                "document_id": document_id,
+                "content": "Transformers use self attention to process sequences.",
+            },
+        )
+    await db_session.commit()
+
+    results = await pgvector.search_documents_fulltext(
+        db_session, user_ids[0], "transformer attention", limit=10
+    )
+
+    assert [row["id"] for row in results] == [document_ids[0]]
+    assert results[0]["fts_rank"] > 0
+
+
+@pytest.mark.parametrize(
+    ("query", "language", "direction", "content"),
+    [
+        ("transformer attention", "english", "ltr", "Transformers use self attention."),
+        ("شبكات عصبية", "arabic", "rtl", "الشبكات العصبية العميقة."),
+    ],
+)
+async def test_library_fulltext_can_limit_results_to_documents_without_search_vectors(
+    db_session, query, language, direction, content,
+):
+    user_id = uuid4()
+    vector_document_id, vectorless_document_id = uuid4(), uuid4()
+    await db_session.execute(
+        text("INSERT INTO users (id, email, password_hash) VALUES (:id, :email, 'x')"),
+        {"id": user_id, "email": f"vector-filter-{user_id}@example.test"},
+    )
+    vector = [0.25] + [0.0] * (pgvector.settings.vector_dimension - 1)
+    vector_literal = "[" + ",".join(map(str, vector)) + "]"
+    for document_id, has_vector in (
+        (vector_document_id, True), (vectorless_document_id, False),
+    ):
+        if has_vector:
+            await db_session.execute(
+                text("""
+                    INSERT INTO documents
+                        (id, user_id, filename, original_filename, status,
+                         detected_language, text_direction, search_embedding)
+                    VALUES (:id, :user_id, 'fixture.pdf', 'fixture.pdf', 'complete',
+                            :language, :direction, CAST(:embedding AS vector))
+                """),
+                {
+                    "id": document_id, "user_id": user_id, "language": language,
+                    "direction": direction, "embedding": vector_literal,
+                },
+            )
+        else:
+            await db_session.execute(
+                text("""
+                    INSERT INTO documents
+                        (id, user_id, filename, original_filename, status,
+                         detected_language, text_direction)
+                    VALUES (:id, :user_id, 'fixture.pdf', 'fixture.pdf', 'complete',
+                            :language, :direction)
+                """),
+                {
+                    "id": document_id, "user_id": user_id, "language": language,
+                    "direction": direction,
+                },
+            )
+        await db_session.execute(
+            text("""
+                INSERT INTO chunks (document_id, sequence_id, markdown, plain_text)
+                VALUES (:document_id, 1, :content, :content)
+            """),
+            {"document_id": document_id, "content": content},
+        )
+    await db_session.commit()
+
+    rows = await pgvector.search_documents_fulltext(
+        db_session, user_id, query, limit=10, missing_vectors_only=True
+    )
+
+    assert [row["id"] for row in rows] == [vectorless_document_id]
+
+
 def test_arabic_stemming_is_enabled_by_default():
     assert getattr(pgvector.settings, "arabic_fts_stemming_enabled", None) is True
 

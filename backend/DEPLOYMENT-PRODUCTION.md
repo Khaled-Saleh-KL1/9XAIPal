@@ -138,19 +138,37 @@ docker exec <celery_worker container> python3 -c \
   "import httpx; print(httpx.get('http://host.docker.internal:11434/api/version', timeout=5).text)"
 ```
 
-### Embedding concurrency
+### Embedding concurrency and interactive priority
 
-`EMBEDDING_MAX_CONCURRENCY` (default `2`) controls how many embedding batch requests run at once
-against local Ollama, measured directly on this hardware, not guessed:
+`BULK_EMBEDDING_MAX_INFLIGHT=1` allows one bulk embedding request at a time across all API and
+Celery processes sharing Redis. `BULK_EMBEDDING_BATCH_SIZE=4` sends at most four chunk texts in
+each normal batch request. `EMBEDDING_MAX_CONCURRENCY` still controls the local worker thread pool;
+every outbound bulk call must also acquire the shared Redis permit. The lease defaults to
+`BULK_EMBEDDING_SEMAPHORE_TTL_S=360` seconds and renews while its process is alive. The setting
+must remain longer than the synchronous embedding HTTP timeout of 300 seconds. If Redis is
+unavailable while acquiring a permit, the worker logs a warning and uses a process-local semaphore.
+Bulk embedding continues, so a permit-store outage alone does not fail ingestion. This fallback
+does not preserve the cluster-wide limit: with `N` processes running bulk embedding and
+`BULK_EMBEDDING_MAX_INFLIGHT=L`, up to `N × L` fallback calls can run at once. Requests that
+already acquired Redis permits are allowed to finish, so during the transition up to `L` of those
+calls can remain in flight too. The transient peak can therefore reach `N × L + L`, compared with
+the healthy Redis-backed limit of `L`. `L` defaults to 1; the production Compose defaults allow two
+ingest and two light-worker processes, so four fallback calls can overlap, plus up to one
+Redis-permitted call already in flight. That combined peak can exceed the recommended
+`OLLAMA_NUM_PARALLEL=2`, occupy Ollama's parallel slots, and queue interactive query embeddings. If
+a query then exceeds its 8-second deadline, search uses the full-text fallback. Bulk ingestion
+continues but may take longer. Treat the warning as degraded mode: monitor Ollama load and search
+latency, and restore Redis to re-establish the shared limit.
 
-| Concurrency | Measured time for the same workload |
-| --- | --- |
-| 1 (sequential) | baseline |
-| **2 (current default)** | **best measured**: a single batch request only occupies ~2.8 of 6 cores, so a second one overlaps into genuinely idle capacity |
-| 3 | **~4x slower than 2**, not faster: real contention, not more parallelism |
+Interactive query embeddings never acquire the bulk permit. Library search bounds each query
+embedding call by `QUERY_EMBEDDING_TIMEOUT_S=8`; if it fails or times out, search logs the
+degradation and uses English/Arabic full-text results.
 
-Don't casually raise this without re-measuring on the actual target hardware; the "more
-concurrency must be faster" intuition measurably does not hold past the sweet spot here.
+The 2026-10-03 contention measurement recorded in the incident spec was 6.6–19.8 seconds for a
+query embedding while one `embed_document` job was active; the 503s occurred while two jobs ran
+at once. No new host measurement was made for this change. For host-side Ollama, the recommended
+`OLLAMA_NUM_PARALLEL` value is `2`. Ollama runs on the host outside Compose, so apply that setting
+there when configuring Ollama.
 
 ---
 

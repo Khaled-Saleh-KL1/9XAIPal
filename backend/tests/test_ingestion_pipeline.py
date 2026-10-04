@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
@@ -149,6 +151,89 @@ def test_run_pipeline_success(
     assert len(asset_rows) == 1
     assert asset_rows[0]["file_path"] == f"{doc_id}/moved_fig1.png"
     assert asset_rows[0]["asset_type"] == "image"
+
+
+@pytest.mark.parametrize(
+    ("embedding_mode", "should_queue_vector_task"),
+    [("skipped", True), ("embedded", False)],
+)
+def test_pdf_ingestion_queues_vector_only_work_when_chunk_embedding_is_skipped(
+    monkeypatch, tmp_path, embedding_mode, should_queue_vector_task,
+):
+    from app.workers import tasks
+
+    document_id, job_id = uuid4(), uuid4()
+    filename = "paper.pdf"
+    (tmp_path / filename).write_bytes(b"test PDF")
+
+    class QueryResult:
+        def scalar_one_or_none(self):
+            return embedding_mode
+
+    class Session:
+        def execute(self, *_args, **_kwargs):
+            return QueryResult()
+
+    @contextmanager
+    def fake_session():
+        yield Session()
+
+    vector_task = MagicMock()
+    monkeypatch.setattr(tasks, "documents_dir", lambda: tmp_path)
+    monkeypatch.setattr(tasks, "check_disk_headroom", lambda: None)
+    monkeypatch.setattr(tasks, "sync_session", fake_session)
+    monkeypatch.setattr(tasks, "run_pipeline_sync", MagicMock())
+    monkeypatch.setattr(
+        tasks, "embed_document_search_vector", vector_task, raising=False
+    )
+
+    ingestion_body = getattr(tasks.process_ingestion.run, "__wrapped__", None)
+    assert callable(ingestion_body), "the ingestion task must expose its wrapped body"
+    result = ingestion_body(
+        tasks.process_ingestion, str(document_id), str(job_id), filename
+    )
+
+    assert result["status"] == "complete"
+    if should_queue_vector_task:
+        vector_task.delay.assert_called_once_with(str(document_id))
+    else:
+        vector_task.delay.assert_not_called()
+
+
+def test_article_ingestion_queues_vector_only_work_when_embeddings_are_skipped(
+    monkeypatch,
+):
+    from app.workers import tasks
+
+    document_id, job_id = uuid4(), uuid4()
+
+    class QueryResult:
+        def scalar_one_or_none(self):
+            return "skipped"
+
+    class Session:
+        def execute(self, *_args, **_kwargs):
+            return QueryResult()
+
+    @contextmanager
+    def fake_session():
+        yield Session()
+
+    vector_task = MagicMock()
+    monkeypatch.setattr(tasks.sync_engine, "dispose", lambda: None)
+    monkeypatch.setattr(tasks, "sync_session", fake_session)
+    monkeypatch.setattr(tasks, "run_article_pipeline_sync", MagicMock())
+    monkeypatch.setattr(
+        tasks, "embed_document_search_vector", vector_task, raising=False
+    )
+
+    result = tasks.process_article_ingestion.apply(
+        args=(str(document_id), str(job_id), "https://example.test/article"),
+        throw=True,
+    ).get()
+
+    assert result["status"] == "complete"
+    vector_task.delay.assert_called_once_with(str(document_id))
 
 
 def test_run_pipeline_failure_cleans_up(

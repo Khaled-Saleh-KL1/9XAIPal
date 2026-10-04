@@ -1,6 +1,7 @@
 """Synchronous embedding service: generate and store embeddings for chunks in committed batches."""
 
 from concurrent.futures import ThreadPoolExecutor
+import math
 from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.core import tracing
 from app.core.logging import get_logger
 from app.core.config import settings
+from app.database.pgvector import _vector_literal
+from app.embeddings.bulk_semaphore import bulk_embedding_permit
 from app.embeddings.model import active_embedding_model_sync, get_embeddings_batch_sync
 
 logger = get_logger(__name__)
@@ -105,11 +108,117 @@ def _embed_text_for_chunk(chunk: dict) -> str:
     return txt[:settings.embed_max_chars]
 
 
+def build_document_search_text_sync(session: Session, document_id: UUID) -> str:
+    """Build the compact title-and-lead-prose input for library search."""
+    document = session.execute(
+        text("""
+            SELECT title, original_filename, filename
+            FROM documents
+            WHERE id = :document_id
+        """),
+        {"document_id": document_id},
+    ).mappings().first()
+    if document is None:
+        return ""
+
+    title = next(
+        (
+            value.strip()
+            for value in (
+                document.get("title"),
+                document.get("original_filename"),
+                document.get("filename"),
+            )
+            if value and value.strip()
+        ),
+        "",
+    )
+    chunks = session.execute(
+        text("""
+            SELECT plain_text
+            FROM chunks
+            WHERE document_id = :document_id
+              AND chunk_type = 'text'
+              AND plain_text IS NOT NULL
+              AND length(plain_text) > 40
+            ORDER BY sequence_id
+            LIMIT 3
+        """),
+        {"document_id": document_id},
+    ).mappings().all()
+    parts = [title] if title else []
+    parts.extend((chunk["plain_text"] or "").strip() for chunk in chunks)
+    return "\n\n".join(part for part in parts if part)[:2000]
+
+
+def _validated_search_embedding(embedding) -> list[float]:
+    """Reject malformed or zero vectors before they can leave the column non-NULL."""
+    try:
+        vector = [float(value) for value in embedding]
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("search embedding vector contains invalid values") from exc
+
+    if len(vector) != settings.vector_dimension:
+        raise ValueError(
+            "search embedding vector has dimension "
+            f"{len(vector)}; expected {settings.vector_dimension}"
+        )
+    if not all(math.isfinite(value) for value in vector):
+        raise ValueError("search embedding vector contains a non-finite value")
+    if not any(value != 0.0 for value in vector):
+        raise ValueError("search embedding vector is all zero")
+    return vector
+
+
+def embed_document_search_vector_sync(session: Session, document_id: UUID) -> bool:
+    """Create a missing library search vector using the shared bulk permit.
+
+    The conditional update makes this safe to retry and prevents concurrent
+    workers from overwriting a vector another worker has already stored.
+    """
+    missing = session.execute(
+        text("""
+            SELECT 1
+            FROM documents
+            WHERE id = :document_id AND search_embedding IS NULL
+        """),
+        {"document_id": document_id},
+    ).first()
+    if missing is None:
+        return False
+
+    search_text = build_document_search_text_sync(session, document_id)
+    if not search_text:
+        return False
+    with bulk_embedding_permit():
+        embeddings = get_embeddings_batch_sync([search_text])
+    if not embeddings or len(embeddings) != 1:
+        raise ValueError("Search embedding response must contain exactly one vector")
+    embedding = _validated_search_embedding(embeddings[0])
+
+    result = session.execute(
+        text("""
+            UPDATE documents
+            SET search_embedding = CAST(:embedding AS vector)
+            WHERE id = :document_id AND search_embedding IS NULL
+            RETURNING id
+        """),
+        {
+            "document_id": document_id,
+            "embedding": _vector_literal(embedding),
+        },
+    )
+    created = result.scalar_one_or_none() is not None
+    session.commit()
+    return created
+
+
 def _embed_batch(batch: list[dict]) -> tuple[list[dict], list[list[float]] | None, Exception | None]:
     """Embed one sub-batch. Isolated per-batch so one failure doesn't kill the pool."""
     texts = [_embed_text_for_chunk(c) for c in batch]
     try:
-        return batch, get_embeddings_batch_sync(texts), None
+        with bulk_embedding_permit():
+            return batch, get_embeddings_batch_sync(texts), None
     except Exception as exc:
         return batch, None, exc
 
@@ -142,19 +251,16 @@ def _persist_batch(session: Session, model_name: str, batch: list[dict], embeddi
 def embed_document_chunks_sync(
     session: Session,
     document_id: UUID,
-    batch_size: int = 20,
+    batch_size: int | None = None,
     *,
     force: bool = False,
     chunk_type: str | None = None,
 ) -> int:
     """Generate embeddings for all un-embedded chunks of a document in committed batches.
 
-    Sub-batches run concurrently against the embedding backend. Measured on
-    this deployment's local Ollama (qwen3-embedding:0.6b, 6 CPU cores): a
-    single batch request only occupies ~2.8 cores, and one-request-per-chunk
-    is ~13x slower than batching — so a few requests in flight at once uses
-    the box's other idle cores, the same reasoning already applied to VLM
-    figure descriptions (see figure_describer_sync.py / vlm_max_concurrency).
+    The local thread pool may prepare sub-batches concurrently, but each
+    outbound request holds the Redis-backed bulk permit. The shared permit
+    limits Ollama work across all API and Celery processes.
 
     Persistence still happens one sub-batch at a time, each on its own commit
     — a Session isn't thread-safe, so writes can't happen from the pool
@@ -166,6 +272,8 @@ def embed_document_chunks_sync(
     keeps the original guarantee: a crash mid-document only loses the batch
     that was actually in flight, not batches that already finished.
     """
+    if batch_size is None:
+        batch_size = settings.bulk_embedding_batch_size
     total_embedded = 0
     workers = max(1, settings.embedding_max_concurrency)
 

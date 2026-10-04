@@ -30,6 +30,7 @@ celery_app.conf.update(
         "9xaipal.reconstruct_reading_order": {"queue": "ingest"},
         "9xaipal.process_article_ingestion": {"queue": "celery"},
         "9xaipal.embed_document": {"queue": "celery"},
+        "9xaipal.embed_document_search_vector": {"queue": "celery"},
         "9xaipal.generate_section_summaries": {"queue": "celery"},
         "9xaipal.generate_figure_descriptions": {"queue": "celery"},
     },
