@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import time
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -22,6 +23,7 @@ from app.extraction.arabic_adapter import (
     pages_to_content_list,
     parse_complete_page_prefix,
 )
+from app.extraction.arabic_classifier import count_arabic_letters, count_latin_letters
 from app.extraction.arabic_repair import repair_gemma_page
 from app.extraction.arabic_types import (
     ArabicExtractionResult,
@@ -49,6 +51,9 @@ _GEMINI_PROVIDERS = frozenset(
 )
 _GEMMA_PROVIDER = "gemma4_arabic_fallback"
 _HYBRID_EXTRACTOR = "gemini_gemma_arabic_hybrid"
+_PDF_TEXT_LAYER_PROVIDER = "pdf_text_layer"
+_PDF_TEXT_LAYER_MODEL = "pymupdf"
+_PDF_TEXT_LAYER_HYBRID_EXTRACTOR = "arabic_pdf_text_layer_hybrid"
 _GEMINI_FALLBACK_KINDS = frozenset(
     {
         "no_keys_configured",
@@ -109,6 +114,23 @@ _BROKEN_ARABIC_MARKED_CHAIN_RE = re.compile(
 _ARABIC_BASE_MARK_GAP_RE = re.compile(
     rf"(?P<base>[{_ARABIC_OCR_LETTERS}]){_ARABIC_OCR_HSPACE}+"
     rf"(?P<marks>{_ARABIC_OCR_MARK_RUN})"
+)
+_PDF_TEXT_WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
+_PDF_ARABIC_WORD_RE = re.compile(
+    rf"[{_ARABIC_OCR_LETTERS}{_ARABIC_OCR_MARKS}]+"
+)
+_PDF_MOJIBAKE_RE = re.compile(
+    r"[\u00c2\u00c3\u00d0\u00d8\u00d9\u00de][\u0080-\u00bf]"
+)
+_COMMON_ARABIC_WORDS = frozenset(
+    {
+        "هذا", "هذه", "هذان", "هؤلاء", "ذلك", "تلك", "الذي", "التي",
+        "الذين", "اللاتي", "من", "في", "على", "إلى", "الى", "عن", "أن",
+        "ان", "إن", "لا", "ما", "هو", "هي", "كان", "كانت", "يكون",
+        "تكون", "مع", "بين", "بعد", "قبل", "قد", "لم", "لن", "كل",
+        "كما", "حيث", "عند", "أي", "او", "أو", "ثم", "و", "نص", "النص",
+        "عربي", "العربي", "واضح", "قابل", "صفحة",
+    }
 )
 
 
@@ -343,6 +365,23 @@ def extract_arabic_document(
     )
 
     def _mark_unreadable(page_number: int) -> bool:
+        text_layer = _usable_pdf_text_layer(
+            source_texts[page_number - 1], settings=settings
+        )
+        if text_layer is not None:
+            page_map[page_number] = ArabicOcrPage(
+                page_number=page_number,
+                raw_markdown=text_layer,
+                markdown=text_layer,
+                provider=_PDF_TEXT_LAYER_PROVIDER,
+                model=_PDF_TEXT_LAYER_MODEL,
+            )
+            logger.info(
+                "Arabic OCR page %d recovered from its PDF text layer",
+                page_number,
+            )
+            return True
+
         # ⚠ Live (2026-09-30): a 78-page book OCR'd pages 1–38, then Gemma
         # looped to its token cap on page 39 on every key and the whole book
         # failed. Within the budget, such a page is kept as a visible Arabic
@@ -519,6 +558,12 @@ def _extractor_from_pages(
     pages: Sequence[ArabicOcrPage], *, writing_style: str
 ) -> str:
     providers = {page.provider for page in pages}
+    if providers == {_PDF_TEXT_LAYER_PROVIDER}:
+        return _PDF_TEXT_LAYER_PROVIDER
+    if _PDF_TEXT_LAYER_PROVIDER in providers and providers <= (
+        _GEMINI_PROVIDERS | {_GEMMA_PROVIDER, _PDF_TEXT_LAYER_PROVIDER}
+    ):
+        return _PDF_TEXT_LAYER_HYBRID_EXTRACTOR
     if providers and providers <= _GEMINI_PROVIDERS:
         return _GEMINI_PRO_PROVIDER if writing_style == "handwritten" else _GEMINI_PROVIDER
     if providers == {_GEMMA_PROVIDER}:
@@ -526,6 +571,68 @@ def _extractor_from_pages(
     if _GEMMA_PROVIDER in providers and providers <= _GEMINI_PROVIDERS | {_GEMMA_PROVIDER}:
         return _HYBRID_EXTRACTOR
     raise ArabicExtractionFailed("The Arabic OCR provider provenance is invalid.")
+
+
+def _usable_pdf_text_layer(text: str, *, settings: Settings) -> str | None:
+    """Return substantive, readable page text or reject the PDF text layer."""
+    candidate = text.strip()
+    if not candidate or "\ufffd" in candidate:
+        return None
+
+    presentation_forms = sum(
+        1
+        for character in candidate
+        if 0xFB50 <= ord(character) <= 0xFDFF
+        or 0xFE70 <= ord(character) <= 0xFEFF
+    )
+    arabic_letters = count_arabic_letters(candidate)
+    latin_letters = count_latin_letters(candidate)
+    if presentation_forms and presentation_forms / max(
+        1, presentation_forms + arabic_letters + latin_letters
+    ) >= 0.5:
+        return None
+    mojibake_pairs = len(_PDF_MOJIBAKE_RE.findall(candidate))
+    if mojibake_pairs >= 3 and mojibake_pairs / len(candidate) >= 0.03:
+        return None
+
+    letter_count = arabic_letters + latin_letters
+    if letter_count < settings.arabic_min_body_char_count:
+        return None
+    words = [word for word in _PDF_TEXT_WORD_RE.findall(candidate) if len(word) >= 2]
+    if len(words) < 4:
+        return None
+    meaningful_lines = [
+        line
+        for line in candidate.splitlines()
+        if count_arabic_letters(line) + count_latin_letters(line) >= 4
+    ]
+    if len(meaningful_lines) < 3 and len(words) < 8:
+        return None
+    if arabic_letters >= settings.arabic_min_body_char_count and (
+        _has_reversed_arabic_words(candidate)
+    ):
+        return None
+    return candidate
+
+
+def _has_reversed_arabic_words(text: str) -> bool:
+    words = [
+        "".join(
+            character
+            for character in word
+            if not unicodedata.category(character).startswith("M")
+        )
+        for word in _PDF_ARABIC_WORD_RE.findall(text)
+    ]
+    words = [word for word in words if word]
+    if not words:
+        return False
+    impossible_starts = sum(word.startswith(("ة", "ى")) for word in words)
+    if impossible_starts >= 2:
+        return True
+    normal_matches = sum(word in _COMMON_ARABIC_WORDS for word in words)
+    reversed_matches = sum(word[::-1] in _COMMON_ARABIC_WORDS for word in words)
+    return reversed_matches >= 3 and reversed_matches >= normal_matches + 2
 
 
 def _render_document(pdf_path: Path, dpi: int) -> tuple[list[RenderedPage], list[str]]:

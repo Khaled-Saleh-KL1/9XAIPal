@@ -21,6 +21,8 @@ ARABIC_OCR_EXTRACTORS = frozenset({
     "gemini_gemma_arabic_hybrid",
     "gemini_arabic_pro",
     "modelgateway_gemini",
+    "pdf_text_layer",
+    "arabic_pdf_text_layer_hybrid",
 })
 
 
