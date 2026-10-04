@@ -48,7 +48,7 @@ All text and links live in `src/landing/content.ts`, so wording can be edited in
 
 1. **Top bar:**
    - left: `LogoMark` and "9XAIPal" with the BETA pill;
-   - center: anchors to Features, How it works and Built by;
+   - center: anchors to The journey and Built by;
    - right: "★ GitHub" (repo) and "Sign in".
    - It is sticky. After 24px of scroll it shrinks and gets a frosted (`backdrop-filter`) background.
 2. **Hero:**
@@ -57,19 +57,25 @@ All text and links live in `src/landing/content.ts`, so wording can be edited in
    - subtitle: "Upload papers, books and articles in English or Arabic. Read them beautifully, ask questions, and get answers with citations to the exact page."
    - buttons: "Try the free beta" (primary) and "View the code ↗" (repo);
    - visual: two or three floating paper pages, one with Arabic text set right-to-left. Highlights sweep across their lines. The pages tilt toward the pointer (`useTilt`) and spread apart on hover.
-3. **Features** (6 cards, staggered reveal on scroll, each with a small animated illustration):
-   1. Answers with citations
-   2. Arabic + English OCR
-   3. Study desk and sticky notes
-   4. Smart search
-   5. Streaming answers
-   6. Figures and equations kept intact
-4. **How it works:** four steps, Upload → Read → Ask → Collect. A single paper page travels through the steps as you scroll (scroll-linked with `useScroll`/`useTransform`). On small screens the steps stack and each one reveals on its own.
-5. **Beta note:** a paper card with the quota wording and a "Try the free beta" button.
-6. **Built by:**
+3. **The journey** (owner request: the page is a story that follows a student or researcher through their work, not a list of features):
+   - **Persona switch** at the start of the journey: a two-option toggle, "I'm a student" / "I'm a researcher", default student. It only changes the example content in the chapters below (documents, questions, notes); layout and motion stay the same. The choice is kept for the visit (in memory only).
+     - Student examples: lecture notes, a textbook chapter and an Arabic past exam, with a question like "Explain backpropagation simply, with the slide it comes from". The goal: exam ready.
+     - Researcher examples: three papers (one in Arabic), with a question like "Which of these papers report results on Arabic OCR, and how do they compare?". The goal: literature review ready.
+   - **Progress rail:** a thin vertical line on the left (desktop) or a top progress bar (mobile) with one dot per chapter. The dots fill as you scroll, and clicking a dot scrolls to its chapter. Driven by `useScroll`.
+   - **Chapters**, each a full-height scene that animates as it scrolls into view and is tied to scroll where noted. Each has a small label ("Chapter 1 · The pile"), a serif title, one sentence, and the scene:
+     1. **The pile.** Scattered documents (English and Arabic, PDFs and scans) drift on the page. As you scroll they gather and drop onto a neat shelf, landing one after another. Copy: "Too many PDFs, two languages, one deadline."
+     2. **Read.** One document opens into a clean reader page. Its figure and equation snap into place, and the Arabic page flows right to left. Copy: "Every page, figure and equation, readable, in Arabic or English."
+     3. **Ask.** A question types itself into an ask box. The answer streams in word by word, citation chips pop in, and the cited passage on the page lights up. Copy: "Ask anything. Every answer shows exactly where it came from."
+     4. **Collect.** The answer folds into a sticky note and flies onto a desk, where it joins other notes into a study. Copy: "Keep what matters. Build your study as you go."
+     5. **Find again.** A search across the whole shelf in both languages: matching documents rise and the rest dim. Copy: "Find the idea again weeks later, in either language."
+   - **Finale, "Your turn":** the persona's goal ("Exam ready." or "Literature review ready."), the primary "Try the free beta" button and the beta note wording.
+   - Every scene is built from HTML/CSS/SVG (no video, no images over 30 KB). With reduced motion, each scene shows its final state with a fade only. On mobile (<900px) the scenes stack, and scroll-tied parts become simple in-view animations.
+   - The six capabilities (cited answers, Arabic + English OCR, desk and notes, smart search, streaming, figures and equations) must each appear in at least one chapter.
+4. **Beta note:** folded into the finale above.
+5. **Built by:**
    - name, "AI Engineer", the 2-3 sentence bio above;
    - buttons "Portfolio ↗" (`https://portfolio.kl1.site`) and "GitHub repo ↗".
-7. **Footer:** "© 2026 Khaled Saleh", the same links, and "Made with care in Amman."
+6. **Footer:** "© 2026 Khaled Saleh", the same links, and "Made with care in Amman."
 
 All external links use `target="_blank" rel="noopener noreferrer"`. The page must work at 360px width with a 16px side gutter and no horizontal scroll.
 

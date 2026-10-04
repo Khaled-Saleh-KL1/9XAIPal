@@ -54,9 +54,8 @@
 | `src/landing/content.ts` | create | all landing copy and links |
 | `src/views/LandingView.tsx` | create | page shell, top bar, auth-sheet state |
 | `src/views/landing/Hero.tsx` | create | hero with floating paper pages |
-| `src/views/landing/Features.tsx` | create | 6 feature cards |
-| `src/views/landing/HowItWorks.tsx` | create | 4 steps with the travelling page |
-| `src/views/landing/BetaNote.tsx` | create | quota wording card |
+| `src/views/landing/Journey.tsx` | create | persona switch, progress rail, chapter layout, finale |
+| `src/views/landing/scenes/*.tsx` | create | one animated scene per chapter: `PileScene`, `ReadScene`, `AskScene`, `CollectScene`, `FindScene` |
 | `src/views/landing/BuiltBy.tsx` | create | author section |
 | `src/views/landing/Footer.tsx` | create | footer |
 | `src/views/landing/landing.css` | create | landing-only styles (imported by `LandingView`) |
@@ -315,21 +314,45 @@ export const HERO = {
   arabicSample: 'اقرأ بعمق، واسأل مكتبتك',
 } as const;
 
-export const FEATURES = [
-  { key: 'cite', title: 'Answers with citations', body: 'Every answer points to the page and passage it came from, so you can check it in one click.' },
-  { key: 'ocr', title: 'Arabic + English OCR', body: 'Scanned or born-digital, right-to-left or left-to-right: text, tables and figures come out clean.' },
-  { key: 'desk', title: 'Study desk & sticky notes', body: 'Collect answers, pin notes and build a study across several documents.' },
-  { key: 'search', title: 'Smart search', body: 'Find the idea, not just the word, across your whole library in both languages.' },
-  { key: 'stream', title: 'Streaming answers', body: 'Answers write themselves as they think, no waiting for a wall of text.' },
-  { key: 'figures', title: 'Figures & equations intact', body: 'Charts, diagrams and LaTeX math stay where they belong in the reader.' },
+export type Persona = 'student' | 'researcher';
+
+/** Example content per persona; the chapters' layout and motion never change. */
+export const PERSONAS = {
+  student: {
+    label: "I'm a student",
+    docs: ['Lecture 7 · Neural networks.pdf', 'Deep Learning, ch. 6', 'امتحان سابق ٢٠٢٥.pdf'],
+    question: 'Explain backpropagation simply, with the slide it comes from.',
+    answer: 'Backpropagation sends the error backwards through the network, layer by layer, to work out how much each weight should change.',
+    citations: ['Lecture 7, slide 14', 'Deep Learning, p. 204'],
+    note: 'Backprop = chain rule, applied layer by layer',
+    search: 'gradient',
+    goal: 'Exam ready.',
+  },
+  researcher: {
+    label: "I'm a researcher",
+    docs: ['Attention Is All You Need.pdf', 'QIMMA: Arabic LLM leaderboard.pdf', 'التعرف الضوئي على الحروف العربية.pdf'],
+    question: 'Which of these papers report results on Arabic OCR, and how do they compare?',
+    answer: 'Two of the three do. The Arabic OCR survey reports the strongest character accuracy on printed text, while QIMMA evaluates Arabic language models rather than OCR.',
+    citations: ['OCR survey, p. 9', 'QIMMA, p. 23'],
+    note: 'Arabic OCR baselines: survey p. 9, compare with our results',
+    search: 'Arabic OCR',
+    goal: 'Literature review ready.',
+  },
+} as const;
+
+/** The journey's chapters, in order. Each capability appears in at least one. */
+export const CHAPTERS = [
+  { key: 'pile', label: 'Chapter 1 · The pile', title: 'Too many PDFs, two languages, one deadline.', body: 'Drop in papers, books, scans and articles, in English or Arabic. They land on your shelf, ready.' },
+  { key: 'read', label: 'Chapter 2 · Read', title: 'Every page, readable.', body: 'Figures, tables and equations stay intact. Arabic flows right to left, the way it should.' },
+  { key: 'ask', label: 'Chapter 3 · Ask', title: 'Ask anything. See where the answer came from.', body: 'Answers stream in as they are written, with citations that take you to the exact passage.' },
+  { key: 'collect', label: 'Chapter 4 · Collect', title: 'Keep what matters.', body: 'Turn answers into sticky notes and build a study across documents on your desk.' },
+  { key: 'find', label: 'Chapter 5 · Find again', title: 'Find the idea again, weeks later.', body: 'Search your whole library by meaning, in either language.' },
 ] as const;
 
-export const STEPS = [
-  { key: 'upload', title: 'Upload', body: 'Drop a PDF, a book or an article link.' },
-  { key: 'read', title: 'Read', body: 'A calm reader with the original layout, figures and math.' },
-  { key: 'ask', title: 'Ask', body: 'Ask in Arabic or English and get cited answers.' },
-  { key: 'collect', title: 'Collect', body: 'Keep what matters on your desk as notes and studies.' },
-] as const;
+export const JOURNEY = {
+  eyebrow: 'Follow the journey',
+  finaleTitle: 'Your turn.',
+} as const;
 
 export const AUTHOR = {
   name: 'Khaled Saleh',
@@ -351,16 +374,16 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
 import { MotionRoot } from '../motion';
 import { LandingView } from './LandingView';
-import { LINKS, BETA_NOTE, FEATURES } from '../landing/content';
+import { LINKS, BETA_NOTE, CHAPTERS, PERSONAS } from '../landing/content';
 
 const renderLanding = (props: Partial<Parameters<typeof LandingView>[0]> = {}) =>
   render(<MotionRoot><LandingView signedIn={false} onRequestAuth={vi.fn()} onOpenLibrary={vi.fn()} {...props} /></MotionRoot>);
 
 describe('LandingView', () => {
-  it('shows the hero, all six features, the beta note and the author', () => {
+  it('shows the hero, all five chapters, the beta note and the author', () => {
     renderLanding();
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Read deeper. Ask your library.');
-    for (const f of FEATURES) expect(screen.getByRole('heading', { name: f.title })).toBeInTheDocument();
+    for (const c of CHAPTERS) expect(screen.getByRole('heading', { name: c.title })).toBeInTheDocument();
     expect(screen.getAllByText(BETA_NOTE).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Khaled Saleh' })).toBeInTheDocument();
   });
@@ -394,6 +417,22 @@ describe('LandingView', () => {
     expect(onOpenLibrary).toHaveBeenCalled();
   });
 
+  it('switches the example content between student and researcher', async () => {
+    renderLanding();
+    expect(screen.getAllByText(PERSONAS.student.question).length).toBeGreaterThan(0);
+    expect(screen.getByText(PERSONAS.student.goal)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: PERSONAS.researcher.label }));
+    expect(screen.getAllByText(PERSONAS.researcher.question).length).toBeGreaterThan(0);
+    expect(screen.getByText(PERSONAS.researcher.goal)).toBeInTheDocument();
+    expect(screen.queryByText(PERSONAS.student.question)).toBeNull();
+  });
+
+  it('has a progress rail with one control per chapter', () => {
+    renderLanding();
+    const rail = screen.getByRole('navigation', { name: /journey progress/i });
+    expect(within(rail).getAllByRole('button')).toHaveLength(CHAPTERS.length);
+  });
+
   it('does not touch the URL hash', () => {
     window.history.replaceState(null, '', '#/paper/abc');
     renderLanding();
@@ -407,8 +446,8 @@ describe('LandingView', () => {
 - [ ] **Step 4: Implement the page**, following spec §2 exactly.
 
 **Page structure and the shell:**
-- Landmarks: `<header role="banner">` top bar, `<main>`, `<footer>`. In-page anchors are `#features`, `#how`, `#built-by`.
-- In-page anchors must not change `location.hash`, because the hash is the app router. Implement them as buttons that call `document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })`.
+- Landmarks: `<header role="banner">` top bar, `<main>`, `<footer>`.
+- Top-bar in-page links: "The journey" (`#journey`) and "Built by" (`#built-by`). In-page anchors must not change `location.hash`, because the hash is the app router. Implement them as buttons that call `document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })`.
 - The shell is a scroll container: `min-h-screen` with `overflow-y: auto` on the page element. The app's root may have `overflow:hidden`, so check `index.css` `body`/`#root` rules.
 - The top bar:
   - shrinks from 64 to 52px and gets the frosted background (`backdrop-filter: blur(10px)`, `background: color-mix(in oklch, var(--bg) 78%, transparent)`) once `scrollY > 24`, using `useScroll` on the container plus `useMotionValueEvent`;
@@ -428,24 +467,23 @@ describe('LandingView', () => {
   - The pages group uses `useTilt(8)`. On group hover the pages spread apart: each card's `x` and `rotate` animate outward with `playful`.
   - Below 640px the pages sit under the text, scaled to 0.8, and the tilt is off.
 
-**Features:**
-- A `Stagger` grid with 3 columns on desktop, 2 on tablet and 1 on mobile.
-- Each card is `StaggerItem` with `whileHover={{ y: -6, rotate: -1 }}` (`playful`) and a 64px illustration (inline SVG or CSS) that animates while hovered or in view:
-  - cite: a chip pops in;
-  - ocr: Arabic and English letters swap;
-  - desk: a sticky note wobbles;
-  - search: a magnifier sweeps;
-  - stream: words type in;
-  - figures: a bar chart grows.
-- Card headings are `h3`.
-
-**How it works:**
-- A two-column section from 900px wide: left is a sticky page illustration, right is the four step cards.
-- `useScroll({ target: sectionRef, offset: ['start center', 'end center'] })` drives the page's `y` and `rotate` through `useTransform`, so it travels past the steps. The active step (index from `scrollYProgress`) is highlighted with the accent border.
-- Below 900px: steps stack, each in a `Reveal`, with no sticky element.
-- Step headings are `h3`; the section heading is `h2` "How it works".
-
-**Beta note:** a paper card with `BETA_NOTE` and a primary CTA, which behaves the same as the hero CTA.
+**Journey** (`Journey.tsx` + `scenes/*`, spec §2.3; read that section first):
+- `<section id="journey">` with an `h2` from `JOURNEY.eyebrow`.
+- **Persona switch:** a `role="radiogroup"` with an `aria-label` of "Choose your journey", containing two `role="radio"` buttons (`aria-checked`) labelled `PERSONAS[*].label`. The default is `student`. The choice lives in `LandingView` state only, with no storage. Switching crossfades the persona-specific text in every scene (`AnimatePresence mode="wait"` keyed by persona). The selected pill slides between the options (`layoutId`).
+- **Progress rail:** `<nav aria-label="Journey progress">` with one `button` per chapter (`aria-label` = chapter label, `aria-current="step"` on the active one). Desktop: a fixed vertical line on the left while `#journey` is in view. Mobile: a thin top bar. The fill is `scaleY`/`scaleX` from `useScroll({ target: journeyRef })`. Clicking a dot calls `scrollIntoView({ behavior: 'smooth' })` on that chapter, with no hash change.
+- **Chapter layout:**
+  - Each chapter is a `<section aria-labelledby>` with `min-height: 100vh` on desktop. The text column holds the label, the `h3` (`CHAPTERS[i].title`) and the body. The scene column is sticky while its chapter scrolls.
+  - Scenes get `progress` (a 0…1 `MotionValue` from `useScroll({ target: chapterRef, offset: ['start end', 'end start'] })`) and the persona.
+  - Below 900px: single column, `min-height: auto`, and the scene animates once on enter (`Reveal`) rather than being tied to scroll.
+- **Scenes** (HTML/CSS/SVG only, no images over 30 KB, colors from tokens):
+  - `PileScene`: 6-8 document cards (titles from `persona.docs` plus generic ones, one Arabic card with `dir="rtl"`). Each has a random-but-seeded scatter position and rotation, then `useTransform(progress)` maps it to a shelf slot. The cards land with a staggered `playful` bounce once progress passes 0.6.
+  - `ReadScene`: a reader page opens (`scaleY` from the spine). An SVG figure and a LaTeX-looking equation block slide into their slots. An Arabic paragraph reveals right to left (`clipPath` inset animating from the left edge).
+  - `AskScene`: the ask box types `persona.question` (character reveal over about 1.6s). Then `persona.answer` streams word by word, `persona.citations` chips pop in (`playful`), and hovering a chip (or progress > 0.8) lights up the matching line on a small page beside it.
+  - `CollectScene`: the answer card folds (`rotateX`, `scale`) into a sticky note with `persona.note`. It flies along a curved path (`useTransform` on x/y/rotate) onto a desk, joins two other notes, and they snap into a study group with a bounce.
+  - `FindScene`: a search box types `persona.search`. Matching shelf documents rise and glow, and the others dim (`opacity` 0.35).
+  - All endless or looping parts use `usePauseWhenHidden`. With reduced motion, every scene renders its final composed state with no transforms.
+- **Finale:** `h2` `JOURNEY.finaleTitle`, the persona's `goal` as a large serif line, `BETA_NOTE`, and the primary CTA (the same handler as the hero's).
+- **Coverage:** the six capabilities (cited answers, Arabic + English OCR, desk and notes, smart search, streaming, figures and equations) must each be visible in at least one scene.
 
 **Built by:**
 - `h2` "Built by"; inside it, `h3` `AUTHOR.name`, the role and the two bio paragraphs.
@@ -463,7 +501,7 @@ describe('LandingView', () => {
 
 - [ ] **Step 5:** Run the landing tests and the whole suite. Expected: PASS.
 
-- [ ] **Step 6: Commit** with `feat(landing): Warm Paper landing page with playful motion`.
+- [ ] **Step 6: Commit** with `feat(landing): Warm Paper landing page as a student/researcher journey`.
 
 ### Task 3: AuthForm (moved out of AuthView)
 
@@ -729,7 +767,7 @@ Also write a `RollingNumber` test: rendering `<RollingNumber value={12} />` expo
 
 - **Spec coverage:**
   - §1 flow: Tasks 2 and 4.
-  - §2 landing: Task 2.
+  - §2 landing, including the journey (persona switch, progress rail, five chapters, finale): Task 2.
   - §3 building blocks: Task 1. `PageTransition` is deferred to PR 2, where route transitions are wired, and is listed in the spec's PR 2 scope.
   - Auth sheet details: Task 3.
   - Waiting room and BETA: Task 5.
