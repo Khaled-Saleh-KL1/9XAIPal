@@ -248,6 +248,10 @@ class Settings(BaseSettings):
     # phase.
     generate_figure_descriptions: bool = True
 
+    # Bound interactive query embedding so library search can degrade to
+    # full-text search while the local embedding model is under load.
+    query_embedding_timeout_s: float = Field(default=8.0, gt=0)
+
     # How many embedding batches (see embed_document_chunks_sync's batch_size)
     # run concurrently against the embedding backend. Measured directly on
     # this deployment's local Ollama (qwen3-embedding:0.6b, 6-core host): a

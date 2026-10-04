@@ -184,6 +184,41 @@ async def test_library_arabic_fulltext_is_scoped_to_the_requesting_user(db_sessi
     assert [row["id"] for row in results] == [document_ids[0]]
 
 
+async def test_library_english_fulltext_finds_matching_document_and_scopes_user(db_session):
+    user_ids = [uuid4(), uuid4()]
+    document_ids = [uuid4(), uuid4()]
+    for index, (user_id, document_id) in enumerate(zip(user_ids, document_ids)):
+        await db_session.execute(
+            text("INSERT INTO users (id, email, password_hash) VALUES (:id, :email, 'x')"),
+            {"id": user_id, "email": f"english-library-{index}-{user_id}@example.test"},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO documents (id, user_id, filename, original_filename, status)
+                VALUES (:id, :user_id, 'paper.pdf', 'paper.pdf', 'complete')
+            """),
+            {"id": document_id, "user_id": user_id},
+        )
+        await db_session.execute(
+            text("""
+                INSERT INTO chunks (document_id, sequence_id, markdown, plain_text)
+                VALUES (:document_id, 1, :content, :content)
+            """),
+            {
+                "document_id": document_id,
+                "content": "Transformers use self attention to process sequences.",
+            },
+        )
+    await db_session.commit()
+
+    results = await pgvector.search_documents_fulltext(
+        db_session, user_ids[0], "transformer attention", limit=10
+    )
+
+    assert [row["id"] for row in results] == [document_ids[0]]
+    assert results[0]["fts_rank"] > 0
+
+
 def test_arabic_stemming_is_enabled_by_default():
     assert getattr(pgvector.settings, "arabic_fts_stemming_enabled", None) is True
 

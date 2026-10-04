@@ -431,14 +431,36 @@ async def search_documents_fulltext(
     query: str,
     limit: int = 20,
 ) -> list[dict]:
-    """Find this user's documents by Arabic chunk text, ranked by FTS rank."""
+    """Find this user's documents by chunk text, ranked by language FTS."""
+    params = {"user_id": user_id, "q": query, "limit": limit}
     if not is_primarily_arabic(query):
-        return []
+        if not query.strip():
+            return []
+        result = await session.execute(
+            text("""
+                SELECT c.document_id AS id,
+                       MAX(ts_rank(
+                           to_tsvector('english', coalesce(c.plain_text, '')),
+                           websearch_to_tsquery('english', :q)
+                       )) AS fts_rank
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE d.user_id = :user_id
+                  AND to_tsvector('english', coalesce(c.plain_text, ''))
+                      @@ websearch_to_tsquery('english', :q)
+                GROUP BY c.document_id
+                ORDER BY fts_rank DESC
+                LIMIT :limit
+            """),
+            params,
+        )
+        return [dict(row) for row in result.mappings().all()]
+
     arabic_query = _arabic_tsquery(query)
     if not arabic_query:
         return []
 
-    params = {"user_id": user_id, "q": arabic_query, "limit": limit}
+    params["q"] = arabic_query
     if settings.arabic_fts_stemming_enabled:
         stem_query = _arabic_snowball_tsquery(query)
         if not stem_query:
