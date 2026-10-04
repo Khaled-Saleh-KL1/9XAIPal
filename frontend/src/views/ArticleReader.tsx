@@ -1463,6 +1463,7 @@ export function ArticleReader({
                   : [...p.steps, step],
               })),
             onToken: (text) => pacer.push(text),
+            onReplace: () => pacer.reset(),
             // The answer is complete; the card keeps its streamed text and
             // shows the check running until the stream closes with the report.
             onVerifying: () => patch((p) => ({ ...p, verifying: true })),

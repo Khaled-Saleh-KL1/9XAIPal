@@ -34,7 +34,7 @@ data: URIs, so call sites never care which provider is active.
 """
 
 import json
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -375,19 +375,20 @@ async def stream_chat(
     temperature: float = 0.7,
     num_predict: Optional[int] = None,
     keep_alive: Optional[str] = None,
+    can_fallback: Optional[Callable[[], bool]] = None,
 ) -> AsyncIterator[dict]:
     """Provider-dispatched streaming chat.
 
     Yields ``{"type": "token", "text": ...}`` per token, then a final
     ``{"type": "done", "content", "model", "prompt_tokens", "completion_tokens"}``.
 
-    Falls through to the next cascade target on a failure that happens
-    BEFORE any token reached the caller — a dead/misconfigured/rate-limited
-    provider is invisible to whoever is rendering the stream. Once a token
-    has gone out, a later failure raises instead of silently restarting:
-    discarding visible partial output and resuming on a different provider
-    (possibly a different model, different voice, duplicated content) is a
-    worse experience than a clean error the caller can show and retry.
+    By default, falls through to the next cascade target only when a failure
+    happens before any token reaches the caller. A filtering caller may pass
+    ``can_fallback`` to allow retries while all yielded text is still hidden
+    from the user. If such a retry follows yielded events, this stream emits
+    an internal ``_retry`` event so the filter can discard its buffered state.
+    Once visible output has gone out, a later failure raises instead of
+    silently restarting on a different provider.
     """
     targets = await resolver.targets_for(model)
     last_error: Optional[ModelUnavailable] = None
@@ -405,10 +406,15 @@ async def stream_chat(
             return
         except ModelUnavailable as e:
             circuit_breaker.record_failure(target.breaker_id)
-            if yielded_any:
+            may_fallback = can_fallback() if can_fallback is not None else not yielded_any
+            if not may_fallback:
                 raise
-            logger.warning(f"{target.provider} stream failed before any output, falling through: {e}")
+            logger.warning(
+                f"{target.provider} stream failed before visible output, falling through: {e}"
+            )
             last_error = e
+            if yielded_any and can_fallback is not None:
+                yield {"type": "_retry"}
     raise last_error or ModelUnavailable("no LLM provider configured")
 
 

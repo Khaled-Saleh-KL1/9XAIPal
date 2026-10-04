@@ -894,6 +894,8 @@ export interface NoteStreamHandlers {
   onStep: (step: AgentStep) => void;
   /** Answer text, token by token. */
   onToken: (text: string) => void;
+  /** Clear a streamed draft when an agent switches to a tool round. */
+  onReplace?: () => void;
   /**
    * The answer is complete and the evidence check is running. The stream
    * stays open until the check's `grounding` event (or closes at once when
@@ -986,6 +988,9 @@ export async function askNoteStream(
         break;
       case 'token':
         handlers.onToken(String(ev.text ?? ''));
+        break;
+      case 'replace':
+        handlers.onReplace?.();
         break;
       case 'error':
         streamError = String(ev.detail || 'Note generation failed');
@@ -1734,6 +1739,8 @@ export interface StudyStreamHandlers {
   onStatus: (message: string) => void;
   onStep: (step: AgentStep) => void;
   onToken: (text: string) => void;
+  /** Clear a streamed draft when an agent switches to a tool round. */
+  onReplace?: () => void;
   /** The answer is complete; the evidence check is running (see NoteStreamHandlers). */
   onVerifying?: () => void;
 }
@@ -1804,6 +1811,9 @@ export async function askStudyStream(
         break;
       case 'token':
         handlers.onToken(String(ev.text ?? ''));
+        break;
+      case 'replace':
+        handlers.onReplace?.();
         break;
       case 'error':
         streamError = String(ev.detail || 'Could not answer that');

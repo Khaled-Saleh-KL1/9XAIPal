@@ -254,6 +254,7 @@ export function DeskView({
               }));
             },
             onToken: (text) => pacer.push(text),
+            onReplace: () => pacer.reset(),
             onVerifying: () => patch((p) => ({ ...p, verifying: true })),
           },
           model,

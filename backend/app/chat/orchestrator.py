@@ -928,6 +928,10 @@ async def _stream_book_agent(
             # this is additive — it is forwarded so the pane can show the
             # agent's work later without another backend change.
             yield event
+        elif etype == "replace":
+            # A streamed probe can show a partial draft before it reveals a
+            # tool block. Clear that draft before the tool trail and final pass.
+            yield event
         elif etype == "done":
             answer = event.get("answer", "") or ""
             model = event.get("model", "") or ""

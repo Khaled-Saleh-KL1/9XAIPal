@@ -892,24 +892,31 @@ async def answer_study_question(
             context_text="\n\n---\n\n".join(parts),
         )
 
-        # Probe without streaming: this reply may turn out to be a tool call,
-        # and streaming a tool block to the reader would be nonsense on screen.
-        result = await llm_client.chat(messages, temperature=0.3, model=model)
-        reply = result.get("content") or ""
+        # Stream the probe while the shared filter withholds tool, note, and
+        # memory markup. Keep the raw reply for the unchanged tool parser.
+        result: dict = {}
+        streamed_text = False
+        async for event in stream_answer(
+            messages, temperature=0.3, model=model,
+            catch_notes=True, catch_remember=True,
+            tool_probe=True,
+        ):
+            if event["type"] == "token":
+                streamed_text = True
+                yield event
+            else:
+                result = event
+        reply = result.get("raw") or result.get("answer") or ""
         calls = parse_tool_calls(reply)
 
+        if has_calls(calls) and streamed_text:
+            yield {"type": "replace"}
+
         if not has_calls(calls):
-            answer = strip_tool_block(reply)
-            # ⚠ Notes (and remembers) come out here too. This branch never
-            # touches stream_answer — the model answered straight from the
-            # probe — so extracting only in the streamed path left the raw
-            # tag in the answer precisely when the reader had asked for one.
-            answer, written = extract_notes(answer)
-            answer, remembered = extract_remembers(answer)
-            answer = answer.strip()
+            answer = result.get("answer") or ""
+            written = result.get("notes") or []
+            remembered = result.get("remembers") or []
             if answer or written or remembered:
-                if answer:
-                    yield {"type": "token", "text": answer}
                 async for ev in _pin_written_notes(
                     session, written,
                     user_id=user_id,
