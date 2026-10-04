@@ -667,8 +667,9 @@ async def stream_answer(
     temperature: float = 0.3,
     catch_notes: bool = False,
     catch_remember: bool = False,
+    tool_probe: bool = False,
 ) -> AsyncIterator[dict]:
-    """Stream the forced final answer, keeping markup out of the reader's view.
+    """Stream an assistant reply, keeping protocol markup out of the reader's view.
 
     Yields ``{"type": "token"}`` events and finally
     ``{"type": "_final", "answer", "model", "notes", "remembers"}`` for the
@@ -691,7 +692,9 @@ async def stream_answer(
     would race over which one "wins" the earlier position.
 
     Both hold back the last few characters until the next token arrives, because
-    a marker can be split across token boundaries ("<no" + "te>").
+    a marker can be split across token boundaries ("<no" + "te>"). A tool
+    probe may intentionally return a tool block for the caller to parse; it is
+    filtered from the reader either way, but only forced-final replies warn.
     """
     buf = ""
     sent = 0          # how much of buf the reader has already seen
@@ -699,20 +702,37 @@ async def stream_answer(
     skip_from = -1    # start of a skipped span (a <note> or <remember>) we are stepping over
     skip_close = ""   # its closing tag, so the two never get cross-matched
     answered_by = ""
+    visible_output = False
+
+    def can_fallback() -> bool:
+        return not visible_output
 
     def emit_upto(limit: int) -> Optional[dict]:
         """Release buf[sent:limit] to the reader, if there is anything there."""
-        nonlocal sent
+        nonlocal sent, visible_output
         if limit > sent:
             chunk = buf[sent:limit]
             sent = limit
             if chunk:
+                visible_output = visible_output or bool(chunk.strip())
                 return {"type": "token", "text": chunk}
         return None
 
     async for event in llm_client.stream_chat(
-        messages, temperature=temperature, model=model
+        messages, temperature=temperature, model=model,
+        can_fallback=can_fallback,
     ):
+        if event["type"] == "_retry":
+            # The provider failed while all its text was still hidden by this
+            # filter. Discard that attempt before consuming the next provider.
+            buf = ""
+            sent = 0
+            leaked = False
+            skip_from = -1
+            skip_close = ""
+            answered_by = ""
+            visible_output = False
+            continue
         if event["type"] != "token":
             answered_by = event.get("model") or answered_by
             # The terminal event carries the whole content; prefer it, since a
@@ -724,47 +744,56 @@ async def stream_answer(
         buf += event["text"]
         low = buf.lower()
 
-        # Inside a skipped span we are waiting for ITS closing tag, and
-        # nothing in between reaches the reader.
-        if skip_from >= 0:
-            close = low.find(skip_close, skip_from)
-            if close == -1:
+        # Keep scanning this same buffer after each complete skipped span.
+        # The next tag or prose may already be present in this provider delta.
+        while True:
+            # Inside a skipped span we are waiting for ITS closing tag, and
+            # nothing in between reaches the reader.
+            if skip_from >= 0:
+                close = low.find(skip_close, skip_from)
+                if close == -1:
+                    break
+                sent = close + len(skip_close)
+                skip_from = -1
+                skip_close = ""
+
+            cut = low.find("<tool", sent)
+
+            # Earliest of the two catch-tags that actually occurs, so a reply
+            # carrying both is stepped over left to right rather than always
+            # preferring one kind.
+            tag_at, tag_close = -1, ""
+            for candidate, close_tag in (
+                (low.find("<note", sent) if catch_notes else -1, "</note>"),
+                (low.find("<remember", sent) if catch_remember else -1, "</remember>"),
+            ):
+                if candidate != -1 and (tag_at == -1 or candidate < tag_at):
+                    tag_at, tag_close = candidate, close_tag
+
+            if tag_at != -1 and (cut == -1 or tag_at < cut):
+                ev = emit_upto(tag_at)
+                if ev:
+                    yield ev
+                skip_from, skip_close = tag_at, tag_close
+                close = low.find(skip_close, skip_from)
+                if close == -1:
+                    break
+                sent = close + len(skip_close)
+                skip_from = -1
+                skip_close = ""
                 continue
-            sent = close + len(skip_close)
-            skip_from = -1
-            skip_close = ""
-            low = buf.lower()
 
-        cut = low.find("<tool", sent)
+            if cut != -1:
+                leaked = True
+                ev = emit_upto(cut)
+                if ev:
+                    yield ev
+                break
 
-        # Earliest of the two catch-tags that actually occurs, so a reply
-        # carrying both is stepped over left to right rather than always
-        # preferring one kind.
-        tag_at, tag_close = -1, ""
-        for candidate, close_tag in (
-            (low.find("<note", sent) if catch_notes else -1, "</note>"),
-            (low.find("<remember", sent) if catch_remember else -1, "</remember>"),
-        ):
-            if candidate != -1 and (tag_at == -1 or candidate < tag_at):
-                tag_at, tag_close = candidate, close_tag
-
-        if tag_at != -1 and (cut == -1 or tag_at < cut):
-            ev = emit_upto(tag_at)
+            ev = emit_upto(max(sent, len(buf) - _HOLD))
             if ev:
                 yield ev
-            skip_from, skip_close = tag_at, tag_close
-            continue
-
-        if cut != -1:
-            leaked = True
-            ev = emit_upto(cut)
-            if ev:
-                yield ev
-            continue
-
-        ev = emit_upto(max(sent, len(buf) - _HOLD))
-        if ev:
-            yield ev
+            break
 
     answer = strip_tool_block(buf) if leaked else buf
     notes: list[dict] = []
@@ -775,6 +804,16 @@ async def stream_answer(
         answer, remembers = extract_remembers(answer)
     answer = answer.strip()
 
+    if not leaked and skip_from >= 0:
+        # A provider's final content can contain the close tag even when the
+        # last token delta did not. Resolve that complete span before flushing
+        # the prose after it.
+        close = buf.lower().find(skip_close, skip_from)
+        if close != -1:
+            sent = close + len(skip_close)
+            skip_from = -1
+            skip_close = ""
+
     if not leaked and skip_from < 0:
         # Flush whatever was held back, minus anything the tag passes removed.
         tail = buf[sent:]
@@ -783,8 +822,9 @@ async def stream_answer(
         if catch_remember:
             tail, _ = extract_remembers(tail)
         if tail.strip():
+            visible_output = True
             yield {"type": "token", "text": tail}
-    if leaked:
+    if leaked and not tool_probe:
         logger.warning(
             "agent emitted a tool block on the forced final turn; %d chars dropped",
             len(buf) - len(answer),
@@ -795,4 +835,7 @@ async def stream_answer(
         "model": answered_by,
         "notes": notes,
         "remembers": remembers,
+        # Tool detection needs the exact model reply. `answer` is filtered for
+        # display, while `raw` preserves the protocol block for the agent loop.
+        "raw": buf,
     }

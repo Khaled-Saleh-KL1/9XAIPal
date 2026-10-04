@@ -47,6 +47,8 @@ const MIN_REPAINT_MS = 55;
 export interface Pacer {
   /** Feed newly arrived text. */
   push(text: string): void;
+  /** Discard the current draft and continue with replacement tokens. */
+  reset(): void;
   /** No more text is coming; resolves once everything has been displayed. */
   finish(): Promise<void>;
   /** Abandon immediately, revealing whatever is buffered. */
@@ -118,6 +120,15 @@ export function createPacer(onUpdate: (revealed: string) => void): Pacer {
       if (!text) return;
       buffer += text;
       schedule();
+    },
+    reset() {
+      stop();
+      revealed = '';
+      buffer = '';
+      streamEnded = false;
+      carry = 0;
+      lastPaint = 0;
+      paint(true);
     },
     finish() {
       streamEnded = true;
