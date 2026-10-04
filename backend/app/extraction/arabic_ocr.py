@@ -120,13 +120,8 @@ _PDF_ARABIC_WORD_RE = re.compile(
     rf"[{_ARABIC_OCR_LETTERS}{_ARABIC_OCR_MARKS}]+"
 )
 _PDF_PAGE_NUMBER_LINE_RE = re.compile(
-    r"(?:page\s+\d+(?:\s+(?:of|/)\s+\d+)?|\d+(?:\s+(?:of|/)\s+\d+)?)",
-    flags=re.IGNORECASE,
-)
-_PDF_RUNNING_FURNITURE_LINE_RE = re.compile(
-    r"(?:confidential(?:\s+copy)?|annual\s+report(?:\s+\d{4})?|"
-    r"(?:©|\(c\)|copyright)(?:\s+.*)?|all\s+rights\s+reserved\.?)"
-    r"(?:\s+[—–|:;·•-]\s+(?P<decoration>.+))?",
+    r"(?:(?:page|صفحة)\s+\d+(?:\s+(?:of|من|/)\s+\d+)?|"
+    r"\d+(?:\s+(?:of|من|/)\s+\d+)?)",
     flags=re.IGNORECASE,
 )
 _PDF_MOJIBAKE_RE = re.compile(
@@ -636,49 +631,27 @@ def _usable_pdf_text_layer(text: str, *, settings: Settings) -> str | None:
     if mojibake_pairs >= 3 and mojibake_pairs / len(candidate) >= 0.03:
         return None
 
-    letter_count = arabic_letters + latin_letters
-    if letter_count < settings.arabic_min_body_char_count:
-        return None
-    words = [word for word in _PDF_TEXT_WORD_RE.findall(candidate) if len(word) >= 2]
-    if len(words) < 4:
-        return None
-    if _substantive_pdf_body_word_count(candidate) < 8:
-        return None
-    meaningful_lines = [
-        line
+    body_lines = [
+        line.strip()
         for line in candidate.splitlines()
-        if count_arabic_letters(line) + count_latin_letters(line) >= 4
+        if line.strip()
+        and not _PDF_PAGE_NUMBER_LINE_RE.fullmatch(line.strip())
     ]
-    if len(meaningful_lines) < 3 and len(words) < 8:
+    body_text = "\n".join(body_lines)
+    if count_arabic_letters(body_text) + count_latin_letters(body_text) < 200:
+        return None
+    sentence_like_lines = sum(
+        len(_PDF_TEXT_WORD_RE.findall(line)) >= 8
+        or line.endswith((".", "!", "?", "؟", "۔", ":"))
+        for line in body_lines
+    )
+    if sentence_like_lines < 2:
         return None
     if arabic_letters >= settings.arabic_min_body_char_count and (
         _has_reversed_arabic_words(candidate)
     ):
         return None
     return candidate
-
-
-def _substantive_pdf_body_word_count(text: str) -> int:
-    """Count text-layer words outside page-number and running-furniture lines."""
-    body_words = 0
-    for line in text.splitlines():
-        normalized_line = line.strip()
-        if _PDF_PAGE_NUMBER_LINE_RE.fullmatch(
-            normalized_line
-        ) or _is_pdf_running_furniture_line(normalized_line):
-            continue
-        body_words += sum(
-            len(word) >= 2 for word in _PDF_TEXT_WORD_RE.findall(normalized_line)
-        )
-    return body_words
-
-
-def _is_pdf_running_furniture_line(line: str) -> bool:
-    match = _PDF_RUNNING_FURNITURE_LINE_RE.fullmatch(line)
-    if match is None:
-        return False
-    decoration = match.group("decoration") or ""
-    return len(_PDF_TEXT_WORD_RE.findall(decoration)) <= 6
 
 
 def _has_reversed_arabic_words(text: str) -> bool:

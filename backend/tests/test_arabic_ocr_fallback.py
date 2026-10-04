@@ -33,6 +33,22 @@ from app.extraction.arabic_types import (
 from app.extraction.gemini_ocr_client import batch_prompt
 
 
+_ENGLISH_TEXT_LAYER_BODY = (
+    "English selectable text supports recovery when every OCR provider fails, "
+    "preserving the document's narrative and relevant details.\n"
+    "This second line explains how researchers collect the evidence, compare "
+    "results across regions, and describe the methods used in the report.\n"
+    "A final sentence confirms that the PDF page has a useful text layer, "
+    "summarizes the findings, and records implications for future work."
+)
+_ARABIC_TEXT_LAYER_BODY = (
+    "هذا النص العربي واضح ومقروء من الجميع ويعرض نتائج الدراسة بأسلوب علمي دقيق ومفصل.\n"
+    "تشرح الباحثة منهجية العمل وتقارن المؤشرات بين المناطق وتعرض الأدلة والبيانات المستخدمة في التحليل.\n"
+    "كما تناقش النتائج والخيارات المتاحة وتوضح أثر القرارات على المؤسسات والمجتمع في المستقبل.\n"
+    "وتقدم الدراسة توصيات عملية لدعم التخطيط وتحسين الخدمات وتطوير السياسات العامة."
+)
+
+
 def page_section(number: int, text: str) -> str:
     return f"<!-- PAGE:{number} -->\n{text}\n<!-- END_PAGE:{number} -->"
 
@@ -825,18 +841,15 @@ def test_one_unreadable_page_in_a_long_document_is_marked_not_fatal(tmp_path):
 @pytest.mark.parametrize(
     "text",
     [
-        pytest.param(
-            "English selectable text supports recovery when every OCR provider fails.\n"
-            "This second line contains enough body text to distinguish it from a heading.\n"
-            "A final sentence confirms that the PDF page has a useful text layer.",
-            id="body-only",
-        ),
+        pytest.param(_ENGLISH_TEXT_LAYER_BODY, id="body-only"),
         pytest.param(
             "Confidential Copy — For Internal Use Only\n"
             "Annual Report 2024 — Finance Department\n"
             "Page 23 of 120\n"
             "The report examines current financial controls, risks, and annual forecasts.\n"
-            "Researchers compare results with prior years and explain material changes.",
+            "Researchers compare results with prior years and explain material changes.\n"
+            "The report documents how teams evaluate regional outcomes and preserve "
+            "the methods for future research.",
             id="decorated-furniture-with-body",
         ),
     ],
@@ -891,6 +904,30 @@ def test_english_pdf_text_layer_recovers_page_and_records_its_provider(tmp_path,
             "Page 23 of 120",
             id="decorated-header-footer-page-number",
         ),
+        pytest.param(
+            "Department of Education\n"
+            "Research and Planning Office\n"
+            "Ministry of Administrative Affairs\n"
+            "Date: 4 October 2026\n"
+            "Page 23 of 120",
+            id="round-2-department-of-header-only",
+        ),
+        pytest.param(
+            "North Valley Center for Public Policy\n"
+            "Office of Regional Coordination and Academic Development\n"
+            "Directorate of Research Administration\n"
+            "Date: 4 October 2026\n"
+            "Page 17 of 280",
+            id="generic-english-header-only",
+        ),
+        pytest.param(
+            "وزارة التعليم والبحث العلمي\n"
+            "مديرية التخطيط والتطوير المؤسسي\n"
+            "مركز الدراسات والسياسات العامة\n"
+            "تاريخ الإصدار ٤ تشرين الأول ٢٠٢٦\n"
+            "صفحة ٢٣ من ١٢٠",
+            id="generic-arabic-header-only",
+        ),
     ],
 )
 def test_sparse_page_number_or_header_text_layer_keeps_unreadable_marker(
@@ -920,31 +957,73 @@ def test_sparse_page_number_or_header_text_layer_keeps_unreadable_marker(
 
 
 @pytest.mark.parametrize(
+    "page_line",
+    ["Page 1 of 100", "صفحة ١ من ١٠٠"],
+    ids=("english-page-number", "arabic-page-number"),
+)
+def test_pdf_page_number_line_does_not_count_toward_body_letter_threshold(
+    page_line,
+):
+    from app.extraction.arabic_ocr import _usable_pdf_text_layer
+
+    # The two body lines contain 194 letters; the page-number line adds six.
+    body = (
+        "data " * 18
+        + "policy " * 3
+        + "research firm.\n"
+        + "data " * 17
+        + "policy " * 3
+        + "result."
+    )
+    text = body + "\n" + page_line
+
+    assert _usable_pdf_text_layer(text, settings=Settings(_env_file=None)) is None
+
+
+def test_pdf_text_layer_requires_two_sentence_like_lines():
+    from app.extraction.arabic_ocr import _usable_pdf_text_layer
+
+    text = "information" * 9 + "\n" + "research " * 12 + "evidence."
+
+    assert _usable_pdf_text_layer(text, settings=Settings(_env_file=None)) is None
+
+
+@pytest.mark.parametrize(
     "bad_text",
     [
-        "ﻫﺬﺍ ﺍﻟﻨﺺ ﺍﻟﻌﺮﺑﻲ ﻭﺍﺿﺢ ﻭﻣﻘﺮﻭﺀ ﻣﻦ "
-        "ﺍﻟﺠﻤﻴﻊ\n"
-        "ﻧﺴﺘﺨﺪﻡ ﻫﺬﻩ ﺍﻟﺼﻔﺤﺔ ﻟﻠﺘﺤﻘﻖ ﻣﻦ "
-        "ﺟﻮﺩﺓ ﺍﻟﻨﺺ\n"
-        "ﺍﻟﻤﺴﺘﺨﺮﺝ ﻋﻨﺪ ﻓﺸﻞ ﻣﺰﻭﺩﻱ ﺍﻟﺘﻌﺮﻑ "
-        "ﺍﻟﻀﻮﺋﻲ",
-        "\n".join(
-            " ".join(word[::-1] for word in line.split())
-            for line in (
-                "هذا النص العربي واضح ومقروء من الجميع",
-                "نستخدم هذه الصفحة للتحقق من جودة النص",
-                "المستخرج عند فشل مزودي التعرف الضوئي",
-            )
+        pytest.param(
+            "ﻫﺬﺍ ﺍﻟﻨﺺ ﺍﻟﻌﺮﺑﻲ ﻭﺍﺿﺢ ﻭﻣﻘﺮﻭﺀ ﻣﻦ "
+            "ﺍﻟﺠﻤﻴﻊ\n"
+            "ﻧﺴﺘﺨﺪﻡ ﻫﺬﻩ ﺍﻟﺼﻔﺤﺔ ﻟﻠﺘﺤﻘﻖ ﻣﻦ "
+            "ﺟﻮﺩﺓ ﺍﻟﻨﺺ\n"
+            "ﺍﻟﻤﺴﺘﺨﺮﺝ ﻋﻨﺪ ﻓﺸﻞ ﻣﺰﻭﺩﻱ ﺍﻟﺘﻌﺮﻑ "
+            "ﺍﻟﻀﻮﺋﻲ",
+            id="presentation-forms",
         ),
-        "باتك ديدج ريبك ليمج حضاو مادختسلال ثيدح ديفم تباث",
-        "لخد لجر مث بلط باتك باسح مث سرد",
+        pytest.param(
+            "\n".join(
+                " ".join(word[::-1] for word in line.split())
+                for line in (
+                    "هذا النص العربي واضح ومقروء من الجميع",
+                    *_ARABIC_TEXT_LAYER_BODY.splitlines(),
+                )
+            ),
+            id="reversed-arabic",
+        ),
+        pytest.param(
+            "\n".join(
+                "باتك ديدج ريبك ليمج حضاو مادختسلال ثيدح ديفم تباث."
+                for _ in range(5)
+            ),
+            id="reversed-arabic-unknown-words",
+        ),
+        pytest.param(
+            "\n".join(
+                "لخد لجر مث بلط باتك باسح مث سرد." for _ in range(8)
+            ),
+            id="reversed-arabic-common-words",
+        ),
     ],
-    ids=(
-        "presentation-forms",
-        "reversed-arabic",
-        "reversed-arabic-unknown-words",
-        "reversed-arabic-common-words",
-    ),
 )
 def test_broken_arabic_text_layer_keeps_unreadable_marker(tmp_path, bad_text):
     from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
@@ -973,11 +1052,7 @@ def test_broken_arabic_text_layer_keeps_unreadable_marker(tmp_path, bad_text):
 def test_mojibake_arabic_text_layer_keeps_unreadable_marker(tmp_path):
     from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
 
-    english_text = (
-        "English selectable text supports recovery when every OCR provider fails.\n"
-        "This second line contains enough body text to distinguish it from a heading.\n"
-        "A final sentence confirms that the PDF page has a useful text layer."
-    )
+    english_text = _ENGLISH_TEXT_LAYER_BODY
     corrupted_arabic = (
         "هذا النص العربي واضح ومقروء من الجميع. "
         "نستخدم هذه الصفحة للتحقق من جودة النص المستخرج."
@@ -1009,17 +1084,16 @@ def test_mojibake_arabic_text_layer_keeps_unreadable_marker(tmp_path):
     "text",
     [
         pytest.param(
-            "هذا النص العربي واضح ومقروء من الجميع\n"
-            "نستخدم هذه الصفحة للتحقق من جودة النص\n"
-            "المستخرج عند فشل مزودي التعرف الضوئي",
+            "هذا النص العربي واضح ومقروء من الجميع\n" + _ARABIC_TEXT_LAYER_BODY,
             id="existing-readable-arabic",
         ),
         pytest.param(
-            "دخل رجل ثم طلب كتاب حساب ثم درس",
+            "دخل رجل ثم طلب كتاب حساب ثم درس.\n" + _ARABIC_TEXT_LAYER_BODY,
             id="valid-common-words-not-reversed",
         ),
         pytest.param(
-            "كتاب جديد كبير جميل واضح للاستخدام حديث مفيد ثابت",
+            "كتاب جديد كبير جميل واضح للاستخدام حديث مفيد ثابت.\n"
+            + _ARABIC_TEXT_LAYER_BODY,
             id="valid-content-words-not-reversed",
         ),
     ],
@@ -1053,9 +1127,8 @@ def test_mostly_english_text_layer_survives_a_small_presentation_form_fragment(
     tmp_path,
 ):
     text = (
-        "English selectable text supports recovery when every OCR provider fails.\n"
-        "This second line contains enough body text to distinguish it from a heading.\n"
-        "A final sentence confirms that the PDF page has a useful text layer.\n"
+        _ENGLISH_TEXT_LAYER_BODY
+        + "\n"
         "Arabic example: ﻣﺮﺣﺒﺎ"
     )
     pdf = _make_pdf_with_text_layers(tmp_path / "mixed-text-layer.pdf", [text])
@@ -1082,11 +1155,7 @@ def test_mostly_english_text_layer_survives_a_small_presentation_form_fragment(
 def test_pdf_text_layer_pages_do_not_consume_unreadable_budget(tmp_path):
     from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
 
-    useful_text = (
-        "English selectable text supports recovery when every OCR provider fails.\n"
-        "This second line contains enough body text to distinguish it from a heading.\n"
-        "A final sentence confirms that the PDF page has a useful text layer."
-    )
+    useful_text = _ENGLISH_TEXT_LAYER_BODY
     page_texts = [useful_text, useful_text] + [None] * 18
     pdf = _make_pdf_with_text_layers(tmp_path / "text-layer-budget.pdf", page_texts)
     settings = Settings(
