@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core import tracing
 from app.core.logging import get_logger
 from app.core.config import settings
+from app.database.pgvector import _vector_literal
 from app.embeddings.bulk_semaphore import bulk_embedding_permit
 from app.embeddings.model import active_embedding_model_sync, get_embeddings_batch_sync
 
@@ -104,6 +105,91 @@ def _embed_text_for_chunk(chunk: dict) -> str:
         if context_parts:
             txt = f"{' | '.join(context_parts)}\n\n{txt}"
     return txt[:settings.embed_max_chars]
+
+
+def build_document_search_text_sync(session: Session, document_id: UUID) -> str:
+    """Build the compact title-and-lead-prose input for library search."""
+    document = session.execute(
+        text("""
+            SELECT title, original_filename, filename
+            FROM documents
+            WHERE id = :document_id
+        """),
+        {"document_id": document_id},
+    ).mappings().first()
+    if document is None:
+        return ""
+
+    title = next(
+        (
+            value.strip()
+            for value in (
+                document.get("title"),
+                document.get("original_filename"),
+                document.get("filename"),
+            )
+            if value and value.strip()
+        ),
+        "",
+    )
+    chunks = session.execute(
+        text("""
+            SELECT plain_text
+            FROM chunks
+            WHERE document_id = :document_id
+              AND chunk_type = 'text'
+              AND plain_text IS NOT NULL
+              AND length(plain_text) > 40
+            ORDER BY sequence_id
+            LIMIT 3
+        """),
+        {"document_id": document_id},
+    ).mappings().all()
+    parts = [title] if title else []
+    parts.extend((chunk["plain_text"] or "").strip() for chunk in chunks)
+    return "\n\n".join(part for part in parts if part)[:2000]
+
+
+def embed_document_search_vector_sync(session: Session, document_id: UUID) -> bool:
+    """Create a missing library search vector using the shared bulk permit.
+
+    The conditional update makes this safe to retry and prevents concurrent
+    workers from overwriting a vector another worker has already stored.
+    """
+    missing = session.execute(
+        text("""
+            SELECT 1
+            FROM documents
+            WHERE id = :document_id AND search_embedding IS NULL
+        """),
+        {"document_id": document_id},
+    ).first()
+    if missing is None:
+        return False
+
+    search_text = build_document_search_text_sync(session, document_id)
+    if not search_text:
+        return False
+    with bulk_embedding_permit():
+        embeddings = get_embeddings_batch_sync([search_text])
+    if not embeddings or len(embeddings) != 1:
+        raise ValueError("Search embedding response must contain exactly one vector")
+
+    result = session.execute(
+        text("""
+            UPDATE documents
+            SET search_embedding = CAST(:embedding AS vector)
+            WHERE id = :document_id AND search_embedding IS NULL
+            RETURNING id
+        """),
+        {
+            "document_id": document_id,
+            "embedding": _vector_literal(embeddings[0]),
+        },
+    )
+    created = result.scalar_one_or_none() is not None
+    session.commit()
+    return created
 
 
 def _embed_batch(batch: list[dict]) -> tuple[list[dict], list[list[float]] | None, Exception | None]:

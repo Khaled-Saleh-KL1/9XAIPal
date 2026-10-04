@@ -24,7 +24,10 @@ from app.extraction.pipeline_sync import (
     update_document_status_sync,
     update_job_status_sync,
 )
-from app.embeddings.service_sync import embed_document_chunks_sync
+from app.embeddings.service_sync import (
+    embed_document_chunks_sync,
+    embed_document_search_vector_sync,
+)
 from app.extraction.jobs import JobStatus
 from app.summarization.section_summarizer_sync import generate_and_store_section_summaries_sync
 from app.summarization.figure_describer_sync import generate_figure_descriptions_sync
@@ -256,6 +259,19 @@ def embed_document(self, document_id: str, force: bool = False) -> dict:
             return {"document_id": document_id, "status": "failed", "error": str(exc)}
 
     logger.info(f"[celery] embed_document done document={document_id} embedded={count}")
+
+    # Library search vectors are auxiliary to chunk retrieval. A failure here
+    # must not retry or mark the successfully embedded document as failed.
+    try:
+        with sync_session() as session:
+            created = embed_document_search_vector_sync(session, doc_uuid)
+        if created:
+            logger.info(f"[celery] Created document search vector for {document_id}")
+    except Exception:
+        logger.exception(
+            f"[celery] Failed to create document search vector for {document_id} "
+            "(non-fatal); a later retry or backfill can fill it"
+        )
 
     if force:
         # A repair changes vectors only; summaries and figure descriptions are
