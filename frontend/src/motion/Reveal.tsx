@@ -3,7 +3,7 @@ import type { ReactElement, ReactNode } from 'react';
 import { m } from 'motion/react';
 import { playful } from './springs';
 
-type MotionTag = 'div' | 'section' | 'article' | 'li' | 'span';
+type MotionTag = 'div' | 'section' | 'article' | 'h2' | 'h3' | 'li' | 'span';
 
 export function Reveal({
   children,
@@ -11,17 +11,20 @@ export function Reveal({
   y = 18,
   className,
   as = 'div',
+  id,
 }: {
   children: ReactNode;
   delay?: number;
   y?: number;
   className?: string;
   as?: MotionTag;
+  id?: string;
 }) {
   const MotionTagComponent = m[as] as typeof m.div;
   return (
     <MotionTagComponent
       className={className}
+      id={id}
       initial={{ opacity: 0, y }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: '-60px' }}

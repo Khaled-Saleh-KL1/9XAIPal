@@ -82,8 +82,9 @@ describe('Sheet', () => {
 
 describe('Reveal and Stagger', () => {
   it('renders reveal and stagger children', () => {
-    render(<MotionRoot><Reveal><p>Revealed</p></Reveal><Stagger><StaggerItem>First</StaggerItem><StaggerItem>Second</StaggerItem></Stagger></MotionRoot>);
+    render(<MotionRoot><Reveal><p>Revealed</p></Reveal><Reveal as="h2">A chapter</Reveal><Stagger><StaggerItem>First</StaggerItem><StaggerItem>Second</StaggerItem></Stagger></MotionRoot>);
     expect(screen.getByText('Revealed')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'A chapter' })).toBeInTheDocument();
     expect(screen.getByText('First')).toBeInTheDocument();
     expect(screen.getByText('Second')).toBeInTheDocument();
   });
