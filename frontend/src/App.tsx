@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, lazy, Suspense } from 'react';
+import { useState, useCallback, useRef, useEffect, useId, lazy, Suspense } from 'react';
 import type { Route, LibraryLayout, UploadingFile } from './types';
 import type { Paper } from './types';
 import { LibraryView } from './views/LibraryView';
@@ -6,9 +6,12 @@ import { ProcessingOverlay } from './views/ProcessingOverlay';
 import { ReadingView } from './views/ReadingView';
 import { RawFilesPanel } from './views/RawFilesPanel';
 import { DeskView } from './views/DeskView';
-import { AuthView } from './views/AuthView';
+import { AuthForm } from './views/AuthForm';
+import { LandingView } from './views/LandingView';
 import { WaitingRoomView } from './views/WaitingRoomView';
 import { useAuth } from './contexts/AuthContext';
+import { Sheet } from './motion';
+import { isWelcomeHash, useWelcomeRoute } from './lib/welcomeRoute';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
 // keeps it out of the initial bundle so the library/reading views appear
@@ -106,6 +109,20 @@ function writeHash(state: HashState, mode: 'push' | 'replace' = 'push') {
 export function App() {
   const { user, loading: authLoading, admitted } = useAuth();
   const [route, setRoute] = useState<Route>('library');
+  const [welcome, setWelcome] = useWelcomeRoute();
+  const [authSheet, setAuthSheet] = useState<{ mode: 'login' | 'signup' } | null>(null);
+  const authOpenerRef = useRef<HTMLElement | null>(null);
+  const authFirstFieldRef = useRef<HTMLInputElement | null>(null);
+  const authTitleId = useId();
+  const requestAuth = useCallback((mode: 'login' | 'signup', opener: HTMLElement) => {
+    authOpenerRef.current = opener;
+    setAuthSheet({ mode });
+  }, []);
+  const closeWelcome = useCallback(() => {
+    setRoute('library');
+    setWelcome(false);
+  }, [setWelcome]);
+  const noopAuth = useCallback(() => {}, []);
   /** False until the hash-sync effect has run once — see that effect. */
   const historyPrimed = useRef(false);
   const [activePaper, setActivePaper] = useState<Paper | null>(null);
@@ -179,6 +196,10 @@ export function App() {
   const [rawAnchors, setRawAnchors] = useState<string[]>([]);
   const [readingAnchor, setReadingAnchor] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (user) setAuthSheet(null);
+  }, [user]);
+
   // Which scope the desk opens on: a study id, or 'library'.
   const [deskScope, setDeskScope] = useState<string>('library');
   const [deskPage, setDeskPage] = useState<DeskPage>('study');
@@ -206,15 +227,16 @@ export function App() {
   // with a permanent poll: load once on mount, then refresh (and slow-poll)
   // only while the panel is actually open. LibraryView owns its own polling.
   useEffect(() => {
+    if (!user || welcome) return;
     refreshPapers();
-  }, [refreshPapers]);
+  }, [user, welcome, refreshPapers]);
 
   useEffect(() => {
-    if (!rawFilesOpen) return;
+    if (!user || welcome || !rawFilesOpen) return;
     refreshPapers();
     const id = setInterval(refreshPapers, 10000);
     return () => clearInterval(id);
-  }, [rawFilesOpen, refreshPapers]);
+  }, [user, welcome, rawFilesOpen, refreshPapers]);
 
   // Shared by every ingestion pipeline (file upload, URL import, …): poll
   // /progress until a terminal state, without auto-closing the overlay: the
@@ -494,6 +516,7 @@ export function App() {
   // Restore route from URL hash on mount (e.g. after a browser refresh).
   // Also keep the hash in sync whenever route or active paper changes.
   useEffect(() => {
+    if (!user || isWelcomeHash()) return;
     const initial = parseHash();
     if (initial.route === 'library') return;
     if (initial.route === 'desk') {
@@ -529,7 +552,7 @@ export function App() {
       }
     })();
     // Only run on mount; further nav updates the hash via the next effect.
-  }, []);
+  }, [user]);
 
   /**
    * Follow the hash when something outside React changes it: a typed URL, a
@@ -546,7 +569,9 @@ export function App() {
    * the hash already matches.
    */
   useEffect(() => {
+    if (!user) return;
     const onNavigate = () => {
+      if (isWelcomeHash()) return;
       const next = parseHash();
       if (next.route === 'library') { setRoute('library'); return; }
       if (next.route === 'desk') {
@@ -585,7 +610,7 @@ export function App() {
       window.removeEventListener('hashchange', onNavigate);
       window.removeEventListener('popstate', onNavigate);
     };
-  }, [activePaperId, openPaperById, viewingPdf?.id]);
+  }, [user, activePaperId, openPaperById, viewingPdf?.id]);
 
   // A file dropped where nothing claims it is not ignored by the browser: it
   // navigates the tab to the file, and the app is gone — replaced by a PDF
@@ -612,12 +637,14 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!user || welcome || isWelcomeHash()) return;
     // The very first run is the app settling onto its opening screen, not a
     // navigation — replacing keeps a phantom entry from sitting behind it,
     // which would otherwise cost the user one dead Back press before they
     // actually left.
     const mode = historyPrimed.current ? 'push' : 'replace';
     historyPrimed.current = true;
+    if (mode === 'replace' && parseHash().route !== 'library') return;
 
     if (route === 'reading' && activePaperId) {
       writeHash({ route: 'reading', paperId: activePaperId }, mode);
@@ -630,7 +657,7 @@ export function App() {
     }
     // 'processing' intentionally leaves the existing hash alone so a refresh
     // mid-upload returns to the library, not a half-baked processing state.
-  }, [route, activePaperId, viewingPdf, deskScope, deskPage]);
+  }, [user, welcome, route, activePaperId, viewingPdf, deskScope, deskPage]);
 
   // Gated below all hooks (not an early return above them), since every hook in
   // this component must run unconditionally on every render regardless of
@@ -639,7 +666,23 @@ export function App() {
     return <div className="h-screen" style={{ background: 'var(--bg)' }} />;
   }
   if (!user) {
-    return <AuthView />;
+    return (
+      <>
+        <LandingView signedIn={false} onRequestAuth={requestAuth} onOpenLibrary={() => {}} />
+        <Sheet
+          open={authSheet !== null}
+          onClose={() => setAuthSheet(null)}
+          labelledBy={authTitleId}
+          initialFocusRef={authFirstFieldRef}
+          returnFocusRef={authOpenerRef}
+        >
+          {authSheet && <AuthForm initialMode={authSheet.mode} titleId={authTitleId} firstFieldRef={authFirstFieldRef} />}
+        </Sheet>
+      </>
+    );
+  }
+  if (welcome) {
+    return <LandingView signedIn onRequestAuth={noopAuth} onOpenLibrary={closeWelcome} />;
   }
   if (!admitted) {
     return <WaitingRoomView />;

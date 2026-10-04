@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { WELCOME_HASH } from '../lib/welcomeRoute';
 
 /**
  * User badge + logout dropdown. Meant to sit inline as the trailing item in
@@ -81,6 +82,15 @@ export function UserMenuInline() {
       </button>
       {open && pos && createPortal(
         <div ref={popRef} className="user-menu-pop" role="menu" style={{ top: pos.top, right: pos.right }}>
+          <button
+            type="button"
+            role="menuitem"
+            className="user-menu-about"
+            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 8, fontSize: 12, fontWeight: 500, color: 'var(--fg)' }}
+            onClick={() => { setOpen(false); window.location.hash = WELCOME_HASH; }}
+          >
+            About 9XAIPal
+          </button>
           <button
             type="button"
             role="menuitem"

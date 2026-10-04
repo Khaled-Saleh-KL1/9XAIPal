@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 /**
  * Shown when someone is logged in but the site is at its concurrent-active-
  * user cap (see backend app/core/capacity.py) and they haven't been let in
- * yet. Same full-screen-gate shape as AuthView — there's nothing behind it
+ * yet. Same full-screen-gate shape as the signed-out landing view — there's nothing behind it
  * to show, same as "not logged in" — polling GET /me every few seconds until
  * `admitted` flips true, at which point App.tsx's gate swaps this out for
  * the real app with no reload needed.
