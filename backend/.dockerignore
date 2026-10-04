@@ -1,0 +1,21 @@
+# User documents and generated extraction artifacts belong to the storage mount.
+app/storage/
+
+# Python bytecode and local test/development environments.
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+**/.pytest_cache/
+.venv/
+**/.venv/
+
+# Local environment files are runtime inputs, never image build inputs.
+.env
+.env.*
+
+# Runtime images do not need the test suite; CI runs it from the checkout.
+tests/
+
+# Local logs and generated log files.
+*.log
+**/*.log
