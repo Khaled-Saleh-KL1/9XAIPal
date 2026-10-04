@@ -228,7 +228,6 @@ async def test_english_retrieval_never_calls_query_understanding_or_translation(
 
 async def test_library_search_uses_msa_and_english_vectors_and_keyword_only_terms(monkeypatch):
     module = _understanding_api()
-    monkeypatch.setattr(library_search, "_backfill_missing_embeddings", AsyncMock())
     understand = AsyncMock(return_value=_UNDERSTANDING)
     monkeypatch.setattr(library_search.arabic_query_understanding, "understand_arabic_query", understand)
     translate = AsyncMock(side_effect=AssertionError("successful understanding replaces translation"))
