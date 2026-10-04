@@ -105,6 +105,29 @@ def _mark_document_and_job_failed(session, doc_uuid: UUID, error_message: str) -
         update_job_status_sync(session, job_row["id"], JobStatus.FAILED, error_message=error_message)
 
 
+def _queue_search_vector_if_embedding_skipped(session, document_id: UUID) -> None:
+    """Queue the small search-vector task for completed extraction-only paths.
+
+    Full embedding work creates this vector itself. Fast and paper-only paths
+    skip chunk embedding, so dispatch the vector-only task without building a
+    chunk index. Queue/database failures are auxiliary and must not fail ingest.
+    """
+    try:
+        mode = session.execute(
+            text("SELECT embedding_mode FROM documents WHERE id = :document_id"),
+            {"document_id": document_id},
+        ).scalar_one_or_none()
+        if mode != "skipped":
+            return
+        embed_document_search_vector.delay(str(document_id))
+    except Exception:
+        logger.exception(
+            "[celery] Could not queue document search-vector work for %s "
+            "(non-fatal; backfill can retry)",
+            document_id,
+        )
+
+
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 
 
@@ -152,6 +175,7 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str, *, exe
                 job_id=job_uuid,
                 pdf_path=pdf_path,
             )
+            _queue_search_vector_if_embedding_skipped(session, doc_uuid)
     except Exception as exc:
         logger.exception(f"[celery] process_ingestion failed document={document_id}: {exc}")
         raise
@@ -210,6 +234,7 @@ def process_article_ingestion(
                 kind=kind,
                 pdf_handoff=handoff,
             )
+            _queue_search_vector_if_embedding_skipped(session, doc_uuid)
     except Exception as exc:
         logger.exception(f"[celery] process_article_ingestion failed document={document_id}: {exc}")
         raise
@@ -227,6 +252,37 @@ def process_article_ingestion(
 
 
 # ── Embedding ─────────────────────────────────────────────────────────────────
+
+
+@celery_app.task(
+    name="9xaipal.embed_document_search_vector",
+    bind=True,
+    max_retries=0,
+    acks_late=True,
+)
+def embed_document_search_vector(self, document_id: str) -> dict:
+    """Create only the library search vector, without embedding document chunks."""
+    logger.info(f"[celery] embed_document_search_vector start document={document_id}")
+    sync_engine.dispose()
+
+    doc_uuid = UUID(document_id)
+    try:
+        with sync_session() as session:
+            created = embed_document_search_vector_sync(session, doc_uuid)
+    except Exception as exc:
+        logger.exception(
+            "[celery] Search-vector-only work failed for %s; it can be retried by backfill",
+            document_id,
+        )
+        return {"document_id": document_id, "status": "failed", "error": str(exc)}
+
+    status = "complete" if created else "skipped"
+    logger.info(
+        "[celery] embed_document_search_vector done document=%s created=%s",
+        document_id,
+        created,
+    )
+    return {"document_id": document_id, "status": status, "created": created}
 
 
 @celery_app.task(

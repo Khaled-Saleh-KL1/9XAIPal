@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from pathlib import Path
 from runpy import run_path
+from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
 
@@ -78,3 +79,28 @@ def test_backfill_only_enqueues_documents_missing_vectors_with_chunks(db_session
     assert count == 1
     delay.assert_called_once_with(str(eligible_id))
     embed_inline.assert_not_called()
+
+
+def test_backfill_uses_the_vector_only_task_by_default(db_session_sync, monkeypatch):
+    from app.workers import tasks as worker_tasks
+
+    chunk_task = SimpleNamespace(delay=Mock())
+    search_vector_task = SimpleNamespace(delay=Mock())
+    monkeypatch.setattr(worker_tasks, "embed_document", chunk_task)
+    monkeypatch.setattr(
+        worker_tasks, "embed_document_search_vector", search_vector_task, raising=False
+    )
+    enqueue = _load_script()["enqueue_missing_search_embeddings"]
+
+    eligible_id = _add_document(db_session_sync, has_chunk=True)
+    db_session_sync.commit()
+
+    @contextmanager
+    def session_factory():
+        yield db_session_sync
+
+    count = enqueue(session_factory=session_factory)
+
+    assert count == 1
+    search_vector_task.delay.assert_called_once_with(str(eligible_id))
+    chunk_task.delay.assert_not_called()

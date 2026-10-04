@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from _queue_test_helpers import redis_test_url
 from app.core.config import Settings, settings
-from app.embeddings import model, service_sync
+from app.embeddings import bulk_semaphore, model, service_sync
 
 
 @pytest.fixture
@@ -143,14 +143,15 @@ def test_query_embedding_does_not_wait_for_an_occupied_bulk_permit(
     assert embed.await_count == 1
 
 
-def test_redis_failure_fails_bulk_embedding_closed():
+def test_redis_acquisition_outage_uses_a_released_local_fallback(caplog):
     permit = _permit_factory()
 
     class UnavailableRedis:
         def set(self, *_args, **_kwargs):
             raise redis.ConnectionError("redis unavailable")
 
-    with pytest.raises(RuntimeError, match="Redis"):
+    work = []
+    with caplog.at_level("WARNING"):
         with permit(
             redis_client=UnavailableRedis(),
             key_prefix=f"bulk-embedding-test:{uuid4()}",
@@ -158,7 +159,64 @@ def test_redis_failure_fails_bulk_embedding_closed():
             ttl_s=1,
             poll_interval_s=0.005,
         ):
-            pytest.fail("bulk embedding must not run when Redis is unavailable")
+            work.append("first")
+        with permit(
+            redis_client=UnavailableRedis(),
+            key_prefix=f"bulk-embedding-test:{uuid4()}",
+            max_inflight=1,
+            ttl_s=1,
+            poll_interval_s=0.005,
+        ):
+            work.append("second")
+
+    assert work == ["first", "second"]
+    assert "Redis" in caplog.text
+
+
+def test_chunk_embedding_continues_when_redis_is_unavailable(monkeypatch):
+    class UnavailableRedis:
+        def set(self, *_args, **_kwargs):
+            raise redis.ConnectionError("redis unavailable")
+
+    monkeypatch.setattr(
+        bulk_semaphore, "_redis_client_for_url", lambda _url: UnavailableRedis()
+    )
+    monkeypatch.setattr(
+        service_sync, "get_embeddings_batch_sync", lambda texts: [[0.4, 0.5] for _ in texts]
+    )
+
+    batch, embeddings, error = service_sync._embed_batch(
+        [{"id": "chunk-1", "plain_text": "a chunk that should still be embedded"}]
+    )
+
+    assert batch[0]["id"] == "chunk-1"
+    assert embeddings == [[0.4, 0.5]]
+    assert error is None
+
+
+def test_redis_release_outage_does_not_mask_completed_embedding(caplog):
+    permit = _permit_factory()
+
+    class ReleaseUnavailableRedis:
+        def set(self, *_args, **_kwargs):
+            return True
+
+        def eval(self, *_args, **_kwargs):
+            raise redis.ConnectionError("redis unavailable during release")
+
+    work = []
+    with caplog.at_level("WARNING"):
+        with permit(
+            redis_client=ReleaseUnavailableRedis(),
+            key_prefix=f"bulk-embedding-test:{uuid4()}",
+            max_inflight=1,
+            ttl_s=30,
+            poll_interval_s=0.005,
+        ):
+            work.append("embedded")
+
+    assert work == ["embedded"]
+    assert "release" in caplog.text.lower()
 
 
 def test_chunk_batch_request_runs_inside_the_bulk_permit(monkeypatch):

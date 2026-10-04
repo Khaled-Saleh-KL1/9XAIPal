@@ -430,14 +430,22 @@ async def search_documents_fulltext(
     user_id: UUID,
     query: str,
     limit: int = 20,
+    *,
+    missing_vectors_only: bool = False,
 ) -> list[dict]:
-    """Find this user's documents by chunk text, ranked by language FTS."""
+    """Find this user's documents by chunk text, ranked by language FTS.
+
+    ``missing_vectors_only`` supports the healthy semantic-search path: FTS
+    supplements vector results only for documents that do not yet have a
+    document-level search vector.
+    """
     params = {"user_id": user_id, "q": query, "limit": limit}
+    vector_filter = "AND d.search_embedding IS NULL" if missing_vectors_only else ""
     if not is_primarily_arabic(query):
         if not query.strip():
             return []
         result = await session.execute(
-            text("""
+            text(f"""
                 SELECT c.document_id AS id,
                        MAX(ts_rank(
                            to_tsvector('english', coalesce(c.plain_text, '')),
@@ -446,6 +454,7 @@ async def search_documents_fulltext(
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
                 WHERE d.user_id = :user_id
+                  {vector_filter}
                   AND to_tsvector('english', coalesce(c.plain_text, ''))
                       @@ websearch_to_tsquery('english', :q)
                 GROUP BY c.document_id
@@ -498,6 +507,7 @@ async def search_documents_fulltext(
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
                 WHERE d.user_id = :user_id
+                  {vector_filter}
                   AND ({exact_vector} @@ to_tsquery('simple', :q) OR {stem_matches})
                 GROUP BY c.document_id
                 ORDER BY fts_rank DESC
@@ -509,7 +519,7 @@ async def search_documents_fulltext(
 
     if settings.arabic_fts_v2_enabled:
         result = await session.execute(
-            text("""
+            text(f"""
                 SELECT c.document_id AS id,
                        MAX(ts_rank(
                            to_tsvector('simple', ar_normalize_v2(coalesce(c.plain_text, ''))),
@@ -518,6 +528,7 @@ async def search_documents_fulltext(
                 FROM chunks c
                 JOIN documents d ON d.id = c.document_id
                 WHERE d.user_id = :user_id
+                  {vector_filter}
                   AND to_tsvector('simple', ar_normalize_v2(coalesce(c.plain_text, '')))
                       @@ to_tsquery('simple', :q)
                 GROUP BY c.document_id
@@ -529,7 +540,7 @@ async def search_documents_fulltext(
         return [dict(row) for row in result.mappings().all()]
 
     result = await session.execute(
-        text("""
+        text(f"""
             SELECT c.document_id AS id,
                    MAX(ts_rank(
                        to_tsvector('simple', ar_normalize(coalesce(c.plain_text, ''))),
@@ -538,6 +549,7 @@ async def search_documents_fulltext(
             FROM chunks c
             JOIN documents d ON d.id = c.document_id
             WHERE d.user_id = :user_id
+              {vector_filter}
               AND to_tsvector('simple', ar_normalize(coalesce(c.plain_text, '')))
                   @@ to_tsquery('simple', :q)
             GROUP BY c.document_id

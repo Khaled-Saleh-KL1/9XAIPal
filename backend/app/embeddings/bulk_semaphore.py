@@ -10,6 +10,7 @@ from uuid import uuid4
 import redis
 
 from app.core.config import settings
+from app.core.logging import get_logger
 
 
 _DEFAULT_KEY_PREFIX = "9xaipal:bulk-embedding"
@@ -25,10 +26,17 @@ if redis.call('GET', KEYS[1]) == ARGV[1] then
 end
 return 0
 """
+logger = get_logger(__name__)
 
 
 class BulkEmbeddingPermitError(RuntimeError):
     """Bulk work could not safely acquire or retain a Redis permit."""
+
+
+@lru_cache(maxsize=8)
+def _local_fallback_semaphore(limit: int) -> threading.BoundedSemaphore:
+    """Bound concurrent bulk calls within this process while Redis is down."""
+    return threading.BoundedSemaphore(limit)
 
 
 @lru_cache(maxsize=4)
@@ -89,10 +97,22 @@ def bulk_embedding_permit(
     if poll_interval_s <= 0:
         raise ValueError("poll_interval_s must be positive")
 
-    client = redis_client or _redis_client_for_url(settings.redis_url)
-    key, token = _acquire_slot(
-        client, prefix, limit, max(1, int(ttl * 1000)), poll_interval_s
-    )
+    try:
+        client = redis_client or _redis_client_for_url(settings.redis_url)
+        key, token = _acquire_slot(
+            client, prefix, limit, max(1, int(ttl * 1000)), poll_interval_s
+        )
+    except Exception as exc:
+        logger.warning(
+            "Redis bulk-embedding permit unavailable; using a local limit of %d "
+            "for this process",
+            limit,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        with _local_fallback_semaphore(limit):
+            yield
+        return
+
     ttl_ms = max(1, int(ttl * 1000))
     stop_heartbeat = threading.Event()
     heartbeat_errors: list[Exception] = []
@@ -115,12 +135,8 @@ def bulk_embedding_permit(
         target=renew_lease, name="bulk-embedding-lease", daemon=True
     )
     heartbeat.start()
-    body_error: BaseException | None = None
     try:
         yield
-    except BaseException as exc:
-        body_error = exc
-        raise
     finally:
         stop_heartbeat.set()
         heartbeat.join()
@@ -131,16 +147,23 @@ def bulk_embedding_permit(
         except Exception as exc:
             release_error = exc
 
-        if body_error is None:
-            if heartbeat_errors:
-                raise BulkEmbeddingPermitError(
-                    "Redis lease renewal failed; bulk embedding result is unsafe"
-                ) from heartbeat_errors[0]
-            if release_error is not None:
-                raise BulkEmbeddingPermitError(
-                    "Redis unavailable while releasing bulk embedding lease"
-                ) from release_error
-            if not released:
-                raise BulkEmbeddingPermitError(
-                    "bulk embedding lease was not owned at release time"
-                )
+        if heartbeat_errors:
+            logger.warning(
+                "Redis bulk-embedding lease renewal failed; allowing the current "
+                "request to finish and relying on release or TTL expiry",
+                exc_info=(
+                    type(heartbeat_errors[0]), heartbeat_errors[0],
+                    heartbeat_errors[0].__traceback__,
+                ),
+            )
+        if release_error is not None:
+            logger.warning(
+                "Redis bulk-embedding lease release failed; its finite TTL will "
+                "expire the permit",
+                exc_info=(type(release_error), release_error, release_error.__traceback__),
+            )
+        elif not released:
+            logger.warning(
+                "Redis bulk-embedding lease was no longer owned at release; "
+                "its former key will expire by TTL"
+            )

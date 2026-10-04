@@ -180,6 +180,18 @@ async def semantic_search_documents(
                 except Exception:
                     logger.warning("library Arabic keyword search failed", exc_info=True)
 
+            original_fts_results: list[dict] = []
+            try:
+                original_fts_results = await search_documents_fulltext(
+                    session, user_id, query, limit=search_limit,
+                    missing_vectors_only=True,
+                )
+            except Exception:
+                logger.warning(
+                    "library Arabic original-query full-text search failed",
+                    exc_info=True,
+                )
+
             similarity_by_id: dict = {}
             for rows in semantic_lists:
                 for row in rows:
@@ -194,12 +206,21 @@ async def semantic_search_documents(
                 for row in semantic_results
                 if similarity_by_id.get(row["id"], 0.0) >= _MIN_SIMILARITY
             ]
-            if semantic_results and keyword_results:
+            keyword_ids = {row["id"] for row in keyword_results}
+            original_fts_results = [
+                row for row in original_fts_results if row["id"] not in keyword_ids
+            ]
+            fts_lists = [
+                rows for rows in (original_fts_results, keyword_results) if rows
+            ]
+            if semantic_results and fts_lists:
                 results = reciprocal_rank_fusion(
-                    [semantic_results, keyword_results], limit
+                    [semantic_results, *fts_lists], limit
                 )
             elif semantic_results:
                 results = semantic_results[:limit]
+            elif fts_lists:
+                results = reciprocal_rank_fusion(fts_lists, limit)
             else:
                 results = keyword_results[:limit]
             return [
@@ -266,6 +287,18 @@ async def semantic_search_documents(
         if similarity_by_id.get(row["id"], 0.0) >= _MIN_SIMILARITY
     ]
 
+    vectorless_fts_results: list[dict] = []
+    if query_language == "english":
+        try:
+            vectorless_fts_results = await search_documents_fulltext(
+                session, user_id, query, limit=search_limit,
+                missing_vectors_only=True,
+            )
+        except Exception:
+            logger.warning(
+                "library original-query full-text search failed", exc_info=True
+            )
+
     keyword_query = query if query_language == "arabic" else translated
     keyword_results: list[dict] = []
     if keyword_query and is_primarily_arabic(keyword_query):
@@ -276,14 +309,21 @@ async def semantic_search_documents(
         except Exception:
             logger.warning("library Arabic full-text search failed", exc_info=True)
 
-    if semantic_results and keyword_results:
-        results = reciprocal_rank_fusion(
-            [semantic_results, keyword_results], limit
-        )
+    keyword_ids = {row["id"] for row in keyword_results}
+    vectorless_fts_results = [
+        row for row in vectorless_fts_results if row["id"] not in keyword_ids
+    ]
+    fts_lists = [
+        rows for rows in (vectorless_fts_results, keyword_results) if rows
+    ]
+    if semantic_results and fts_lists:
+        results = reciprocal_rank_fusion([semantic_results, *fts_lists], limit)
     elif semantic_results:
         results = semantic_results[:limit]
+    elif fts_lists:
+        results = reciprocal_rank_fusion(fts_lists, limit)
     else:
-        results = keyword_results[:limit]
+        results = []
 
     return [
         {

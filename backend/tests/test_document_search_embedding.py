@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 from unittest.mock import Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
@@ -148,6 +148,82 @@ def test_existing_search_embedding_is_never_overwritten(db_session_sync, monkeyp
         {"embedding": existing_literal, "id": document_id},
     ).scalar_one()
     assert distance == 0
+
+
+@pytest.mark.parametrize("invalid_kind", ["zero", "wrong_dimension", "nan", "infinity"])
+def test_invalid_search_vectors_are_rejected_and_left_missing(
+    db_session_sync, monkeypatch, invalid_kind,
+):
+    embed_search = _search_embedding_helper("embed_document_search_vector_sync")
+    document_id = _add_document(db_session_sync, title="Invalid vector fixture")
+    _add_chunk(
+        db_session_sync,
+        document_id,
+        1,
+        "A substantive lead paragraph that is long enough for search indexing.",
+    )
+    db_session_sync.commit()
+
+    vector = [0.25] * settings.vector_dimension
+    if invalid_kind == "zero":
+        vector = [0.0] * settings.vector_dimension
+    elif invalid_kind == "wrong_dimension":
+        vector = [0.25]
+    elif invalid_kind == "nan":
+        vector[0] = float("nan")
+    elif invalid_kind == "infinity":
+        vector[0] = float("inf")
+
+    @contextmanager
+    def permit():
+        yield
+
+    monkeypatch.setattr(service_sync, "bulk_embedding_permit", permit)
+    monkeypatch.setattr(service_sync, "get_embeddings_batch_sync", lambda _texts: [vector])
+
+    with pytest.raises(ValueError, match="search embedding vector"):
+        embed_search(db_session_sync, document_id)
+
+    db_session_sync.rollback()
+    assert db_session_sync.execute(
+        text("SELECT search_embedding IS NULL FROM documents WHERE id = :id"),
+        {"id": document_id},
+    ).scalar_one()
+
+
+def test_vector_only_task_does_not_embed_document_chunks(monkeypatch):
+    from app.workers import tasks
+    from app.core.celery_app import celery_app
+
+    task = getattr(tasks, "embed_document_search_vector", None)
+    assert task is not None, "a dedicated vector-only worker task must exist"
+    assert celery_app.conf.task_routes["9xaipal.embed_document_search_vector"]["queue"] == "celery"
+
+    document_id = str(uuid4())
+    sessions = []
+    created = []
+
+    @contextmanager
+    def fake_session():
+        sessions.append("opened")
+        yield object()
+
+    def embed_search(_session, doc_id):
+        created.append(doc_id)
+        return True
+
+    monkeypatch.setattr(tasks.sync_engine, "dispose", lambda: None)
+    monkeypatch.setattr(tasks, "sync_session", fake_session)
+    monkeypatch.setattr(tasks, "embed_document_chunks_sync", Mock(side_effect=AssertionError(
+        "vector-only work must not create a chunk index"
+    )))
+    monkeypatch.setattr(tasks, "embed_document_search_vector_sync", embed_search)
+
+    result = task.apply(args=(document_id,), throw=True).get()
+
+    assert result == {"document_id": document_id, "status": "complete", "created": True}
+    assert sessions == ["opened"]
+    assert created == [UUID(document_id)]
 
 
 def test_search_vector_failure_does_not_fail_chunk_embedding_task(monkeypatch):

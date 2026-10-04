@@ -11,12 +11,12 @@ performed later by the light Celery worker, under the shared bulk permit.
 from sqlalchemy import text
 
 from app.database.connection import sync_session
-from app.workers.tasks import embed_document
+from app.workers.tasks import embed_document_search_vector
 
 
 def enqueue_missing_search_embeddings(
     session_factory=sync_session,
-    task=embed_document,
+    task=embed_document_search_vector,
 ) -> int:
     """Enqueue documents that have chunks but no document search vector."""
     with session_factory() as session:

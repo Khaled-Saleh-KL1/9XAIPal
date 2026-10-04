@@ -266,8 +266,12 @@ async def test_library_search_uses_msa_and_english_vectors_and_keyword_only_term
     assert semantic.await_args_list[2].kwargs["document_ids"] == [
         "mixed-paper", "english-paper"
     ]
-    keyword.assert_awaited_once()
-    assert keyword.await_args.args[2] == "طالب طلاب شبكة عصبية شبكات عصبية"
+    assert keyword.await_count == 2
+    assert [item.args[2] for item in keyword.await_args_list] == [
+        "طالب طلاب شبكة عصبية شبكات عصبية", _QUESTION
+    ]
+    assert keyword.await_args_list[0].kwargs.get("missing_vectors_only", False) is False
+    assert keyword.await_args_list[1].kwargs["missing_vectors_only"] is True
     translate.assert_not_awaited()
     assert {row["id"] for row in results} == {
         "arabic-paper", "mixed-paper", "english-paper", "keyword-paper"

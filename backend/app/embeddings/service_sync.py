@@ -1,6 +1,7 @@
 """Synchronous embedding service: generate and store embeddings for chunks in committed batches."""
 
 from concurrent.futures import ThreadPoolExecutor
+import math
 from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -150,6 +151,25 @@ def build_document_search_text_sync(session: Session, document_id: UUID) -> str:
     return "\n\n".join(part for part in parts if part)[:2000]
 
 
+def _validated_search_embedding(embedding) -> list[float]:
+    """Reject malformed or zero vectors before they can leave the column non-NULL."""
+    try:
+        vector = [float(value) for value in embedding]
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("search embedding vector contains invalid values") from exc
+
+    if len(vector) != settings.vector_dimension:
+        raise ValueError(
+            "search embedding vector has dimension "
+            f"{len(vector)}; expected {settings.vector_dimension}"
+        )
+    if not all(math.isfinite(value) for value in vector):
+        raise ValueError("search embedding vector contains a non-finite value")
+    if not any(value != 0.0 for value in vector):
+        raise ValueError("search embedding vector is all zero")
+    return vector
+
+
 def embed_document_search_vector_sync(session: Session, document_id: UUID) -> bool:
     """Create a missing library search vector using the shared bulk permit.
 
@@ -174,6 +194,7 @@ def embed_document_search_vector_sync(session: Session, document_id: UUID) -> bo
         embeddings = get_embeddings_batch_sync([search_text])
     if not embeddings or len(embeddings) != 1:
         raise ValueError("Search embedding response must contain exactly one vector")
+    embedding = _validated_search_embedding(embeddings[0])
 
     result = session.execute(
         text("""
@@ -184,7 +205,7 @@ def embed_document_search_vector_sync(session: Session, document_id: UUID) -> bo
         """),
         {
             "document_id": document_id,
-            "embedding": _vector_literal(embeddings[0]),
+            "embedding": _vector_literal(embedding),
         },
     )
     created = result.scalar_one_or_none() is not None

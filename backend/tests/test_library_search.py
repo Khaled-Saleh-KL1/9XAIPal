@@ -6,7 +6,7 @@ test_web_search_cascade.py's approach for the same reason.
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import httpx
 import pytest
@@ -84,10 +84,11 @@ async def test_library_search_translates_and_fuses_semantic_and_arabic_keyword_h
         ],
     ])
     monkeypatch.setattr(library_search, "search_documents_semantic", semantic)
-    keyword = AsyncMock(return_value=[
+    keyword_rows = [
         {"id": "doc-d", "fts_rank": 0.2},
         {"id": "doc-b", "fts_rank": 0.1},
-    ])
+    ]
+    keyword = AsyncMock(side_effect=[[], keyword_rows])
     monkeypatch.setattr(library_search, "search_documents_fulltext", keyword, raising=False)
     session = object()
 
@@ -99,7 +100,13 @@ async def test_library_search_translates_and_fuses_semantic_and_arabic_keyword_h
     assert query_embed.await_args_list[0].args == ("How does attention work?",)
     assert query_embed.await_args_list[1].args == (translation,)
     assert semantic.await_count == 2
-    keyword.assert_awaited_once_with(session, "user-1", translation, limit=15)
+    keyword.assert_has_awaits([
+        call(
+            session, "user-1", "How does attention work?", limit=15,
+            missing_vectors_only=True,
+        ),
+        call(session, "user-1", translation, limit=15),
+    ])
     assert [row["id"] for row in results] == ["doc-b", "doc-d", "doc-a", "doc-c"]
     assert results == [
         {"id": "doc-b", "similarity": 0.83},
@@ -107,6 +114,84 @@ async def test_library_search_translates_and_fuses_semantic_and_arabic_keyword_h
         {"id": "doc-a", "similarity": 0.52},
         {"id": "doc-c", "similarity": 0.61},
     ]
+
+
+async def test_healthy_english_search_merges_fts_hits_from_documents_without_vectors(
+    monkeypatch,
+):
+    query = "neural attention"
+    monkeypatch.setattr(library_search, "translated_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        library_search,
+        "search_documents_semantic",
+        AsyncMock(return_value=[{"id": "vector-doc", "similarity": 0.72}]),
+    )
+    calls = []
+
+    async def fulltext(_session, _user_id, term, limit, *, missing_vectors_only=False):
+        calls.append((term, limit, missing_vectors_only))
+        if term == query and missing_vectors_only:
+            return [{"id": "fts-only-doc", "fts_rank": 0.8}]
+        return []
+
+    monkeypatch.setattr(library_search, "search_documents_fulltext", fulltext)
+
+    results = await library_search.semantic_search_documents(object(), "user-1", query)
+
+    assert calls == [(query, 20, True)]
+    assert [row["id"] for row in results] == ["vector-doc", "fts-only-doc"]
+    assert results[0] == {"id": "vector-doc", "similarity": 0.72}
+    assert results[1] == {"id": "fts-only-doc", "similarity": 0.0}
+
+
+async def test_healthy_arabic_understanding_keeps_original_language_fts_for_vectorless_docs(
+    monkeypatch,
+):
+    from app.core.config import settings
+
+    query = "التعلم العميق"
+    monkeypatch.setattr(settings, "arabic_query_understanding_enabled", True)
+    monkeypatch.setattr(
+        library_search.arabic_query_understanding,
+        "understand_arabic_query",
+        AsyncMock(return_value={
+            "msa": "التعلّم العميق",
+            "english": "deep learning",
+            "keywords": ["تعلم", "عميق"],
+        }),
+    )
+
+    class EmptyRows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class Session:
+        async def execute(self, *_args, **_kwargs):
+            return EmptyRows()
+
+    monkeypatch.setattr(
+        library_search, "get_query_embedding", AsyncMock(return_value=[0.1, 0.2])
+    )
+    monkeypatch.setattr(
+        library_search, "search_documents_semantic", AsyncMock(return_value=[])
+    )
+    calls = []
+
+    async def fulltext(_session, _user_id, term, limit, *, missing_vectors_only=False):
+        calls.append((term, missing_vectors_only))
+        if term == query and missing_vectors_only:
+            return [{"id": "arabic-fts-only", "fts_rank": 0.9}]
+        return []
+
+    monkeypatch.setattr(library_search, "search_documents_fulltext", fulltext)
+
+    results = await library_search.semantic_search_documents(Session(), "user-1", query)
+
+    assert (query, True) in calls
+    assert results == [{"id": "arabic-fts-only", "similarity": 0.0}]
 
 
 async def test_arabic_library_search_uses_original_for_keyword_and_falls_back_on_translation_failure(
@@ -146,7 +231,9 @@ async def test_arabic_library_search_uses_original_for_keyword_and_falls_back_on
     translate_failure.assert_awaited_once_with("attention", "arabic")
     query_embed.assert_awaited_once_with("attention")
     semantic.assert_awaited_once()
-    keyword.assert_not_awaited()
+    keyword.assert_awaited_once_with(
+        session, "user-2", "attention", limit=20, missing_vectors_only=True
+    )
     assert fallback == [{"id": "original-doc", "similarity": 0.6}]
 
 
