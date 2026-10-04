@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import time
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -49,6 +50,9 @@ _GEMINI_PROVIDERS = frozenset(
 )
 _GEMMA_PROVIDER = "gemma4_arabic_fallback"
 _HYBRID_EXTRACTOR = "gemini_gemma_arabic_hybrid"
+_PDF_TEXT_LAYER_PROVIDER = "pdf_text_layer"
+_PDF_TEXT_LAYER_MODEL = "pymupdf"
+_PDF_TEXT_LAYER_HYBRID_EXTRACTOR = "arabic_pdf_text_layer_hybrid"
 _GEMINI_FALLBACK_KINDS = frozenset(
     {
         "no_keys_configured",
@@ -109,6 +113,14 @@ _BROKEN_ARABIC_MARKED_CHAIN_RE = re.compile(
 _ARABIC_BASE_MARK_GAP_RE = re.compile(
     rf"(?P<base>[{_ARABIC_OCR_LETTERS}]){_ARABIC_OCR_HSPACE}+"
     rf"(?P<marks>{_ARABIC_OCR_MARK_RUN})"
+)
+_PDF_PAGE_NUMBER_LINE_RE = re.compile(
+    r"(?:(?:page|صفحة)\s+\d+(?:\s+(?:of|من|/)\s+\d+)?|"
+    r"\d+(?:\s+(?:of|من|/)\s+\d+)?)",
+    flags=re.IGNORECASE,
+)
+_PDF_MOJIBAKE_RE = re.compile(
+    r"[\u00c2\u00c3\u00d0\u00d8\u00d9\u00de][\u0080-\u00bf]"
 )
 
 
@@ -343,6 +355,21 @@ def extract_arabic_document(
     )
 
     def _mark_unreadable(page_number: int) -> bool:
+        text_layer = _usable_pdf_text_layer(source_texts[page_number - 1])
+        if text_layer is not None:
+            page_map[page_number] = ArabicOcrPage(
+                page_number=page_number,
+                raw_markdown=text_layer,
+                markdown=text_layer,
+                provider=_PDF_TEXT_LAYER_PROVIDER,
+                model=_PDF_TEXT_LAYER_MODEL,
+            )
+            logger.info(
+                "Arabic OCR page %d recovered from its PDF text layer",
+                page_number,
+            )
+            return True
+
         # ⚠ Live (2026-09-30): a 78-page book OCR'd pages 1–38, then Gemma
         # looped to its token cap on page 39 on every key and the whole book
         # failed. Within the budget, such a page is kept as a visible Arabic
@@ -519,6 +546,12 @@ def _extractor_from_pages(
     pages: Sequence[ArabicOcrPage], *, writing_style: str
 ) -> str:
     providers = {page.provider for page in pages}
+    if providers == {_PDF_TEXT_LAYER_PROVIDER}:
+        return _PDF_TEXT_LAYER_PROVIDER
+    if _PDF_TEXT_LAYER_PROVIDER in providers and providers <= (
+        _GEMINI_PROVIDERS | {_GEMMA_PROVIDER, _PDF_TEXT_LAYER_PROVIDER}
+    ):
+        return _PDF_TEXT_LAYER_HYBRID_EXTRACTOR
     if providers and providers <= _GEMINI_PROVIDERS:
         return _GEMINI_PRO_PROVIDER if writing_style == "handwritten" else _GEMINI_PROVIDER
     if providers == {_GEMMA_PROVIDER}:
@@ -526,6 +559,44 @@ def _extractor_from_pages(
     if _GEMMA_PROVIDER in providers and providers <= _GEMINI_PROVIDERS | {_GEMMA_PROVIDER}:
         return _HYBRID_EXTRACTOR
     raise ArabicExtractionFailed("The Arabic OCR provider provenance is invalid.")
+
+
+def _usable_pdf_text_layer(text: str) -> str | None:
+    """Return a substantial, Latin-dominant PDF text layer or reject it."""
+    candidate = text.strip()
+    if not candidate or "\ufffd" in candidate:
+        return None
+
+    mojibake_pairs = len(_PDF_MOJIBAKE_RE.findall(candidate))
+    if mojibake_pairs >= 3 and mojibake_pairs / len(candidate) >= 0.03:
+        return None
+
+    letters = [
+        character
+        for character in candidate
+        if unicodedata.category(character).startswith("L")
+    ]
+    if not letters:
+        return None
+    latin_letters = sum(
+        unicodedata.name(character, "").startswith("LATIN")
+        for character in letters
+    )
+    if latin_letters * 5 < len(letters) * 4:
+        return None
+
+    body_lines = [
+        line.strip()
+        for line in candidate.splitlines()
+        if line.strip()
+        and not _PDF_PAGE_NUMBER_LINE_RE.fullmatch(line.strip())
+    ]
+    body_text = "\n".join(body_lines)
+    body_letter_count = sum(
+        unicodedata.category(character).startswith("L")
+        for character in body_text
+    )
+    return candidate if body_letter_count >= 200 else None
 
 
 def _render_document(pdf_path: Path, dpi: int) -> tuple[list[RenderedPage], list[str]]:

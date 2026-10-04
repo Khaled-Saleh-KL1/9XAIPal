@@ -25,11 +25,28 @@ from app.extraction.arabic_types import (
     DocumentRoute,
     GeminiKeysExhausted,
     GeminiRequestInvalid,
+    mineru_repairs_apply,
     OcrBatchResult,
     OcrUsage,
     GemmaOutputInvalid,
 )
 from app.extraction.gemini_ocr_client import batch_prompt
+
+
+_ENGLISH_TEXT_LAYER_BODY = (
+    "English selectable text supports recovery when every OCR provider fails, "
+    "preserving the document's narrative and relevant details.\n"
+    "This second line explains how researchers collect the evidence, compare "
+    "results across regions, and describe the methods used in the report.\n"
+    "A final sentence confirms that the PDF page has a useful text layer, "
+    "summarizes the findings, and records implications for future work."
+)
+_ARABIC_TEXT_LAYER_BODY = (
+    "هذا النص العربي واضح ومقروء من الجميع ويعرض نتائج الدراسة بأسلوب علمي دقيق ومفصل.\n"
+    "تشرح الباحثة منهجية العمل وتقارن المؤشرات بين المناطق وتعرض الأدلة والبيانات المستخدمة في التحليل.\n"
+    "كما تناقش النتائج والخيارات المتاحة وتوضح أثر القرارات على المؤسسات والمجتمع في المستقبل.\n"
+    "وتقدم الدراسة توصيات عملية لدعم التخطيط وتحسين الخدمات وتطوير السياسات العامة."
+)
 
 
 def page_section(number: int, text: str) -> str:
@@ -286,6 +303,29 @@ def _make_pdf(path: Path, page_count: int, *, width: float = 72, height: float =
     with fitz.open() as document:
         for _ in range(page_count):
             document.new_page(width=width, height=height)
+        document.save(path)
+    return path
+
+
+def _make_pdf_with_text_layers(path: Path, page_texts):
+    """Build selectable text layers without requiring a system Arabic font."""
+    with fitz.open() as document:
+        for text in page_texts:
+            page = document.new_page(width=420, height=595)
+            if text is None:
+                continue
+            page.insert_text((40, 60), "X")
+            content_xref = page.get_contents()[0]
+            content = document.xref_stream(content_xref)
+            actual_text = "FEFF" + text.encode("utf-16-be").hex().upper()
+            marked_content = (
+                b"/Span <</ActualText <"
+                + actual_text.encode("ascii")
+                + b">>> BDC\n"
+                + content
+                + b"\nEMC"
+            )
+            document.update_stream(content_xref, marked_content)
         document.save(path)
     return path
 
@@ -796,6 +836,339 @@ def test_one_unreadable_page_in_a_long_document_is_marked_not_fatal(tmp_path):
     assert [p.page_number for p in result.pages] == list(range(1, 21))
     assert result.pages[6].markdown == UNREADABLE_PAGE_MARKER
     assert result.pages[7].markdown == "صفحة رقم 8"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(_ENGLISH_TEXT_LAYER_BODY, id="body-only"),
+        pytest.param(
+            "Confidential Copy — For Internal Use Only\n"
+            "Annual Report 2024 — Finance Department\n"
+            "Page 23 of 120\n"
+            "The report examines current financial controls, risks, and annual forecasts.\n"
+            "Researchers compare results with prior years and explain material changes.\n"
+            "The report documents how teams evaluate regional outcomes and preserve "
+            "the methods for future research.",
+            id="decorated-furniture-with-body",
+        ),
+        pytest.param(
+            "North Valley Center for Public Policy and Civic Research\n"
+            "Office of Regional Coordination and Academic Development\n"
+            "Directorate of Research Administration and Strategic Planning\n"
+            "Ministry of Education, Culture, Public Service, and Regional Affairs\n"
+            "Annual Governance and Public Policy Research Review\n"
+            "Page 7 of 90",
+            id="header-heavy-page-with-enough-latin-letters",
+        ),
+    ],
+)
+def test_english_pdf_text_layer_recovers_page_and_records_its_provider(tmp_path, text):
+    from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
+
+    pdf = _make_pdf_with_text_layers(tmp_path / "english-text-layer.pdf", [text])
+    settings = Settings(
+        _env_file=None,
+        arabic_ocr_enabled=True,
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+        arabic_ocr_max_unreadable_page_share=0.0,
+    )
+
+    result = extract(
+        pdf,
+        tmp_path / "english-text-layer-out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        FakeGemma({1: GemmaKeysExhausted("provider_error", ())}),
+        settings=settings,
+    )
+
+    assert result.pages[0].markdown == text
+    assert result.pages[0].provider == "pdf_text_layer"
+    assert result.provider_summary == [
+        {"provider": "pdf_text_layer", "pages": [1]}
+    ]
+    assert result.extractor == "pdf_text_layer"
+    assert mineru_repairs_apply(result.extractor) is False
+    raw_pages = json.loads(
+        (result.output_dir / "raw_pages.json").read_text(encoding="utf-8")
+    )
+    assert raw_pages[0]["provider"] == "pdf_text_layer"
+    assert raw_pages[0]["markdown"] == text
+    assert result.pages[0].markdown != UNREADABLE_PAGE_MARKER
+
+
+@pytest.mark.parametrize(
+    "sparse_text",
+    [
+        pytest.param("23", id="page-number"),
+        pytest.param("Header text from a running section", id="header-only"),
+        pytest.param(
+            "Confidential Copy\nAnnual Report 2024\nPage 23 of 120",
+            id="multi-line-header-footer-page-number",
+        ),
+        pytest.param(
+            "Confidential Copy — For Internal Use Only\n"
+            "Annual Report 2024 — Finance Department\n"
+            "Page 23 of 120",
+            id="decorated-header-footer-page-number",
+        ),
+        pytest.param(
+            "Department of Education\n"
+            "Research and Planning Office\n"
+            "Ministry of Administrative Affairs\n"
+            "Date: 4 October 2026\n"
+            "Page 23 of 120",
+            id="round-2-department-of-header-only",
+        ),
+        pytest.param(
+            "North Valley Center for Public Policy\n"
+            "Office of Regional Coordination and Academic Development\n"
+            "Directorate of Research Administration\n"
+            "Date: 4 October 2026\n"
+            "Page 17 of 280",
+            id="generic-english-header-only",
+        ),
+        pytest.param(
+            "وزارة التعليم والبحث العلمي\n"
+            "مديرية التخطيط والتطوير المؤسسي\n"
+            "مركز الدراسات والسياسات العامة\n"
+            "تاريخ الإصدار ٤ تشرين الأول ٢٠٢٦\n"
+            "صفحة ٢٣ من ١٢٠",
+            id="generic-arabic-header-only",
+        ),
+    ],
+)
+def test_sparse_page_number_or_header_text_layer_keeps_unreadable_marker(
+    tmp_path, sparse_text
+):
+    from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
+
+    pdf = _make_pdf_with_text_layers(tmp_path / "sparse-text-layer.pdf", [sparse_text])
+    settings = Settings(
+        _env_file=None,
+        arabic_ocr_enabled=True,
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+        arabic_ocr_max_unreadable_page_share=1.0,
+    )
+
+    result = extract(
+        pdf,
+        tmp_path / "page-number-out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        FakeGemma({1: GemmaKeysExhausted("provider_error", ())}),
+        settings=settings,
+    )
+
+    assert result.pages[0].markdown == UNREADABLE_PAGE_MARKER
+    assert result.pages[0].provider == "gemma4_arabic_fallback"
+
+
+@pytest.mark.parametrize(
+    "page_line",
+    ["Page 1 of 100", "صفحة ١ من ١٠٠"],
+    ids=("english-page-number", "arabic-page-number"),
+)
+def test_pdf_page_number_line_does_not_count_toward_body_letter_threshold(
+    page_line,
+):
+    from app.extraction.arabic_ocr import _usable_pdf_text_layer
+
+    # The two body lines contain 194 letters; the page-number line adds six.
+    body = (
+        "data " * 18
+        + "policy " * 3
+        + "research firm.\n"
+        + "data " * 17
+        + "policy " * 3
+        + "result."
+    )
+    text = body + "\n" + page_line
+
+    assert _usable_pdf_text_layer(text) is None
+
+
+def test_pdf_text_layer_accepts_exactly_200_latin_letters_after_page_number_drop():
+    from app.extraction.arabic_ocr import _usable_pdf_text_layer
+
+    text = "research " * 25 + "\nPage 1 of 100"
+
+    assert _usable_pdf_text_layer(text) == text.strip()
+
+
+def test_pdf_text_layer_accepts_latin_at_the_80_percent_boundary():
+    from app.extraction.arabic_ocr import _usable_pdf_text_layer
+
+    text = "research " * 25 + "\n" + "العربية " * 7 + "ا"
+
+    assert _usable_pdf_text_layer(text) == text.strip()
+
+
+@pytest.mark.parametrize(
+    "bad_text",
+    [
+        pytest.param(
+            "هذا النص العربي واضح ومقروء من الجميع\n" + _ARABIC_TEXT_LAYER_BODY,
+            id="good-arabic-layer",
+        ),
+        pytest.param(
+            "ﻫﺬﺍ ﺍﻟﻨﺺ ﺍﻟﻌﺮﺑﻲ ﻭﺍﺿﺢ ﻭﻣﻘﺮﻭﺀ ﻣﻦ "
+            "ﺍﻟﺠﻤﻴﻊ\n"
+            "ﻧﺴﺘﺨﺪﻡ ﻫﺬﻩ ﺍﻟﺼﻔﺤﺔ ﻟﻠﺘﺤﻘﻖ ﻣﻦ "
+            "ﺟﻮﺩﺓ ﺍﻟﻨﺺ\n"
+            "ﺍﻟﻤﺴﺘﺨﺮﺝ ﻋﻨﺪ ﻓﺸﻞ ﻣﺰﻭﺩﻱ ﺍﻟﺘﻌﺮﻑ "
+            "ﺍﻟﻀﻮﺋﻲ",
+            id="presentation-forms",
+        ),
+        pytest.param(
+            "\n".join(
+                " ".join(word[::-1] for word in line.split())
+                for line in (
+                    "هذا النص العربي واضح ومقروء من الجميع",
+                    *_ARABIC_TEXT_LAYER_BODY.splitlines(),
+                )
+            ),
+            id="reversed-arabic",
+        ),
+        pytest.param(
+            "\n".join(
+                "باتك ديدج ريبك ليمج حضاو مادختسلال ثيدح ديفم تباث."
+                for _ in range(5)
+            ),
+            id="reversed-arabic-unknown-words",
+        ),
+        pytest.param(
+            "\n".join(
+                "لخد لجر مث بلط باتك باسح مث سرد." for _ in range(8)
+            ),
+            id="reversed-arabic-common-words",
+        ),
+        pytest.param(
+            _ENGLISH_TEXT_LAYER_BODY + "\n" + _ARABIC_TEXT_LAYER_BODY,
+            id="mixed-latin-and-arabic",
+        ),
+    ],
+)
+def test_arabic_dominant_or_mixed_pdf_text_layers_keep_unreadable_marker(
+    tmp_path, bad_text
+):
+    from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
+
+    pdf = _make_pdf_with_text_layers(tmp_path / "broken-arabic.pdf", [bad_text])
+    settings = Settings(
+        _env_file=None,
+        arabic_ocr_enabled=True,
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+        arabic_ocr_max_unreadable_page_share=1.0,
+    )
+
+    result = extract(
+        pdf,
+        tmp_path / "rejected-language-text-layer-out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        FakeGemma({1: GemmaKeysExhausted("provider_error", ())}),
+        settings=settings,
+    )
+
+    assert result.pages[0].markdown == UNREADABLE_PAGE_MARKER
+    assert result.pages[0].provider == "gemma4_arabic_fallback"
+
+
+def test_mojibake_arabic_text_layer_keeps_unreadable_marker(tmp_path):
+    from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
+
+    english_text = _ENGLISH_TEXT_LAYER_BODY
+    corrupted_arabic = (
+        "هذا النص العربي واضح ومقروء من الجميع. "
+        "نستخدم هذه الصفحة للتحقق من جودة النص المستخرج."
+    ).encode("utf-8").decode("latin-1")
+    pdf = _make_pdf_with_text_layers(
+        tmp_path / "mojibake-arabic.pdf", [english_text + "\n" + corrupted_arabic]
+    )
+    settings = Settings(
+        _env_file=None,
+        arabic_ocr_enabled=True,
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+        arabic_ocr_max_unreadable_page_share=1.0,
+    )
+
+    result = extract(
+        pdf,
+        tmp_path / "mojibake-arabic-out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        FakeGemma({1: GemmaKeysExhausted("provider_error", ())}),
+        settings=settings,
+    )
+
+    assert result.pages[0].markdown == UNREADABLE_PAGE_MARKER
+    assert result.pages[0].provider == "gemma4_arabic_fallback"
+
+
+def test_latin_dominant_text_layer_survives_a_small_presentation_form_fragment(
+    tmp_path,
+):
+    text = (
+        _ENGLISH_TEXT_LAYER_BODY
+        + "\n"
+        "Arabic example: ﻣﺮﺣﺒﺎ"
+    )
+    pdf = _make_pdf_with_text_layers(tmp_path / "mixed-text-layer.pdf", [text])
+    settings = Settings(
+        _env_file=None,
+        arabic_ocr_enabled=True,
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+        arabic_ocr_max_unreadable_page_share=0.0,
+    )
+
+    result = extract(
+        pdf,
+        tmp_path / "mixed-text-layer-out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        FakeGemma({1: GemmaKeysExhausted("provider_error", ())}),
+        settings=settings,
+    )
+
+    assert result.pages[0].markdown == text
+    assert result.pages[0].provider == "pdf_text_layer"
+
+
+def test_pdf_text_layer_pages_do_not_consume_unreadable_budget(tmp_path):
+    from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
+
+    useful_text = _ENGLISH_TEXT_LAYER_BODY
+    page_texts = [useful_text, useful_text] + [None] * 18
+    pdf = _make_pdf_with_text_layers(tmp_path / "text-layer-budget.pdf", page_texts)
+    settings = Settings(
+        _env_file=None,
+        arabic_ocr_enabled=True,
+        arabic_ocr_single_request_max_pages=4,
+        arabic_ocr_batch_pages=4,
+        arabic_ocr_max_unreadable_page_share=0.10,
+    )
+    replies = {number: f"صفحة رقم {number}" for number in range(1, 21)}
+    for number in (1, 2, 3):
+        replies[number] = GemmaKeysExhausted("provider_error", ())
+
+    result = extract(
+        pdf,
+        tmp_path / "text-layer-budget-out",
+        FakeGemini(GeminiKeysExhausted("daily_quota", None, ())),
+        FakeGemma(replies),
+        settings=settings,
+    )
+
+    assert result.pages[0].provider == "pdf_text_layer"
+    assert result.pages[1].provider == "pdf_text_layer"
+    assert result.pages[2].markdown == UNREADABLE_PAGE_MARKER
+    assert result.extractor == "arabic_pdf_text_layer_hybrid"
+    assert result.provider_summary[:2] == [
+        {"provider": "pdf_text_layer", "pages": [1, 2]},
+        {"provider": "gemma4_arabic_fallback", "pages": list(range(3, 21))},
+    ]
 
 
 def test_too_many_unreadable_pages_still_fail_the_document(tmp_path):
