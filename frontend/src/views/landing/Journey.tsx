@@ -56,12 +56,23 @@ function PersonaSwitch({ persona, onChange }: { persona: Persona; onChange: (per
 }
 
 function JourneyProgress({ active, visible, progress }: { active: number; visible: boolean; progress: ReturnType<typeof useScroll>['scrollYProgress'] }) {
+  const reducedMotion = useReducedMotion();
   const fillY = useTransform(progress, [0, 1], [0, 1]);
   const fillX = useTransform(progress, [0, 1], [0, 1]);
   return (
-    <nav className={`journey-progress${visible ? ' is-visible' : ''}`} aria-label={JOURNEY_COPY.progressLabel}>
-      <div className="journey-progress-track" aria-hidden="true"><m.span style={{ scaleY: fillY, originY: 0 }} /></div>
-      <m.span className="journey-progress-mobile-fill" aria-hidden="true" style={{ scaleX: fillX, originX: 0 }} />
+    <m.nav
+      className="journey-progress"
+      aria-label={JOURNEY_COPY.progressLabel}
+      aria-hidden={!visible}
+      initial={{ opacity: 0, x: reducedMotion ? 0 : -12 }}
+      animate={{ opacity: visible ? 1 : 0, x: !reducedMotion && !visible ? -12 : 0 }}
+      transition={{ duration: 0.24, ease: 'easeOut' }}
+      style={{ pointerEvents: visible ? 'auto' : 'none' }}
+    >
+      <div className="journey-progress-track" aria-hidden="true">
+        {!reducedMotion && <m.span style={{ scaleY: fillY, originY: 0 }} />}
+      </div>
+      {!reducedMotion && <m.span className="journey-progress-mobile-fill" aria-hidden="true" style={{ scaleX: fillX, originX: 0 }} />}
       <div className="journey-progress-dots">
         {CHAPTERS.map((chapter, index) => (
           <Pressable
@@ -69,13 +80,14 @@ function JourneyProgress({ active, visible, progress }: { active: number; visibl
             className={`journey-progress-dot${active === index ? ' is-current' : ''}`}
             aria-label={chapter.label}
             aria-current={active === index ? 'step' : undefined}
+            tabIndex={visible ? 0 : -1}
             onClick={() => document.getElementById(`chapter-${chapter.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
           >
             <span />
           </Pressable>
         ))}
       </div>
-    </nav>
+    </m.nav>
   );
 }
 
@@ -139,7 +151,7 @@ export function Journey({
   onOpenLibrary: () => void;
 }) {
   const journeyRef = useRef<HTMLElement>(null);
-  const inView = useInView(journeyRef, { root: scrollContainer, amount: 0.01 });
+  const inView = useInView(journeyRef, { root: scrollContainer, amount: 0.04 });
   const { scrollYProgress } = useScroll({ container: scrollContainer, target: journeyRef });
   const [active, setActive] = useState(0);
   const small = useMediaQuery('(max-width: 899px)');

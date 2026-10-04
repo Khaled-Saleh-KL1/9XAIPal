@@ -56,6 +56,28 @@ describe('LandingView', () => {
     await waitFor(() => expect(screen.queryByText(PERSONAS.student.question)).toBeNull());
   });
 
+  it('shows each persona Arabic filename in right-to-left isolates in both scenes', async () => {
+    const { container } = renderLanding();
+    expect(container.querySelector('.pile-document-title bdi[dir="rtl"]')).toHaveTextContent('امتحان سابق ٢٠٢٥.pdf');
+    expect(container.querySelector('.find-result-title bdi[dir="rtl"]')).toHaveTextContent('امتحان سابق ٢٠٢٥.pdf');
+
+    await userEvent.click(screen.getByRole('radio', { name: PERSONAS.researcher.label }));
+    await waitFor(() => {
+      expect(container.querySelector('.pile-document-title bdi[dir="rtl"]')).toHaveTextContent('التعرف الضوئي على الحروف العربية.pdf');
+      expect(container.querySelector('.find-result-title bdi[dir="rtl"]')).toHaveTextContent('التعرف الضوئي على الحروف العربية.pdf');
+    });
+  });
+
+  it('includes RAG in the author bio', () => {
+    renderLanding();
+    expect(screen.getByText(/RAG/i)).toBeInTheDocument();
+  });
+
+  it('uses the visible brand text as the brand button accessible name', () => {
+    renderLanding();
+    expect(screen.getByRole('button', { name: /9XAIPal/ })).toHaveAccessibleName('9 9XAIPal');
+  });
+
   it('has a progress rail with one control per chapter', () => {
     renderLanding();
     const rail = screen.getByRole('navigation', { name: /journey progress/i });

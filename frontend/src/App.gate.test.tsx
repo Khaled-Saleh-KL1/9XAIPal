@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MotionRoot } from './motion';
 import { getPaper } from './api';
 
@@ -20,7 +20,6 @@ vi.mock('./contexts/AuthContext', () => ({
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock('./views/LibraryView', () => ({ LibraryView: () => <div>LIBRARY</div> }));
-vi.mock('./views/WaitingRoomView', () => ({ WaitingRoomView: () => <div>WAITING</div> }));
 vi.mock('./views/ReadingView', () => ({ ReadingView: () => <div>READING</div> }));
 vi.mock('./views/ProcessingOverlay', () => ({ ProcessingOverlay: () => null }));
 vi.mock('./views/RawFilesPanel', () => ({ RawFilesPanel: () => null }));
@@ -50,8 +49,11 @@ beforeEach(() => {
   authState.loading = false;
   authState.admitted = true;
   authState.queuePosition = null;
+  authState.refreshAdmission.mockReset().mockResolvedValue(undefined);
   window.history.replaceState(null, '', '#/library');
 });
+
+afterEach(() => vi.useRealTimers());
 
 describe('App gate', () => {
   it('shows the landing page, not the auth form, to a signed-out visitor', () => {
@@ -140,10 +142,22 @@ describe('App gate', () => {
     expect(await screen.findByText('LIBRARY')).toBeInTheDocument();
   });
 
-  it('shows the waiting room to a signed-in but not admitted user', () => {
+  it('polls admission, releases the gate when admitted, and stops polling after unmount', async () => {
+    vi.useFakeTimers();
     authState.user = { id: 'u', email: 'a@b.co' };
     authState.admitted = false;
-    renderApp();
-    expect(screen.getByText('WAITING')).toBeInTheDocument();
+    authState.refreshAdmission.mockImplementation(async () => { authState.admitted = true; });
+    const view = renderApp();
+    expect(screen.getByRole('heading', { name: "You're in the queue" })).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(authState.refreshAdmission).toHaveBeenCalledOnce();
+
+    view.rerender(<MotionRoot><App /></MotionRoot>);
+    expect(screen.getByText('LIBRARY')).toBeInTheDocument();
+    view.unmount();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000); });
+    expect(authState.refreshAdmission).toHaveBeenCalledOnce();
   });
 });

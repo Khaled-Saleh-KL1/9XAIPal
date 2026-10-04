@@ -2,15 +2,16 @@ import type { MotionValue } from 'motion/react';
 import { AnimatePresence, m, useReducedMotion, useSpring, useTransform } from 'motion/react';
 import { PERSONAS, SCENE_COPY, type Persona } from '../../../landing/content';
 import { playful } from '../../../motion/springs';
+import { DocumentTitle } from './DocumentTitle';
 
 const scatter = [
-  { x: -116, y: 80, rotate: -18 },
-  { x: 88, y: 50, rotate: 13 },
-  { x: -68, y: -66, rotate: 17 },
-  { x: 138, y: -78, rotate: -14 },
-  { x: 30, y: 106, rotate: 11 },
-  { x: -136, y: -21, rotate: 8 },
-  { x: 117, y: 96, rotate: -9 },
+  { x: -4, y: 8, rotate: -3 },
+  { x: 4, y: 6, rotate: 3 },
+  { x: -3, y: -7, rotate: 3 },
+  { x: 4, y: -6, rotate: -3 },
+  { x: 2, y: 8, rotate: 2 },
+  { x: -4, y: -2, rotate: 2 },
+  { x: 3, y: 7, rotate: -2 },
 ];
 
 const slots = [
@@ -38,7 +39,7 @@ function DocumentCard({ index, title, progress }: { index: number; title: string
       aria-label={title}
     >
       <span className="pile-document-type">{SCENE_COPY.pileMedia[index]}</span>
-      <span className="pile-document-title">{title}</span>
+      <span className="pile-document-title"><DocumentTitle title={title} /></span>
       <span className="pile-document-lines" aria-hidden="true"><i /><i /><i /></span>
       <span className="pile-document-corner" aria-hidden="true">{isArabic ? 'ع' : index + 1}</span>
     </m.article>
@@ -58,7 +59,7 @@ export function PileScene({ progress, persona }: { progress: MotionValue<number>
         </m.div>
       </AnimatePresence>
       <div className="pile-library-tab" aria-hidden="true">
-        <span />
+        <span className="pile-library-icon" />
         <AnimatePresence mode="wait" initial={false}>
           <m.span key={persona} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
             {persona === 'student' ? SCENE_COPY.pileShelfStudent : SCENE_COPY.pileShelfResearcher}

@@ -33,7 +33,7 @@ export function LandingView({ signedIn, onRequestAuth, onOpenLibrary }: LandingV
       <header className={`landing-header${compact ? ' is-compact' : ''}`} role="banner">
         <div className="landing-topbar-inner">
           <div className="landing-brand-group">
-            <Pressable className="landing-brand" onClick={() => scrollTo('hero')} aria-label={NAVIGATION.home}>
+            <Pressable className="landing-brand" onClick={() => scrollTo('hero')}>
               <LogoMark />
               <span>9XAIPal</span>
             </Pressable>

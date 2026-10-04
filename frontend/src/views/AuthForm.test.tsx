@@ -28,7 +28,10 @@ describe('AuthForm', () => {
   it('opens in the requested mode and focuses the email field through its ref', () => {
     const { firstFieldRef } = renderForm('signup');
     expect(screen.getByText('Create an account')).toHaveAttribute('id', 'auth-title');
-    expect(screen.getByPlaceholderText('Display name (optional)')).toBeInTheDocument();
+    const displayName = screen.getByPlaceholderText('Display name (optional)');
+    expect(displayName).toBeInTheDocument();
+    expect(displayName.parentElement?.style.height).toBe('');
+    expect(displayName.parentElement?.style.overflow).toBe('');
     expect(firstFieldRef.current).toBe(screen.getByPlaceholderText('Email'));
   });
 

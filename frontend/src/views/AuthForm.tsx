@@ -114,11 +114,10 @@ export function AuthForm({
           {mode === 'signup' && (
             <m.div
               key="display-name"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
               transition={gentle}
-              style={{ overflow: 'hidden' }}
             >
               <input
                 dir="auto"

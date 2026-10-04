@@ -3,6 +3,7 @@ import type { MotionValue } from 'motion/react';
 import { AnimatePresence, m, useMotionValueEvent, useReducedMotion, useSpring, useTransform } from 'motion/react';
 import { PERSONAS, SCENE_COPY, type Persona } from '../../../landing/content';
 import { calm, playful } from '../../../motion/springs';
+import { DocumentTitle } from './DocumentTitle';
 
 function SearchContents({ persona, progress }: { persona: Persona; progress: MotionValue<number> }) {
   const query = PERSONAS[persona].search;
@@ -48,7 +49,7 @@ function FindResult({ title, index, matched, pageLabel, progress }: { title: str
   return (
     <m.li className={matched ? 'find-result is-match' : 'find-result'} style={reducedMotion ? undefined : { opacity, y }}>
       <span className="find-result-type">{index === 2 ? SCENE_COPY.findArabicLabel : SCENE_COPY.findPdfLabel}</span>
-      <span className="find-result-title">{title}</span>
+      <span className="find-result-title"><DocumentTitle title={title} /></span>
       <span className="find-result-page">{matched ? pageLabel : SCENE_COPY.findNoPage}</span>
       {matched && <i className="find-result-mark" aria-hidden="true" />}
     </m.li>

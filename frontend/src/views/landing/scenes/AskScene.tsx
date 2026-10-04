@@ -8,14 +8,14 @@ import { calm, playful } from '../../../motion/springs';
 function AskContent({ persona, progress }: { persona: Persona; progress: MotionValue<number> }) {
   const data = PERSONAS[persona];
   const words = data.answer.split(' ');
-  const questionCountValue = useTransform(progress, [0.08, 0.34], [0, data.question.length]);
-  const answerCountValue = useTransform(progress, [0.34, 0.7], [0, words.length]);
-  const revealCitations = useTransform(progress, [0.56, 0.82], [0, data.citations.length]);
-  const readingHighlight = useTransform(progress, [0.76, 0.9], [0, 1]);
+  const questionCountValue = useTransform(progress, [0.03, 0.18], [0, data.question.length]);
+  const answerCountValue = useTransform(progress, [0.18, 0.4], [0, words.length]);
+  const revealCitations = useTransform(progress, [0.36, 0.55], [0, data.citations.length]);
+  const readingHighlight = useTransform(progress, [0.42, 0.6], [0, 1]);
   const [questionCount, setQuestionCount] = useState(() => Math.floor(questionCountValue.get()));
   const [answerCount, setAnswerCount] = useState(() => Math.floor(answerCountValue.get()));
   const [citationCount, setCitationCount] = useState(() => Math.floor(revealCitations.get()));
-  const [highlighted, setHighlighted] = useState(false);
+  const [highlighted, setHighlighted] = useState(() => readingHighlight.get() > 0.65);
   const reducedMotion = useReducedMotion();
 
   useMotionValueEvent(questionCountValue, 'change', (value) => setQuestionCount(Math.floor(value)));
@@ -37,7 +37,7 @@ function AskContent({ persona, progress }: { persona: Persona; progress: MotionV
     >
       <div className="ask-window-bar"><span /><span /><span /><b>{SCENE_COPY.askLabel}</b></div>
       <div className="ask-question-card">
-        <span className="ask-avatar" aria-hidden="true">9</span>
+        <span className="ask-avatar" aria-hidden="true">You</span>
         <div className="ask-question-text">
           <span className="sr-only">{data.question}</span>
           <span aria-hidden="true">{questionVisible}<i className="typing-caret" /></span>
@@ -47,7 +47,8 @@ function AskContent({ persona, progress }: { persona: Persona; progress: MotionV
         <span className="ask-answer-mark" aria-hidden="true">9</span>
         <div className="ask-answer-card">
           <p className="ask-answer-label">{SCENE_COPY.answerLabel}</p>
-          <p className="ask-answer-copy" aria-label={data.answer}>
+          <p className="ask-answer-copy">
+            <span className="sr-only">{data.answer}</span>
             {words.slice(0, answerVisible).map((word, index) => (
               <m.span
                 key={`${persona}-${index}`}

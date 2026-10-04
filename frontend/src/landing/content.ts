@@ -60,7 +60,11 @@ export const SCENE_COPY = {
   sourcesLabel: 'Sources',
   sourceLabel: 'Source passage',
   collectKicker: 'Saved to your desk',
-  collectOtherNotes: ['Compare the two methods', 'Check this before the exam'],
+  collectOtherNotes: ['Compare the two methods'],
+  collectPersonaNote: {
+    student: 'Check this before the exam',
+    researcher: 'Check this before citing',
+  },
   findLabel: 'Search the whole shelf',
   findExtraDoc: 'Reading list · week 4',
   findStudentPageLabels: ['p. 14', 'p. 204', 'p. 9', 'p. 4'],
@@ -133,7 +137,7 @@ export const AUTHOR = {
   monogram: 'KS',
   role: 'AI Engineer',
   bio: [
-    'I design and ship end-to-end intelligent systems, from Arabic-aware NLP pipelines to multi-agent orchestration, using FastAPI, LangGraph and Gemini.',
+    'I design and ship end-to-end intelligent systems, from Arabic-aware NLP pipelines to RAG and multi-agent orchestration, using FastAPI, LangGraph and Gemini.',
     'I build production AI platforms at 9XAI / HTU. 9XAIPal is my own project: a reading companion I wanted for myself, now open as a free beta.',
   ],
 } as const;

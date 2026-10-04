@@ -29,7 +29,7 @@ export function CollectScene({ progress, persona }: { progress: MotionValue<numb
         <div className="desk-pencil" aria-hidden="true"><span /></div>
         <m.div className="collect-note-stack" style={reducedMotion ? undefined : { scale: groupScale }}>
           <article className="collect-note collect-note-back"><span className="collect-note-pin" aria-hidden="true" /><p>{SCENE_COPY.collectOtherNotes[0]}</p><span className="collect-note-foot"><AnimatePresence mode="wait" initial={false}><m.span key={persona} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>{PERSONAS[persona].citations[1]}</m.span></AnimatePresence></span></article>
-          <article className="collect-note collect-note-side"><span className="collect-note-pin" aria-hidden="true" /><p>{SCENE_COPY.collectOtherNotes[1]}</p><span className="collect-note-foot"><AnimatePresence mode="wait" initial={false}><m.span key={persona} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>{PERSONAS[persona].citations[0]}</m.span></AnimatePresence></span></article>
+          <article className="collect-note collect-note-side"><span className="collect-note-pin" aria-hidden="true" /><p>{SCENE_COPY.collectPersonaNote[persona]}</p><span className="collect-note-foot"><AnimatePresence mode="wait" initial={false}><m.span key={persona} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>{PERSONAS[persona].citations[0]}</m.span></AnimatePresence></span></article>
           <AnimatePresence mode="wait" initial={false}>
             <CollectNote key={persona} persona={persona} progress={progress} />
           </AnimatePresence>
