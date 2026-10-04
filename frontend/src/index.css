@@ -4216,3 +4216,18 @@ button img,
   color: var(--accent-fg);
   box-shadow: 0 1px 0 rgb(0 0 0 / 0.05);
 }
+
+/* Shared BETA badge used by the landing page, Library, and Desk headers. */
+.beta-badge-wrap { position: relative; display: inline-flex; align-items: center; }
+.beta-badge { min-width: 38px; padding: 4px 7px; border: 1px solid var(--accent); border-radius: 999px; background: var(--bg); color: var(--accent); font-size: 9px !important; font-weight: 750 !important; letter-spacing: 0.08em; line-height: 1.1; cursor: help; }
+.beta-tooltip { position: absolute; z-index: 24; top: calc(100% + 11px); left: 50%; width: max-content; max-width: min(280px, calc(100vw - 32px)); padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--fg-2); box-shadow: 0 10px 30px color-mix(in oklch, var(--fg) 12%, transparent); font-size: 11px; font-weight: 450; letter-spacing: 0; line-height: 1.45; transform: translateX(-50%); }
+
+/* Respect the OS "reduce motion" setting for the hand-written keyframes too. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
