@@ -1,0 +1,46 @@
+.motion-pressable {
+  touch-action: manipulation;
+}
+
+.motion-pressable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.motion-pressable:disabled {
+  cursor: not-allowed;
+}
+
+.motion-sheet-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  background: color-mix(in oklch, var(--fg) 24%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.motion-sheet-panel {
+  width: min(100%, 30rem);
+  max-height: min(90dvh, 52rem);
+  overflow-y: auto;
+  padding: clamp(22px, 5vw, 36px);
+  border: 1px solid var(--border);
+  border-radius: 26px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 24px 80px color-mix(in oklch, var(--fg) 18%, transparent);
+  transform-origin: center bottom;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-sheet-backdrop {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
