@@ -822,14 +822,28 @@ def test_one_unreadable_page_in_a_long_document_is_marked_not_fatal(tmp_path):
     assert result.pages[7].markdown == "صفحة رقم 8"
 
 
-def test_english_pdf_text_layer_recovers_page_and_records_its_provider(tmp_path):
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "English selectable text supports recovery when every OCR provider fails.\n"
+            "This second line contains enough body text to distinguish it from a heading.\n"
+            "A final sentence confirms that the PDF page has a useful text layer.",
+            id="body-only",
+        ),
+        pytest.param(
+            "Confidential Copy — For Internal Use Only\n"
+            "Annual Report 2024 — Finance Department\n"
+            "Page 23 of 120\n"
+            "The report examines current financial controls, risks, and annual forecasts.\n"
+            "Researchers compare results with prior years and explain material changes.",
+            id="decorated-furniture-with-body",
+        ),
+    ],
+)
+def test_english_pdf_text_layer_recovers_page_and_records_its_provider(tmp_path, text):
     from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER
 
-    text = (
-        "English selectable text supports recovery when every OCR provider fails.\n"
-        "This second line contains enough body text to distinguish it from a heading.\n"
-        "A final sentence confirms that the PDF page has a useful text layer."
-    )
     pdf = _make_pdf_with_text_layers(tmp_path / "english-text-layer.pdf", [text])
     settings = Settings(
         _env_file=None,
@@ -870,6 +884,12 @@ def test_english_pdf_text_layer_recovers_page_and_records_its_provider(tmp_path)
         pytest.param(
             "Confidential Copy\nAnnual Report 2024\nPage 23 of 120",
             id="multi-line-header-footer-page-number",
+        ),
+        pytest.param(
+            "Confidential Copy — For Internal Use Only\n"
+            "Annual Report 2024 — Finance Department\n"
+            "Page 23 of 120",
+            id="decorated-header-footer-page-number",
         ),
     ],
 )
@@ -917,11 +937,13 @@ def test_sparse_page_number_or_header_text_layer_keeps_unreadable_marker(
             )
         ),
         "باتك ديدج ريبك ليمج حضاو مادختسلال ثيدح ديفم تباث",
+        "لخد لجر مث بلط باتك باسح مث سرد",
     ],
     ids=(
         "presentation-forms",
         "reversed-arabic",
         "reversed-arabic-unknown-words",
+        "reversed-arabic-common-words",
     ),
 )
 def test_broken_arabic_text_layer_keeps_unreadable_marker(tmp_path, bad_text):
@@ -983,12 +1005,26 @@ def test_mojibake_arabic_text_layer_keeps_unreadable_marker(tmp_path):
     assert result.pages[0].provider == "gemma4_arabic_fallback"
 
 
-def test_good_arabic_pdf_text_layer_recovers_page(tmp_path):
-    text = (
-        "هذا النص العربي واضح ومقروء من الجميع\n"
-        "نستخدم هذه الصفحة للتحقق من جودة النص\n"
-        "المستخرج عند فشل مزودي التعرف الضوئي"
-    )
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "هذا النص العربي واضح ومقروء من الجميع\n"
+            "نستخدم هذه الصفحة للتحقق من جودة النص\n"
+            "المستخرج عند فشل مزودي التعرف الضوئي",
+            id="existing-readable-arabic",
+        ),
+        pytest.param(
+            "دخل رجل ثم طلب كتاب حساب ثم درس",
+            id="valid-common-words-not-reversed",
+        ),
+        pytest.param(
+            "كتاب جديد كبير جميل واضح للاستخدام حديث مفيد ثابت",
+            id="valid-content-words-not-reversed",
+        ),
+    ],
+)
+def test_good_arabic_pdf_text_layer_recovers_page(tmp_path, text):
     pdf = _make_pdf_with_text_layers(tmp_path / "good-arabic-text-layer.pdf", [text])
     settings = Settings(
         _env_file=None,

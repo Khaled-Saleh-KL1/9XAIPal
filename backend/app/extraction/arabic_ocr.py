@@ -125,7 +125,8 @@ _PDF_PAGE_NUMBER_LINE_RE = re.compile(
 )
 _PDF_RUNNING_FURNITURE_LINE_RE = re.compile(
     r"(?:confidential(?:\s+copy)?|annual\s+report(?:\s+\d{4})?|"
-    r"(?:©|\(c\)|copyright)(?:\s+.*)?|all\s+rights\s+reserved\.?)",
+    r"(?:©|\(c\)|copyright)(?:\s+.*)?|all\s+rights\s+reserved\.?)"
+    r"(?:\s+[—–|:;·•-]\s+(?P<decoration>.+))?",
     flags=re.IGNORECASE,
 )
 _PDF_MOJIBAKE_RE = re.compile(
@@ -138,7 +139,9 @@ _COMMON_ARABIC_WORDS = frozenset(
         "ان", "إن", "لا", "ما", "هو", "هي", "كان", "كانت", "يكون",
         "تكون", "مع", "بين", "بعد", "قبل", "قد", "لم", "لن", "كل",
         "كما", "حيث", "عند", "أي", "او", "أو", "ثم", "و", "نص", "النص",
-        "عربي", "العربي", "واضح", "قابل", "صفحة",
+        "عربي", "العربي", "واضح", "قابل", "صفحة", "دخل", "رجل",
+        "طلب", "كتاب", "حساب", "درس", "جديد", "كبير", "جميل",
+        "للاستخدام", "حديث", "مفيد", "ثابت",
     }
 )
 # PyMuPDF generally returns base Arabic letters rather than contextual glyph
@@ -660,15 +663,22 @@ def _substantive_pdf_body_word_count(text: str) -> int:
     body_words = 0
     for line in text.splitlines():
         normalized_line = line.strip()
-        if (
-            _PDF_PAGE_NUMBER_LINE_RE.fullmatch(normalized_line)
-            or _PDF_RUNNING_FURNITURE_LINE_RE.fullmatch(normalized_line)
-        ):
+        if _PDF_PAGE_NUMBER_LINE_RE.fullmatch(
+            normalized_line
+        ) or _is_pdf_running_furniture_line(normalized_line):
             continue
         body_words += sum(
             len(word) >= 2 for word in _PDF_TEXT_WORD_RE.findall(normalized_line)
         )
     return body_words
+
+
+def _is_pdf_running_furniture_line(line: str) -> bool:
+    match = _PDF_RUNNING_FURNITURE_LINE_RE.fullmatch(line)
+    if match is None:
+        return False
+    decoration = match.group("decoration") or ""
+    return len(_PDF_TEXT_WORD_RE.findall(decoration)) <= 6
 
 
 def _has_reversed_arabic_words(text: str) -> bool:
@@ -690,6 +700,8 @@ def _has_reversed_arabic_words(text: str) -> bool:
     reversed_matches = sum(word[::-1] in _COMMON_ARABIC_WORDS for word in words)
     if reversed_matches >= 3 and reversed_matches >= normal_matches + 2:
         return True
+    if normal_matches >= 3 and normal_matches >= reversed_matches + 2:
+        return False
 
     positioned_words = [word for word in words if len(word) >= 3]
     if len(positioned_words) < 6:
@@ -699,8 +711,9 @@ def _has_reversed_arabic_words(text: str) -> bool:
     reverse_score, reverse_cues = _arabic_word_orientation_score(
         [word[::-1] for word in positioned_words]
     )
-    # Require repeated morphology evidence as well as a positional score gap.
-    return reverse_cues >= 2 and reverse_score >= forward_score + 2.5
+    # Single-letter clitics can also be ordinary root letters. Require a
+    # multi-character affix cue and a larger positional score gap.
+    return reverse_cues >= 1 and reverse_score >= forward_score + 5.0
 
 
 def _arabic_word_orientation_score(words: Sequence[str]) -> tuple[float, int]:
@@ -710,24 +723,27 @@ def _arabic_word_orientation_score(words: Sequence[str]) -> tuple[float, int]:
         score += _ARABIC_WORD_INITIAL_SCORES.get(word[0], 0.0)
         score += _ARABIC_WORD_FINAL_SCORES.get(word[-1], 0.0)
 
-        prefix_score = next(
+        prefix, prefix_score = next(
             (
-                weight
+                (prefix, weight)
                 for prefix, weight in _ARABIC_WORD_PREFIX_WEIGHTS
                 if word.startswith(prefix)
             ),
-            0.0,
+            ("", 0.0),
         )
-        suffix_score = next(
+        suffix, suffix_score = next(
             (
-                weight
+                (suffix, weight)
                 for suffix, weight in _ARABIC_WORD_SUFFIX_WEIGHTS
                 if word.endswith(suffix)
             ),
-            0.0,
+            ("", 0.0),
         )
         score += prefix_score + suffix_score
-        morphology_cues += int(bool(prefix_score)) + int(bool(suffix_score))
+        morphology_cues += int(len(prefix) > 1 and prefix_score >= 1.0)
+        morphology_cues += int(
+            (len(suffix) > 1 or suffix == "ة") and suffix_score >= 1.0
+        )
     return score, morphology_cues
 
 
