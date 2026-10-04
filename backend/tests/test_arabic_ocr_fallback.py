@@ -916,8 +916,13 @@ def test_sparse_page_number_or_header_text_layer_keeps_unreadable_marker(
                 "المستخرج عند فشل مزودي التعرف الضوئي",
             )
         ),
+        "باتك ديدج ريبك ليمج حضاو مادختسلال ثيدح ديفم تباث",
     ],
-    ids=("presentation-forms", "reversed-arabic"),
+    ids=(
+        "presentation-forms",
+        "reversed-arabic",
+        "reversed-arabic-unknown-words",
+    ),
 )
 def test_broken_arabic_text_layer_keeps_unreadable_marker(tmp_path, bad_text):
     from app.extraction.arabic_ocr import UNREADABLE_PAGE_MARKER

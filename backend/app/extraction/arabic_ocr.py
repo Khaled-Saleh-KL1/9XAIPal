@@ -141,6 +141,35 @@ _COMMON_ARABIC_WORDS = frozenset(
         "عربي", "العربي", "واضح", "قابل", "صفحة",
     }
 )
+# PyMuPDF generally returns base Arabic letters rather than contextual glyph
+# forms, so compare common letters at word edges as a direction signal.
+_ARABIC_WORD_INITIAL_SCORES = {
+    "ا": 1.0, "أ": 1.0, "إ": 1.0, "آ": 0.8, "ب": 0.8, "ت": 0.8,
+    "ج": 0.15, "ح": 0.2, "د": 0.15, "ر": 0.1, "س": 0.65, "ش": 0.3,
+    "ع": 0.6, "ف": 0.5, "ق": 0.4, "ك": 0.6, "ل": 0.8, "م": 1.0,
+    "ن": 0.6, "ه": 0.4, "و": 0.8, "ي": 0.7, "ث": 0.05, "ذ": 0.05,
+    "ز": 0.15, "ص": 0.2, "ض": 0.15, "ط": 0.1, "ظ": 0.05, "غ": 0.15,
+    "ء": 0.1, "ة": -2.0, "ى": -1.5,
+}
+_ARABIC_WORD_FINAL_SCORES = {
+    "ء": 0.2, "ا": 1.0, "ب": 0.2, "ت": 0.8, "ث": 0.05, "ج": 0.1,
+    "ح": 0.1, "د": 0.8, "ذ": 0.05, "ر": 0.8, "ز": 0.1, "س": 0.4,
+    "ش": 0.1, "ص": 0.15, "ض": 0.1, "ط": 0.1, "ظ": 0.05, "ع": 0.4,
+    "غ": 0.1, "ف": 0.4, "ق": 0.3, "ك": 0.15, "ل": 0.8, "م": 0.6,
+    "ن": 0.9, "ه": 0.8, "و": 0.25, "ي": 1.0, "ى": 0.8, "ة": 1.5,
+}
+_ARABIC_WORD_PREFIX_WEIGHTS = (
+    ("وال", 2.0), ("بال", 2.0), ("كال", 2.0), ("فال", 2.0),
+    ("ولل", 2.0), ("لل", 1.8), ("ال", 1.8),
+    ("و", 0.5), ("ف", 0.5), ("ب", 0.5), ("ك", 0.5), ("ل", 0.5),
+    ("س", 0.4),
+)
+_ARABIC_WORD_SUFFIX_WEIGHTS = (
+    ("هما", 1.4), ("كما", 1.4), ("ات", 1.5), ("ون", 1.5), ("ين", 1.5),
+    ("ان", 1.3), ("ها", 1.2), ("هم", 1.2), ("هن", 1.2), ("نا", 1.2),
+    ("ني", 1.2), ("كم", 1.2), ("كن", 1.2), ("وا", 1.2), ("تم", 1.0),
+    ("تن", 1.0), ("ة", 1.4), ("ه", 0.6), ("ي", 0.5), ("ت", 0.5),
+)
 
 
 def _normalize_arabic_ocr_mark_spacing(text: str) -> str:
@@ -659,7 +688,47 @@ def _has_reversed_arabic_words(text: str) -> bool:
         return True
     normal_matches = sum(word in _COMMON_ARABIC_WORDS for word in words)
     reversed_matches = sum(word[::-1] in _COMMON_ARABIC_WORDS for word in words)
-    return reversed_matches >= 3 and reversed_matches >= normal_matches + 2
+    if reversed_matches >= 3 and reversed_matches >= normal_matches + 2:
+        return True
+
+    positioned_words = [word for word in words if len(word) >= 3]
+    if len(positioned_words) < 6:
+        return False
+
+    forward_score, _ = _arabic_word_orientation_score(positioned_words)
+    reverse_score, reverse_cues = _arabic_word_orientation_score(
+        [word[::-1] for word in positioned_words]
+    )
+    # Require repeated morphology evidence as well as a positional score gap.
+    return reverse_cues >= 2 and reverse_score >= forward_score + 2.5
+
+
+def _arabic_word_orientation_score(words: Sequence[str]) -> tuple[float, int]:
+    score = 0.0
+    morphology_cues = 0
+    for word in words:
+        score += _ARABIC_WORD_INITIAL_SCORES.get(word[0], 0.0)
+        score += _ARABIC_WORD_FINAL_SCORES.get(word[-1], 0.0)
+
+        prefix_score = next(
+            (
+                weight
+                for prefix, weight in _ARABIC_WORD_PREFIX_WEIGHTS
+                if word.startswith(prefix)
+            ),
+            0.0,
+        )
+        suffix_score = next(
+            (
+                weight
+                for suffix, weight in _ARABIC_WORD_SUFFIX_WEIGHTS
+                if word.endswith(suffix)
+            ),
+            0.0,
+        )
+        score += prefix_score + suffix_score
+        morphology_cues += int(bool(prefix_score)) + int(bool(suffix_score))
+    return score, morphology_cues
 
 
 def _render_document(pdf_path: Path, dpi: int) -> tuple[list[RenderedPage], list[str]]:
