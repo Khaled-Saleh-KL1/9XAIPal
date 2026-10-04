@@ -702,20 +702,37 @@ async def stream_answer(
     skip_from = -1    # start of a skipped span (a <note> or <remember>) we are stepping over
     skip_close = ""   # its closing tag, so the two never get cross-matched
     answered_by = ""
+    visible_output = False
+
+    def can_fallback() -> bool:
+        return not visible_output
 
     def emit_upto(limit: int) -> Optional[dict]:
         """Release buf[sent:limit] to the reader, if there is anything there."""
-        nonlocal sent
+        nonlocal sent, visible_output
         if limit > sent:
             chunk = buf[sent:limit]
             sent = limit
             if chunk:
+                visible_output = visible_output or bool(chunk.strip())
                 return {"type": "token", "text": chunk}
         return None
 
     async for event in llm_client.stream_chat(
-        messages, temperature=temperature, model=model
+        messages, temperature=temperature, model=model,
+        can_fallback=can_fallback,
     ):
+        if event["type"] == "_retry":
+            # The provider failed while all its text was still hidden by this
+            # filter. Discard that attempt before consuming the next provider.
+            buf = ""
+            sent = 0
+            leaked = False
+            skip_from = -1
+            skip_close = ""
+            answered_by = ""
+            visible_output = False
+            continue
         if event["type"] != "token":
             answered_by = event.get("model") or answered_by
             # The terminal event carries the whole content; prefer it, since a
@@ -805,6 +822,7 @@ async def stream_answer(
         if catch_remember:
             tail, _ = extract_remembers(tail)
         if tail.strip():
+            visible_output = True
             yield {"type": "token", "text": tail}
     if leaked and not tool_probe:
         logger.warning(
