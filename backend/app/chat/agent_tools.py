@@ -795,4 +795,7 @@ async def stream_answer(
         "model": answered_by,
         "notes": notes,
         "remembers": remembers,
+        # Tool detection needs the exact model reply. `answer` is filtered for
+        # display, while `raw` preserves the protocol block for the agent loop.
+        "raw": buf,
     }

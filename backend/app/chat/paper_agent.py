@@ -862,12 +862,10 @@ async def answer_paper_question(
     over the whole paper and needs more rounds than a margin note does.
     ``allow_web`` withholds the WEB tool even when a provider is configured.
 
-    ⚠ The anchored path answers from a non-streamed probe when the model
-    replies without calling a tool, so the answer lands whole rather than
-    typing itself out. That is the price of a text tool protocol: a reply may
-    turn out to be a tool block, and streaming one to the margin would put
-    "<tool>SEARCH: …" on screen. Generation time is unchanged — only the
-    reveal is.
+    ⚠ Tool rounds use a streamed probe with tool markup withheld from the
+    reader. A direct answer can therefore arrive token by token without ever
+    exposing a tool block; if the model starts with prose before requesting a
+    tool, that draft is cleared before the tool trail begins.
     """
     noun = _NOUN_BY_KIND.get(doc_kind, "paper")
     chunks = await chunk_repo.get_all_document_chunks(session, document_id)
@@ -1008,24 +1006,29 @@ async def answer_paper_question(
             image_paths=image_paths or None,
         )
 
-        # Probe without streaming: this reply may turn out to be a tool call,
-        # and streaming a tool block to the reader would be nonsense on screen.
-        result = await llm_client.chat(messages, temperature=0.3, model=model)
-        reply = result.get("content") or ""
+        # Stream the probe while the shared filter withholds tool and memory
+        # markup. Keep the raw reply for the unchanged tool parser below.
+        result: dict = {}
+        streamed_text = False
+        async for event in stream_answer(
+            messages, temperature=0.3, model=model, catch_remember=True
+        ):
+            if event["type"] == "token":
+                streamed_text = True
+                yield event
+            else:
+                result = event
+        reply = result.get("raw") or result.get("answer") or ""
         calls = _parse_tool_calls(reply)
 
+        if _has_calls(calls):
+            if streamed_text:
+                yield {"type": "replace"}
+
         if not _has_calls(calls):
-            answer = strip_tool_block(reply)
-            # ⚠ <remember> comes out here too, not just in the streamed path —
-            # this branch never touches stream_answer (it answered straight
-            # from the probe), so catching the tag only there would leave it
-            # sitting raw in the answer exactly when the reader asked
-            # something worth remembering.
-            answer, remembered = extract_remembers(answer)
-            answer = answer.strip()
+            answer = result.get("answer") or ""
+            remembered = result.get("remembers") or []
             if answer or remembered:
-                if answer:
-                    yield {"type": "token", "text": answer}
                 async for ev in write_remembered(
                     session, remembered, user_id=user_id, n=step + 1,
                     id_prefix=f"remember{step}", trail=trail,
