@@ -146,7 +146,16 @@ each normal batch request. `EMBEDDING_MAX_CONCURRENCY` still controls the local 
 every outbound bulk call must also acquire the shared Redis permit. The lease defaults to
 `BULK_EMBEDDING_SEMAPHORE_TTL_S=360` seconds and renews while its process is alive. The setting
 must remain longer than the synchronous embedding HTTP timeout of 300 seconds. If Redis is
-unavailable, bulk work fails closed instead of sending an unguarded request.
+unavailable while acquiring a permit, the worker logs a warning and uses a process-local semaphore.
+Bulk embedding continues, so a permit-store outage alone does not fail ingestion. This fallback
+does not preserve the cluster-wide limit: with `N` processes running bulk embedding and
+`BULK_EMBEDDING_MAX_INFLIGHT=L`, up to `N × L` requests can run at once instead of the healthy
+Redis-backed limit of `L`. `L` defaults to 1; the production Compose defaults allow two ingest and
+two light-worker processes, so four bulk calls can overlap if all are busy. That can exceed the
+recommended `OLLAMA_NUM_PARALLEL=2`, occupy Ollama's parallel slots, and queue interactive query
+embeddings. If a query then exceeds its 8-second deadline, search uses the full-text fallback. Bulk
+ingestion continues but may take longer. Treat the warning as degraded mode: monitor Ollama load
+and search latency, and restore Redis to re-establish the shared limit.
 
 Interactive query embeddings never acquire the bulk permit. Library search bounds each query
 embedding call by `QUERY_EMBEDDING_TIMEOUT_S=8`; if it fails or times out, search logs the
