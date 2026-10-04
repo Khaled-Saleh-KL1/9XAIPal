@@ -1011,7 +1011,8 @@ async def answer_paper_question(
         result: dict = {}
         streamed_text = False
         async for event in stream_answer(
-            messages, temperature=0.3, model=model, catch_remember=True
+            messages, temperature=0.3, model=model, catch_remember=True,
+            tool_probe=True,
         ):
             if event["type"] == "token":
                 streamed_text = True

@@ -899,6 +899,7 @@ async def answer_study_question(
         async for event in stream_answer(
             messages, temperature=0.3, model=model,
             catch_notes=True, catch_remember=True,
+            tool_probe=True,
         ):
             if event["type"] == "token":
                 streamed_text = True
