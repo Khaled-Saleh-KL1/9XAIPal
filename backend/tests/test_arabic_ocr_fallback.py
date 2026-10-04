@@ -864,8 +864,14 @@ def test_english_pdf_text_layer_recovers_page_and_records_its_provider(tmp_path)
 
 @pytest.mark.parametrize(
     "sparse_text",
-    ["23", "Header text from a running section"],
-    ids=("page-number", "header-only"),
+    [
+        pytest.param("23", id="page-number"),
+        pytest.param("Header text from a running section", id="header-only"),
+        pytest.param(
+            "Confidential Copy\nAnnual Report 2024\nPage 23 of 120",
+            id="multi-line-header-footer-page-number",
+        ),
+    ],
 )
 def test_sparse_page_number_or_header_text_layer_keeps_unreadable_marker(
     tmp_path, sparse_text

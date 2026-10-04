@@ -119,6 +119,15 @@ _PDF_TEXT_WORD_RE = re.compile(r"[^\W\d_]+", flags=re.UNICODE)
 _PDF_ARABIC_WORD_RE = re.compile(
     rf"[{_ARABIC_OCR_LETTERS}{_ARABIC_OCR_MARKS}]+"
 )
+_PDF_PAGE_NUMBER_LINE_RE = re.compile(
+    r"(?:page\s+\d+(?:\s+(?:of|/)\s+\d+)?|\d+(?:\s+(?:of|/)\s+\d+)?)",
+    flags=re.IGNORECASE,
+)
+_PDF_RUNNING_FURNITURE_LINE_RE = re.compile(
+    r"(?:confidential(?:\s+copy)?|annual\s+report(?:\s+\d{4})?|"
+    r"(?:©|\(c\)|copyright)(?:\s+.*)?|all\s+rights\s+reserved\.?)",
+    flags=re.IGNORECASE,
+)
 _PDF_MOJIBAKE_RE = re.compile(
     r"[\u00c2\u00c3\u00d0\u00d8\u00d9\u00de][\u0080-\u00bf]"
 )
@@ -601,6 +610,8 @@ def _usable_pdf_text_layer(text: str, *, settings: Settings) -> str | None:
     words = [word for word in _PDF_TEXT_WORD_RE.findall(candidate) if len(word) >= 2]
     if len(words) < 4:
         return None
+    if _substantive_pdf_body_word_count(candidate) < 8:
+        return None
     meaningful_lines = [
         line
         for line in candidate.splitlines()
@@ -613,6 +624,22 @@ def _usable_pdf_text_layer(text: str, *, settings: Settings) -> str | None:
     ):
         return None
     return candidate
+
+
+def _substantive_pdf_body_word_count(text: str) -> int:
+    """Count text-layer words outside page-number and running-furniture lines."""
+    body_words = 0
+    for line in text.splitlines():
+        normalized_line = line.strip()
+        if (
+            _PDF_PAGE_NUMBER_LINE_RE.fullmatch(normalized_line)
+            or _PDF_RUNNING_FURNITURE_LINE_RE.fullmatch(normalized_line)
+        ):
+            continue
+        body_words += sum(
+            len(word) >= 2 for word in _PDF_TEXT_WORD_RE.findall(normalized_line)
+        )
+    return body_words
 
 
 def _has_reversed_arabic_words(text: str) -> bool:
