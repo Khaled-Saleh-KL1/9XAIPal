@@ -10,7 +10,7 @@ import { ShelfGroups } from '../components/ShelfGroups';
 import { StickyBoard } from './StickyBoard';
 import { StudyChat, type PendingTurn } from './StudyChat';
 import { createPacer } from '../lib/pacer';
-import { Pressable, useTilt } from '../motion';
+import { Pressable, useFocusTrap, useTilt } from '../motion';
 import { calm, gentle, playful, reducedMotionFade } from '../motion/springs';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
@@ -85,6 +85,9 @@ export function DeskView({
   const [mobileLayout, setMobileLayout] = useState(
     () => typeof window !== 'undefined' && Boolean(window.matchMedia?.('(max-width: 820px)').matches),
   );
+  const [narrowLayout, setNarrowLayout] = useState(
+    () => typeof window !== 'undefined' && (window.matchMedia?.('(max-width: 1180px)').matches ?? window.innerWidth <= 1180),
+  );
   const [studies, setStudies] = useState<Study[]>([]);
   const [scope, setScope] = useState<string>(initialScope || LIBRARY_SCOPE);
   const [study, setStudy] = useState<Study | null>(null);
@@ -102,6 +105,8 @@ export function DeskView({
   const [library, setLibrary] = useState<PaperMeta[]>([]);
   const [picking, setPicking] = useState(false);
   const pickerOpenerRef = useRef<HTMLButtonElement>(null);
+  const chatBoardOpenerRef = useRef<HTMLButtonElement>(null);
+  const chatBoardDrawerRef = useRef<HTMLElement>(null);
   const [renaming, setRenaming] = useState(false);
   /** A study just created, whose rename box opens once it has loaded. */
   const [pendingRename, setPendingRename] = useState<string | null>(null);
@@ -128,6 +133,7 @@ export function DeskView({
    * a phone. This opens it as a slide-over instead.
    */
   const [railOpenMobile, setRailOpenMobile] = useState(false);
+  const [chatBoardOpen, setChatBoardOpen] = useState(false);
 
   useEffect(() => {
     const media = window.matchMedia?.('(max-width: 820px)');
@@ -137,6 +143,21 @@ export function DeskView({
     media.addEventListener?.('change', update);
     return () => media.removeEventListener?.('change', update);
   }, []);
+  useEffect(() => {
+    const media = window.matchMedia?.('(max-width: 1180px)');
+    if (!media) return;
+    const update = () => setNarrowLayout(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  const closeChatBoard = useCallback(() => setChatBoardOpen(false), []);
+  const handleChatBoardKeyDown = useFocusTrap({
+    active: narrowLayout && chatBoardOpen,
+    containerRef: chatBoardDrawerRef,
+    returnFocusRef: chatBoardOpenerRef,
+    onEscape: closeChatBoard,
+  });
   const toggleBoard = useCallback(() => {
     setBoardHidden((v) => {
       const next = !v;
@@ -524,11 +545,27 @@ export function DeskView({
         <button
           type="button"
           className="desk-rail-toggle"
-          onClick={() => setRailOpenMobile(true)}
+          onClick={() => { setChatBoardOpen(false); setRailOpenMobile(true); }}
           title="Studies and papers"
         >
           Papers
         </button>
+
+        {page === 'study' && narrowLayout && (
+          <button
+            ref={chatBoardOpenerRef}
+            type="button"
+            className="desk-board-toggle"
+            aria-controls={chatBoardOpen ? 'chat-notes-drawer' : undefined}
+            aria-expanded={chatBoardOpen}
+            onClick={() => {
+              setRailOpenMobile(false);
+              setChatBoardOpen((open) => !open);
+            }}
+          >
+            Chat notes
+          </button>
+        )}
 
         <nav className="desk-tabs">
           <button
@@ -541,7 +578,7 @@ export function DeskView({
           <button
             type="button"
             className={`desk-tab${page === 'notes' ? ' is-on' : ''}`}
-            onClick={() => onPageChange('notes')}
+            onClick={() => { setChatBoardOpen(false); onPageChange('notes'); }}
           >
             Notes
             {wallNotes.length > 0 && <span className="marg-badge">{wallNotes.length}</span>}
@@ -730,15 +767,55 @@ export function DeskView({
             onModelChange={chooseModel}
           />
 
-          <StickyBoard
-            notes={chatNotes}
-            scopeName={scopeName}
-            collapsed={boardHidden}
-            onToggle={toggleBoard}
-            onCreate={() => void addNote('chat')}
-            onSave={(id, patch) => void saveNote('chat', id, patch)}
-            onDelete={(id) => void removeNote('chat', id)}
-          />
+          {narrowLayout ? (
+            chatBoardOpen && (
+              <>
+                <button
+                  type="button"
+                  className="chat-notes-backdrop"
+                  aria-label="Close chat notes backdrop"
+                  tabIndex={-1}
+                  onClick={closeChatBoard}
+                />
+                <aside
+                  ref={chatBoardDrawerRef}
+                  id="chat-notes-drawer"
+                  className="chat-notes-drawer"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="chat-notes-drawer-title"
+                  tabIndex={-1}
+                  onKeyDown={handleChatBoardKeyDown}
+                >
+                  <div className="chat-notes-drawer-header">
+                    <h2 id="chat-notes-drawer-title">Chat notes</h2>
+                    <button type="button" className="chat-notes-drawer-close" aria-label="Close chat notes" onClick={closeChatBoard}>
+                      ×
+                    </button>
+                  </div>
+                  <StickyBoard
+                    notes={chatNotes}
+                    scopeName={scopeName}
+                    collapsed={boardHidden}
+                    onToggle={toggleBoard}
+                    onCreate={() => void addNote('chat')}
+                    onSave={(id, patch) => void saveNote('chat', id, patch)}
+                    onDelete={(id) => void removeNote('chat', id)}
+                  />
+                </aside>
+              </>
+            )
+          ) : (
+            <StickyBoard
+              notes={chatNotes}
+              scopeName={scopeName}
+              collapsed={boardHidden}
+              onToggle={toggleBoard}
+              onCreate={() => void addNote('chat')}
+              onSave={(id, patch) => void saveNote('chat', id, patch)}
+              onDelete={(id) => void removeNote('chat', id)}
+            />
+          )}
         </div>
       )}
 

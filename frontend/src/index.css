@@ -3052,10 +3052,9 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
    between "put away" and "gone". */
 .desk-grid.is-board-hidden { grid-template-columns: 250px minmax(0, 1fr) 38px; }
 @media (max-width: 1180px) {
-  /* The board folds away first: notes are a companion to the chat, and the
-     chat is unusable below a certain width. */
+  /* The chat notes open in a drawer at this width, leaving the chat column
+     room to keep its controls and transcript usable. */
   .desk-grid { grid-template-columns: 220px minmax(0, 1fr); }
-  .board { display: none; }
 }
 @media (max-width: 820px) {
   .desk-grid { grid-template-columns: minmax(0, 1fr); }
@@ -3064,7 +3063,8 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 
 /* Header button that reopens the rail once the grid has hidden it. Hidden
    above 820px, since the rail is just always there and this would be redundant. */
-.desk-rail-toggle {
+.desk-rail-toggle,
+.desk-board-toggle {
   display: none;
   font-size: 12px;
   padding: 5px 10px;
@@ -3075,6 +3075,9 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 }
 @media (max-width: 820px) {
   .desk-rail-toggle { display: inline-flex; align-items: center; }
+}
+@media (max-width: 1180px) {
+  .desk-board-toggle { display: inline-flex; align-items: center; }
 }
 /* Slide-over: same .rail markup and behaviour as the desktop sidebar, just
    pulled out of grid flow and pinned over the chat instead of beside it.
@@ -3954,8 +3957,61 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   color: var(--faint);
 }
 .board-hide:hover { color: var(--fg); }
-@media (max-width: 1180px) {
-  .board { display: none; }
+.chat-notes-backdrop {
+  position: fixed;
+  inset: 52px 0 0;
+  z-index: 46;
+  width: 100%;
+  height: calc(100vh - 52px);
+  padding: 0;
+  border: 0;
+  background: color-mix(in oklab, var(--fg), transparent 68%);
+}
+.chat-notes-drawer {
+  position: fixed;
+  top: 52px;
+  right: 0;
+  bottom: 0;
+  z-index: 47;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - 20px));
+  min-height: 0;
+  background: var(--bg-2);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px -12px rgba(0, 0, 0, 0.35);
+}
+.chat-notes-drawer-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.chat-notes-drawer-header h2 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 17px;
+  color: var(--fg);
+}
+.chat-notes-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.chat-notes-drawer-close:hover { color: var(--fg); background: var(--bg-3); }
+.chat-notes-drawer .board {
+  flex: 1;
+  min-height: 0;
+  border-left: 0;
 }
 
 /* ── Desk tabs ── */
