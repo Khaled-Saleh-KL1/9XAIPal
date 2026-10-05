@@ -171,6 +171,29 @@ def test_all_quota_exhausted_accounts_raise_quota_exception(monkeypatch):
         )
 
 
+def test_model_failure_before_quota_still_retries_accounts_next_day(monkeypatch):
+    from app.services import cloudflare_images
+
+    attempted = {}
+
+    def post(url, **kwargs):
+        account = "account-a" if "account-a" in url else "account-b"
+        attempted[account] = attempted.get(account, 0) + 1
+        if attempted[account] == 1:
+            return _response(404)
+        return _response(429)
+
+    monkeypatch.setattr(cloudflare_images.httpx, "post", post)
+
+    with pytest.raises(cloudflare_images.QuotaExhaustedError):
+        cloudflare_images.generate_image(
+            "prompt",
+            config=_settings(
+                "account-a:secret-a,account-b:secret-b", "model-one,model-two"
+            ),
+        )
+
+
 def test_no_configured_accounts_is_a_quiet_noop(monkeypatch, caplog):
     from app.services import cloudflare_images
 

@@ -134,6 +134,7 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
             continue
 
         account_failed = False
+        account_quota = False
         for model in models:
             url = f"{_BASE_URL}/{account_id}/ai/run/{model}"
             json_payload, multipart_fields = _request_fields(model, prompt)
@@ -165,6 +166,7 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
             if status == 429 or _QUOTA_TEXT.search(error_text):
                 # The free neuron budget is shared by every model under this
                 # account. A different model cannot recover from this state.
+                account_quota = True
                 break
 
             if status < 200 or status >= 300 or (body and body.get("success") is False):
@@ -188,9 +190,14 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
                 all_accounts_quota_exhausted = False
             continue
 
-        # Reaching here means a quota response broke the model loop.
-        # Account failures such as auth errors also break, and must not trigger
-        # a quota retry for the whole task.
+        # Quota can follow model-specific failures. Once Cloudflare confirms
+        # the shared account budget is exhausted, those earlier failures do
+        # not change the account-level retry classification.
+        if account_quota:
+            continue
+
+        # Account failures such as auth errors must not trigger a quota retry
+        # for the whole task.
         if account_failed:
             circuit_breaker.record_failure(breaker_name)
             all_accounts_quota_exhausted = False
