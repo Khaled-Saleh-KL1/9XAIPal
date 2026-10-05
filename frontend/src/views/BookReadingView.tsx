@@ -6,6 +6,7 @@
  * between the two. Nothing here is on the paper path.
  */
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import { m, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { displayTitle as paperDisplayTitle } from '../lib/titles';
@@ -18,6 +19,7 @@ import { TitleEditor } from '../components/TitleEditor';
 import { useConfirm } from '../components/ConfirmDialog';
 import { ChatPane } from './ChatPane';
 import { BookNotes } from './BookNotes';
+import { calm, reducedMotionFade } from '../motion/springs';
 import { PageMapProvider, useFetchedPageMap } from '../lib/pageMap';
 import {
   getNextChunk,
@@ -222,6 +224,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
    * show one pane at a time, full-width, with a toggle to switch.
    */
   const [narrow, setNarrow] = useState(() => window.innerWidth < 820);
+  const reducedMotion = useReducedMotion();
   useEffect(() => {
     const onResize = () => setNarrow(window.innerWidth < 820);
     window.addEventListener('resize', onResize);
@@ -949,14 +952,30 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
       </header>
 
       {/* ── Split layout (drag the divider to resize the chat pane) ── */}
-      <div ref={splitRef} className="flex-1 min-h-0 flex">
+      <div
+        ref={splitRef}
+        className="flex-1 min-h-0 flex"
+        style={narrow ? { position: 'relative' } : undefined}
+      >
 
         {/* Left: reading pane */}
-        <section
+        <m.section
           className="relative flex flex-col min-h-0"
+          initial={false}
+          animate={narrow ? { opacity: mobilePane === 'read' ? 1 : 0 } : undefined}
+          transition={reducedMotion ? reducedMotionFade : calm}
+          aria-hidden={narrow && mobilePane !== 'read' ? true : undefined}
+          inert={narrow && mobilePane !== 'read'}
           style={
             narrow
-              ? { width: '100%', display: mobilePane === 'read' ? 'flex' : 'none', background: 'var(--bg)' }
+              ? {
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  display: 'flex',
+                  pointerEvents: mobilePane === 'read' ? 'auto' : 'none',
+                  background: 'var(--bg)',
+                }
               : {
                   width: `calc(100% - ${chatWidthPct}% - 6px)`,
                   borderRight: '1px solid var(--border)',
@@ -1171,7 +1190,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
               </div>
             </div>
           )}
-        </section>
+        </m.section>
 
         {/* Drag handle: 6px wide, full-height, becomes accent-colored on hover/drag.
             Only meaningful when both panes share the width, so it's dropped
@@ -1213,11 +1232,21 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
         )}
 
         {/* Right: chat pane */}
-        <div
+        <m.div
           className="min-h-0 flex flex-col"
+          initial={false}
+          animate={narrow ? { opacity: mobilePane === 'chat' ? 1 : 0 } : undefined}
+          transition={reducedMotion ? reducedMotionFade : calm}
+          aria-hidden={narrow && mobilePane !== 'chat' ? true : undefined}
+          inert={narrow && mobilePane !== 'chat'}
           style={
             narrow
-              ? { width: '100%', display: mobilePane === 'chat' ? 'flex' : 'none' }
+              ? {
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  pointerEvents: mobilePane === 'chat' ? 'auto' : 'none',
+                }
               : { width: `${chatWidthPct}%` }
           }
         >
@@ -1230,7 +1259,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
             revealedCount={revealedUnits.length}
             maxSequenceId={maxRevealedSeq}
           />
-        </div>
+        </m.div>
       </div>
 
       {/* Phone/tablet: the only way in or out of the chat pane once it isn't

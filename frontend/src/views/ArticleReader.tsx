@@ -218,6 +218,7 @@ export function ArticleReader({
   const [tintedBlocks, setTintedBlocks] = useState<Set<number>>(new Set());
   const [progress, setProgress] = useState(0);
   const [panel, setPanel] = useState<'contents' | 'bookmarks' | 'notes' | null>(null);
+  const panelOpenerRef = useRef<HTMLButtonElement>(null);
   /**
    * Which desk scope this paper's corner button opens.
    *
@@ -2227,6 +2228,7 @@ export function ArticleReader({
           )}
 
           <button
+            ref={panelOpenerRef}
             className={`reader-chip${panel ? ' is-on' : ''}`}
             onClick={() => setPanel((p) => (p ? null : 'contents'))}
             title="Contents, bookmarks and notes (I)"
@@ -2272,6 +2274,7 @@ export function ArticleReader({
         onRemoveBookmark={removeBookmark}
         onAddBookmark={bookmarkHere}
         currentSeq={currentSeq}
+        returnFocusRef={panelOpenerRef}
       />
 
       <Toast notice={notice} onDismiss={() => setNotice(null)} />

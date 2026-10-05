@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import type { GroundingClaim, GroundingReport, GroundingVerdict } from '../api';
+import { calm, gentle, playful, reducedMotionFade } from '../motion/springs';
 
 /**
  * The evidence behind an answer, claim by claim.
@@ -134,6 +136,8 @@ export function EvidencePanel({
   paperLabel?: (documentId: string | null) => string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const disclosureId = useId();
+  const reducedMotion = useReducedMotion();
 
   if (verifying && !report) {
     return (
@@ -155,11 +159,33 @@ export function EvidencePanel({
         className="evidence-toggle"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
+        aria-controls={disclosureId}
       >
-        <span className="trail-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+        <m.span
+          className="trail-caret"
+          aria-hidden="true"
+          initial={false}
+          animate={reducedMotion ? { opacity: 1 } : { rotate: open ? 90 : 0 }}
+          transition={reducedMotion ? reducedMotionFade : playful}
+        >▸</m.span>
         <span className="evidence-summary">{evidenceSummary(report)}</span>
       </button>
-      {open && <EvidenceList report={report} onJump={onJump} paperLabel={paperLabel} />}
+      <AnimatePresence initial={false}>
+        {open && (
+          <m.div
+            id={disclosureId}
+            key="evidence-disclosure"
+            initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
+            animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+            exit={reducedMotion
+              ? { opacity: 0, pointerEvents: 'none' }
+              : { opacity: 0, y: 6, pointerEvents: 'none', transition: calm }}
+            transition={reducedMotion ? reducedMotionFade : gentle}
+          >
+            <EvidenceList report={report} onJump={onJump} paperLabel={paperLabel} />
+          </m.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { PaperCover } from './PaperCover';
 import { ShelfGroups } from '../components/ShelfGroups';
 import { displayTitle } from '../lib/titles';
 import type { PaperMeta, StudyPaper } from '../api';
+import { Sheet } from '../motion';
 
 /**
  * Choosing which papers a study holds, and in which order.
@@ -23,6 +24,7 @@ export function PaperPicker({
   chosen,
   onApply,
   onClose,
+  returnFocusRef,
 }: {
   open: boolean;
   library: PaperMeta[];
@@ -30,6 +32,7 @@ export function PaperPicker({
   chosen: StudyPaper[];
   onApply: (documentIds: string[]) => void;
   onClose: () => void;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   // Held locally and applied on Done: membership is written whole-collection,
   // so a live write per checkbox would be one request per click and would
@@ -42,15 +45,7 @@ export function PaperPicker({
     if (!open) return;
     setIds(chosen.map((p) => p.id));
     setQuery('');
-    searchRef.current?.focus({ preventScroll: true });
   }, [open, chosen]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
 
   const byId = useMemo(
     () => new Map(library.map((m) => [m.id, m])),
@@ -63,8 +58,6 @@ export function PaperPicker({
       (m) => !ids.includes(m.id) && (!q || displayTitle(m).toLowerCase().includes(q)),
     );
   }, [library, ids, query]);
-
-  if (!open) return null;
 
   const add = (id: string) => setIds((prev) => [...prev, id]);
   const remove = (id: string) => setIds((prev) => prev.filter((x) => x !== id));
@@ -81,16 +74,18 @@ export function PaperPicker({
     ids.length !== chosen.length || ids.some((id, i) => chosen[i]?.id !== id);
 
   return (
-    <div className="picker-scrim" onClick={onClose}>
-      <div
-        className="picker"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label="Choose the papers in this study"
-      >
+    <Sheet
+      open={open}
+      onClose={onClose}
+      labelledBy="picker-title"
+      initialFocusRef={searchRef}
+      returnFocusRef={returnFocusRef}
+      backdropClassName="picker-backdrop"
+      panelClassName="picker"
+    >
         <header className="picker-head">
           <div>
-            <h2>Papers in this study</h2>
+            <h2 id="picker-title">Papers in this study</h2>
             <p className="picker-sub">
               The order is the numbering answers cite: P1 is the first here.
             </p>
@@ -262,7 +257,6 @@ export function PaperPicker({
             Save
           </button>
         </footer>
-      </div>
-    </div>
+    </Sheet>
   );
 }
