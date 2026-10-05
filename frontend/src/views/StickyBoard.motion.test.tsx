@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Sticky } from '../api';
 import { MotionRoot } from '../motion';
 
 const mocks = vi.hoisted(() => ({
   reducedMotion: false,
+  inView: true,
   rows: new Map<string, { props: Record<string, any>; mountId: number }>(),
   nextMountId: 0,
   save: vi.fn(),
@@ -33,7 +34,7 @@ vi.mock('motion/react', async (importOriginal) => {
     ...actual,
     m: inspectedM,
     useReducedMotion: () => mocks.reducedMotion,
-    useInView: () => true,
+    useInView: () => mocks.inView,
   };
 });
 
@@ -75,6 +76,7 @@ beforeEach(() => {
   mocks.rows.clear();
   mocks.nextMountId = 0;
   mocks.reducedMotion = false;
+  mocks.inView = true;
 });
 
 describe('StickyBoard motion', () => {
@@ -116,12 +118,14 @@ describe('StickyBoard motion', () => {
       });
     }
     render(<Harness />);
+    await act(async () => { await import('motion/react'); });
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete this note' }));
     expect(mocks.remove).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }));
     expect(mocks.remove).toHaveBeenCalledTimes(1);
     expect(mocks.remove).toHaveBeenCalledWith('delete-me');
+    expect(await screen.findByTestId('sticky-motion-wrapper')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Delete target')).not.toBeInTheDocument(), { timeout: 3000 });
   });
 
@@ -149,5 +153,14 @@ describe('StickyBoard motion', () => {
     expect(props?.whileDrag).toBeUndefined();
     expect(props?.drag).toBe(false);
     expect(props?.layout).toBe(false);
+  });
+
+  it('pauses endless sway while a sticky is outside the viewport', () => {
+    mocks.inView = false;
+    render(board([sticky('offscreen', 'Offscreen note')]));
+
+    const props = mocks.rows.get('offscreen')?.props;
+    expect(props?.animate?.rotate).toBe(0);
+    expect(props?.transition?.rotate?.repeat).toBeUndefined();
   });
 });

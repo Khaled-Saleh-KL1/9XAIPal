@@ -137,6 +137,7 @@ export function MarginaliaPanel({
     initialFocusRef: searchRef,
     returnFocusRef,
     onEscape: onClose,
+    shouldHandleEscape: () => !document.querySelector('.lightbox-backdrop'),
     lockScroll: true,
   });
 

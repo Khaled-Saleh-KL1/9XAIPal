@@ -114,7 +114,7 @@ describe('reader panels and pickers motion', () => {
     fireEvent.click(image);
     expect(await screen.findByRole('dialog', { name: 'A figure' })).toBeInTheDocument();
 
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(screen.getByPlaceholderText('Find a section…'), { key: 'Escape' });
 
     await waitFor(() => expect(document.querySelector('.lightbox-backdrop')).toBeNull());
     expect(screen.getByRole('dialog', { name: 'Contents, bookmarks and notes' })).toBeInTheDocument();
@@ -155,6 +155,39 @@ describe('reader panels and pickers motion', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     expect(onApply).toHaveBeenCalledWith(['paper-1']);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Papers in this study' })).toBeNull());
+    expect(opener).toHaveFocus();
+  });
+
+  it('closes PaperPicker on Escape and restores focus to its opener', async () => {
+    const user = userEvent.setup();
+
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      const openerRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button ref={openerRef} type="button" onClick={() => setOpen(true)}>Choose papers</button>
+          <PaperPicker
+            open={open}
+            library={[paper('paper-1', 'A paper about motion')]}
+            chosen={[]}
+            onApply={() => setOpen(false)}
+            onClose={() => setOpen(false)}
+            returnFocusRef={openerRef}
+          />
+        </>
+      );
+    }
+
+    render(<MotionRoot><Harness /></MotionRoot>);
+    const opener = screen.getByRole('button', { name: 'Choose papers' });
+    await user.click(opener);
+    await screen.findByRole('dialog', { name: 'Papers in this study' });
+    expect(screen.getByRole('textbox', { name: 'Find a paper' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Papers in this study' })).toBeNull());
     expect(opener).toHaveFocus();
   });

@@ -100,8 +100,8 @@ function PendingAnswer({ text }: { text: string }) {
   return (
     <m.div
       data-testid="pending-note-stream-answer"
-      initial={reducedMotion ? false : { opacity: 0, scale: 0.6, rotate: -3, y: 12 }}
-      animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0, y: 0 }}
+      initial={reducedMotion ? false : { opacity: 0 }}
+      animate={{ opacity: 1 }}
       transition={reducedMotion ? reducedMotionFade : playful}
     >
       <Answer text={text} />

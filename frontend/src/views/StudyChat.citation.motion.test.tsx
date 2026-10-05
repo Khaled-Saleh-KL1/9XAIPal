@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MotionRoot } from '../motion';
+import type { StudyPaper } from '../api';
 
 const mocks = vi.hoisted(() => ({
   getChunk: vi.fn(),
@@ -23,12 +24,12 @@ const pending = (answer: string): PendingTurn => ({
   verifying: false,
 });
 
-function chat(answer: string) {
+function chat(answer: string, papers: StudyPaper[] = [{ id: 'paper-1', title: 'Paper One', page_count: 4, status: 'complete', paper: 1 }]) {
   return (
     <MotionRoot>
       <StudyChat
         scopeName="Study"
-        papers={[{ id: 'paper-1', title: 'Paper One', page_count: 4, status: 'complete', paper: 1 }]}
+        papers={papers}
         turns={[]}
         pending={pending(answer)}
         onAsk={vi.fn()}
@@ -67,5 +68,25 @@ describe('StudyChat citation streaming', () => {
       expect(screen.getByText('The cited passage.')).toBeInTheDocument();
     });
     expect(mocks.getChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches a new passage when the same citation position points to a reordered paper', async () => {
+    mocks.getChunk.mockImplementation(async (documentId: string) => ({
+      content_markdown: `Passage from ${documentId}`,
+    }));
+    const view = render(chat('A claim [[P1:7]]'));
+    fireEvent.click(screen.getByRole('button', { name: 'P1:7' }));
+    expect(await screen.findByText('Passage from paper-1')).toBeInTheDocument();
+
+    view.rerender(chat('A claim [[P1:7]]', [
+      { id: 'paper-2', title: 'Paper Two', page_count: 4, status: 'complete', paper: 1 },
+    ]));
+
+    const reboundChip = screen.getByRole('button', { name: 'P1:7' });
+    expect(reboundChip).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Passage from paper-1')).not.toBeInTheDocument();
+    fireEvent.click(reboundChip);
+    expect(await screen.findByText('Passage from paper-2')).toBeInTheDocument();
+    expect(mocks.getChunk).toHaveBeenLastCalledWith('paper-2', 7);
   });
 });

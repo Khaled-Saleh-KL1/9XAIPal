@@ -73,7 +73,7 @@ export function BibCitationRef({
       if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || document.querySelector('.lightbox-backdrop')) return;
       event.stopPropagation();
       setOpen(false);
     };

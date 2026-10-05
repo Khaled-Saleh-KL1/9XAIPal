@@ -6,6 +6,7 @@ import { MotionRoot } from '../motion';
 const mocks = vi.hoisted(() => ({
   reducedMotion: false,
   rows: new Map<string, { props: Record<string, any>; mountId: number }>(),
+  stickyRows: new Map<string, Record<string, any>>(),
   nextMountId: 0,
 }));
 
@@ -18,6 +19,9 @@ vi.mock('motion/react', async (importOriginal) => {
     const key = props['data-note-motion-key'];
     if (props['data-testid'] === 'wall-motion-item' && typeof key === 'string') {
       mocks.rows.set(key, { props, mountId: mountId.current });
+    }
+    if (props['data-testid'] === 'sticky-motion-wrapper' && typeof props['data-motion-key'] === 'string') {
+      mocks.stickyRows.set(props['data-motion-key'], props);
     }
     return React.createElement(actual.m.div, { ...props, ref });
   });
@@ -56,6 +60,7 @@ function wall(notes: Sticky[]) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.rows.clear();
+  mocks.stickyRows.clear();
   mocks.nextMountId = 0;
   mocks.reducedMotion = false;
 });
@@ -86,5 +91,20 @@ describe('NoteWall motion', () => {
     expect(props?.animate).toEqual({ opacity: 1 });
     expect(props?.style).toBeUndefined();
     expect(props?.layout).toBe(false);
+  });
+
+  it('keeps a pinned note still while its text is being edited', async () => {
+    render(wall([sticky('edit-wall', 'Edit this wall note')]));
+    fireEvent.click(screen.getByText('Edit this wall note'));
+    const textarea = await screen.findByPlaceholderText('Write it down…');
+    await waitFor(() => expect(textarea).toHaveFocus());
+
+    const props = mocks.stickyRows.get('edit-wall');
+    expect(props?.drag).toBe(false);
+    expect(props?.onPointerMove).toBeUndefined();
+    expect(props?.onPointerLeave).toBeUndefined();
+    expect(props?.style).toBeUndefined();
+    fireEvent.pointerMove(textarea, { pointerType: 'mouse', clientX: 80, clientY: 20 });
+    expect(textarea).toHaveValue('Edit this wall note');
   });
 });

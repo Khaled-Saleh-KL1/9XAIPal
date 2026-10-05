@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react';
+import { m, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
@@ -8,7 +9,8 @@ import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
 import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
 import { textDirection } from '../lib/documentDirection';
-import { Pressable } from '../motion';
+import { playful, Pressable, reducedMotionFade } from '../motion';
+import { StreamingCaret } from './StreamingCaret';
 
 /**
  * The desk's chat.
@@ -87,6 +89,7 @@ function Answer({
       if (!paper) return <span className="cite-dead">P{m[1]}:{m[2]}</span>;
       return (
         <CitationRef
+          key={`${paper.id}:${m[2]}`}
           cite={{
             paper: Number(m[1]),
             document_id: paper.id,
@@ -218,6 +221,12 @@ export function StudyChat({
   };
 
   const empty = turns.length === 0 && !pending;
+  const reducedMotion = useReducedMotion();
+  const messageInitial = reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -3, y: 12 };
+  const messageAnimate = reducedMotion
+    ? { opacity: 1 }
+    : { opacity: 1, scale: 1, rotate: 0, y: 0 };
+  const messageTransition = reducedMotion ? reducedMotionFade : playful;
 
   return (
     <section className="chat">
@@ -265,9 +274,28 @@ export function StudyChat({
           turns.map((turn) => (
             <Fragment key={turn.id}>
               {turn.role === 'user' ? (
-                <div className="msg is-user"><div className="msg-body" dir={textDirection(turn.content) ?? 'auto'}>{turn.content}</div></div>
+                <m.div
+                  key={`${turn.id}-message`}
+                  data-testid="study-message-motion"
+                  data-study-message-key={turn.id}
+                  initial={false}
+                  animate={messageAnimate}
+                  transition={messageTransition}
+                  style={{ transformOrigin: 'center' }}
+                >
+                  <div className="msg is-user"><div className="msg-body" dir={textDirection(turn.content) ?? 'auto'}>{turn.content}</div></div>
+                </m.div>
               ) : (
-                <div className="msg is-assistant">
+                <m.div
+                  key={`${turn.id}-message`}
+                  data-testid="study-message-motion"
+                  data-study-message-key={turn.id}
+                  initial={false}
+                  animate={messageAnimate}
+                  transition={messageTransition}
+                  style={{ transformOrigin: 'center' }}
+                  className="msg is-assistant"
+                >
                   <div className="msg-meta">
                     {turn.model && <span className="note-model">{turn.model}</span>}
                   </div>
@@ -294,7 +322,7 @@ export function StudyChat({
                       ))}
                     </div>
                   )}
-                </div>
+                </m.div>
               )}
             </Fragment>
           ))
@@ -302,8 +330,28 @@ export function StudyChat({
 
         {pending && (
           <>
-            <div className="msg is-user"><div className="msg-body" dir={textDirection(pending.question) ?? 'auto'}>{pending.question}</div></div>
-            <div className="msg is-assistant">
+            <m.div
+              key={`${pending.clientId}-user`}
+              data-testid="study-message-motion"
+              data-study-message-key={`${pending.clientId}-user`}
+              initial={messageInitial}
+              animate={messageAnimate}
+              transition={messageTransition}
+              style={{ transformOrigin: 'center' }}
+            >
+              <div className="msg is-user"><div className="msg-body" dir={textDirection(pending.question) ?? 'auto'}>{pending.question}</div></div>
+            </m.div>
+            <m.div
+              key={`${pending.clientId}-assistant`}
+              data-testid="study-message-motion"
+              data-study-message-key={`${pending.clientId}-assistant`}
+              data-streaming={pending.answer && !pending.verifying && !pending.error ? 'true' : undefined}
+              initial={messageInitial}
+              animate={messageAnimate}
+              transition={messageTransition}
+              style={{ transformOrigin: 'center' }}
+              className="msg is-assistant"
+            >
               {/* Live, the trail IS the progress indicator: the answer has not
                   started yet and a bare spinner says nothing about what it is
                   doing across five papers. */}
@@ -320,6 +368,7 @@ export function StudyChat({
                     papers={papers}
                     onOpenPaper={onOpenPaper}
                   />
+                  {!pending.verifying && <StreamingCaret />}
                   <EvidencePanel report={null} verifying={pending.verifying} />
                 </div>
               ) : (
@@ -328,7 +377,7 @@ export function StudyChat({
                   {pending.status || 'Thinking…'}
                 </div>
               )}
-            </div>
+            </m.div>
           </>
         )}
       </div>

@@ -98,6 +98,10 @@ export function StickyNote({
     if (editing) ref.current?.focus({ preventScroll: true });
   }, [editing]);
 
+  useEffect(() => {
+    if (editing && pinned) tiltMotion.onPointerLeave();
+  }, [editing, pinned, tiltMotion.onPointerLeave]);
+
   // The body can change under us: the assistant edits notes too. So a card
   // that is not being edited follows the server.
   useEffect(() => {
@@ -170,6 +174,9 @@ export function StickyNote({
   const rotateTransition = sway
     ? { type: 'tween' as const, duration: 3.6, ease: 'easeInOut' as const, repeat: Infinity, delay: swayPhase(note.id) }
     : playful;
+  const editingTransition = editing && actualEntrance !== 'pop'
+    ? { type: 'tween' as const, duration: 0 }
+    : rotateTransition;
 
   return (
     <m.div
@@ -191,7 +198,7 @@ export function StickyNote({
         : { opacity: 0, scale: 0.5, rotate: -8, y: 12 }}
       animate={reducedMotion
         ? { opacity: 1 }
-        : { opacity: 1, scale: 1, rotate: animateSway, y: 0 }}
+        : { opacity: 1, scale: 1, rotate: editing && actualEntrance !== 'pop' ? 0 : animateSway, y: 0 }}
       exit={exitOnRemove
         ? reducedMotion
           ? { opacity: 0, pointerEvents: 'none' }
@@ -199,13 +206,13 @@ export function StickyNote({
         : undefined}
       transition={reducedMotion
         ? reducedMotionFade
-        : { ...playful, rotate: rotateTransition }}
+        : { ...playful, rotate: editing ? editingTransition : rotateTransition }}
       whileHover={!editing && !reducedMotion
         ? { rotate: [0, -4, 3, -2, 0], y: -3, scale: 1.02, transition: { type: 'tween', duration: 0.5, ease: 'easeInOut' } }
         : undefined}
-      onPointerMove={pinned ? tiltMotion.onPointerMove : undefined}
-      onPointerLeave={pinned ? tiltMotion.onPointerLeave : undefined}
-      style={!reducedMotion && pinned ? tiltMotion.style : undefined}
+      onPointerMove={pinned && !editing ? tiltMotion.onPointerMove : undefined}
+      onPointerLeave={pinned && !editing ? tiltMotion.onPointerLeave : undefined}
+      style={!reducedMotion && pinned && !editing ? tiltMotion.style : undefined}
     >
       <article
         className={[

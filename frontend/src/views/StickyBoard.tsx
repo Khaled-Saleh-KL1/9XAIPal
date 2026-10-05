@@ -81,7 +81,30 @@ export function StickyBoard({
             </header>
 
             <div className="board-list thin-scroll">
-              {notes.length === 0 ? (
+              <AnimatePresence initial={false}>
+                {notes.map((n) => (
+                  <m.div
+                    key={n.id}
+                    data-testid="sticky-board-presence"
+                    layout={reducedMotion ? false : 'position'}
+                    initial={false}
+                    animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0 }}
+                    exit={reducedMotion
+                      ? { opacity: 0, pointerEvents: 'none' }
+                      : { opacity: 0, scale: 0.4, rotate: 20, pointerEvents: 'none' }}
+                    transition={transition}
+                    style={{ transformOrigin: 'center' }}
+                  >
+                    <StickyNote
+                      note={n}
+                      exitOnRemove={false}
+                      onSave={(patch) => onSave(n.id, patch)}
+                      onDelete={() => onDelete(n.id)}
+                    />
+                  </m.div>
+                ))}
+              </AnimatePresence>
+              {notes.length === 0 && (
                 <div className="board-empty">
                   <p>No notes on {scopeName} yet.</p>
                   <p className="marg-hint">
@@ -89,17 +112,6 @@ export function StickyBoard({
                     its notes are badged, and only you can remove one.
                   </p>
                 </div>
-              ) : (
-                <AnimatePresence initial={false}>
-                  {notes.map((n) => (
-                    <StickyNote
-                      key={n.id}
-                      note={n}
-                      onSave={(patch) => onSave(n.id, patch)}
-                      onDelete={() => onDelete(n.id)}
-                    />
-                  ))}
-                </AnimatePresence>
               )}
             </div>
           </m.div>

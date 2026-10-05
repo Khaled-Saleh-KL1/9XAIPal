@@ -56,7 +56,7 @@ describe('PendingNoteCard streaming motion', () => {
     mocks.nextMountId = 0;
   });
 
-  it('pops in its pending answer once and keeps a streaming caret through token updates', () => {
+  it('fades in its pending answer once and keeps a streaming caret through token updates', () => {
     const view = render(
       <MotionRoot>
         <PendingNoteCard note={note('First token')} onRetry={vi.fn()} onDismiss={vi.fn()} />
@@ -64,7 +64,7 @@ describe('PendingNoteCard streaming motion', () => {
     );
 
     expect(screen.getByText('First token')).toBeInTheDocument();
-    expect(mocks.props?.initial).toMatchObject({ scale: 0.6, rotate: -3, y: 12 });
+    expect(mocks.props?.initial).toEqual({ opacity: 0 });
     expect(screen.getByTestId('chat-stream-caret')).toBeInTheDocument();
     const firstMount = mocks.mountId;
 
@@ -76,6 +76,7 @@ describe('PendingNoteCard streaming motion', () => {
 
     expect(screen.getByText('First token and the next one')).toBeInTheDocument();
     expect(mocks.mountId).toBe(firstMount);
+    expect(mocks.props?.initial).toEqual({ opacity: 0 });
     expect(screen.getByTestId('chat-stream-caret')).toBeInTheDocument();
   });
 });

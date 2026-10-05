@@ -768,6 +768,7 @@ function StudyRailRow({
 
   return (
     <Pressable
+      ref={tilt.ref}
       data-testid="study-rail-row"
       data-study-id={study.id}
       type="button"

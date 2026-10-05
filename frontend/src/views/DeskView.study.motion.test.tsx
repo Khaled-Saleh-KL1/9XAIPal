@@ -87,6 +87,11 @@ describe('DeskView study rail motion', () => {
     expect(alphaMotion?.whileTap).toBeDefined();
     expect(alphaMotion?.style?.rotateX).toBeDefined();
     expect(alphaMotion?.style?.rotateY).toBeDefined();
+    const rect = vi.spyOn(alpha, 'getBoundingClientRect').mockReturnValue({
+      left: 0, right: 100, top: 0, bottom: 40, width: 100, height: 40,
+    } as DOMRect);
+    fireEvent.pointerMove(alpha, { pointerType: 'mouse', clientX: 90, clientY: 8 });
+    expect(rect).toHaveBeenCalled();
     expect(screen.getByTestId('active-study-indicator')).toBeInTheDocument();
     expect(mocks.indicatorProps?.layoutId).toBe('active-study-indicator');
 

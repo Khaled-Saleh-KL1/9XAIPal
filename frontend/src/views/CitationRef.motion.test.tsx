@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MotionRoot } from '../motion';
+import { ImageLightbox } from '../components/ImageLightbox';
 
 const mocks = vi.hoisted(() => ({ getChunk: vi.fn() }));
 
@@ -71,5 +72,25 @@ describe('CitationRef disclosure', () => {
       expect(screen.queryByText('Quoted passage.')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'P2:41' })).toHaveAttribute('aria-expanded', 'false');
     });
+  });
+
+  it('lets the lightbox receive Escape before closing the citation', async () => {
+    mocks.getChunk.mockResolvedValueOnce({ content_markdown: '![Cited figure](/figure.png)' });
+    render(
+      <MotionRoot>
+        <ImageLightbox />
+        <CitationRef cite={{ paper: 2, document_id: 'paper-2', label: 'Paper Two', sequence_id: 41 }} />
+      </MotionRoot>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'P2:41' }));
+    const image = await screen.findByAltText('Cited figure');
+    Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 120 });
+    fireEvent.click(image);
+    expect(await screen.findByRole('dialog', { name: 'Cited figure' })).toBeInTheDocument();
+
+    fireEvent.keyDown(image, { key: 'Escape' });
+
+    await waitFor(() => expect(document.querySelector('.lightbox-backdrop')).toBeNull());
+    expect(screen.getByRole('button', { name: 'P2:41' })).toHaveAttribute('aria-expanded', 'true');
   });
 });
