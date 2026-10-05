@@ -294,14 +294,14 @@ export function ProcessingOverlay({
               className="absolute inset-y-0 left-0 h-full"
               initial={reducedMotion ? false : { scaleX: 0 }}
               animate={reducedMotion ? { opacity: 1 } : { scaleX: overall }}
-              transition={reducedMotion ? calm : gentle}
+              transition={reducedMotion ? reducedMotionFade : gentle}
               style={{
                 width: reducedMotion ? `${overall * 100}%` : '100%',
                 transformOrigin: 'left center',
                 background: failed || declined ? 'var(--muted)' : complete ? 'var(--ok)' : 'var(--accent)',
               }}
             >
-              {!reducedMotion && !complete && !failed && !declined && <ProgressWobble />}
+              {!complete && !failed && !declined && <ProgressWobble />}
             </m.div>
           </div>
         </div>
@@ -468,11 +468,11 @@ function DocumentSweep() {
       ref={ref}
       aria-hidden="true"
       className="pointer-events-none absolute inset-y-0 left-0 w-[42%]"
-      initial={false}
+      initial={reducedMotion ? { opacity: 0 } : false}
       animate={sweep ? { x: ['-140%', '340%'], opacity: [0, 0.8, 0] } : { opacity: 0 }}
       transition={sweep
         ? { duration: 3.8, ease: 'easeInOut', repeat: Infinity, repeatDelay: 1 }
-        : calm}
+        : reducedMotion ? reducedMotionFade : calm}
       style={{ background: 'linear-gradient(110deg, transparent, color-mix(in oklab, var(--accent) 16%, transparent), transparent)' }}
     />
   );
@@ -488,8 +488,9 @@ function ProgressWobble() {
       ref={ref}
       aria-hidden="true"
       className="absolute right-[-3px] top-[-1.5px] h-[6px] w-[6px] rounded-full"
+      initial={reducedMotion ? { opacity: 0 } : false}
       animate={wobble ? { scaleY: [0.8, 1.2, 0.9, 1.08, 0.8] } : { opacity: 0 }}
-      transition={wobble ? { duration: 0.9, ease: 'easeInOut', repeat: Infinity } : calm}
+      transition={wobble ? { duration: 0.9, ease: 'easeInOut', repeat: Infinity } : reducedMotion ? reducedMotionFade : calm}
       style={{ background: 'var(--accent)' }}
     />
   );

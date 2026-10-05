@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef, type DragEvent, type RefObject } from 'react';
-import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'motion/react';
+import { useState, useEffect, useMemo, useRef, type ComponentProps, type DragEvent, type ReactNode, type RefObject } from 'react';
+import { AnimatePresence, LayoutGroup, m, useIsPresent, useReducedMotion } from 'motion/react';
 import type { Paper, LibraryLayout, SortKey } from '../types';
 import { LogoMark } from '../components/LogoMark';
 import {
@@ -39,6 +39,9 @@ function deriveProgress(m: PaperMeta): number {
   return stageProgress(m.status, m.job_status, m.job_progress_fraction);
 }
 
+const arrivalGlowStart = '0 0 0 3px color-mix(in oklab, var(--accent) 42%, transparent)';
+const arrivalGlowEnd = '0 0 0 0 transparent';
+
 function metaToPaper(m: PaperMeta): Paper {
   return {
     id: m.id,
@@ -66,6 +69,20 @@ function metaToPaper(m: PaperMeta): Paper {
   };
 }
 
+function PresenceAwarePaper({ children, ...props }: ComponentProps<typeof m.div> & { children: ReactNode }) {
+  const isPresent = useIsPresent();
+  return (
+    <m.div
+      {...props}
+      aria-hidden={isPresent ? undefined : true}
+      inert={isPresent ? undefined : true}
+      style={isPresent ? props.style : { ...props.style, pointerEvents: 'none' }}
+    >
+      {children}
+    </m.div>
+  );
+}
+
 export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout, refreshToken }: Props) {
   const confirm = useConfirm();
   const [query, setQuery] = useState('');
@@ -79,10 +96,9 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const [loadError, setLoadError] = useState<string | null>(null);
   const hasReceivedInitialListRef = useRef(false);
   const initialStaggerIdsRef = useRef(new Set<string>());
-  const initialStaggerStartedIdsRef = useRef(new Set<string>());
   const seenPaperIdsRef = useRef(new Set<string>());
   const arrivingPaperIdsRef = useRef(new Set<string>());
-  const arrivalStartedIdsRef = useRef(new Set<string>());
+  const [completedEntranceIds, setCompletedEntranceIds] = useState<Set<string>>(() => new Set());
   const deletedPaperIdsRef = useRef(new Set<string>());
   const reducedMotion = useReducedMotion();
   /** The paper whose title is being edited inline, if any. */
@@ -586,8 +602,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
 
           {/* dropzone */}
           <div
-            onClick={(e) => onUpload(undefined, e.currentTarget)}
-            className={`dropzone${fileOver ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
+            className={`dropzone${fileOver ? ' is-over' : ''} rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
             style={{ background: fileOver ? undefined : 'var(--bg-2)' }}
           >
             <div
@@ -604,12 +619,13 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 Extraction, VLM enhancement, and embedding run entirely on-device.
               </div>
             </div>
-            <div className="hidden sm:flex flex-col items-end gap-1.5 shrink-0">
-              <div className="text-[10.5px] font-mono" style={{ color: 'var(--muted)' }}>
+            <div className="ml-auto flex flex-col items-end gap-1.5 shrink-0">
+              <div className="hidden sm:block text-[10.5px] font-mono" style={{ color: 'var(--muted)' }}>
                 PDF · large books OK · stays on this machine
               </div>
               <Pressable
-                onClick={(e) => { e.stopPropagation(); onUpload(undefined, e.currentTarget); }}
+                type="button"
+                onClick={(e) => onUpload(undefined, e.currentTarget)}
                 className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
                 style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
@@ -818,51 +834,68 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               <AnimatePresence mode="wait">
                 <m.div
                   key={layout}
+                  data-testid="library-motion-layout"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={calm}
+                  transition={reducedMotion ? reducedMotionFade : calm}
                 >
                   <div className={layout === 'grid' ? 'lib-grid' : 'lib-rows'}>
                     <AnimatePresence mode="popLayout" custom={deletedPaperIdsRef.current}>
                       {filtered.map((p, index) => {
                         const isArrival = arrivingPaperIdsRef.current.has(p.id)
-                          && !arrivalStartedIdsRef.current.has(p.id);
+                          && !completedEntranceIds.has(p.id);
                         const shouldStagger = layout === 'grid'
                           && initialStaggerIdsRef.current.has(p.id)
-                          && !initialStaggerStartedIdsRef.current.has(p.id);
+                          && !completedEntranceIds.has(p.id);
                         return (
-                          <m.div
+                          <PresenceAwarePaper
                             key={p.id}
                             data-testid="paper-motion-item"
                             data-arrival={isArrival ? 'true' : undefined}
                             layout="position"
                             initial={isArrival
-                              ? reducedMotion ? { opacity: 0 } : { opacity: 0, y: -40, rotate: -4, scale: 0.9 }
+                              ? reducedMotion
+                                ? { opacity: 0, boxShadow: arrivalGlowStart }
+                                : { opacity: 0, y: -40, rotate: -4, scale: 0.9, boxShadow: arrivalGlowStart }
                               : shouldStagger ? reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 } : false}
                             animate={isArrival
-                              ? reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, rotate: 0, scale: 1 }
+                              ? reducedMotion
+                                ? { opacity: 1, boxShadow: arrivalGlowEnd }
+                                : { opacity: 1, y: 0, rotate: 0, scale: 1, boxShadow: arrivalGlowEnd }
                               : shouldStagger ? { opacity: 1, y: 0 } : undefined}
                             variants={{
                               exit: (deletedIds: Set<string> | undefined) => {
                                 const deleted = (deletedIds ?? deletedPaperIdsRef.current).has(p.id);
-                                if (reducedMotion) return { opacity: 0, transition: calm };
+                                if (reducedMotion) return { opacity: 0, transition: reducedMotionFade };
                                 return deleted
                                   ? { opacity: 0, scale: 0.6, rotate: 6, transition: playful }
                                   : { opacity: 0, scale: 0.8, transition: calm };
                               },
                             }}
                             exit="exit"
-                            transition={reducedMotion ? calm : { ...playful, delay: shouldStagger ? Math.min(index, 11) * 0.07 : 0 }}
-                            onAnimationStart={() => {
-                              if (isArrival) arrivalStartedIdsRef.current.add(p.id);
-                              if (shouldStagger) initialStaggerStartedIdsRef.current.add(p.id);
+                            transition={reducedMotion
+                              ? reducedMotionFade
+                              : {
+                                  ...playful,
+                                  delay: shouldStagger ? Math.min(index, 11) * 0.07 : 0,
+                                  ...(isArrival ? { boxShadow: { duration: 0.8, ease: 'easeOut' } } : {}),
+                                }}
+                            onAnimationComplete={() => {
+                              if (isArrival || shouldStagger) {
+                                setCompletedEntranceIds((completed) => {
+                                  if (completed.has(p.id)) return completed;
+                                  const next = new Set(completed);
+                                  next.add(p.id);
+                                  return next;
+                                });
+                              }
                             }}
                           >
                             {layout === 'grid'
                               ? <PaperCard {...cardProps(p)} />
                               : <PaperRow {...cardProps(p)} />}
-                          </m.div>
+                          </PresenceAwarePaper>
                         );
                       })}
                     </AnimatePresence>
@@ -898,16 +931,15 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             </p>
           )}
 
-          {shelving && (
-            <ShelfPanel
-              paper={shelving}
-              folders={folders}
-              onChoose={(folder) => void shelve(shelving, true, folder)}
-              onUnshelve={() => void shelve(shelving, false, null)}
-              onClose={() => setShelving(null)}
-              returnFocusRef={shelvingOpenerRef}
-            />
-          )}
+          <ShelfPanel
+            open={shelving !== null}
+            paper={shelving}
+            folders={folders}
+            onChoose={(folder) => { if (shelving) void shelve(shelving, true, folder); }}
+            onUnshelve={() => { if (shelving) void shelve(shelving, false, null); }}
+            onClose={() => setShelving(null)}
+            returnFocusRef={shelvingOpenerRef}
+          />
         </div>
       </main>
     </div>
@@ -1264,6 +1296,7 @@ function PaperRow({
 // classes so it reads as the app's one modal.
 
 function ShelfPanel({
+  open,
   paper,
   folders,
   onChoose,
@@ -1271,7 +1304,8 @@ function ShelfPanel({
   onClose,
   returnFocusRef,
 }: {
-  paper: Paper;
+  open: boolean;
+  paper: Paper | null;
   folders: string[];
   /** null = the top of Done Reading, otherwise the folder name. */
   onChoose: (folder: string | null) => void;
@@ -1280,14 +1314,18 @@ function ShelfPanel({
   returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   const [newName, setNewName] = useState('');
-  const moving = Boolean(paper.doneAt);
+  const moving = Boolean(paper?.doneAt);
   const clean = newName.trim();
   const exists = folders.some((f) => f.toLowerCase() === clean.toLowerCase());
   const newFolderRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (open) setNewName('');
+  }, [open]);
+
   return (
     <Sheet
-      open
+      open={open}
       onClose={onClose}
       labelledBy="shelf-title"
       initialFocusRef={newFolderRef}
@@ -1299,7 +1337,7 @@ function ShelfPanel({
           {moving ? 'Move' : 'Done reading'}
         </h2>
         <p className="confirm-body">
-          <span className="shelf-panel-paper">{paper.title}</span>
+          <span className="shelf-panel-paper">{paper?.title}</span>
           {moving
             ? ' — where should it go?'
             : ' — it leaves the reading shelf but stays in your library, your notes and the Desk. Where should it go?'}
@@ -1309,7 +1347,7 @@ function ShelfPanel({
           <Pressable
             type="button"
             intensity="calm"
-            className={`shelf-option${moving && !paper.doneFolder ? ' is-current' : ''}`}
+            className={`shelf-option${moving && !paper?.doneFolder ? ' is-current' : ''}`}
             onClick={() => onChoose(null)}
           >
             <IconCheck className="w-4 h-4" />
@@ -1321,12 +1359,12 @@ function ShelfPanel({
               key={f}
               type="button"
               intensity="calm"
-              className={`shelf-option${paper.doneFolder === f ? ' is-current' : ''}`}
+              className={`shelf-option${paper?.doneFolder === f ? ' is-current' : ''}`}
               onClick={() => onChoose(f)}
             >
               <IconFolder className="w-4 h-4" />
               <span>{f}</span>
-              {paper.doneFolder === f && <span className="shelf-option-hint">here now</span>}
+              {paper?.doneFolder === f && <span className="shelf-option-hint">here now</span>}
             </Pressable>
           ))}
         </div>

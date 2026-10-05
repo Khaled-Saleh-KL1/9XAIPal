@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PaperMeta } from '../api';
 import { MotionRoot } from '../motion';
@@ -14,11 +15,26 @@ const mocks = vi.hoisted(() => ({
   getCoverUrl: vi.fn((id: string) => `/cover/${id}`),
   confirm: vi.fn(),
   reducedMotion: false,
+  paperMotionProps: new Map<string, Record<string, unknown>>(),
 }));
 
 vi.mock('motion/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('motion/react')>();
-  return { ...actual, useReducedMotion: () => mocks.reducedMotion };
+  const React = await import('react');
+  const InspectableMotionDiv = React.forwardRef<HTMLDivElement, Record<string, any>>((props, ref) => {
+    if (props['data-testid'] === 'paper-motion-item') {
+      const paperId = React.isValidElement(props.children) ? (props.children.props as any).paper?.id : undefined;
+      if (paperId) mocks.paperMotionProps.set(paperId, props);
+    }
+    if (props['data-testid'] === 'library-motion-layout') mocks.paperMotionProps.set('layout', props);
+    return React.createElement(actual.m.div, { ...props, ref });
+  });
+  const inspectedM = new Proxy(actual.m, {
+    get(target, key, receiver) {
+      return key === 'div' ? InspectableMotionDiv : Reflect.get(target, key, receiver);
+    },
+  });
+  return { ...actual, m: inspectedM, useReducedMotion: () => mocks.reducedMotion };
 });
 
 vi.mock('../api', () => ({
@@ -64,6 +80,7 @@ function renderLibrary(refreshToken = 0) {
   const view = render(<MotionRoot><LibraryView {...props} /></MotionRoot>);
   return {
     ...view,
+    props,
     rerenderWithRefreshToken: (next: number) => view.rerender(
       <MotionRoot><LibraryView {...props} refreshToken={next} /></MotionRoot>,
     ),
@@ -76,6 +93,7 @@ async function flushLibraryLoad() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.paperMotionProps.clear();
   mocks.deletePaper.mockResolvedValue(undefined);
   mocks.renamePaper.mockResolvedValue({});
   mocks.setPaperDone.mockResolvedValue({});
@@ -147,6 +165,41 @@ describe('LibraryView motion', () => {
       .not.toHaveAttribute('data-arrival', 'true');
   });
 
+  it('keeps an arriving card target through a poll after its entrance starts', async () => {
+    mocks.listPapers
+      .mockResolvedValueOnce([meta('alpha', 'Alpha paper')])
+      .mockResolvedValueOnce([meta('alpha', 'Alpha paper'), meta('beta', 'Beta book')])
+      .mockResolvedValueOnce([meta('alpha', 'Alpha paper'), meta('beta', 'Beta book')]);
+    const view = renderLibrary();
+    await screen.findByRole('button', { name: 'Open Alpha paper' });
+
+    view.rerenderWithRefreshToken(1);
+    await screen.findByRole('button', { name: 'Open Beta book' });
+    const entrance = mocks.paperMotionProps.get('beta')!;
+    expect(entrance.animate).toMatchObject({ opacity: 1, y: 0, rotate: 0, scale: 1 });
+
+    act(() => { (entrance.onAnimationStart as (() => void) | undefined)?.(); });
+    view.rerenderWithRefreshToken(2);
+    await flushLibraryLoad();
+
+    expect(mocks.paperMotionProps.get('beta')?.animate).toEqual(entrance.animate);
+  });
+
+  it('gives new arrivals an accent halo that fades over 800ms', async () => {
+    mocks.listPapers
+      .mockResolvedValueOnce([meta('alpha', 'Alpha paper')])
+      .mockResolvedValueOnce([meta('alpha', 'Alpha paper'), meta('beta', 'Beta book')]);
+    const view = renderLibrary();
+    await screen.findByRole('button', { name: 'Open Alpha paper' });
+    view.rerenderWithRefreshToken(1);
+    await screen.findByRole('button', { name: 'Open Beta book' });
+
+    const entrance = mocks.paperMotionProps.get('beta')!;
+    expect((entrance.initial as Record<string, unknown>).boxShadow).toContain('var(--accent)');
+    expect((entrance.animate as Record<string, unknown>).boxShadow).toBe('0 0 0 0 transparent');
+    expect((entrance.transition as { boxShadow: { duration: number } }).boxShadow.duration).toBe(0.8);
+  });
+
   it('keeps cards transform-free with reduced motion enabled', async () => {
     mocks.reducedMotion = true;
     mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper')]);
@@ -155,6 +208,34 @@ describe('LibraryView motion', () => {
 
     const item = screen.getByTestId('paper-motion-item');
     expect((item as HTMLElement).style.transform).not.toMatch(/translate|rotate|scale/);
+  });
+
+  it('caps library entrance and exit fades at 150ms with reduced motion', async () => {
+    mocks.reducedMotion = true;
+    mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper')]);
+    renderLibrary();
+    await screen.findByRole('button', { name: 'Open Alpha paper' });
+
+    const layout = mocks.paperMotionProps.get('layout')!;
+    const card = mocks.paperMotionProps.get('alpha')!;
+    const exit = (card.variants as { exit: (custom: Set<string>) => { transition: { duration: number } } })
+      .exit(new Set());
+    expect((layout.transition as { duration: number }).duration).toBeLessThanOrEqual(0.15);
+    expect((card.transition as { duration: number }).duration).toBeLessThanOrEqual(0.15);
+    expect(exit.transition.duration).toBeLessThanOrEqual(0.15);
+  });
+
+  it('keeps the mobile upload trigger keyboard reachable and passes it as the focus-return target', async () => {
+    mocks.listPapers.mockResolvedValue([]);
+    const view = renderLibrary();
+    await screen.findByText('Your library is empty. Drop a PDF above to add your first paper.');
+
+    const upload = screen.getByRole('button', { name: 'Add paper' });
+    expect(upload.closest('.hidden')).toBeNull();
+    upload.focus();
+    await userEvent.keyboard('{Enter}');
+
+    expect(view.props.onUpload).toHaveBeenCalledWith(undefined, upload);
   });
 
   it('keeps the same card nodes when a processing poll returns fresh objects for the same ids', async () => {
@@ -170,5 +251,33 @@ describe('LibraryView motion', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
     expect(mocks.listPapers).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('button', { name: 'Open Alpha paper' }).isSameNode(original)).toBe(true);
+  });
+
+  it('makes an exiting card inert before its exit animation finishes', async () => {
+    mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper'), meta('beta', 'Beta book')]);
+    const view = renderLibrary();
+    await screen.findByRole('button', { name: 'Open Beta book' });
+
+    const exitingCard = screen.getByRole('button', { name: 'Open Beta book' })
+      .closest('[data-testid="paper-motion-item"]') as HTMLElement;
+    await userEvent.click(within(exitingCard).getByRole('button', { name: 'Delete this paper' }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(exitingCard).toHaveAttribute('aria-hidden', 'true');
+    expect(exitingCard).toHaveAttribute('inert');
+    expect(exitingCard).toHaveStyle({ pointerEvents: 'none' });
+    view.unmount();
+  });
+
+  it('keeps the shelf sheet mounted during its close animation', async () => {
+    mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper')]);
+    renderLibrary();
+    await screen.findByRole('button', { name: 'Open Alpha paper' });
+    await userEvent.click(screen.getByRole('button', { name: 'Mark as done reading' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Done reading' });
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(dialog).toBeInTheDocument();
   });
 });

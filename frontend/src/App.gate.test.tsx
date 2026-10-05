@@ -172,6 +172,18 @@ describe('App gate', () => {
     await vi.waitFor(() => expect(opener).toHaveFocus());
   });
 
+  it('keeps the upload-kind sheet mounted during its close animation', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(dialog).toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('shows the landing page at #/welcome to a signed-in user and closes into the library', async () => {
     authState.user = { id: 'u', email: 'a@b.co' };
     window.history.replaceState(null, '', '#/welcome');

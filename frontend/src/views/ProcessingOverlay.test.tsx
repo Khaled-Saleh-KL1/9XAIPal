@@ -7,14 +7,27 @@ import { ProcessingOverlay } from './ProcessingOverlay';
 
 const file = { name: 'arabic.pdf', size: '1.2 MB', pages: 0 };
 const noop = () => {};
-const motionPreference = vi.hoisted(() => ({ reduced: false }));
+const motionPreference = vi.hoisted(() => ({ reduced: false, motionProps: new Map<string, Record<string, any>>() }));
 vi.mock('motion/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('motion/react')>();
-  return { ...actual, useReducedMotion: () => motionPreference.reduced };
+  const React = await import('react');
+  const InspectableMotionDiv = React.forwardRef<HTMLDivElement, Record<string, any>>((props, ref) => {
+    const className = typeof props.className === 'string' ? props.className : '';
+    if (className.includes('w-[42%]')) motionPreference.motionProps.set('document-sweep', props);
+    if (className.includes('right-[-3px]')) motionPreference.motionProps.set('progress-wobble', props);
+    if (props['data-testid'] === 'processing-progress-fill') motionPreference.motionProps.set('progress-fill', props);
+    return React.createElement(actual.m.div, { ...props, ref });
+  });
+  const inspectedM = new Proxy(actual.m, {
+    get(target, key, receiver) {
+      return key === 'div' ? InspectableMotionDiv : Reflect.get(target, key, receiver);
+    },
+  });
+  return { ...actual, m: inspectedM, useReducedMotion: () => motionPreference.reduced };
 });
 const renderOverlay = (children: ReactNode) => render(<MotionRoot>{children}</MotionRoot>);
 
-afterEach(() => { motionPreference.reduced = false; });
+afterEach(() => { motionPreference.reduced = false; motionPreference.motionProps.clear(); });
 
 describe('ProcessingOverlay extraction route copy', () => {
   it.each([
@@ -67,6 +80,22 @@ describe('ProcessingOverlay extraction route copy', () => {
     for (const testId of ['processing-overlay', 'processing-card', 'processing-progress-fill']) {
       expect(screen.getByTestId(testId).style.transform).not.toMatch(/translate|rotate|scale/);
     }
+  });
+
+  it('uses reduced-motion fades of at most 150ms for the document sweep and progress indicator', () => {
+    motionPreference.reduced = true;
+    renderOverlay(
+      <ProcessingOverlay file={file} status="extracting" progressFraction={0.5} onClose={noop} onCancel={noop} />,
+    );
+
+    const sweep = motionPreference.motionProps.get('document-sweep')!;
+    const wobble = motionPreference.motionProps.get('progress-wobble')!;
+    const fill = motionPreference.motionProps.get('progress-fill')!;
+    expect(sweep.animate).toEqual({ opacity: 0 });
+    expect(sweep.transition.duration).toBeLessThanOrEqual(0.15);
+    expect(wobble.animate).toEqual({ opacity: 0 });
+    expect(wobble.transition.duration).toBeLessThanOrEqual(0.15);
+    expect(fill.transition.duration).toBeLessThanOrEqual(0.15);
   });
 
   it.each([

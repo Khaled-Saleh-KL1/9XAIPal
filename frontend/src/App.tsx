@@ -820,14 +820,13 @@ export function App() {
         />
       )}
 
-      {kindPickerOpen && (
-        <UploadKindModal
-          onChoose={pickFileWithKind}
-          onImportUrl={submitImportUrl}
-          returnFocusRef={uploadOpenerRef}
-          onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
-        />
-      )}
+      <UploadKindModal
+        open={kindPickerOpen}
+        onChoose={pickFileWithKind}
+        onImportUrl={submitImportUrl}
+        returnFocusRef={uploadOpenerRef}
+        onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
+      />
 
       {/* Raw Files slide-over panel */}
       <RawFilesPanel
@@ -852,11 +851,13 @@ export function App() {
 // research paper (linear reading), then opens the file picker.
 
 function UploadKindModal({
+  open,
   onChoose,
   onImportUrl,
   onCancel,
   returnFocusRef,
 }: {
+  open: boolean;
   onChoose: (kind: DocKind) => void;
   onImportUrl: (url: string, kind: 'book' | 'paper' | null) => void;
   onCancel: () => void;
@@ -877,8 +878,8 @@ function UploadKindModal({
 
   const openUrlMode = (kind: 'book' | 'paper' | null) => {
     setUrlKind(kind);
-    // Cleared on every entry, not just the first: the modal only unmounts on
-    // Cancel or submit, so without this a rejected link (and its red error)
+    // Cleared on every entry, not just the first: the modal stays mounted
+    // after it closes, so without this a rejected link (and its red error)
     // survives ← Back and reappears under the next tile's heading, before the
     // reader has typed anything into it.
     setUrl('');
@@ -887,8 +888,17 @@ function UploadKindModal({
   };
 
   useEffect(() => {
-    if (mode === 'url') urlInputRef.current?.focus();
-  }, [mode]);
+    if (open && mode === 'url') urlInputRef.current?.focus();
+  }, [open, mode]);
+
+  useEffect(() => {
+    if (!open) {
+      setMode('choose');
+      setUrlKind(null);
+      setUrl('');
+      setError(null);
+    }
+  }, [open]);
 
   const submitUrl = () => {
     const trimmed = url.trim();
@@ -923,7 +933,7 @@ function UploadKindModal({
 
   return (
     <Sheet
-      open
+      open={open}
       onClose={onCancel}
       labelledBy={mode === 'choose' ? 'upload-kind-title' : 'upload-url-title'}
       initialFocusRef={mode === 'url' ? urlInputRef : firstChoiceRef}
