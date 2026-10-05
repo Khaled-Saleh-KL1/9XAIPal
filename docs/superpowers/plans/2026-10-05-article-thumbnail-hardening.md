@@ -102,10 +102,10 @@
 - `Settings.cloudflare_ai_accounts` accepts only account IDs matching `^[0-9a-f]{32}$`.
 - Ignore invalid IDs and emit a warning containing neither the token nor the raw configuration entry.
 
-- [ ] Add tests for valid lowercase hex, short, uppercase, and path-like IDs; assert invalid entries are omitted and their token is absent from captured warnings.
-- [ ] Run those tests and confirm the current parser accepts malformed IDs.
-- [ ] Implement regex validation and a token-safe warning; update existing fixture IDs to valid 32-character lowercase hex.
-- [ ] Run the focused config and Cloudflare tests; commit with the required trailer.
+- [x] Add tests for valid lowercase hex, short, uppercase, and path-like IDs; assert invalid entries are omitted and their token is absent from captured warnings.
+- [x] Run those tests and confirm the current parser accepts malformed IDs.
+- [x] Implement regex validation and a token-safe warning; update existing fixture IDs to valid 32-character lowercase hex.
+- [x] Run the focused config and Cloudflare tests; commit with the required trailer.
 
 ## Final verification
 

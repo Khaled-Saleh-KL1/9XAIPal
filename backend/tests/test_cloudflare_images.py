@@ -7,6 +7,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+_ACCOUNT_A = "a" * 32
+_ACCOUNT_B = "b" * 32
+
 
 @pytest.fixture(autouse=True)
 def _reset_cloudflare_breakers():
@@ -17,7 +20,7 @@ def _reset_cloudflare_breakers():
     circuit_breaker.reset()
 
 
-def _settings(accounts="account-a:secret-a", models="model-one,model-two"):
+def _settings(accounts=f"{_ACCOUNT_A}:secret-a", models="model-one,model-two"):
     from app.core.config import Settings
 
     return Settings(
@@ -57,13 +60,33 @@ def _mock_stream(monkeypatch, handler):
 
 
 def test_settings_parse_accounts_and_optional_model_order():
-    config = _settings(" first : token-one ,second:token-two ", " model-a, ,model-b ")
+    config = _settings(
+        f" {_ACCOUNT_A} : token-one ,{_ACCOUNT_B}:token-two ",
+        " model-a, ,model-b ",
+    )
 
     assert config.cloudflare_ai_accounts == [
-        ("first", "token-one"),
-        ("second", "token-two"),
+        (_ACCOUNT_A, "token-one"),
+        (_ACCOUNT_B, "token-two"),
     ]
     assert config.cloudflare_image_models == ["model-a", "model-b"]
+
+
+def test_invalid_account_ids_are_ignored_without_logging_their_tokens(caplog):
+    valid_token = "valid-account-token"
+    invalid_tokens = ("short-token", "uppercase-token", "path-token")
+    missing_separator = "account-entry-without-separator"
+    config = _settings(
+        f"{_ACCOUNT_A}:{valid_token},short-id:{invalid_tokens[0]},"
+        f"{'C' * 32}:{invalid_tokens[1]},bad/../path:{invalid_tokens[2]},"
+        f"{_ACCOUNT_B}:,{missing_separator}"
+    )
+
+    assert config.cloudflare_ai_accounts == [(_ACCOUNT_A, valid_token)]
+    assert len(caplog.records) == len(invalid_tokens) + 2
+    for token in (valid_token, *invalid_tokens):
+        assert token not in caplog.text
+    assert missing_separator not in caplog.text
 
 
 def test_decodes_json_base64_image(monkeypatch):
@@ -179,14 +202,14 @@ def test_quota_on_one_account_restarts_at_first_model_on_next(monkeypatch):
 
     def post(url, **kwargs):
         attempted.append((url, kwargs["headers"]["Authorization"]))
-        if "account-a" in url:
+        if _ACCOUNT_A in url:
             return _response(429, json_body={"errors": [{"message": "daily limit"}]})
         return _response(content=b"image", content_type="image/jpeg")
 
     _mock_stream(monkeypatch, post)
 
     result = cloudflare_images.generate_image(
-        "prompt", config=_settings("account-a:secret-a,account-b:secret-b")
+        "prompt", config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b")
     )
 
     assert result == b"image"
@@ -229,7 +252,7 @@ def test_auth_failure_skips_remaining_models_for_that_account(monkeypatch):
     _mock_stream(monkeypatch, post)
 
     assert cloudflare_images.generate_image(
-        "prompt", config=_settings("account-a:secret-a,account-b:secret-b")
+        "prompt", config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b")
     ) == b"image"
     assert [url.rsplit("/", 1)[-1] for url, _ in attempted] == ["model-one", "model-one"]
 
@@ -241,7 +264,7 @@ def test_all_quota_exhausted_accounts_raise_quota_exception(monkeypatch):
 
     with pytest.raises(cloudflare_images.QuotaExhaustedError):
         cloudflare_images.generate_image(
-            "prompt", config=_settings("account-a:secret-a,account-b:secret-b")
+            "prompt", config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b")
         )
 
 
@@ -251,7 +274,7 @@ def test_model_failure_before_quota_still_retries_accounts_next_day(monkeypatch)
     attempted = {}
 
     def post(url, **kwargs):
-        account = "account-a" if "account-a" in url else "account-b"
+        account = _ACCOUNT_A if _ACCOUNT_A in url else _ACCOUNT_B
         attempted[account] = attempted.get(account, 0) + 1
         if attempted[account] == 1:
             return _response(404)
@@ -263,7 +286,7 @@ def test_model_failure_before_quota_still_retries_accounts_next_day(monkeypatch)
         cloudflare_images.generate_image(
             "prompt",
             config=_settings(
-                "account-a:secret-a,account-b:secret-b", "model-one,model-two"
+                f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b", "model-one,model-two"
             ),
         )
 
@@ -284,12 +307,12 @@ def test_open_account_is_skipped_when_another_account_is_healthy(monkeypatch):
 
     result = cloudflare_images.generate_image(
         "prompt",
-        config=_settings("account-a:secret-a,account-b:secret-b", "model-one"),
+        config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b", "model-one"),
     )
 
     assert result == b"image"
     assert len(attempted) == 1
-    assert "/account-b/" in attempted[0]
+    assert f"/{_ACCOUNT_B}/" in attempted[0]
 
 
 def test_all_open_account_breakers_skip_requests_and_raise_for_later_retry(monkeypatch):
@@ -310,7 +333,7 @@ def test_all_open_account_breakers_skip_requests_and_raise_for_later_retry(monke
     with pytest.raises(cloudflare_images.QuotaExhaustedError):
         cloudflare_images.generate_image(
             "prompt",
-            config=_settings("account-a:secret-a,account-b:secret-b", "model-one"),
+            config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b", "model-one"),
         )
 
     assert attempted == []
@@ -336,7 +359,7 @@ def test_model_requests_share_one_total_deadline(monkeypatch):
 
     result = cloudflare_images.generate_image(
         "prompt",
-        config=_settings("account-a:secret-a", "model-one,model-two,model-three"),
+        config=_settings(f"{_ACCOUNT_A}:secret-a", "model-one,model-two,model-three"),
     )
 
     assert result is None
@@ -361,7 +384,7 @@ def test_tokens_are_never_written_to_log_records(monkeypatch, caplog):
     _mock_stream(monkeypatch, lambda *_args, **_kwargs: _response(401))
 
     cloudflare_images.generate_image(
-        "prompt", config=_settings("account-a:do-not-log-this-token", "model-one")
+        "prompt", config=_settings(f"{_ACCOUNT_A}:do-not-log-this-token", "model-one")
     )
 
     assert "do-not-log-this-token" not in caplog.text

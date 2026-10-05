@@ -1,9 +1,15 @@
 """Application settings loaded from environment variables."""
 
+import re
 from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+_CLOUDFLARE_ACCOUNT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 class Settings(BaseSettings):
@@ -326,10 +332,28 @@ class Settings(BaseSettings):
     def cloudflare_ai_accounts(self) -> list[tuple[str, str]]:
         """Configured (account id, token) pairs; malformed entries are ignored."""
         accounts = []
-        for entry in self._split_keys(self.cloudflare_ai_accounts_raw):
+        for index, entry in enumerate(self._split_keys(self.cloudflare_ai_accounts_raw), start=1):
             account_id, separator, token = entry.partition(":")
-            if separator and account_id.strip() and token.strip():
-                accounts.append((account_id.strip(), token.strip()))
+            if not separator:
+                logger.warning(
+                    "Ignoring Cloudflare AI account entry %d without an account/token separator",
+                    index,
+                )
+                continue
+            account_id = account_id.strip()
+            if not _CLOUDFLARE_ACCOUNT_ID_RE.fullmatch(account_id):
+                logger.warning(
+                    "Ignoring Cloudflare AI account entry %d with an invalid account ID",
+                    index,
+                )
+                continue
+            if not token.strip():
+                logger.warning(
+                    "Ignoring Cloudflare AI account entry %d without a token",
+                    index,
+                )
+                continue
+            accounts.append((account_id, token.strip()))
         return accounts
 
     @property
