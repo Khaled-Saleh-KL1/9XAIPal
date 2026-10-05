@@ -1,8 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useLayoutEffect } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import type { PaperMeta } from '../api';
 import { getRawFileUrl } from '../api';
 import { IconSearch, IconDoc } from '../components/Icons';
 import { displayTitle } from '../lib/titles';
+import { Pressable, calm, gentle, reducedMotionFade, useFocusTrap } from '../motion';
 
 interface Props {
   papers: PaperMeta[];
@@ -13,6 +15,23 @@ interface Props {
 
 export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
   const [query, setQuery] = useState('');
+  const panelRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const reducedMotion = useReducedMotion();
+  useLayoutEffect(() => {
+    if (open) {
+      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+  }, [open]);
+  const handleKeyDown = useFocusTrap({
+    active: open,
+    containerRef: panelRef,
+    initialFocusRef: searchRef,
+    returnFocusRef,
+    onEscape: onClose,
+    lockScroll: true,
+  });
 
   // Every document has a raw copy now: the original PDF for a paper/book,
   // or a sanitized raw HTML snapshot for an imported article (see backend
@@ -32,21 +51,38 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
     );
   }, [rawPapers, query]);
 
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-40 flex justify-end">
+    <AnimatePresence onExitComplete={() => returnFocusRef.current?.focus()}>
+      {open && (
+    <m.div
+      key="raw-files-panel"
+      className="fixed inset-0 z-40 flex justify-end"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, pointerEvents: 'none' }}
+      transition={reducedMotion ? reducedMotionFade : calm}
+    >
       {/* backdrop */}
-      <div
+      <m.div
         className="absolute inset-0"
         style={{ background: 'rgba(0,0,0,0.2)', backdropFilter: 'blur(2px)' }}
         onClick={onClose}
       />
 
       {/* panel */}
-      <div
+      <m.div
+        ref={panelRef}
         className="relative w-full max-w-[480px] h-full flex flex-col overflow-hidden"
         style={{ background: 'var(--bg)', borderLeft: '1px solid var(--border)' }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="raw-files-title"
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+        initial={reducedMotion ? { opacity: 0 } : { x: '100%' }}
+        animate={reducedMotion ? { opacity: 1 } : { x: 0 }}
+        exit={reducedMotion ? { opacity: 0, pointerEvents: 'none' } : { x: '100%', pointerEvents: 'none' }}
+        transition={reducedMotion ? reducedMotionFade : gentle}
       >
         {/* header */}
         <div
@@ -54,16 +90,19 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
           style={{ borderBottom: '1px solid var(--border)' }}
         >
           <IconDoc className="w-4 h-4" style={{ color: 'var(--muted)' }} />
-          <span className="font-serif text-[16px] tracking-tight" style={{ color: 'var(--fg)' }}>
+          <h2 id="raw-files-title" className="font-serif text-[16px] tracking-tight" style={{ color: 'var(--fg)' }}>
             Raw Files
-          </span>
+          </h2>
           <span
             className="text-[11px] font-mono px-1.5 py-0.5 rounded"
             style={{ color: 'var(--muted)', background: 'var(--bg-2)', border: '1px solid var(--border)' }}
           >
             {filtered.length} / {rawPapers.length}
           </span>
-          <button
+          <Pressable
+            type="button"
+            intensity="calm"
+            aria-label="Close raw files"
             onClick={onClose}
             className="ml-auto w-7 h-7 rounded flex items-center justify-center text-[16px]"
             style={{ color: 'var(--muted)' }}
@@ -71,7 +110,7 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
             onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--muted)')}
           >
             ×
-          </button>
+          </Pressable>
         </div>
 
         {/* search */}
@@ -82,6 +121,7 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
               style={{ color: 'var(--muted)' }}
             />
             <input
+              ref={searchRef}
               dir="auto"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -128,8 +168,10 @@ export function RawFilesPanel({ papers, open, onClose, onOpenPdf }: Props) {
             <kbd className="kbd">Esc</kbd> to close.
           </span>
         </div>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
+      )}
+    </AnimatePresence>
   );
 }
 

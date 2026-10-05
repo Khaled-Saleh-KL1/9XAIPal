@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type DragEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, type DragEvent, type RefObject } from 'react';
 import type { Paper, LibraryLayout, SortKey } from '../types';
 import { LogoMark } from '../components/LogoMark';
 import {
@@ -18,13 +18,13 @@ import { stageProgress } from '../lib/progress';
 import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
 import { BetaBadge } from '../components/BetaBadge';
-import { Pressable } from '../motion';
+import { Pressable, Sheet } from '../motion';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
   /** Called with the dropped file when the source is a drag-and-drop, and with
    *  nothing when the user clicked (the file is chosen later, in a picker). */
-  onUpload: (file?: File) => void;
+  onUpload: (file?: File, opener?: HTMLElement) => void;
   onOpenRawFiles: () => void;
   onOpenDesk: () => void;
   layout: LibraryLayout;
@@ -108,6 +108,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const [doneFolder, setDoneFolder] = useState<string | null>(null);
   /** The paper the shelf panel is open for (mark as done / move). */
   const [shelving, setShelving] = useState<Paper | null>(null);
+  const shelvingOpenerRef = useRef<HTMLElement | null>(null);
   /** The Done-area folder whose name is being edited inline. */
   const [folderRenaming, setFolderRenaming] = useState<string | null>(null);
 
@@ -455,7 +456,10 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     onCancelRename: () => setRenaming(null),
     onCommitRename: (next: string) => void commitRename(p, next),
     area,
-    onShelve: () => setShelving(p),
+    onShelve: (opener: HTMLElement) => {
+      shelvingOpenerRef.current = opener;
+      setShelving(p);
+    },
     onUnshelve: () => void shelve(p, false, null),
     onConfirmWritingStyle: (style: ArabicWritingStyle) => void confirmWritingStyle(p, style),
     confirmationPending: arabicConfirmationPendingId === p.id,
@@ -553,7 +557,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
 
           {/* dropzone */}
           <div
-            onClick={() => onUpload()}
+            onClick={(e) => onUpload(undefined, e.currentTarget)}
             className={`dropzone${fileOver ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
             style={{ background: fileOver ? undefined : 'var(--bg-2)' }}
           >
@@ -576,7 +580,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 PDF · large books OK · stays on this machine
               </div>
               <Pressable
-                onClick={(e) => { e.stopPropagation(); onUpload(); }}
+                onClick={(e) => { e.stopPropagation(); onUpload(undefined, e.currentTarget); }}
                 className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
                 style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
@@ -816,6 +820,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               onChoose={(folder) => void shelve(shelving, true, folder)}
               onUnshelve={() => void shelve(shelving, false, null)}
               onClose={() => setShelving(null)}
+              returnFocusRef={shelvingOpenerRef}
             />
           )}
         </div>
@@ -835,7 +840,7 @@ interface CardProps {
   /** Which area the card is shown in — decides which shelf action it offers. */
   area: 'reading' | 'done';
   /** Open the shelf panel: "mark as done" on the reading shelf, "move" in Done. */
-  onShelve: () => void;
+  onShelve: (opener: HTMLElement) => void;
   /** Done area only: straight back to the reading shelf, no panel. */
   onUnshelve: () => void;
   onConfirmWritingStyle: (style: ArabicWritingStyle) => void;
@@ -852,7 +857,7 @@ function CardActions({
 }: {
   area: 'reading' | 'done';
   onStartRename: () => void;
-  onShelve: () => void;
+  onShelve: (opener: HTMLElement) => void;
   onUnshelve: () => void;
   onDelete: () => void;
 }) {
@@ -872,7 +877,7 @@ function CardActions({
           type="button"
           intensity="calm"
           className="is-done"
-          onClick={(e) => { e.stopPropagation(); onShelve(); }}
+          onClick={(e) => { e.stopPropagation(); onShelve(e.currentTarget); }}
           title="Done reading — move it to Done Reading"
           aria-label="Mark as done reading"
         >
@@ -883,7 +888,7 @@ function CardActions({
           <Pressable
             type="button"
             intensity="calm"
-            onClick={(e) => { e.stopPropagation(); onShelve(); }}
+            onClick={(e) => { e.stopPropagation(); onShelve(e.currentTarget); }}
             title="Move to a folder"
             aria-label="Move to a folder"
           >
@@ -1150,6 +1155,7 @@ function ShelfPanel({
   onChoose,
   onUnshelve,
   onClose,
+  returnFocusRef,
 }: {
   paper: Paper;
   folders: string[];
@@ -1157,20 +1163,23 @@ function ShelfPanel({
   onChoose: (folder: string | null) => void;
   onUnshelve: () => void;
   onClose: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   const [newName, setNewName] = useState('');
   const moving = Boolean(paper.doneAt);
   const clean = newName.trim();
   const exists = folders.some((f) => f.toLowerCase() === clean.toLowerCase());
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const newFolderRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="shelf-title" onClick={onClose}>
+    <Sheet
+      open
+      onClose={onClose}
+      labelledBy="shelf-title"
+      initialFocusRef={newFolderRef}
+      returnFocusRef={returnFocusRef}
+      panelClassName="motion-sheet-panel--content"
+    >
       <div className="confirm-card shelf-panel" onClick={(e) => e.stopPropagation()}>
         <h2 className="confirm-title" id="shelf-title">
           {moving ? 'Move' : 'Done reading'}
@@ -1216,6 +1225,7 @@ function ShelfPanel({
           <input
             dir="auto"
             value={newName}
+            ref={newFolderRef}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="New folder, e.g. Technical Books"
             maxLength={80}
@@ -1236,6 +1246,6 @@ function ShelfPanel({
           <Pressable type="button" className="confirm-cancel" onClick={onClose}>Cancel</Pressable>
         </div>
       </div>
-    </div>
+    </Sheet>
   );
 }

@@ -5,4 +5,5 @@ export { Reveal, Stagger, StaggerItem } from './Reveal';
 export { Sheet } from './Sheet';
 export { useTilt } from './useTilt';
 export { usePauseWhenHidden } from './usePauseWhenHidden';
+export { useFocusTrap } from './useFocusTrap';
 export { playful, gentle, calm, reducedMotionFade, jellyPress } from './springs';

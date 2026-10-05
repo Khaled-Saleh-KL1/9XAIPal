@@ -19,7 +19,14 @@ vi.mock('./contexts/AuthContext', () => ({
   useAuth: () => authState,
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
-vi.mock('./views/LibraryView', () => ({ LibraryView: () => <div>LIBRARY</div> }));
+vi.mock('./views/LibraryView', () => ({
+  LibraryView: ({ onUpload }: any) => (
+    <div>
+      LIBRARY
+      <button onClick={(event) => onUpload(undefined, event.currentTarget)}>Add paper</button>
+    </div>
+  ),
+}));
 vi.mock('./views/ReadingView', () => ({ ReadingView: () => <div>READING</div> }));
 vi.mock('./views/ProcessingOverlay', () => ({ ProcessingOverlay: () => null }));
 vi.mock('./views/RawFilesPanel', () => ({ RawFilesPanel: () => null }));
@@ -110,6 +117,23 @@ describe('App gate', () => {
     authState.user = { id: 'u', email: 'a@b.co' };
     renderApp();
     expect(screen.getByText('LIBRARY')).toBeInTheDocument();
+  });
+
+  it('traps focus in the upload sheet, closes on Escape, and returns focus to its opener', async () => {
+    const user = userEvent.setup();
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+
+    const opener = screen.getByRole('button', { name: 'Add paper' });
+    await user.click(opener);
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    expect(screen.getByRole('button', { name: /^Book/ })).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    await user.keyboard('{Escape}');
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await vi.waitFor(() => expect(opener).toHaveFocus());
   });
 
   it('shows the landing page at #/welcome to a signed-in user and closes into the library', async () => {

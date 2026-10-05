@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useId, lazy, Suspense } from 'react';
+import type { RefObject } from 'react';
 import type { Route, LibraryLayout, UploadingFile } from './types';
 import type { Paper } from './types';
 import { LibraryView } from './views/LibraryView';
@@ -158,6 +159,7 @@ export function App() {
   // article is a third option inside it, not a separate entry point (see
   // UploadKindModal below).
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
+  const uploadOpenerRef = useRef<HTMLElement | null>(null);
   // A file handed to us by a drag-and-drop. The kind chooser still has to run
   // (a drop can't say whether it's a book or a paper), so the file waits here
   // until a kind is picked, and then skips the native file picker entirely.
@@ -386,7 +388,8 @@ export function App() {
   // Step 1 of upload: ask whether this is a book or a research paper. A drop
   // already carries the file, so it comes in as `file` and we hold onto it;
   // the button passes nothing and the file gets picked in step 2.
-  const startUpload = useCallback((file?: File) => {
+  const startUpload = useCallback((file?: File, opener?: HTMLElement) => {
+    uploadOpenerRef.current = opener ?? null;
     setPendingFile(file ?? null);
     setKindPickerOpen(true);
   }, []);
@@ -811,6 +814,7 @@ export function App() {
         <UploadKindModal
           onChoose={pickFileWithKind}
           onImportUrl={submitImportUrl}
+          returnFocusRef={uploadOpenerRef}
           onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
         />
       )}
@@ -841,10 +845,12 @@ function UploadKindModal({
   onChoose,
   onImportUrl,
   onCancel,
+  returnFocusRef,
 }: {
   onChoose: (kind: DocKind) => void;
   onImportUrl: (url: string, kind: 'book' | 'paper' | null) => void;
   onCancel: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   // A URL can be pasted for any of the three choices, not just the generic
   // one — picking one swaps this modal's body for a URL field in place,
@@ -857,6 +863,7 @@ function UploadKindModal({
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
+  const firstChoiceRef = useRef<HTMLButtonElement>(null);
 
   const openUrlMode = (kind: 'book' | 'paper' | null) => {
     setUrlKind(kind);
@@ -905,22 +912,24 @@ function UploadKindModal({
       };
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center px-6"
-      style={{ background: 'color-mix(in oklch, var(--bg), transparent 8%)', backdropFilter: 'blur(6px)' }}
-      onClick={onCancel}
+    <Sheet
+      open
+      onClose={onCancel}
+      labelledBy={mode === 'choose' ? 'upload-kind-title' : 'upload-url-title'}
+      initialFocusRef={mode === 'url' ? urlInputRef : firstChoiceRef}
+      returnFocusRef={returnFocusRef}
+      panelClassName="motion-sheet-panel--content"
     >
       <div
         className="w-full max-w-[560px] rounded-2xl overflow-hidden"
         style={{ background: 'var(--bg)', border: '1px solid var(--border)', boxShadow: '0 20px 60px -20px rgba(0,0,0,0.18)' }}
-        onClick={(e) => e.stopPropagation()}
       >
         {mode === 'choose' ? (
           <>
             <div className="px-7 pt-7 pb-2">
-              <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
+              <h2 id="upload-kind-title" className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
                 What are you adding?
-              </div>
+              </h2>
               <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
                 This sets how you read it. You can re-process later if you pick wrong.
               </div>
@@ -936,7 +945,7 @@ function UploadKindModal({
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <Pressable onClick={() => onChoose('book')} className="text-left w-full flex-1 px-4 pt-4">
+                <Pressable ref={firstChoiceRef} onClick={() => onChoose('book')} className="text-left w-full flex-1 px-4 pt-4">
                   <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
                   <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
                     Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
@@ -1007,9 +1016,9 @@ function UploadKindModal({
               >
                 ← Back
               </Pressable>
-              <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
+              <h2 id="upload-url-title" className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
                 {urlCopy.title}
-              </div>
+              </h2>
               <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
                 {urlCopy.subtitle}
               </div>
@@ -1048,6 +1057,6 @@ function UploadKindModal({
           </>
         )}
       </div>
-    </div>
+    </Sheet>
   );
 }

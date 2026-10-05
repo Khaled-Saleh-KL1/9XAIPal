@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 import { WELCOME_HASH } from '../lib/welcomeRoute';
-import { Pressable } from '../motion';
+import { Pressable, calm, playful, reducedMotionFade } from '../motion';
 
 /**
  * User badge + logout dropdown. Meant to sit inline as the trailing item in
@@ -25,6 +26,7 @@ export function UserMenuInline() {
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const nameRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion();
 
   // ⚠ The menu is rendered into document.body at a fixed position, not as a
   // child of the badge. The badge lives inside each view's header, and the
@@ -82,8 +84,21 @@ export function UserMenuInline() {
       >
         {user.display_name || user.email}
       </Pressable>
-      {open && pos && createPortal(
-        <div ref={popRef} className="user-menu-pop" role="menu" style={{ top: pos.top, right: pos.right }}>
+      {pos && createPortal(
+        <AnimatePresence>
+          {open && (
+        <m.div
+          ref={popRef}
+          className="user-menu-pop"
+          role="menu"
+          style={{ top: pos.top, right: pos.right, transformOrigin: 'top right' }}
+          initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.85, y: -6 }}
+          animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+          exit={reducedMotion
+            ? { opacity: 0, pointerEvents: 'none', transition: reducedMotionFade }
+            : { opacity: 0, scale: 0.85, y: -6, pointerEvents: 'none', transition: calm }}
+          transition={reducedMotion ? reducedMotionFade : playful}
+        >
           <Pressable
             type="button"
             role="menuitem"
@@ -101,7 +116,9 @@ export function UserMenuInline() {
           >
             Sign out
           </Pressable>
-        </div>,
+        </m.div>
+          )}
+        </AnimatePresence>,
         document.body,
       )}
     </>

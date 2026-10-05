@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MotionRoot } from '../motion';
@@ -57,7 +57,7 @@ describe('Pressable shared chrome adoption', () => {
     expect(cancel).toHaveClass('motion-pressable');
     expect(confirm).toHaveClass('motion-pressable');
     await user.click(confirm);
-    expect(dialog).not.toBeInTheDocument();
+    await waitFor(() => expect(dialog).not.toBeInTheDocument(), { timeout: 3000 });
     expect(onResult).toHaveBeenCalledWith(true);
   });
 });

@@ -537,7 +537,6 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.28);
-  animation: marg-fade 120ms ease;
 }
 .user-menu-signout {
   display: block;
@@ -4095,7 +4094,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   background: rgb(0 0 0 / 0.62);
   backdrop-filter: blur(16px) saturate(1.05);
   -webkit-backdrop-filter: blur(16px) saturate(1.05);
-  animation: lightbox-fade 140ms ease-out;
 }
 .lightbox-image {
   max-width: 100%;
@@ -4106,7 +4104,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
      dark backdrop their black axis labels would vanish without this. */
   background: #fff;
   box-shadow: 0 24px 70px rgb(0 0 0 / 0.55);
-  animation: lightbox-rise 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .lightbox-close {
   position: absolute;
@@ -4122,11 +4119,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   border: 1px solid rgb(255 255 255 / 0.25);
 }
 .lightbox-close:hover { background: rgb(255 255 255 / 0.22); }
-@keyframes lightbox-fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes lightbox-rise {
-  from { opacity: 0; transform: scale(0.985); }
-  to   { opacity: 1; transform: scale(1); }
-}
 /* The affordance: content images are enlargeable, chrome images are not.
    Mirrors ImageLightbox.tsx's exclusion list. */
 .md-body img,
@@ -4141,25 +4133,7 @@ button img,
 [data-no-lightbox] { cursor: inherit; }
 
 /* ── In-app confirmation ────────────────────────────────────
-   Replaces window.confirm. Rust (--accent) on the destructive action, over
-   the same neutral blurred backdrop the image lightbox uses. */
-.confirm-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 210;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  /* Identical to .lightbox-backdrop on purpose: one "the app is behind a
-     modal" treatment, not two. The blue tint that used to be here fought
-     with the rust confirm button sitting on top of it. Rust stays; the
-     backdrop just gets out of its way. */
-  background: rgb(0 0 0 / 0.62);
-  backdrop-filter: blur(16px) saturate(1.05);
-  -webkit-backdrop-filter: blur(16px) saturate(1.05);
-  animation: lightbox-fade 130ms ease-out;
-}
+   Replaces window.confirm. Rust (--accent) marks destructive actions. */
 .confirm-card {
   width: min(440px, 100%);
   padding: 22px 24px 18px;
@@ -4168,7 +4142,6 @@ button img,
   border: 1px solid var(--border);
   box-shadow: 0 22px 60px rgb(0 0 0 / 0.32);
   cursor: default;
-  animation: lightbox-rise 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .confirm-title {
   font-size: 15.5px;

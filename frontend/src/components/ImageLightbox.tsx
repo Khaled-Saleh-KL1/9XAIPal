@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import { Pressable, calm, playful, reducedMotionFade } from '../motion';
 
 /**
  * Click any content image to open it full-screen over a blurred page.
@@ -39,6 +41,7 @@ const MIN_NATURAL_WIDTH = 80;
 
 export function ImageLightbox() {
   const [image, setImage] = useState<{ src: string; alt: string } | null>(null);
+  const reducedMotion = useReducedMotion();
   const close = useCallback(() => setImage(null), []);
 
   useEffect(() => {
@@ -79,22 +82,36 @@ export function ImageLightbox() {
     };
   }, [image, close]);
 
-  if (!image) return null;
-
   return (
-    <div
+    <AnimatePresence>
+      {image && (
+    <m.div
+      key={image.src}
       className="lightbox-backdrop"
       onClick={close}
       role="dialog"
       aria-modal="true"
       aria-label={image.alt || 'Enlarged image'}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, pointerEvents: 'none' }}
+      transition={reducedMotion ? reducedMotionFade : calm}
     >
       {/* No stopPropagation: clicking the image closes it again, so the whole
           thing behaves as the toggle it looks like. */}
-      <img className="lightbox-image" src={image.src} alt={image.alt} />
-      <button type="button" className="lightbox-close" onClick={close} aria-label="Close image">
+      <m.img
+        className="lightbox-image"
+        src={image.src}
+        alt={image.alt}
+        initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.92 }}
+        animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+        transition={reducedMotion ? reducedMotionFade : playful}
+      />
+      <Pressable type="button" className="lightbox-close" onClick={close} aria-label="Close image">
         &times;
-      </button>
-    </div>
+      </Pressable>
+    </m.div>
+      )}
+    </AnimatePresence>
   );
 }
