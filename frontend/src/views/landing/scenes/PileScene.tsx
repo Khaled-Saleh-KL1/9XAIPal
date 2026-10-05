@@ -1,5 +1,6 @@
 import type { MotionValue } from 'motion/react';
 import { AnimatePresence, m, useReducedMotion, useSpring, useTransform } from 'motion/react';
+import type { RefObject } from 'react';
 import { PERSONAS, SCENE_COPY, type Persona } from '../../../landing/content';
 import { playful } from '../../../motion/springs';
 import { DocumentTitle } from './DocumentTitle';
@@ -32,10 +33,13 @@ function DocumentCard({ index, title, progress, small }: { index: number; title:
   const top = small ? '62%' : '65%';
   const scale = small ? 0.64 : 0.62;
   const landAt = 0.42 + index * 0.028;
-  const leftValue = useSpring(useTransform(progress, [0, landAt, 1], [start.left, slot.left, slot.left]), playful);
+  const settleAt = landAt + 0.08;
+  const glide = { type: 'spring' as const, duration: 0.45, bounce: 0 };
+  const leftValue = useSpring(useTransform(progress, [0, landAt, 1], [start.left, slot.left, slot.left]), glide);
   const topValue = useSpring(useTransform(progress, [0, landAt, 1], [start.top, top, top]), playful);
-  const rotateValue = useSpring(useTransform(progress, [0, landAt, 1], [start.rotate, slot.rotate, slot.rotate]), playful);
-  const scaleValue = useSpring(useTransform(progress, [0, landAt, 1], [1, scale, scale]), playful);
+  const rotateValue = useSpring(useTransform(progress, [0, landAt, 1], [start.rotate, slot.rotate, slot.rotate]), glide);
+  const scaleXValue = useSpring(useTransform(progress, [0, landAt, settleAt, 1], [1, scale * 1.08, scale, scale]), glide);
+  const scaleYValue = useSpring(useTransform(progress, [0, landAt, settleAt, 1], [1, scale * 0.78, scale, scale]), playful);
   const reducedMotion = useReducedMotion();
   const isArabic = index === 2;
 
@@ -47,7 +51,8 @@ function DocumentCard({ index, title, progress, small }: { index: number; title:
         top: reducedMotion ? top : topValue,
         zIndex: depth[index],
         rotate: reducedMotion ? slot.rotate : rotateValue,
-        scale: reducedMotion ? scale : scaleValue,
+        scaleX: reducedMotion ? scale : scaleXValue,
+        scaleY: reducedMotion ? scale : scaleYValue,
       }}
       dir={isArabic ? 'rtl' : 'ltr'}
       lang={isArabic ? 'ar' : 'en'}
@@ -61,10 +66,10 @@ function DocumentCard({ index, title, progress, small }: { index: number; title:
   );
 }
 
-export function PileScene({ progress, persona, small = false }: { progress: MotionValue<number>; persona: Persona; small?: boolean }) {
+export function PileScene({ progress, persona, small = false, sceneRef }: { progress: MotionValue<number>; persona: Persona; small?: boolean; sceneRef?: RefObject<HTMLDivElement | null> }) {
   const titles = [...PERSONAS[persona].docs, ...SCENE_COPY.pileDocs].slice(0, 7);
   return (
-    <div className="pile-scene" aria-label={SCENE_COPY.pileKicker}>
+    <div ref={sceneRef} className="pile-scene" aria-label={SCENE_COPY.pileKicker}>
       <div className="scene-paper-wash" aria-hidden="true" />
       <p className="pile-scene-kicker"><span className="scene-marker" />{SCENE_COPY.pileKicker}</p>
       <div className="pile-shelf" aria-hidden="true"><span /><span /></div>

@@ -121,8 +121,10 @@ function ChapterSection({
   onActive: (index: number) => void;
 }) {
   const chapterRef = useRef<HTMLElement>(null);
+  const pileSceneRef = useRef<HTMLDivElement>(null);
   const reducedMotion = useReducedMotion();
   const inView = useInView(chapterRef, { root: scrollContainer, amount: 0.34 });
+  const pileSceneInView = useInView(pileSceneRef, { root: scrollContainer, amount: 0.5 });
   const { scrollYProgress } = useScroll({ container: scrollContainer, target: chapterRef, offset: ['start end', 'end start'] });
   const mappedProgress = useTransform(scrollYProgress, (value) => small || reducedMotion ? 1 : value);
   const pileProgress = useMotionValue(reducedMotion ? 1 : 0);
@@ -131,15 +133,13 @@ function ChapterSection({
     : mappedProgress;
   const Scene = SCENES[chapter.key];
   const scene = chapter.key === 'pile'
-    ? <PileScene progress={sceneProgress} persona={persona} small={small} />
+    ? <PileScene progress={sceneProgress} persona={persona} small={small} sceneRef={pileSceneRef} />
     : <Scene progress={sceneProgress} persona={persona} />;
 
   useEffect(() => {
-    if (inView) {
-      if (chapter.key === 'pile' && (small || reducedMotion)) pileProgress.set(1);
-      onActive(index);
-    }
-  }, [inView, index, onActive, chapter.key, small, reducedMotion, pileProgress]);
+    if (inView) onActive(index);
+    if (chapter.key === 'pile' && small && pileSceneInView) pileProgress.set(1);
+  }, [inView, pileSceneInView, index, onActive, chapter.key, small, pileProgress]);
 
   return (
     <section ref={chapterRef} id={`chapter-${chapter.key}`} className={`journey-chapter chapter-${chapter.key}`} aria-labelledby={`chapter-title-${chapter.key}`}>

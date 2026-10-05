@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
 import { MotionRoot } from '../motion';
+import { motionPrefs } from '../test/setup';
 import { LandingView } from './LandingView';
 import { LINKS, BETA_NOTE, CHAPTERS, PERSONAS } from '../landing/content';
 
@@ -111,6 +112,73 @@ describe('LandingView', () => {
         await user.tab();
         expect(rail.contains(document.activeElement)).toBe(false);
       }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('waits for the pile scene to be half visible before gathering on small screens', async () => {
+    const observed: Array<{
+      target: Element;
+      threshold: number;
+      trigger: (ratio: number) => void;
+    }> = [];
+    class ControlledIntersectionObserver {
+      constructor(private callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        this.threshold = typeof options?.threshold === 'number' ? options.threshold : 0;
+      }
+
+      private threshold: number;
+
+      observe(target: Element) {
+        observed.push({
+          target,
+          threshold: this.threshold,
+          trigger: (ratio) => this.callback([{
+            isIntersecting: ratio > 0,
+            intersectionRatio: ratio,
+            target,
+          } as IntersectionObserverEntry], this as unknown as IntersectionObserver),
+        });
+      }
+
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    }
+
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(max-width: 899px)' || (query.includes('prefers-reduced-motion') && motionPrefs.reducedMotion),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    vi.stubGlobal('IntersectionObserver', ControlledIntersectionObserver);
+
+    try {
+      const { container } = renderLanding();
+      const chapter = container.querySelector('#chapter-pile')!;
+      const scene = container.querySelector('.pile-scene')!;
+      const chapterObserver = observed.find(({ target }) => target === chapter);
+      const sceneObserver = observed.find(({ target }) => target === scene);
+
+      expect(sceneObserver).toBeDefined();
+      expect(sceneObserver?.threshold).toBe(0.5);
+      expect(chapterObserver).toBeDefined();
+
+      act(() => chapterObserver!.trigger(1));
+      expect(Array.from(scene.querySelectorAll<HTMLElement>('.pile-document')).map((card) => Number.parseFloat(card.style.left)))
+        .not.toEqual([0, 13, 26, 39, 52, 65, 78]);
+
+      act(() => sceneObserver!.trigger(0.5));
+      await waitFor(() => {
+        expect(Array.from(scene.querySelectorAll<HTMLElement>('.pile-document')).map((card) => Number.parseFloat(card.style.left)))
+          .toEqual([0, 13, 26, 39, 52, 65, 78]);
+      });
     } finally {
       vi.unstubAllGlobals();
     }
