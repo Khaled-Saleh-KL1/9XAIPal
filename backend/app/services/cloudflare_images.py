@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import re
+import time
 from typing import Any
 
 import httpx
@@ -28,6 +29,7 @@ DEFAULT_MODELS = [
 
 _BASE_URL = "https://api.cloudflare.com/client/v4/accounts"
 _TIMEOUT_SECONDS = 60.0
+_TOTAL_ATTEMPT_TIMEOUT_SECONDS = 180.0
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 _MAX_JSON_IMAGE_BYTES = _MAX_RESPONSE_BYTES
 _RESPONSE_CHUNK_BYTES = 64 * 1024
@@ -71,11 +73,17 @@ def _json_body(response: httpx.Response) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _read_bounded_response(response: httpx.Response) -> httpx.Response | None:
+def _read_bounded_response(
+    response: httpx.Response,
+    *,
+    deadline: float | None = None,
+) -> httpx.Response | None:
     """Buffer at most 8 MiB from a streamed response, then close the stream."""
     chunks: list[bytes] = []
     total_bytes = 0
     for chunk in response.iter_bytes(chunk_size=_RESPONSE_CHUNK_BYTES):
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
         if total_bytes + len(chunk) > _MAX_RESPONSE_BYTES:
             return None
         chunks.append(chunk)
@@ -155,6 +163,7 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
     if not eligible_accounts:
         raise QuotaExhaustedError("all configured Cloudflare accounts are temporarily unavailable")
 
+    attempt_deadline = time.monotonic() + _TOTAL_ATTEMPT_TIMEOUT_SECONDS
     all_accounts_quota_exhausted = True
 
     for account_index, (account_id, token) in enumerate(accounts):
@@ -165,25 +174,37 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
         account_failed = False
         account_quota = False
         for model in models:
+            remaining_seconds = attempt_deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                logger.warning("Cloudflare image generation reached its total attempt deadline")
+                return None
+
             url = f"{_BASE_URL}/{account_id}/ai/run/{model}"
             json_payload, multipart_fields = _request_fields(model, prompt)
             try:
                 kwargs: dict[str, Any] = {
                     "headers": {"Authorization": f"Bearer {token}"},
-                    "timeout": _TIMEOUT_SECONDS,
+                    "timeout": min(_TIMEOUT_SECONDS, remaining_seconds),
                 }
                 if multipart_fields is not None:
                     kwargs["files"] = multipart_fields
                 else:
                     kwargs["json"] = json_payload
                 with httpx.stream("POST", url, **kwargs) as streamed_response:
-                    response = _read_bounded_response(streamed_response)
+                    response = _read_bounded_response(
+                        streamed_response,
+                        deadline=attempt_deadline,
+                    )
             except httpx.RequestError:
                 account_failed = True
                 continue
             except Exception:
                 account_failed = True
                 continue
+
+            if time.monotonic() >= attempt_deadline:
+                logger.warning("Cloudflare image generation reached its total attempt deadline")
+                return None
 
             if response is None:
                 account_failed = True

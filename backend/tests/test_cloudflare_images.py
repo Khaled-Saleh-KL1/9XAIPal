@@ -2,6 +2,7 @@
 
 import base64
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -313,6 +314,33 @@ def test_all_open_account_breakers_skip_requests_and_raise_for_later_retry(monke
         )
 
     assert attempted == []
+
+
+def test_model_requests_share_one_total_deadline(monkeypatch):
+    from app.services import cloudflare_images
+
+    clock = iter((0.0, 0.0, 0.0, 179.0, 179.0, 180.0))
+    monkeypatch.setattr(
+        cloudflare_images,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(clock)),
+        raising=False,
+    )
+    attempted_timeouts = []
+
+    def response(_url, **kwargs):
+        attempted_timeouts.append(kwargs["timeout"])
+        return _response(503)
+
+    _mock_stream(monkeypatch, response)
+
+    result = cloudflare_images.generate_image(
+        "prompt",
+        config=_settings("account-a:secret-a", "model-one,model-two,model-three"),
+    )
+
+    assert result is None
+    assert attempted_timeouts == [60.0, 1.0]
 
 
 def test_no_configured_accounts_is_a_quiet_noop(monkeypatch, caplog):

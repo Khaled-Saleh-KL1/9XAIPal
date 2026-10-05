@@ -70,10 +70,10 @@
 - Uses `_TOTAL_ATTEMPT_TIMEOUT_SECONDS = 180.0` and `_TIMEOUT_SECONDS = 60.0`.
 - Before each request, passes `min(_TIMEOUT_SECONDS, remaining_deadline)` as the request timeout; stops when no time remains.
 
-- [ ] Add a deterministic-clock test where the deadline expires after two attempts; assert request timeouts shrink to the remaining time and no later model is requested.
-- [ ] Run it and confirm the current implementation exceeds the total budget.
-- [ ] Implement the shared monotonic deadline across every configured account and model.
-- [ ] Run the deadline, account failover, and quota tests; commit with the required trailer.
+- [x] Add a deterministic-clock test where the deadline expires after two attempts; assert request timeouts shrink to the remaining time and no later model is requested.
+- [x] Run it and confirm the current implementation exceeds the total budget.
+- [x] Implement the shared monotonic deadline across every configured account and model.
+- [x] Run the deadline, account failover, and quota tests; commit with the required trailer.
 
 ### Task 4: Claim a per-document Redis lease before generation
 
