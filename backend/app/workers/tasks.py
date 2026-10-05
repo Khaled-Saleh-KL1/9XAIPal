@@ -11,8 +11,9 @@ import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from uuid import UUID
+from uuid import UUID, uuid4
 
+import redis as redis_sync
 from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import text
 
@@ -63,6 +64,51 @@ _ARTICLE_THUMBNAIL_SYSTEM_PROMPT = (
 _THUMBNAIL_WIDTH = 480
 _THUMBNAIL_HEIGHT = 621  # Matches the library card's 1 / 1.294 portrait aspect ratio.
 _THUMBNAIL_BACKGROUND = (250, 246, 237)
+_ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS = 10 * 60
+_ARTICLE_THUMBNAIL_LOCK_RELEASE_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+_article_thumbnail_redis = None
+
+
+def _article_thumbnail_lock_key(document_id: UUID) -> str:
+    return f"9xaipal:article-thumbnail:{document_id}"
+
+
+def _article_thumbnail_lock_client():
+    """Return the worker's shared synchronous Redis client for thumbnail leases."""
+    global _article_thumbnail_redis
+    if _article_thumbnail_redis is None:
+        _article_thumbnail_redis = redis_sync.from_url(
+            settings.redis_url,
+            decode_responses=True,
+        )
+    return _article_thumbnail_redis
+
+
+def _claim_article_thumbnail(document_id: UUID) -> str | None:
+    """Claim one expiring generation lease per document; return its owner token."""
+    owner_token = uuid4().hex
+    claimed = _article_thumbnail_lock_client().set(
+        _article_thumbnail_lock_key(document_id),
+        owner_token,
+        nx=True,
+        ex=_ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS,
+    )
+    return owner_token if claimed else None
+
+
+def _release_article_thumbnail(document_id: UUID, owner_token: str) -> None:
+    """Delete the lease only if it still belongs to this generation attempt."""
+    _article_thumbnail_lock_client().eval(
+        _ARTICLE_THUMBNAIL_LOCK_RELEASE_LUA,
+        1,
+        _article_thumbnail_lock_key(document_id),
+        owner_token,
+    )
 
 
 def _article_thumbnail_prompt(article_text: str) -> str:
@@ -420,30 +466,48 @@ def generate_article_thumbnail(self, document_id: str) -> dict:
         if not article_text or not article_text.strip():
             return {"document_id": document_id, "status": "no_text"}
 
-        prompt = _article_thumbnail_prompt(article_text)
-        image = cloudflare_images.generate_image(prompt)
-        if not image:
-            return {"document_id": document_id, "status": "unavailable"}
+        lock_token = _claim_article_thumbnail(doc_uuid)
+        if lock_token is None:
+            return {"document_id": document_id, "status": "in_progress"}
 
-        # Lock the document row while installing the file. Deletion takes the
-        # same row lock; it either wins first (so no orphan is written) or runs
-        # after this transaction closes and removes the newly installed cover.
-        with sync_session() as session:
-            row = session.execute(
-                text(
-                    "SELECT doc_kind FROM documents WHERE id = :document_id FOR UPDATE"
-                ),
-                {"document_id": doc_uuid},
-            ).mappings().first()
-            if not row or row.get("doc_kind") != "article":
-                return {"document_id": document_id, "status": "deleted"}
-
+        try:
             destination = cover_service.cover_path(doc_uuid)
             if destination.is_file() and destination.stat().st_size > 0:
                 return {"document_id": document_id, "status": "exists"}
 
-            _write_article_thumbnail(doc_uuid, image)
-            return {"document_id": document_id, "status": "complete"}
+            prompt = _article_thumbnail_prompt(article_text)
+            image = cloudflare_images.generate_image(prompt)
+            if not image:
+                return {"document_id": document_id, "status": "unavailable"}
+
+            # Lock the document row while installing the file. Deletion takes
+            # the same row lock; it either wins first (so no orphan is written)
+            # or runs after this transaction closes and removes the new cover.
+            with sync_session() as session:
+                row = session.execute(
+                    text(
+                        "SELECT doc_kind FROM documents WHERE id = :document_id FOR UPDATE"
+                    ),
+                    {"document_id": doc_uuid},
+                ).mappings().first()
+                if not row or row.get("doc_kind") != "article":
+                    return {"document_id": document_id, "status": "deleted"}
+
+                destination = cover_service.cover_path(doc_uuid)
+                if destination.is_file() and destination.stat().st_size > 0:
+                    return {"document_id": document_id, "status": "exists"}
+
+                _write_article_thumbnail(doc_uuid, image)
+                return {"document_id": document_id, "status": "complete"}
+        finally:
+            try:
+                _release_article_thumbnail(doc_uuid, lock_token)
+            except Exception as exc:
+                logger.warning(
+                    "article thumbnail lock release failed document=%s error=%s",
+                    document_id,
+                    type(exc).__name__,
+                )
     except cloudflare_images.QuotaExhaustedError as exc:
         if self.request.retries >= self.max_retries:
             logger.warning("article thumbnail quota retries exhausted document=%s", document_id)

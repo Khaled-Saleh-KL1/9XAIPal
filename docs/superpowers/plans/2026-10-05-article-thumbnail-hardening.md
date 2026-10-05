@@ -86,11 +86,11 @@
 - `_release_article_thumbnail(document_id: UUID, token: str)` compare-deletes with Lua so an expired owner cannot release a replacement lease.
 - Return `status: in_progress` on contention; acquire before `chat_sync` and image generation; release in `finally`.
 
-- [ ] Add a task test where claim returns `None`; assert it exits as `in_progress` without calling the prompt model or image generator.
-- [ ] Add helper tests for `NX`/`EX=600`, successful claim, and compare-delete preserving a different token.
-- [ ] Run these tests and confirm failure before implementation.
-- [ ] Implement the synchronous Redis claim/release helpers and release the lease on every exit after acquisition.
-- [ ] Run the new tests and existing thumbnail task tests; commit with the required trailer.
+- [x] Add a task test where claim returns `None`; assert it exits as `in_progress` without calling the prompt model or image generator.
+- [x] Add helper tests for `NX`/`EX=600`, successful claim, and compare-delete preserving a different token.
+- [x] Run these tests and confirm failure before implementation.
+- [x] Implement the synchronous Redis claim/release helpers and release the lease on every exit after acquisition.
+- [x] Run the new tests and existing thumbnail task tests; commit with the required trailer.
 
 ### Task 5: Validate Cloudflare account IDs without logging tokens
 

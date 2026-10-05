@@ -62,6 +62,15 @@ def _harness(
         SimpleNamespace(cloudflare_ai_accounts=[("account", "test-token")]),
     )
     monkeypatch.setattr(tasks.cover_service, "cover_path", lambda _id: tmp_path / "cover.jpg")
+    lock_releases = []
+    monkeypatch.setattr(tasks, "_claim_article_thumbnail", lambda _id: "test-lock", raising=False)
+    monkeypatch.setattr(
+        tasks,
+        "_release_article_thumbnail",
+        lambda _id, token: lock_releases.append(token),
+        raising=False,
+    )
+    monkeypatch.setattr(tasks, "_article_thumbnail_test_lock_releases", lock_releases, raising=False)
     return tasks
 
 
@@ -254,3 +263,101 @@ def test_non_article_document_is_a_noop(monkeypatch, tmp_path):
     result = tasks.generate_article_thumbnail.run(str(uuid4()))
 
     assert result["status"] == "skipped"
+
+
+def test_in_flight_duplicate_exits_without_paid_generation(monkeypatch, tmp_path):
+    tasks = _harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(tasks, "_claim_article_thumbnail", lambda _id: None)
+    monkeypatch.setattr(
+        tasks,
+        "chat_sync",
+        lambda *_args, **_kwargs: pytest.fail("duplicate task must not prompt a model"),
+    )
+    monkeypatch.setattr(
+        tasks.cloudflare_images,
+        "generate_image",
+        lambda *_args, **_kwargs: pytest.fail("duplicate task must not generate an image"),
+    )
+
+    result = tasks.generate_article_thumbnail.run(str(uuid4()))
+
+    assert result["status"] == "in_progress"
+
+
+def test_thumbnail_lock_is_released_when_generation_finishes(monkeypatch, tmp_path):
+    tasks = _harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(tasks, "chat_sync", lambda *_args, **_kwargs: {"content": "A reef"})
+    monkeypatch.setattr(tasks.cloudflare_images, "generate_image", lambda _prompt: None)
+
+    result = tasks.generate_article_thumbnail.run(str(uuid4()))
+
+    assert result["status"] == "unavailable"
+    assert tasks._article_thumbnail_test_lock_releases == ["test-lock"]
+
+
+def test_cover_is_rechecked_after_lock_claim(monkeypatch, tmp_path):
+    tasks = _harness(monkeypatch, tmp_path)
+
+    def claim(_document_id):
+        (tmp_path / "cover.jpg").write_bytes(b"completed by previous task")
+        return "test-lock"
+
+    monkeypatch.setattr(tasks, "_claim_article_thumbnail", claim)
+    monkeypatch.setattr(
+        tasks,
+        "chat_sync",
+        lambda *_args, **_kwargs: pytest.fail("existing cover must skip the prompt model"),
+    )
+    monkeypatch.setattr(
+        tasks.cloudflare_images,
+        "generate_image",
+        lambda *_args, **_kwargs: pytest.fail("existing cover must skip image generation"),
+    )
+
+    result = tasks.generate_article_thumbnail.run(str(uuid4()))
+
+    assert result["status"] == "exists"
+    assert tasks._article_thumbnail_test_lock_releases == ["test-lock"]
+
+
+def test_redis_thumbnail_lease_is_exclusive_and_owner_released(monkeypatch):
+    from app.workers import tasks
+
+    class MemoryRedis:
+        def __init__(self):
+            self.values = {}
+            self.set_calls = []
+
+        def set(self, key, value, *, nx, ex):
+            self.set_calls.append((key, value, nx, ex))
+            if nx and key in self.values:
+                return None
+            self.values[key] = value
+            return True
+
+        def eval(self, script, key_count, key, owner_token):
+            assert key_count == 1
+            assert "GET" in script and "DEL" in script
+            if self.values.get(key) == owner_token:
+                del self.values[key]
+                return 1
+            return 0
+
+    client = MemoryRedis()
+    monkeypatch.setattr(tasks, "_article_thumbnail_lock_client", lambda: client, raising=False)
+    document_id = uuid4()
+
+    first_token = tasks._claim_article_thumbnail(document_id)
+    assert first_token
+    assert tasks._claim_article_thumbnail(document_id) is None
+    key = client.set_calls[0][0]
+    assert key.endswith(str(document_id))
+    assert client.set_calls[0][2:] == (True, 600)
+
+    tasks._release_article_thumbnail(document_id, first_token)
+    replacement_token = tasks._claim_article_thumbnail(document_id)
+    assert replacement_token
+    tasks._release_article_thumbnail(document_id, first_token)
+    assert client.values[key] == replacement_token
+    tasks._release_article_thumbnail(document_id, replacement_token)
+    assert key not in client.values
