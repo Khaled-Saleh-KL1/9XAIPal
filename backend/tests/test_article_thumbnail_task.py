@@ -18,25 +18,43 @@ _SUFFIX = (
 )
 
 
-def _harness(monkeypatch, tmp_path, *, doc_kind="article", article_text="A study of coral reefs."):
+def _harness(
+    monkeypatch,
+    tmp_path,
+    *,
+    doc_kind="article",
+    article_text="A study of coral reefs.",
+    exists_after_generation=True,
+):
     from app.workers import tasks
 
+    query_count = {"value": 0}
+    queries = []
+
     class Result:
+        def __init__(self, row):
+            self.row = row
+
         def mappings(self):
             return self
 
         def first(self):
-            return {"doc_kind": doc_kind}
+            return self.row
 
     class Session:
         def execute(self, *args, **kwargs):
-            return Result()
+            queries.append(str(args[0]) if args else "")
+            query_count["value"] += 1
+            if query_count["value"] == 1 or exists_after_generation:
+                return Result({"doc_kind": doc_kind})
+            return Result(None)
 
     @contextmanager
     def session_factory():
         yield Session()
 
     monkeypatch.setattr(tasks, "sync_session", session_factory)
+    monkeypatch.setattr(tasks, "_article_thumbnail_test_queries", queries, raising=False)
     monkeypatch.setattr(tasks, "build_document_search_text_sync", lambda *_: article_text)
     monkeypatch.setattr(
         tasks,
@@ -85,6 +103,9 @@ def test_article_instructions_are_passed_as_untrusted_subject_matter(monkeypatch
     assert [message["role"] for message in messages] == ["system", "user"]
     assert "untrusted" in messages[0]["content"].lower()
     assert "subject matter" in messages[0]["content"].lower()
+    for term in ("books", "open pages", "documents", "signs", "screens", "labels"):
+        assert term in messages[0]["content"].lower()
+    assert "visual metaphors" in messages[0]["content"].lower()
     assert attack in messages[1]["content"]
 
 
@@ -111,10 +132,29 @@ def test_cover_is_written_as_480px_jpeg_and_second_run_skips_generation(monkeypa
 
     pixmap = fitz.Pixmap(str(cover_path))
     assert pixmap.width == 480
+    assert pixmap.height == 621
 
     second = tasks.generate_article_thumbnail.run(document_id)
     assert second["status"] == "exists"
     assert len(generated) == 1
+
+
+def test_landscape_input_is_fitted_to_portrait_cover(monkeypatch, tmp_path):
+    import fitz
+
+    tasks = _harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(tasks, "chat_sync", lambda *_args, **_kwargs: {"content": "A reef"})
+    source = fitz.open()
+    page = source.new_page(width=1024, height=768)
+    page.draw_rect(page.rect, fill=(0.2, 0.4, 0.6), color=None)
+    image_bytes = page.get_pixmap().tobytes("png")
+    source.close()
+    monkeypatch.setattr(tasks.cloudflare_images, "generate_image", lambda _prompt: image_bytes)
+
+    tasks.generate_article_thumbnail.run(str(uuid4()))
+
+    output = fitz.Pixmap(str(tmp_path / "cover.jpg"))
+    assert (output.width, output.height) == (480, 621)
 
 
 def test_quota_exhaustion_retries_at_next_utc_0010(monkeypatch, tmp_path):
@@ -150,6 +190,52 @@ def test_quota_exhaustion_retries_at_next_utc_0010(monkeypatch, tmp_path):
 
     assert isinstance(retry_call["exc"], QuotaExhaustedError)
     assert retry_call["countdown"] == 20 * 60
+
+
+def test_quota_at_0005_retries_after_next_utc_reset(monkeypatch, tmp_path):
+    from app.services.cloudflare_images import QuotaExhaustedError
+
+    tasks = _harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(tasks, "chat_sync", lambda *_args, **_kwargs: {"content": "A reef"})
+    monkeypatch.setattr(
+        tasks.cloudflare_images,
+        "generate_image",
+        lambda _prompt: (_ for _ in ()).throw(QuotaExhaustedError("quota")),
+    )
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 5, 0, 5, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(tasks, "datetime", FixedDateTime)
+    retry_call = {}
+
+    class RetryRequested(Exception):
+        pass
+
+    def retry(*, exc, countdown):
+        retry_call.update(exc=exc, countdown=countdown)
+        raise RetryRequested
+
+    monkeypatch.setattr(tasks.generate_article_thumbnail, "retry", retry)
+
+    with pytest.raises(RetryRequested):
+        tasks.generate_article_thumbnail.run(str(uuid4()))
+
+    assert retry_call["countdown"] == 24 * 60 * 60 + 5 * 60
+
+
+def test_document_deleted_while_generating_does_not_install_cover(monkeypatch, tmp_path):
+    tasks = _harness(monkeypatch, tmp_path, exists_after_generation=False)
+    monkeypatch.setattr(tasks, "chat_sync", lambda *_args, **_kwargs: {"content": "A reef"})
+    monkeypatch.setattr(tasks.cloudflare_images, "generate_image", lambda _prompt: _PNG)
+
+    result = tasks.generate_article_thumbnail.run(str(uuid4()))
+
+    assert result["status"] == "deleted"
+    assert not (tmp_path / "cover.jpg").exists()
+    assert any("FOR UPDATE" in query.upper() for query in tasks._article_thumbnail_test_queries)
 
 
 def test_non_article_document_is_a_noop(monkeypatch, tmp_path):
