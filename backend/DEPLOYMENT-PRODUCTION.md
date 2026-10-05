@@ -92,6 +92,12 @@ Worth knowing about what it does, since none of it is obvious from the file alon
   Kept at 6G rather than higher: this box also hosts a portfolio site and another small app
   alongside 9XAIPal, so the remaining ~5GB matters more than it would on a single-purpose box.
 
+Optional generated covers for imported articles use Cloudflare Workers AI. The production Compose
+file forwards the `CLOUDFLARE_AI_ACCOUNTS` and `CLOUDFLARE_IMAGE_MODELS` settings to the API and light
+worker; with no usable account, thumbnail generation is disabled and article ingestion still
+completes. Keep credential values in the runtime secret environment, not in tracked files or
+runbooks. See [the article thumbnail runbook](../docs/runbooks/article-thumbnails.md).
+
 ---
 
 ## 3. AI backend split

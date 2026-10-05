@@ -160,6 +160,14 @@ config` command before restarting services.
   It routes verified printed Arabic and mixed Arabic/English to the Arabic
   OCR route. A low-confidence style decision abstains rather than silently
   declaring handwriting.
+- **PDF text-layer recovery is an OCR-failure fallback for an individual page.**
+  After configured OCR providers cannot produce usable page text, the pipeline
+  reuses that page's selectable PDF text only when it has at least 200 body
+  letters and at least 80% of its letters are Latin. Empty text, replacement
+  characters, and sufficiently corrupted text are rejected. Otherwise the page
+  follows the existing unreadable-page budget and may make the document fail if
+  that budget is exceeded. This is not a general classifier bypass. See
+  [arabic_ocr.py](../../backend/app/extraction/arabic_ocr.py).
 - An uncertain document stays failed with
   `arabic_style_confirmation_required`. The user can confirm printed or
   handwritten. Printed confirmation requeues the same job; handwritten

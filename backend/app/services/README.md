@@ -20,6 +20,16 @@ The next chunk lookup should use `document_id + current_chunk.sequence_id + 1` o
 
 Owns transactional ingestion: create ingestion jobs, store document metadata, store ordered chunks, store assets, trigger embeddings, and mark documents complete.
 
+### cloudflare_images.py
+
+Optional Cloudflare Workers AI client for generated article covers. It owns account/model failover
+and image-response validation; the worker task calls it only when an account is configured.
+
+### covers.py
+
+Owns the shared cover cache. PDF covers are lazily rasterized from the source PDF; a generated
+article cover already in the cache is returned as-is. Both use the document-keyed covers directory.
+
 ### `retrieval.py`
 
 Owns global retrieval: embed query, search pgvector, fetch chunk records, preserve similarity scores, and expose physical sequence IDs for citation and ordering.

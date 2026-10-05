@@ -217,8 +217,8 @@ chunks.
 
 ## 4. Capacity: the waiting room
 
-The site runs on one box with one Celery worker (`--concurrency=1`, no autoscaling). Signup being
-open means anyone can create an account, so there's a separate, cheap cap on how many people can
+The site runs on one box with separate ingest and light/default Celery workers and no autoscaling.
+Signup being open means anyone can create an account, so there's a separate, cheap cap on how many people can
 be *actively using* the app at once — not an access-control gate, a defensive ceiling for a burst
 this box genuinely can't serve. [`core/capacity.py`](../../backend/app/core/capacity.py):
 
@@ -281,31 +281,28 @@ the frontend. `GET /auth/me` is the one exception: it goes through `get_current_
 which never raises `NotAdmitted` (§2), so it can keep answering with a queue position for the
 waiting-room UI (`WaitingRoomView.tsx`) to poll every few seconds until `admitted` flips true.
 
-**The ingestion queue is the same shape, layered on infrastructure that already existed.** Celery
-`--concurrency=1` already serializes paper processing one job at a time — that queue isn't new.
-What's new is a ceiling and visibility: `services/ingestion.py::check_queue_capacity` counts
-non-terminal `ingestion_jobs` rows and rejects new uploads with **429**
-(`{"code": "QUEUE_FULL"}`) once `MAX_QUEUED_INGESTION_JOBS` (default 50) is reached, and
-`GET /papers/{id}/progress` reports a 1-based `queue_position` while a job is still queued. Unlike
-the user cap, this check runs **before any destructive I/O** at each of its three call sites
+**The ingestion queue has a database-backed capacity check.** The ingest worker consumes a
+separate queue from the light/default worker; production Compose sets ingest concurrency to 2. The
+check counts non-terminal ingestion jobs and rejects new uploads with 429 when
+`MAX_QUEUED_INGESTION_JOBS` is reached. The progress endpoint reports a 1-based rank among
+older queued jobs. Unlike the user cap, this check runs **before any destructive I/O** at each of
+its three call sites
 (`upload_paper`, URL-import, `reextract_paper`) — `reextract_paper` in particular checks capacity
 *before* wiping the existing paper's chunks/embeddings, since rejecting after that point would
 leave the paper half-deleted with nothing queued to regenerate it.
 
-⚠ Both caps are per-process-safe by construction, not per-process: they live in Redis, shared
-across the API's `--workers 2` uvicorn processes and the Celery worker, unlike an in-memory
-`asyncio.Semaphore` (used elsewhere in this codebase for `/ask` concurrency), which would give
-each process its own independent cap and silently admit `2×` the configured limit.
+⚠ The active-user cap is enforced by a Redis Lua script; the ingestion cap uses a PostgreSQL
+advisory lock and counts jobs in the transaction that creates them. Both are shared across API
+processes. The `/ask` concurrency semaphore remains in-memory and therefore applies per API
+process. See [capacity.py](../../backend/app/core/capacity.py) and
+[ingestion.py](../../backend/app/services/ingestion.py).
 
 ---
 
 ## 5. Known sharp edges
 
-- ⚠ **`/static/{images,extracted,assets}` bypass this entirely.** They're plain `StaticFiles`
-  mounts (`app/main.py`), not FastAPI routes, so `get_current_user` never runs for them. A caller
-  who already has a file path (they're UUID-derived, not sequential, so not trivially enumerable,
-  but also not access-controlled) reads it with no login and no ownership check. See
-  [roadmap.md](../roadmap.md).
+- ~~**Public /static mounts bypassed authentication.**~~ Fixed 2026-09-10: those mounts were removed. Stored files are now served through authenticated API routes with ownership checks. See [the audit finding](../issues/001-public-static-files-bypass-authorization.md) and [roadmap.md](../roadmap.md).
+
 - **No password reset, no email verification.** Anyone can sign up, but recovering a lost password
   or verifying an email address is still a manual DB fix out of band, not a self-service flow.
 - **A stale tab's 423s aren't given bespoke handling.** If a user is evicted from `active_users`

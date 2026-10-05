@@ -7,54 +7,31 @@
 > **Does not own:** known testing gaps ([roadmap.md](../roadmap.md)), recovery procedures
 > ([operations.md](../01-orientation/operations.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-25
+> **Status:** current · **Reconciled with source:** 2026-10-05; see the linked test files and [CI workflow](../../.github/workflows/ci.yml).
 > **Verify with:** `cd backend && POSTGRES_DB=9xaipal_test pytest -v`
 
 ---
 
-## 1. Automated
+## 1. Automated checks
 
-```bash
-cd backend && source .venv/bin/activate
-POSTGRES_DB=9xaipal_test pytest -v
-```
+The backend suite covers focused API, extraction, retrieval, chat, Arabic OCR, queue, and article-generation behavior. Representative files:
 
-| File | Covers |
+| Area | Coverage |
 | --- | --- |
-| [`test_chunk_sequence.py`](../../backend/tests/test_chunk_sequence.py) | Chunker sequence numbering + structural type detection |
-| [`test_ingestion_pipeline.py`](../../backend/tests/test_ingestion_pipeline.py) | End-to-end pipeline (extractor stub → chunks → assets); the fast/full profile split: a paper is ready at chunking and dispatches only the optional figure index, while a book still dispatches `embed_document` |
-| [`test_vector_retrieval.py`](../../backend/tests/test_vector_retrieval.py) | `search_chunks` against pgvector with deterministic vectors |
-| [`test_provider_resolver.py`](../../backend/tests/test_provider_resolver.py) | Provider auto-detection, fallback order, namespace isolation, `NoLLMConfigured` |
-| [`test_subthread_conversations.py`](../../backend/tests/test_subthread_conversations.py) | Sub-thread trees via `parent_turn_id`, recursive history |
-| [`test_context_router.py`](../../backend/tests/test_context_router.py) | ⚠ **Placeholder: a single comment line. Covers nothing.** |
+| Ingestion and chunking | [test_ingestion_pipeline.py](../../backend/tests/test_ingestion_pipeline.py), [test_chunker_algorithm_and_broken_tables.py](../../backend/tests/test_chunker_algorithm_and_broken_tables.py), [test_heading_repair.py](../../backend/tests/test_heading_repair.py) |
+| Retrieval and library search | [test_vector_retrieval.py](../../backend/tests/test_vector_retrieval.py), [test_library_search.py](../../backend/tests/test_library_search.py), [test_document_search_embedding.py](../../backend/tests/test_document_search_embedding.py) |
+| Arabic routing and OCR | [test_arabic_pipeline_routing.py](../../backend/tests/test_arabic_pipeline_routing.py), [test_arabic_ocr_fallback.py](../../backend/tests/test_arabic_ocr_fallback.py), [test_arabic_contextual_embeddings.py](../../backend/tests/test_arabic_contextual_embeddings.py) |
+| Chat and provider behavior | [test_chat_routing_fallback.py](../../backend/tests/test_chat_routing_fallback.py), [test_agent_tools_streaming.py](../../backend/tests/test_agent_tools_streaming.py), [test_web_search_cascade.py](../../backend/tests/test_web_search_cascade.py) |
+| Queues, capacity, and repair | [test_celery_queues.py](../../backend/tests/test_celery_queues.py), [test_capacity.py](../../backend/tests/test_capacity.py), [test_reembed_library.py](../../backend/tests/test_reembed_library.py) |
+| Article thumbnails | [test_article_thumbnail_task.py](../../backend/tests/test_article_thumbnail_task.py), [test_cloudflare_images.py](../../backend/tests/test_cloudflare_images.py), [test_backfill_article_thumbnails.py](../../backend/tests/test_backfill_article_thumbnails.py) |
 
-⚠ **These tests `TRUNCATE documents CASCADE` against whatever `POSTGRES_DB` resolves to**, before
-and after every test. That cascade takes chunks, assets, conversations, and notes with it: run it
-against the development database and the library is gone, with only the PDFs left on disk. This
-has happened.
+The frontend has Vitest component and behavior tests, including landing/reduced-motion, motion primitives, PDF selection, reasoning rows, and cover refresh. Examples: [LandingView.test.tsx](../../frontend/src/views/LandingView.test.tsx), [motion.test.tsx](../../frontend/src/motion/motion.test.tsx), [pdfFiles.test.ts](../../frontend/src/lib/pdfFiles.test.ts), [AgentTrail.test.tsx](../../frontend/src/views/AgentTrail.test.tsx), and [PaperCover.test.tsx](../../frontend/src/views/PaperCover.test.tsx).
 
-`conftest.py` therefore refuses to start unless the database name contains "test":
+The CI workflow runs backend pytest and the frontend TypeScript check/build when their paths change. It does not run Vitest, browser end-to-end tests, or Markdown/link checks. Documentation-only changes run the change-detection job but skip the backend and frontend jobs. See [the CI workflow](../../.github/workflows/ci.yml). The full ask route through the context router, agent tools, persistence, and final response is not covered by one end-to-end test. [test_context_router.py](../../backend/tests/test_context_router.py) remains a placeholder.
 
-```bash
-POSTGRES_DB=9xaipal_test pytest -v          # the normal way
-ALLOW_DESTRUCTIVE_TESTS=1 pytest -v         # override, if you mean it
-```
+⚠ Backend tests use database fixtures that truncate documents CASCADE, which also removes dependent rows. The test configuration refuses to start unless POSTGRES_DB contains test, unless ALLOW_DESTRUCTIVE_TESTS=1 explicitly overrides that guard. Use a disposable test database and Redis; never point the suite at a development library. See [conftest.py](../../backend/tests/conftest.py) and [backend/tests/README.md](../../backend/tests/README.md).
 
-First-time setup of the scratch database:
-
-```bash
-docker exec 9xaipal-postgres psql -U 9xaipal -d postgres -c 'CREATE DATABASE "9xaipal_test"'
-docker exec 9xaipal-postgres psql -U 9xaipal -d 9xaipal_test \
-  -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
-```
-
-**Not covered by anything:** `chat/orchestrator.py`, `chat/paper_agent.py`, `extraction/chunker.py`,
-`extraction/glyph_repair.py`, the notes API, and the entire frontend. See
-[roadmap.md](../roadmap.md).
-
-⚠ `test_chunk_sequence.py::test_embedding_batching_resumption_and_casting` fails on a default
-setup: it builds 4096-dimension vectors while the column is `vector(1024)` per `VECTOR_DIMENSION`.
-Pre-existing, unrelated to ingestion correctness.
+For local execution, run pytest from backend with POSTGRES_DB set to a disposable database whose name contains test. Frontend Vitest can be run from frontend with npm test -- --run. Neither suite was run as part of this documentation update.
 
 ---
 
@@ -68,7 +45,7 @@ Run in order against a clean library. Sample paper:
 | # | Step | Pass criteria |
 | --- | --- | --- |
 | 1 | `GET /api/v1/health` | All fields `ok` |
-| 2 | Drag the sample PDF onto the library | Overlay shows `extracting → chunking → embedding` |
+| 2 | Drop the sample PDF on the library or choose it through Add paper | The fast research-paper profile shows extracting → chunking; a book or full-profile document may continue through embedding and summarizing |
 | 3 | Wait for completion | Reading view renders a heading and first paragraph |
 | 4 | Check the extractor badge | Reads `mineru`, not `pymupdf_fallback` |
 | 5 | Wait ~5–15 min, then `GET /papers/{id}/figure-descriptions` | Non-empty rows |

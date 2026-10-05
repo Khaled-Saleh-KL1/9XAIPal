@@ -2,7 +2,7 @@
 
 This document describes how to run the full 9XAIPal stack (API + UI + workers + infra) in containers so that **your machine acts as the server**.
 
-Ollama (the LLM/VLM/embeddings) can stay on the host, or any cloud API can take over: with `LLM_PROVIDER=auto` (default) the backend uses Ollama when it is reachable and otherwise falls back to the first cloud API key found in `.env` (OpenAI → Anthropic → xAI → DeepSeek). See "AI Backend" below. The rest of the stack is fully containerized and async-ready for multiple concurrent users on the same machine.
+Ollama (the LLM/VLM/embeddings) can stay on the host, and configured cloud APIs can also handle requests. Chat provider selection and failure fallback are described in the AI Backend section below. When a cloud model or embedding provider handles a request, the associated prompt/context or chunk text is sent off-host.
 
 ## Quick Start (Recommended for Your Machine as Server)
 
@@ -33,6 +33,7 @@ Then open **http://localhost:8000** in your browser. Everything (library, reader
 - postgres, redis: unchanged.
 - Web search: a cascade of 5 providers (tavily, linkup, exa, serpapi, then duckduckgo — see `app/search/web.py`), no local service. Tavily rotates across a comma-separated list of keys first. The last needs no key, so web search is never fully off.
 - celery_worker: ingest queue; celery_worker_light: light/default queue, same worker image.
+- Optional article covers: when Cloudflare Workers AI is configured, article-thumbnail tasks run on celery_worker_light; without a usable account the task is disabled and imports still complete. Compose forwards the Cloudflare settings to the API and light worker. See [the thumbnail runbook](../docs/runbooks/article-thumbnails.md).
 
 ## Networking for Ollama (Your LLM)
 

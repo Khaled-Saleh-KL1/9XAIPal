@@ -11,8 +11,8 @@
 > what listens where ([runtime-topology.md](runtime-topology.md)), fixing a broken install
 > ([operations.md](operations.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-28 (`main`, 5471870): §5 run end-to-end from
-> `docker compose down` to a healthy stack
+> **Status:** current · **Last reconciled with code:** 2026-10-05 (`48cb8c6`); this documentation
+> update did not contact a running service.
 > **Verify with:** `curl -s localhost:8000/api/v1/health | jq`
 
 ---
@@ -62,8 +62,7 @@ ollama pull gemma4:31b-cloud       # or whatever you set as CHAT_MODEL
 ollama pull qwen3-embedding:8b     # EMBEDDING_MODEL — note the explicit tag
 ```
 
-⚠ Use a tag that exists. `EMBEDDING_MODEL` defaults to the bare name `qwen3-embedding`, which
-404s at first embed if only tagged variants (`:4b`, `:8b`) are pulled.
+⚠ Use a tag that exists. The configured default is qwen3-embedding:0.6b; Ollama returns 404 if the selected tag is not present locally. If you change EMBEDDING_MODEL, pull that exact tag before the first embedding request.
 
 ---
 
@@ -102,11 +101,21 @@ uvicorn app.main:app --reload --port 8000
 ⚠ Skip the `mineru` extra (plain `uv sync`) if you don't need PDF extraction on the host — it
 skips MinerU and torch, both multi-hundred-MB. `Dockerfile.lite` (the `api` service) does the same.
 
-### 3.3 Celery worker (separate terminal, same venv)
+### 3.3 Celery workers (separate terminals, same venv)
+
+The ingest queue runs PDF extraction. The default `celery` queue runs article imports, embeddings,
+summaries, and other light work. Start one worker for each queue:
 
 ```bash
 cd backend && source .venv/bin/activate
-celery -A app.core.celery_app worker --loglevel=info
+WORKER_ROLE=ingest celery -A app.core.celery_app worker --loglevel=info -Q ingest --hostname=ingest@%h
+```
+
+In a second terminal:
+
+```bash
+cd backend && source .venv/bin/activate
+WORKER_ROLE=light celery -A app.core.celery_app worker --loglevel=info -Q celery --concurrency=2 --hostname=light@%h
 ```
 
 ⚠ Without this, uploads accept and then hang at `queued` forever. Nothing surfaces an error:
@@ -144,7 +153,7 @@ The FastAPI lifespan ([`core/lifecycle.py`](../../backend/app/core/lifecycle.py)
 ```bash
 # 1. health
 curl -s http://localhost:8000/api/v1/health | jq
-# expect: {"status":"ok","database":"ok","ollama":"ok","web_search":"ok","web_search_provider":"tavily"}
+# expect status ok with database ok; web_search_provider names the first eligible provider, not necessarily the one that serves a request
 
 # 2. upload
 curl -s -F "file=@../samples/attention-is-all-you-need.pdf" \
@@ -153,7 +162,8 @@ curl -s -F "file=@../samples/attention-is-all-you-need.pdf" \
 
 # 3. poll until complete
 curl -s http://localhost:8000/api/v1/papers/<uuid>/progress | jq
-# queued → extracting → chunking → embedding → summarizing → complete
+# paper: queued → extracting → chunking → complete (the default fast profile)
+# book/full profile: queued → extracting → chunking → embedding → summarizing → complete
 
 # 4. read the first chunk
 curl -s http://localhost:8000/api/v1/papers/<uuid>/chunks/1 | jq
@@ -179,7 +189,7 @@ A sample paper ships at [`samples/attention-is-all-you-need.pdf`](../../samples/
 | Full stack in Docker | `cd backend && docker compose up -d --build` | UI + API on `:8000`, no Node needed on the host |
 | LAN server | `cd backend && ./start-lan-server.sh` | Let another device on the same Wi-Fi use the app |
 
-**Full stack** brings up every service: Postgres, Redis, the Celery worker, the API, and a one-shot
+**Full stack** brings up PostgreSQL, Redis, the API, the ingest worker, the light/default worker, and the one-shot frontend build service.
 container that builds the SPA into a volume the API serves at `/`. The whole app is on one port;
 there is no second dev server and no reverse proxy.
 
@@ -215,12 +225,12 @@ Collected because each one has cost someone an hour:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Upload sticks at `queued` forever | No Celery worker consuming Redis | Start the worker (§3.3) |
+| Upload or light task stays queued | No worker consumes the task's queue | Start celery_worker for ingest jobs or celery_worker_light for the light/default queue (§3.3) |
 | `docker compose up` fails with "port is already allocated" | Another project holds `8000` / `5432` / `6379` | Set `API_PORT` / `POSTGRES_PORT` / `REDIS_PORT` in `backend/.env`, host side only |
-| Worker logs `Cannot connect to redis://redis:6379: Name or service not known` | A container left over from an older `up` is attached to no compose network | `docker compose up -d --force-recreate redis celery_worker` |
+| Worker logs show a Redis network error | API or worker is attached to an old Compose network | Recreate Redis and both workers with docker compose up -d --force-recreate redis celery_worker celery_worker_light |
 | First embed 404s | `EMBEDDING_MODEL` has no matching pulled tag | Use an explicit tag, e.g. `qwen3-embedding:8b` |
 | Every model call refused, in Docker | `OLLAMA_BASE_URL=localhost` inside a container resolves to the container | Compose already sets `host.docker.internal`; do not override it from the host `.env` |
-| Web search silently returns nothing | No provider configured, or every configured one is down/out of quota | Set at least one of `TAVILY_API_KEY` (accepts a comma-separated list) / `LINKUP_API_KEY` / `EXA_API_KEY` / `SERPAPI_API_KEY`; check the logs for `<provider> search failed: ...`. ⚠ `/health` cannot verify a key works, only that one is configured: see [configuration.md § Web search](../03-reference/configuration.md#web-search) |
+| Web search returns no results | The configured cascade is exhausted, web search is disabled, or a pinned provider is misconfigured | Set WEB_SEARCH_PROVIDER=auto unless intentionally disabled; check provider logs. Auto mode always includes DuckDuckGo as a keyless final fallback; see [configuration](../03-reference/configuration.md#web-search) |
 | Ingestion fails with `MinerUError` | MinerU missing from the worker's `$PATH` | Install it, or run the worker in compose |
 | Chat 503 `NO_LLM_CONFIGURED` | No Ollama and no cloud key | Start Ollama or paste one API key |
 | Setting seems to do nothing | Typo'd env key: `extra="ignore"` swallows unknown keys silently | Check spelling against [configuration.md](../03-reference/configuration.md) |

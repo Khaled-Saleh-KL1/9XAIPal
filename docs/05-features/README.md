@@ -5,8 +5,8 @@
 > how it is implemented, why it is built that way (including what was tried first and failed), and
 > how to see it working. Written for Khaled to learn his own program from, feature by feature.
 >
-> **How to read it:** the table below is the index — 107 features in nine areas, numbered straight
-> through (plus one, #108, found while writing this: cross-session memory). Each area is one file;
+> **How to read it:** the table below is the index — 117 features in thirteen areas, numbered straight
+> through. Each area is one file;
 > each feature is one section. Read an area top to bottom, or jump to a number.
 >
 > **How it relates to the rest of `docs/`:** the architecture docs
@@ -16,8 +16,8 @@
 > links out wherever the deeper material lives. When they disagree, the code wins and this file
 > needs a fix.
 >
-> **Status:** current · **Reflects code as of:** 2026-09-12 (`main`, cb67f64 + done-reading). Every entry was
-> written against the source files it names, on that commit.
+> **Status:** current · **Reconciled with code:** 2026-10-05 (`48cb8c6`). Entries 113–117 describe
+> the landing/motion, reasoning, upload, and thumbnail changes.
 
 ## The areas
 
@@ -32,6 +32,10 @@
 | Accounts, safety, capacity | [07-accounts-and-safety.md](07-accounts-and-safety.md) | 86–94 |
 | Models & configuration | [08-models-and-configuration.md](08-models-and-configuration.md) | 95–100 |
 | Operations | [09-operations.md](09-operations.md) | 101–107 |
+| Landing and shared motion | [10-landing-and-motion.md](10-landing-and-motion.md) | 113–114 |
+| Reasoning UI | [11-reasoning-ui.md](11-reasoning-ui.md) | 115 |
+| Add-paper drop zone | [12-add-paper-drop-zone.md](12-add-paper-drop-zone.md) | 116 |
+| Article thumbnails | [13-article-thumbnails.md](13-article-thumbnails.md) | 117 |
 
 ## All features
 
@@ -149,6 +153,11 @@
 | 110 | Shelved paper lists: the rail and the picker as a file tree | [desk](06-desk.md#110-shelved-paper-lists-the-rail-and-the-picker-as-a-file-tree) |
 | 111 | Notes as movable icons (book reader) | [book reader](04-book-reader.md#111-notes-as-movable-icons) |
 | 112 | Heading repair (levels from the PDF outline, non-headings demoted) | [extraction pipeline](02-extraction-pipeline.md#112-heading-repair) |
+| 113 | Landing page, welcome hash, and sign-in sheet | [landing and motion](10-landing-and-motion.md#113-landing-page-welcome-hash-and-sign-in-sheet) |
+| 114 | Shared motion system and route entrance | [landing and motion](10-landing-and-motion.md#114-shared-motion-system-and-route-entrance) |
+| 115 | Agent reasoning rows and live status | [reasoning UI](11-reasoning-ui.md#115-agent-reasoning-rows-and-live-status) |
+| 116 | Add paper: PDF drop and file selection | [Add-paper drop zone](12-add-paper-drop-zone.md#116-add-paper-pdf-drop-and-file-selection) |
+| 117 | Generated article thumbnails | [article thumbnails](13-article-thumbnails.md) |
 
 ## How each entry is written
 
