@@ -100,3 +100,19 @@ def test_query_and_bulk_embedding_limits_reach_api_and_all_celery_workers():
         for service_name in ("api", "celery_worker", "celery_worker_light"):
             environment = services[service_name]["environment"]
             assert {key: environment.get(key) for key in expected} == expected
+
+
+def test_cloudflare_image_settings_reach_api_and_both_celery_workers():
+    expected = {
+        "CLOUDFLARE_AI_ACCOUNTS": "${CLOUDFLARE_AI_ACCOUNTS:-}",
+        "CLOUDFLARE_IMAGE_MODELS": "${CLOUDFLARE_IMAGE_MODELS:-}",
+    }
+
+    assert {key: _active_environment_values().get(key) for key in expected} == {
+        key: "" for key in expected
+    }
+    for name in COMPOSE_FILES:
+        services = _load_compose(name)["services"]
+        for service_name in ("api", "celery_worker", "celery_worker_light"):
+            environment = services[service_name]["environment"]
+            assert {key: environment.get(key) for key in expected} == expected
