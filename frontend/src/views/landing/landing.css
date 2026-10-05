@@ -278,6 +278,7 @@
 .find-results { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .find-result { position: relative; min-height: 39px; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-bottom: 1px solid color-mix(in oklch, var(--border) 76%, transparent); color: var(--landing-muted); font-size: 8px; }
 .find-result.is-match { border-radius: 5px; background: color-mix(in oklch, var(--accent-soft) 52%, transparent); color: var(--fg); }
+.find-result.is-unmatched { padding-inline-start: 6px; border-inline-start: 2px dashed var(--border-strong); }
 .find-result-type { width: 25px; padding: 4px 0; border-radius: 3px; background: var(--bg-2); color: var(--landing-accent); font-size: 6px; font-weight: 700; text-align: center; }
 .find-result-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .find-result-page { color: var(--landing-muted); font-size: 7px; white-space: nowrap; }

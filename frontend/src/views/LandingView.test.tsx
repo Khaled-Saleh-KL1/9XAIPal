@@ -84,6 +84,69 @@ describe('LandingView', () => {
     expect(within(rail).getAllByRole('button')).toHaveLength(CHAPTERS.length);
   });
 
+  it('keeps hidden progress buttons out of the tab order', async () => {
+    class HiddenIntersectionObserver {
+      constructor(private callback: IntersectionObserverCallback, _options?: IntersectionObserverInit) {}
+      observe(target: Element) {
+        this.callback([{ isIntersecting: false, target, intersectionRatio: 0 } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    }
+
+    vi.stubGlobal('IntersectionObserver', HiddenIntersectionObserver);
+    try {
+      const { container } = renderLanding();
+      const rail = container.querySelector('.journey-progress')!;
+      const railButtons = Array.from(rail.querySelectorAll('button'));
+      expect(rail).toHaveAttribute('aria-hidden', 'true');
+      expect(rail).toHaveAttribute('inert');
+      expect(railButtons).toHaveLength(CHAPTERS.length);
+      expect(railButtons.every((button) => button.tabIndex === -1)).toBe(true);
+
+      const user = userEvent.setup();
+      for (let index = 0; index < 30; index += 1) {
+        await user.tab();
+        expect(rail.contains(document.activeElement)).toBe(false);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the small-screen pile scattered while presenting the scene statically', () => {
+    const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: query.includes('max-width: 899px'),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    });
+
+    try {
+      const { container } = renderLanding();
+      const rotations = Array.from(container.querySelectorAll<HTMLElement>('.pile-document')).map((card) => {
+        const rotation = card.style.transform.match(/rotate\((-?[\d.]+)deg\)/)?.[1];
+        return rotation === undefined ? 0 : Number(rotation);
+      });
+
+      expect(rotations).toHaveLength(7);
+      expect(rotations.every(Number.isFinite)).toBe(true);
+      expect(Math.max(...rotations) - Math.min(...rotations)).toBeGreaterThanOrEqual(14);
+    } finally {
+      if (originalMatchMedia) Object.defineProperty(window, 'matchMedia', originalMatchMedia);
+    }
+  });
+
   it('does not touch the URL hash', () => {
     window.history.replaceState(null, '', '#/paper/abc');
     renderLanding();

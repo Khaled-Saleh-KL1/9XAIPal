@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { MotionValue } from 'motion/react';
 import { AnimatePresence, m, useMotionValueEvent, useReducedMotion, useSpring, useTransform } from 'motion/react';
 import { PERSONAS, SCENE_COPY, type Persona } from '../../../landing/content';
-import { calm, playful } from '../../../motion/springs';
+import { playful } from '../../../motion/springs';
 import { DocumentTitle } from './DocumentTitle';
 
 function SearchContents({ persona, progress }: { persona: Persona; progress: MotionValue<number> }) {
@@ -16,10 +16,10 @@ function SearchContents({ persona, progress }: { persona: Persona; progress: Mot
   return (
     <m.div
       className="find-search-content"
-      initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
-      animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
-      transition={reducedMotion ? calm : playful}
+      transition={reducedMotion ? { duration: 0.15, ease: 'easeOut' } : playful}
     >
       <p className="find-scene-label">{SCENE_COPY.findLabel}</p>
       <div className="find-search-box" role="search">
@@ -44,10 +44,9 @@ function SearchContents({ persona, progress }: { persona: Persona; progress: Mot
 
 function FindResult({ title, index, matched, pageLabel, progress }: { title: string; index: number; matched: boolean; pageLabel: string; progress: MotionValue<number> }) {
   const reducedMotion = useReducedMotion();
-  const opacity = useTransform(progress, [0.28, 0.64, 1], [1, matched ? 1 : 0.35, matched ? 1 : 0.35]);
   const y = useSpring(useTransform(progress, [0.28, 0.64, 0.78, 1], [14, 3, -5, 0]), playful);
   return (
-    <m.li className={matched ? 'find-result is-match' : 'find-result'} style={reducedMotion ? undefined : { opacity, y }}>
+    <m.li className={`find-result ${matched ? 'is-match' : 'is-unmatched'}`} style={reducedMotion ? undefined : { y }}>
       <span className="find-result-type">{index === 2 ? SCENE_COPY.findArabicLabel : SCENE_COPY.findPdfLabel}</span>
       <span className="find-result-title"><DocumentTitle title={title} /></span>
       <span className="find-result-page">{matched ? pageLabel : SCENE_COPY.findNoPage}</span>

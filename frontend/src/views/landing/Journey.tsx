@@ -64,9 +64,10 @@ function JourneyProgress({ active, visible, progress }: { active: number; visibl
       className="journey-progress"
       aria-label={JOURNEY_COPY.progressLabel}
       aria-hidden={!visible}
-      initial={{ opacity: 0, x: reducedMotion ? 0 : -12 }}
+      inert={!visible}
+      initial={reducedMotion ? false : { opacity: 0, x: -12 }}
       animate={{ opacity: visible ? 1 : 0, x: !reducedMotion && !visible ? -12 : 0 }}
-      transition={{ duration: 0.24, ease: 'easeOut' }}
+      transition={{ duration: reducedMotion ? 0.15 : 0.24, ease: 'easeOut' }}
       style={{ pointerEvents: visible ? 'auto' : 'none' }}
     >
       <div className="journey-progress-track" aria-hidden="true">
@@ -81,7 +82,7 @@ function JourneyProgress({ active, visible, progress }: { active: number; visibl
             aria-label={chapter.label}
             aria-current={active === index ? 'step' : undefined}
             tabIndex={visible ? 0 : -1}
-            onClick={() => document.getElementById(`chapter-${chapter.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+            onClick={() => document.getElementById(`chapter-${chapter.key}`)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' })}
           >
             <span />
           </Pressable>
@@ -110,7 +111,10 @@ function ChapterSection({
   const reducedMotion = useReducedMotion();
   const inView = useInView(chapterRef, { root: scrollContainer, amount: 0.34 });
   const { scrollYProgress } = useScroll({ container: scrollContainer, target: chapterRef, offset: ['start end', 'end start'] });
-  const sceneProgress = useTransform(scrollYProgress, (value) => (small || reducedMotion ? 1 : value));
+  const sceneProgress = useTransform(scrollYProgress, (value) => {
+    if (chapter.key === 'pile' && (small || reducedMotion)) return 0;
+    return small || reducedMotion ? 1 : value;
+  });
   const Scene = SCENES[chapter.key];
 
   useEffect(() => {

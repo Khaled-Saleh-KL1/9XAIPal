@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { motionValue } from 'motion/react';
 import { describe, expect, it } from 'vitest';
 import { MotionRoot } from '../../../motion';
@@ -6,9 +6,9 @@ import { PERSONAS } from '../../../landing/content';
 import { AskScene } from './AskScene';
 
 describe('AskScene', () => {
-  it('keeps the user avatar distinct and exposes the complete answer without a prohibited paragraph label', () => {
+  it('shows both citations and a highlighted source once answer streaming finishes', () => {
     const { container } = render(
-      <MotionRoot><AskScene progress={motionValue(0.55)} persona="student" /></MotionRoot>,
+      <MotionRoot><AskScene progress={motionValue(0.4)} persona="student" /></MotionRoot>,
     );
 
     expect(container.querySelector('.ask-avatar')).toHaveTextContent('You');
@@ -20,5 +20,17 @@ describe('AskScene', () => {
     expect(container.querySelector('.ask-source-page')).toBeInTheDocument();
     expect(container.querySelector('.ask-source-page')).toHaveClass('is-lit');
     expect(container.querySelectorAll('.citation-chip')).toHaveLength(PERSONAS.student.citations.length);
+  });
+
+  it('keeps the ready source highlight after a citation hover ends', () => {
+    const { container } = render(
+      <MotionRoot><AskScene progress={motionValue(0.55)} persona="student" /></MotionRoot>,
+    );
+    const citation = container.querySelector('.citation-chip')!;
+
+    fireEvent.mouseEnter(citation);
+    fireEvent.mouseLeave(citation);
+
+    expect(container.querySelector('.source-lines i:nth-child(3)')).toHaveClass('is-lit');
   });
 });

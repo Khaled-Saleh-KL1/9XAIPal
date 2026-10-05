@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { useMotionValueEvent, useScroll } from 'motion/react';
+import { useMotionValueEvent, useReducedMotion, useScroll } from 'motion/react';
 import { LogoMark } from '../components/LogoMark';
 import { BetaBadge } from '../components/BetaBadge';
 import { Pressable } from '../motion';
@@ -20,11 +20,12 @@ export function LandingView({ signedIn, onRequestAuth, onOpenLibrary }: LandingV
   const [persona, setPersona] = useState<Persona>('student');
   const [compact, setCompact] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = useReducedMotion();
   const { scrollY } = useScroll({ container: pageRef });
   useMotionValueEvent(scrollY, 'change', (value) => setCompact(value > 24));
 
   const scrollTo = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById(id)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
   };
   const requestAuth = (mode: 'login' | 'signup', opener: HTMLElement) => onRequestAuth(mode, opener);
 

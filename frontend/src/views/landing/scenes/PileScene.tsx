@@ -5,27 +5,29 @@ import { playful } from '../../../motion/springs';
 import { DocumentTitle } from './DocumentTitle';
 
 const scatter = [
-  { x: -4, y: 8, rotate: -3 },
-  { x: 4, y: 6, rotate: 3 },
-  { x: -3, y: -7, rotate: 3 },
-  { x: 4, y: -6, rotate: -3 },
-  { x: 2, y: 8, rotate: 2 },
-  { x: -4, y: -2, rotate: 2 },
-  { x: 3, y: 7, rotate: -2 },
+  { x: -28, y: -38, rotate: -13 },
+  { x: 12, y: -53, rotate: 8 },
+  { x: 34, y: -15, rotate: 12 },
+  { x: -14, y: -62, rotate: -8 },
+  { x: 24, y: -28, rotate: 9 },
+  { x: -35, y: -49, rotate: -11 },
+  { x: 5, y: -69, rotate: 6 },
 ];
 
 const slots = [
-  { left: '3%', top: '18%' }, { left: '27%', top: '18%' }, { left: '51%', top: '18%' }, { left: '75%', top: '18%' },
-  { left: '14%', top: '55%' }, { left: '38%', top: '55%' }, { left: '62%', top: '55%' },
+  { left: '18%', top: '58%' }, { left: '26%', top: '56%' }, { left: '34%', top: '60%' }, { left: '42%', top: '57%' },
+  { left: '50%', top: '59%' }, { left: '30%', top: '55%' }, { left: '38%', top: '61%' },
 ];
+
+const depth = [3, 6, 2, 5, 1, 7, 4];
 
 function DocumentCard({ index, title, progress }: { index: number; title: string; progress: MotionValue<number> }) {
   const start = scatter[index];
   const gatherAt = 0.52 + index * 0.018;
   const landAt = 0.66 + index * 0.014;
-  const x = useSpring(useTransform(progress, [0, gatherAt, landAt, 1], [start.x, start.x * 0.14, -5, 0]), playful);
-  const y = useSpring(useTransform(progress, [0, gatherAt, landAt, 1], [start.y, start.y * 0.1, -6, 0]), playful);
-  const rotate = useSpring(useTransform(progress, [0, gatherAt, landAt, 1], [start.rotate, start.rotate * 0.12, 3, 0]), playful);
+  const x = useSpring(useTransform(progress, [0, gatherAt, landAt, 1], [start.x, start.x * 0.14, 0, 0]), playful);
+  const y = useSpring(useTransform(progress, [0, gatherAt, landAt, 1], [start.y, start.y * 0.1, 0, 0]), playful);
+  const rotate = useSpring(useTransform(progress, [0, gatherAt, landAt, 1], [start.rotate, start.rotate * 0.12, 0, 0]), playful);
   const reducedMotion = useReducedMotion();
   const isArabic = index === 2;
   const slot = slots[index];
@@ -33,7 +35,7 @@ function DocumentCard({ index, title, progress }: { index: number; title: string
   return (
     <m.article
       className={`pile-document${isArabic ? ' is-arabic' : ''}`}
-      style={{ ...slot, ...(reducedMotion ? {} : { x, y, rotate }) }}
+      style={{ ...slot, zIndex: depth[index], ...(reducedMotion ? { x: start.x, y: start.y, rotate: start.rotate } : { x, y, rotate }) }}
       dir={isArabic ? 'rtl' : 'ltr'}
       lang={isArabic ? 'ar' : 'en'}
       aria-label={title}

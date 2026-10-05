@@ -10,18 +10,20 @@ function AskContent({ persona, progress }: { persona: Persona; progress: MotionV
   const words = data.answer.split(' ');
   const questionCountValue = useTransform(progress, [0.03, 0.18], [0, data.question.length]);
   const answerCountValue = useTransform(progress, [0.18, 0.4], [0, words.length]);
-  const revealCitations = useTransform(progress, [0.36, 0.55], [0, data.citations.length]);
-  const readingHighlight = useTransform(progress, [0.42, 0.6], [0, 1]);
+  const revealCitations = useTransform(progress, [0.36, 0.4], [0, data.citations.length]);
+  const readingHighlight = useTransform(progress, [0.38, 0.4], [0, 1]);
   const [questionCount, setQuestionCount] = useState(() => Math.floor(questionCountValue.get()));
   const [answerCount, setAnswerCount] = useState(() => Math.floor(answerCountValue.get()));
   const [citationCount, setCitationCount] = useState(() => Math.floor(revealCitations.get()));
-  const [highlighted, setHighlighted] = useState(() => readingHighlight.get() > 0.65);
+  const [sourceReady, setSourceReady] = useState(() => readingHighlight.get() > 0.65);
+  const [citationEngaged, setCitationEngaged] = useState(false);
   const reducedMotion = useReducedMotion();
+  const highlighted = sourceReady || citationEngaged;
 
   useMotionValueEvent(questionCountValue, 'change', (value) => setQuestionCount(Math.floor(value)));
   useMotionValueEvent(answerCountValue, 'change', (value) => setAnswerCount(Math.floor(value)));
   useMotionValueEvent(revealCitations, 'change', (value) => setCitationCount(Math.floor(value)));
-  useMotionValueEvent(readingHighlight, 'change', (value) => setHighlighted(value > 0.65));
+  useMotionValueEvent(readingHighlight, 'change', (value) => setSourceReady(value > 0.65));
 
   const questionVisible = reducedMotion ? data.question : data.question.slice(0, questionCount);
   const answerVisible = reducedMotion ? words.length : answerCount;
@@ -30,10 +32,10 @@ function AskContent({ persona, progress }: { persona: Persona; progress: MotionV
   return (
     <m.div
       className="ask-content"
-      initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
-      animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
-      transition={reducedMotion ? calm : playful}
+      transition={reducedMotion ? { duration: 0.15, ease: 'easeOut' } : playful}
     >
       <div className="ask-window-bar"><span /><span /><span /><b>{SCENE_COPY.askLabel}</b></div>
       <div className="ask-question-card">
@@ -64,10 +66,10 @@ function AskContent({ persona, progress }: { persona: Persona; progress: MotionV
               <Pressable
                 key={`${persona}-${citation}`}
                 className={`citation-chip${highlighted || index === 0 ? ' is-highlighted' : ''}`}
-                onMouseEnter={() => setHighlighted(true)}
-                onMouseLeave={() => setHighlighted(false)}
-                onFocus={() => setHighlighted(true)}
-                onBlur={() => setHighlighted(false)}
+                onMouseEnter={() => setCitationEngaged(true)}
+                onMouseLeave={() => setCitationEngaged(false)}
+                onFocus={() => setCitationEngaged(true)}
+                onBlur={() => setCitationEngaged(false)}
               >
                 <span className="citation-pin" aria-hidden="true">{index + 1}</span>{citation}
               </Pressable>
