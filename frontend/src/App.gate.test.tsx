@@ -1,8 +1,9 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useEffect } from 'react';
 import { MotionRoot } from './motion';
-import { getPaper } from './api';
+import { getPaper, uploadPaper } from './api';
 
 const authState = vi.hoisted(() => ({
   user: null as any,
@@ -13,15 +14,30 @@ const authState = vi.hoisted(() => ({
   signup: vi.fn(),
   logout: vi.fn(),
   refreshAdmission: vi.fn(),
+  libraryMounts: 0,
 }));
 
 vi.mock('./contexts/AuthContext', () => ({
   useAuth: () => authState,
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
-vi.mock('./views/LibraryView', () => ({ LibraryView: () => <div>LIBRARY</div> }));
+vi.mock('./views/LibraryView', () => ({
+  LibraryView: ({ onUpload, onOpenDesk }: any) => {
+    useEffect(() => { authState.libraryMounts += 1; }, []);
+    return (
+      <div>
+        <span>LIBRARY</span>
+        <button onClick={(event) => onUpload(undefined, event.currentTarget)}>Add paper</button>
+        <button onClick={() => onOpenDesk()}>Open desk</button>
+        <button onClick={(event) => onUpload(new File(['sample'], 'sample.pdf', { type: 'application/pdf' }), event.currentTarget)}>Start processing</button>
+      </div>
+    );
+  },
+}));
 vi.mock('./views/ReadingView', () => ({ ReadingView: () => <div>READING</div> }));
-vi.mock('./views/ProcessingOverlay', () => ({ ProcessingOverlay: () => null }));
+vi.mock('./views/ProcessingOverlay', () => ({ ProcessingOverlay: ({ onClose }: any) => (
+  <div>PROCESSING<button onClick={onClose}>Close processing</button></div>
+) }));
 vi.mock('./views/RawFilesPanel', () => ({ RawFilesPanel: () => null }));
 vi.mock('./views/DeskView', () => ({ DeskView: () => <div>DESK</div> }));
 vi.mock('./views/RawArticleViewer', () => ({ RawArticleViewer: () => <div>RAW ARTICLE</div> }));
@@ -50,6 +66,8 @@ beforeEach(() => {
   authState.admitted = true;
   authState.queuePosition = null;
   authState.refreshAdmission.mockReset().mockResolvedValue(undefined);
+  authState.libraryMounts = 0;
+  vi.mocked(uploadPaper).mockResolvedValue({ id: 'upload-id' } as never);
   window.history.replaceState(null, '', '#/library');
 });
 
@@ -110,6 +128,60 @@ describe('App gate', () => {
     authState.user = { id: 'u', email: 'a@b.co' };
     renderApp();
     expect(screen.getByText('LIBRARY')).toBeInTheDocument();
+  });
+
+  it('replaces the library with the desk synchronously on route change', () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    expect(screen.getByText('LIBRARY')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open desk' }));
+    expect(screen.queryByText('LIBRARY')).not.toBeInTheDocument();
+    expect(screen.getByText('DESK')).toBeInTheDocument();
+  });
+
+  it('keeps LibraryView mounted while the processing overlay opens', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    const mounts = authState.libraryMounts;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start processing' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Book/ }));
+
+    expect(screen.getByText('LIBRARY')).toBeInTheDocument();
+    expect(screen.getByText('PROCESSING')).toBeInTheDocument();
+    expect(authState.libraryMounts).toBe(mounts);
+    fireEvent.click(screen.getByRole('button', { name: 'Close processing' }));
+  });
+
+  it('traps focus in the upload sheet, closes on Escape, and returns focus to its opener', async () => {
+    const user = userEvent.setup();
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+
+    const opener = screen.getByRole('button', { name: 'Add paper' });
+    await user.click(opener);
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    expect(screen.getByRole('button', { name: /^Book/ })).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    await user.keyboard('{Escape}');
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await vi.waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it('keeps the upload-kind sheet mounted during its close animation', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(dialog).toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('shows the landing page at #/welcome to a signed-in user and closes into the library', async () => {

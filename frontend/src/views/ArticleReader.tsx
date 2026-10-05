@@ -41,6 +41,7 @@ import { loadPersonalState } from '../lib/personalState';
 import { PageMapProvider, useBuiltPageMap } from '../lib/pageMap';
 import { useReferences } from '../lib/references';
 import { RevealModeToggle } from '../components/RevealModeToggle';
+import { Toast } from '../components/Toast';
 import {
   initialRevealCursor,
   loadRevealCursor,
@@ -367,13 +368,6 @@ export function ArticleReader({
       .finally(() => { if (alive) setPersonalLoaded(true); });
     return () => { alive = false; };
   }, [paperId]);
-
-  // The notice is an acknowledgement, not a status bar. It goes on its own.
-  useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), notice.tone === 'error' ? 9000 : 7000);
-    return () => clearTimeout(t);
-  }, [notice]);
 
   // Keep the ref in step with anything that sets decks from outside a write
   // (the load above, and the reconcile pass below).
@@ -2280,14 +2274,7 @@ export function ArticleReader({
         currentSeq={currentSeq}
       />
 
-      {notice && (
-        <div className={`reader-toast${notice.tone === 'error' ? ' is-error' : ''}`}>
-          <span>{notice.text}</span>
-          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">
-            ×
-          </button>
-        </div>
-      )}
+      <Toast notice={notice} onDismiss={() => setNotice(null)} />
 
       <div className="reader-scroll thin-scroll" ref={scrollRef} onScroll={onScroll}>
         {loadError && <div className="reader-notice is-error">{loadError}</div>}

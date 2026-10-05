@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { Pressable, Sheet } from '../motion';
 
 /**
  * In-app replacement for `window.confirm`.
@@ -47,11 +48,13 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const resolveRef = useRef<((value: boolean) => void) | null>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const confirm = useCallback<ConfirmFn>((next) => {
     // A second confirm while one is open would strand the first promise and
     // leave its caller waiting forever. Resolve it as a cancel first.
     resolveRef.current?.(false);
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setOptions(next);
     return new Promise<boolean>((resolve) => {
       resolveRef.current = resolve;
@@ -64,46 +67,44 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     setOptions(null);
   }, []);
 
-  useEffect(() => {
-    if (!options) return;
-    confirmButtonRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') settle(false);
-      if (e.key === 'Enter') settle(true);
-    };
-    window.addEventListener('keydown', onKey);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [options, settle]);
-
   // If the provider unmounts with a dialog open, don't leave the caller hanging.
   useEffect(() => () => resolveRef.current?.(false), []);
 
   return (
     <ConfirmContext.Provider value={confirm}>
       {children}
-      {options && (
-        <div
-          className="confirm-backdrop"
-          onClick={() => settle(false)}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="confirm-title"
-        >
-          <div className="confirm-card" onClick={(e) => e.stopPropagation()}>
+      <Sheet
+        open={Boolean(options)}
+        onClose={() => settle(false)}
+        labelledBy="confirm-title"
+        initialFocusRef={confirmButtonRef}
+        returnFocusRef={returnFocusRef}
+        panelClassName="motion-sheet-panel--content"
+      >
+        {options && (
+          <div
+            className="confirm-card"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(event) => {
+              if (
+                event.key === 'Enter' &&
+                !(event.target instanceof HTMLInputElement) &&
+                !(event.target instanceof HTMLTextAreaElement)
+              ) {
+                event.preventDefault();
+                settle(true);
+              }
+            }}
+          >
             <h2 className="confirm-title" id="confirm-title">
               {options.title}
             </h2>
             {options.body && <p className="confirm-body">{options.body}</p>}
             <div className="confirm-actions">
-              <button type="button" className="confirm-cancel" onClick={() => settle(false)}>
+              <Pressable type="button" className="confirm-cancel" onClick={() => settle(false)}>
                 {options.cancelLabel ?? 'Cancel'}
-              </button>
-              <button
+              </Pressable>
+              <Pressable
                 type="button"
                 ref={confirmButtonRef}
                 className={
@@ -112,11 +113,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 onClick={() => settle(true)}
               >
                 {options.confirmLabel ?? 'Confirm'}
-              </button>
+              </Pressable>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Sheet>
     </ConfirmContext.Provider>
   );
 }

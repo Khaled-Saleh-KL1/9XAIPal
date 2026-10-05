@@ -1,10 +1,33 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
+import { MotionRoot } from '../motion';
 import { ProcessingOverlay } from './ProcessingOverlay';
 
 const file = { name: 'arabic.pdf', size: '1.2 MB', pages: 0 };
 const noop = () => {};
+const motionPreference = vi.hoisted(() => ({ reduced: false, motionProps: new Map<string, Record<string, any>>() }));
+vi.mock('motion/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('motion/react')>();
+  const React = await import('react');
+  const InspectableMotionDiv = React.forwardRef<HTMLDivElement, Record<string, any>>((props, ref) => {
+    const className = typeof props.className === 'string' ? props.className : '';
+    if (className.includes('w-[42%]')) motionPreference.motionProps.set('document-sweep', props);
+    if (className.includes('right-[-3px]')) motionPreference.motionProps.set('progress-wobble', props);
+    if (props['data-testid'] === 'processing-progress-fill') motionPreference.motionProps.set('progress-fill', props);
+    return React.createElement(actual.m.div, { ...props, ref });
+  });
+  const inspectedM = new Proxy(actual.m, {
+    get(target, key, receiver) {
+      return key === 'div' ? InspectableMotionDiv : Reflect.get(target, key, receiver);
+    },
+  });
+  return { ...actual, m: inspectedM, useReducedMotion: () => motionPreference.reduced };
+});
+const renderOverlay = (children: ReactNode) => render(<MotionRoot>{children}</MotionRoot>);
+
+afterEach(() => { motionPreference.reduced = false; motionPreference.motionProps.clear(); });
 
 describe('ProcessingOverlay extraction route copy', () => {
   it.each([
@@ -15,7 +38,7 @@ describe('ProcessingOverlay extraction route copy', () => {
     ['pymupdf_fallback', 'Reading layout, text, math, and figures — the pipeline is chosen automatically'],
     ['gemma4_arabic_fallback', 'Reading layout, text, math, and figures — the pipeline is chosen automatically'],
   ])('describes the known extractor %s without claiming another route', (extractor, text) => {
-    render(
+    renderOverlay(
       <ProcessingOverlay file={file} status="extracting" extractor={extractor} onClose={noop} onCancel={noop} />,
     );
     expect(screen.getByText(text)).toBeInTheDocument();
@@ -25,22 +48,61 @@ describe('ProcessingOverlay extraction route copy', () => {
   });
 
   it('updates the neutral copy when the progress poll identifies the route', () => {
-    const { rerender } = render(
+    const { rerender } = renderOverlay(
       <ProcessingOverlay file={file} status="extracting" onClose={noop} onCancel={noop} />,
     );
     expect(screen.getByText('Reading layout, text, math, and figures — the pipeline is chosen automatically')).toBeInTheDocument();
     rerender(
-      <ProcessingOverlay file={file} status="extracting" extractor="gemini_arabic_pro" onClose={noop} onCancel={noop} />,
+      <MotionRoot><ProcessingOverlay file={file} status="extracting" extractor="gemini_arabic_pro" onClose={noop} onCancel={noop} /></MotionRoot>,
     );
     expect(screen.getByText('Arabic OCR (Gemini Pro) is reading the handwriting')).toBeInTheDocument();
     expect(screen.queryByText('Reading layout, text, math, and figures — the pipeline is chosen automatically')).not.toBeInTheDocument();
+  });
+
+  it('removes the active step label immediately when processing completes', () => {
+    const { rerender } = renderOverlay(
+      <ProcessingOverlay file={file} status="extracting" onClose={noop} onCancel={noop} />,
+    );
+    expect(screen.getByText('running…')).toBeInTheDocument();
+
+    rerender(
+      <MotionRoot><ProcessingOverlay file={file} status="complete" onClose={noop} onCancel={noop} /></MotionRoot>,
+    );
+    expect(screen.queryByText('running…')).not.toBeInTheDocument();
+  });
+
+  it('keeps the overlay and progress fill transform-free for reduced motion', () => {
+    motionPreference.reduced = true;
+    renderOverlay(
+      <ProcessingOverlay file={file} status="extracting" progressFraction={0.5} onClose={noop} onCancel={noop} />,
+    );
+
+    for (const testId of ['processing-overlay', 'processing-card', 'processing-progress-fill']) {
+      expect(screen.getByTestId(testId).style.transform).not.toMatch(/translate|rotate|scale/);
+    }
+  });
+
+  it('uses reduced-motion fades of at most 150ms for the document sweep and progress indicator', () => {
+    motionPreference.reduced = true;
+    renderOverlay(
+      <ProcessingOverlay file={file} status="extracting" progressFraction={0.5} onClose={noop} onCancel={noop} />,
+    );
+
+    const sweep = motionPreference.motionProps.get('document-sweep')!;
+    const wobble = motionPreference.motionProps.get('progress-wobble')!;
+    const fill = motionPreference.motionProps.get('progress-fill')!;
+    expect(sweep.animate).toEqual({ opacity: 0 });
+    expect(sweep.transition.duration).toBeLessThanOrEqual(0.15);
+    expect(wobble.animate).toEqual({ opacity: 0 });
+    expect(wobble.transition.duration).toBeLessThanOrEqual(0.15);
+    expect(fill.transition.duration).toBeLessThanOrEqual(0.15);
   });
 
   it.each([
     ['article', null],
     ['paper', 'trafilatura'],
   ] as const)('preserves article steps for kind %s and extractor %s', (kind, extractor) => {
-    render(
+    renderOverlay(
       <ProcessingOverlay file={file} status="extracting" kind={kind} extractor={extractor} onClose={noop} onCancel={noop} />,
     );
     expect(screen.getByText('Fetching the page')).toBeInTheDocument();
@@ -52,7 +114,7 @@ describe('ProcessingOverlay extraction route copy', () => {
 
 describe('ProcessingOverlay Arabic states', () => {
   it('shows local classifier failure as an actionable alert', () => {
-    render(
+    renderOverlay(
       <ProcessingOverlay
         file={file}
         status="failed"
@@ -67,7 +129,7 @@ describe('ProcessingOverlay Arabic states', () => {
     const message =
       'Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.';
 
-    render(
+    renderOverlay(
       <ProcessingOverlay
         file={file}
         status="failed"
@@ -82,7 +144,7 @@ describe('ProcessingOverlay Arabic states', () => {
   });
 
   it('also blocks the Pro-not-configured state', () => {
-    render(
+    renderOverlay(
       <ProcessingOverlay
         file={file}
         status="failed"
@@ -97,7 +159,7 @@ describe('ProcessingOverlay Arabic states', () => {
   it('offers printed and handwritten actions and sends the selected value', async () => {
     const user = userEvent.setup();
     const onConfirmWritingStyle = vi.fn();
-    render(
+    renderOverlay(
       <ProcessingOverlay
         file={file}
         status="failed"
@@ -118,7 +180,7 @@ describe('ProcessingOverlay Arabic states', () => {
   });
 
   it('disables both confirmation actions while the choice is saving', () => {
-    render(
+    renderOverlay(
       <ProcessingOverlay
         file={file}
         status="failed"

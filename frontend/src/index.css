@@ -72,6 +72,7 @@ body {
    The rename control exists for the same reason from the other direction. */
 .lib-grid {
   display: grid;
+  perspective: 1100px;
   /* auto-fill, not a fixed 3-up: the grid is the same shape on a laptop and
      on a wide monitor, just denser. */
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
@@ -85,9 +86,9 @@ body {
   border-radius: 12px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  overflow: hidden;
+  overflow: visible;
   text-align: left;
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 /* The open target fills the card, so the whole surface is clickable while the
    rename/delete buttons stay siblings rather than nested controls. */
@@ -100,16 +101,16 @@ body {
 }
 .paper-card:hover {
   border-color: var(--border-strong);
-  box-shadow: 0 14px 34px -22px rgba(0, 0, 0, 0.4);
-  transform: translateY(-2px);
+  box-shadow: 0 18px 36px -20px color-mix(in oklab, var(--fg) 34%, transparent);
 }
+.lib-grid > .relative:has(.paper-card:hover) { z-index: 1; }
 /* Focus is drawn on the card, not on the inner target, so the ring follows the
    border radius and does not cut across the cover. */
 .paper-card:has(.paper-open:focus-visible) {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-/* Hover lift is a "click me" cue, and the card being renamed is not clickable. */
+/* The card being renamed is not clickable. */
 .paper-card.is-renaming,
 .paper-card.is-renaming:hover {
   cursor: default;
@@ -127,6 +128,56 @@ body {
   border-bottom: 1px solid var(--border);
   overflow: hidden;
 }
+.paper-cover-stage {
+  position: relative;
+  perspective: 5000px;
+  transform-style: preserve-3d;
+  isolation: isolate;
+}
+.paper-page-stack {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.paper-page-edge,
+.paper-page-face {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border);
+  border-radius: 11px 11px 0 0;
+  background: var(--bg-2);
+}
+.paper-page-edge-back {
+  z-index: 0;
+  transform: translate3d(4px, 3px, -2px);
+  border-color: var(--border-strong);
+}
+.paper-page-edge-middle {
+  z-index: 1;
+  transform: translate3d(2px, 1px, -1px);
+}
+.paper-page-face {
+  z-index: 2;
+  background: var(--bg);
+}
+.paper-page-lines {
+  position: absolute;
+  inset: 10% 3% 14% 13%;
+  background: repeating-linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--muted) 24%, transparent) 0 1px,
+    transparent 1px 10px
+  );
+}
+.paper-cover-stage .paper-cover { border-radius: 11px 11px 0 0; }
+.paper-cover-motion {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  transform-style: preserve-3d;
+}
+.paper-cover-stage:hover .paper-cover-motion { z-index: 4; }
 .paper-cover img {
   width: 100%;
   height: 100%;
@@ -377,7 +428,6 @@ body {
   height: 11px;
   border-radius: 4px;
   background: var(--bg-3);
-  animation: pulse-soft 1.6s ease-in-out infinite;
 }
 
 /* ── Done Reading (views/LibraryView.tsx) ──
@@ -465,6 +515,7 @@ body {
 
 .lib-notice {
   display: flex;
+  overflow: hidden;
   align-items: center;
   gap: 10px;
   margin-bottom: 16px;
@@ -491,6 +542,22 @@ body {
    group: without this, flex's default shrink:1 crushes every child down to
    fit instead of letting the group scroll, which is the point. */
 .hdr-scroll > * { flex-shrink: 0; }
+
+/* Keep the complete filter toolbar available on narrow phones. The search and
+   Done Reading controls stay on the first line; filters and view toggles get
+   a compact, right-aligned second line. */
+@media (max-width: 390px) {
+  .lib-filter-controls {
+    flex: 1 0 100%;
+    justify-content: flex-end;
+    gap: 2px;
+    margin-left: 0;
+  }
+  .lib-filter-controls > div:first-child { gap: 2px; margin-right: 0; }
+  .lib-filter-controls > div:last-child { margin-left: 0; }
+  .lib-filter-chip,
+  .lib-filter-sort { padding-left: 6px; padding-right: 6px; }
+}
 
 /* ── Dropzone ───────────────────────────────────────────────── */
 .dropzone {
@@ -537,7 +604,6 @@ body {
   background: var(--bg);
   border: 1px solid var(--border);
   box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.28);
-  animation: marg-fade 120ms ease;
 }
 .user-menu-signout {
   display: block;
@@ -2689,7 +2755,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   position: absolute;
   top: 64px;
   left: 50%;
-  transform: translateX(-50%);
   z-index: 35;
   display: flex;
   align-items: center;
@@ -2704,7 +2769,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   border: 1px solid var(--border-strong);
   box-shadow: 0 14px 40px -22px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(10px);
-  animation: toast-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .reader-toast.is-error {
   color: #c0392b;
@@ -2719,13 +2783,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   flex-shrink: 0;
 }
 .reader-toast button:hover { color: var(--fg); background: var(--bg-3); }
-@keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, -8px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .reader-toast { animation: none; }
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
    Decks: several cards sharing one slot in the margin.
@@ -4095,7 +4152,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   background: rgb(0 0 0 / 0.62);
   backdrop-filter: blur(16px) saturate(1.05);
   -webkit-backdrop-filter: blur(16px) saturate(1.05);
-  animation: lightbox-fade 140ms ease-out;
 }
 .lightbox-image {
   max-width: 100%;
@@ -4106,7 +4162,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
      dark backdrop their black axis labels would vanish without this. */
   background: #fff;
   box-shadow: 0 24px 70px rgb(0 0 0 / 0.55);
-  animation: lightbox-rise 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .lightbox-close {
   position: absolute;
@@ -4122,11 +4177,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   border: 1px solid rgb(255 255 255 / 0.25);
 }
 .lightbox-close:hover { background: rgb(255 255 255 / 0.22); }
-@keyframes lightbox-fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes lightbox-rise {
-  from { opacity: 0; transform: scale(0.985); }
-  to   { opacity: 1; transform: scale(1); }
-}
 /* The affordance: content images are enlargeable, chrome images are not.
    Mirrors ImageLightbox.tsx's exclusion list. */
 .md-body img,
@@ -4141,25 +4191,7 @@ button img,
 [data-no-lightbox] { cursor: inherit; }
 
 /* ── In-app confirmation ────────────────────────────────────
-   Replaces window.confirm. Rust (--accent) on the destructive action, over
-   the same neutral blurred backdrop the image lightbox uses. */
-.confirm-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 210;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  /* Identical to .lightbox-backdrop on purpose: one "the app is behind a
-     modal" treatment, not two. The blue tint that used to be here fought
-     with the rust confirm button sitting on top of it. Rust stays; the
-     backdrop just gets out of its way. */
-  background: rgb(0 0 0 / 0.62);
-  backdrop-filter: blur(16px) saturate(1.05);
-  -webkit-backdrop-filter: blur(16px) saturate(1.05);
-  animation: lightbox-fade 130ms ease-out;
-}
+   Replaces window.confirm. Rust (--accent) marks destructive actions. */
 .confirm-card {
   width: min(440px, 100%);
   padding: 22px 24px 18px;
@@ -4168,7 +4200,6 @@ button img,
   border: 1px solid var(--border);
   box-shadow: 0 22px 60px rgb(0 0 0 / 0.32);
   cursor: default;
-  animation: lightbox-rise 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .confirm-title {
   font-size: 15.5px;

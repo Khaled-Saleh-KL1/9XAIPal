@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useId, lazy, Suspense } from 'react';
+import type { RefObject } from 'react';
 import type { Route, LibraryLayout, UploadingFile } from './types';
 import type { Paper } from './types';
 import { LibraryView } from './views/LibraryView';
@@ -10,7 +11,7 @@ import { AuthForm } from './views/AuthForm';
 import { LandingView } from './views/LandingView';
 import { WaitingRoomView } from './views/WaitingRoomView';
 import { useAuth } from './contexts/AuthContext';
-import { Sheet } from './motion';
+import { PageTransition, Pressable, Sheet } from './motion';
 import { isWelcomeHash, useWelcomeRoute } from './lib/welcomeRoute';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
@@ -158,6 +159,7 @@ export function App() {
   // article is a third option inside it, not a separate entry point (see
   // UploadKindModal below).
   const [kindPickerOpen, setKindPickerOpen] = useState(false);
+  const uploadOpenerRef = useRef<HTMLElement | null>(null);
   // A file handed to us by a drag-and-drop. The kind chooser still has to run
   // (a drop can't say whether it's a book or a paper), so the file waits here
   // until a kind is picked, and then skips the native file picker entirely.
@@ -386,7 +388,8 @@ export function App() {
   // Step 1 of upload: ask whether this is a book or a research paper. A drop
   // already carries the file, so it comes in as `file` and we hold onto it;
   // the button passes nothing and the file gets picked in step 2.
-  const startUpload = useCallback((file?: File) => {
+  const startUpload = useCallback((file?: File, opener?: HTMLElement) => {
+    uploadOpenerRef.current = opener ?? null;
     setPendingFile(file ?? null);
     setKindPickerOpen(true);
   }, []);
@@ -688,8 +691,17 @@ export function App() {
     return <WaitingRoomView />;
   }
 
+  const pageTransitionKey = route === 'reading'
+    ? `reading:${activePaperId || activePaper?.id || ''}`
+    : route === 'pdf-viewer'
+    ? `pdf:${viewingPdf?.id || ''}`
+    : route === 'desk'
+    ? `desk:${deskScope}:${deskPage}`
+    : 'library';
+
   return (
     <>
+      <PageTransition routeKey={pageTransitionKey}>
       {(route === 'library' || route === 'processing') && (
         <LibraryView
           onOpenPaper={openPaper}
@@ -785,6 +797,7 @@ export function App() {
           </Suspense>
         )
       )}
+      </PageTransition>
 
       {route === 'processing' && uploadingFile && (
         <ProcessingOverlay
@@ -807,13 +820,13 @@ export function App() {
         />
       )}
 
-      {kindPickerOpen && (
-        <UploadKindModal
-          onChoose={pickFileWithKind}
-          onImportUrl={submitImportUrl}
-          onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
-        />
-      )}
+      <UploadKindModal
+        open={kindPickerOpen}
+        onChoose={pickFileWithKind}
+        onImportUrl={submitImportUrl}
+        returnFocusRef={uploadOpenerRef}
+        onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
+      />
 
       {/* Raw Files slide-over panel */}
       <RawFilesPanel
@@ -838,13 +851,17 @@ export function App() {
 // research paper (linear reading), then opens the file picker.
 
 function UploadKindModal({
+  open,
   onChoose,
   onImportUrl,
   onCancel,
+  returnFocusRef,
 }: {
+  open: boolean;
   onChoose: (kind: DocKind) => void;
   onImportUrl: (url: string, kind: 'book' | 'paper' | null) => void;
   onCancel: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   // A URL can be pasted for any of the three choices, not just the generic
   // one — picking one swaps this modal's body for a URL field in place,
@@ -857,11 +874,12 @@ function UploadKindModal({
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
+  const firstChoiceRef = useRef<HTMLButtonElement>(null);
 
   const openUrlMode = (kind: 'book' | 'paper' | null) => {
     setUrlKind(kind);
-    // Cleared on every entry, not just the first: the modal only unmounts on
-    // Cancel or submit, so without this a rejected link (and its red error)
+    // Cleared on every entry, not just the first: the modal stays mounted
+    // after it closes, so without this a rejected link (and its red error)
     // survives ← Back and reappears under the next tile's heading, before the
     // reader has typed anything into it.
     setUrl('');
@@ -870,8 +888,17 @@ function UploadKindModal({
   };
 
   useEffect(() => {
-    if (mode === 'url') urlInputRef.current?.focus();
-  }, [mode]);
+    if (open && mode === 'url') urlInputRef.current?.focus();
+  }, [open, mode]);
+
+  useEffect(() => {
+    if (!open) {
+      setMode('choose');
+      setUrlKind(null);
+      setUrl('');
+      setError(null);
+    }
+  }, [open]);
 
   const submitUrl = () => {
     const trimmed = url.trim();
@@ -905,29 +932,31 @@ function UploadKindModal({
       };
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center px-6"
-      style={{ background: 'color-mix(in oklch, var(--bg), transparent 8%)', backdropFilter: 'blur(6px)' }}
-      onClick={onCancel}
+    <Sheet
+      open={open}
+      onClose={onCancel}
+      labelledBy={mode === 'choose' ? 'upload-kind-title' : 'upload-url-title'}
+      initialFocusRef={mode === 'url' ? urlInputRef : firstChoiceRef}
+      returnFocusRef={returnFocusRef}
+      panelClassName="motion-sheet-panel--content"
     >
       <div
         className="w-full max-w-[560px] rounded-2xl overflow-hidden"
         style={{ background: 'var(--bg)', border: '1px solid var(--border)', boxShadow: '0 20px 60px -20px rgba(0,0,0,0.18)' }}
-        onClick={(e) => e.stopPropagation()}
       >
         {mode === 'choose' ? (
           <>
             <div className="px-7 pt-7 pb-2">
-              <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
+              <h2 id="upload-kind-title" className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
                 What are you adding?
-              </div>
+              </h2>
               <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
                 This sets how you read it. You can re-process later if you pick wrong.
               </div>
             </div>
             <div className="px-7 py-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* The card's padding belongs to the buttons, not the wrapper.
-                  This whole card used to be one <button>, so every pixel of it
+                  This whole card used to be one <Pressable>, so every pixel of it
                   picked the kind; holding the padding out here would leave a
                   dead ring around the text that silently does nothing. */}
               <div
@@ -936,19 +965,19 @@ function UploadKindModal({
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <button onClick={() => onChoose('book')} className="text-left w-full flex-1 px-4 pt-4">
+                <Pressable ref={firstChoiceRef} onClick={() => onChoose('book')} className="text-left w-full flex-1 px-4 pt-4">
                   <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
                   <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
                     Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
                   </div>
-                </button>
-                <button
+                </Pressable>
+                <Pressable
                   onClick={() => openUrlMode('book')}
                   className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
                   style={{ color: 'var(--muted)' }}
                 >
                   <IconLink className="w-3 h-3" /> or paste a link
-                </button>
+                </Pressable>
               </div>
               <div
                 className="rounded-xl transition-colors flex flex-col"
@@ -956,21 +985,21 @@ function UploadKindModal({
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <button onClick={() => onChoose('paper')} className="text-left w-full flex-1 px-4 pt-4">
+                <Pressable onClick={() => onChoose('paper')} className="text-left w-full flex-1 px-4 pt-4">
                   <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
                   <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
                     Linear reading, front to back, no chapter navigation. Best for articles and papers.
                   </div>
-                </button>
-                <button
+                </Pressable>
+                <Pressable
                   onClick={() => openUrlMode('paper')}
                   className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
                   style={{ color: 'var(--muted)' }}
                 >
                   <IconLink className="w-3 h-3" /> or paste a link
-                </button>
+                </Pressable>
               </div>
-              <button
+              <Pressable
                 onClick={() => openUrlMode(null)}
                 className="sm:col-span-2 text-left rounded-xl p-4 flex items-center gap-3 transition-colors"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
@@ -989,27 +1018,27 @@ function UploadKindModal({
                     Paste a link: reads exactly like a paper, with margin notes, search, and the AI panel.
                   </div>
                 </div>
-              </button>
+              </Pressable>
             </div>
             <div className="px-7 py-3.5 flex items-center" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
-              <button onClick={onCancel} className="ml-auto text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
+              <Pressable onClick={onCancel} className="ml-auto text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
                 Cancel
-              </button>
+              </Pressable>
             </div>
           </>
         ) : (
           <>
             <div className="px-7 pt-7 pb-2">
-              <button
+              <Pressable
                 onClick={() => { setMode('choose'); setUrlKind(null); }}
                 className="text-[12px] mb-2"
                 style={{ color: 'var(--muted)' }}
               >
                 ← Back
-              </button>
-              <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
+              </Pressable>
+              <h2 id="upload-url-title" className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
                 {urlCopy.title}
-              </div>
+              </h2>
               <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
                 {urlCopy.subtitle}
               </div>
@@ -1034,20 +1063,20 @@ function UploadKindModal({
               )}
             </div>
             <div className="px-7 py-3.5 flex items-center gap-3" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
-              <button onClick={onCancel} className="text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
+              <Pressable onClick={onCancel} className="text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
                 Cancel
-              </button>
-              <button
+              </Pressable>
+              <Pressable
                 onClick={submitUrl}
                 className="ml-auto text-[12.5px] px-3 py-1.5 rounded-md"
                 style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
                 Import
-              </button>
+              </Pressable>
             </div>
           </>
         )}
       </div>
-    </div>
+    </Sheet>
   );
 }

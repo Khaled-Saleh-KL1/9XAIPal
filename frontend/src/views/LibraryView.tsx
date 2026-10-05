@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useRef, type DragEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, type ComponentProps, type DragEvent, type ReactNode, type RefObject } from 'react';
+import { AnimatePresence, LayoutGroup, m, useIsPresent, useReducedMotion } from 'motion/react';
 import type { Paper, LibraryLayout, SortKey } from '../types';
 import { LogoMark } from '../components/LogoMark';
 import {
@@ -18,12 +19,14 @@ import { stageProgress } from '../lib/progress';
 import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
 import { BetaBadge } from '../components/BetaBadge';
+import { Pressable, Sheet, usePauseWhenHidden } from '../motion';
+import { calm, gentle, jellyPress, playful, reducedMotionFade } from '../motion/springs';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
   /** Called with the dropped file when the source is a drag-and-drop, and with
    *  nothing when the user clicked (the file is chosen later, in a picker). */
-  onUpload: (file?: File) => void;
+  onUpload: (file?: File, opener?: HTMLElement) => void;
   onOpenRawFiles: () => void;
   onOpenDesk: () => void;
   layout: LibraryLayout;
@@ -34,6 +37,24 @@ interface Props {
 
 function deriveProgress(m: PaperMeta): number {
   return stageProgress(m.status, m.job_status, m.job_progress_fraction);
+}
+
+const arrivalGlowShadow = '0 0 0 3px var(--accent)';
+
+function ArrivalGlow({ paperId, reducedMotion, onComplete }: { paperId: string; reducedMotion: boolean | null; onComplete: () => void }) {
+  return (
+    <m.div
+      data-testid="paper-arrival-glow"
+      data-paper-id={paperId}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-10 rounded-xl"
+      initial={{ opacity: 0.42 }}
+      animate={{ opacity: 0 }}
+      transition={{ opacity: { duration: reducedMotion ? 0.15 : 0.8, ease: 'easeOut' } }}
+      style={{ boxShadow: arrivalGlowShadow }}
+      onAnimationComplete={onComplete}
+    />
+  );
 }
 
 function metaToPaper(m: PaperMeta): Paper {
@@ -63,6 +84,20 @@ function metaToPaper(m: PaperMeta): Paper {
   };
 }
 
+function PresenceAwarePaper({ children, ...props }: ComponentProps<typeof m.div> & { children: ReactNode }) {
+  const isPresent = useIsPresent();
+  return (
+    <m.div
+      {...props}
+      aria-hidden={isPresent ? undefined : true}
+      inert={isPresent ? undefined : true}
+      style={isPresent ? props.style : { ...props.style, pointerEvents: 'none' }}
+    >
+      {children}
+    </m.div>
+  );
+}
+
 export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk, layout, setLayout, refreshToken }: Props) {
   const confirm = useConfirm();
   const [query, setQuery] = useState('');
@@ -74,6 +109,14 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const [papers, setPapers] = useState<Paper[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const hasReceivedInitialListRef = useRef(false);
+  const initialStaggerIdsRef = useRef(new Set<string>());
+  const seenPaperIdsRef = useRef(new Set<string>());
+  const arrivingPaperIdsRef = useRef(new Set<string>());
+  const [completedEntranceIds, setCompletedEntranceIds] = useState<Set<string>>(() => new Set());
+  const [completedArrivalGlowIds, setCompletedArrivalGlowIds] = useState<Set<string>>(() => new Set());
+  const deletedPaperIdsRef = useRef(new Set<string>());
+  const reducedMotion = useReducedMotion();
   /** The paper whose title is being edited inline, if any. */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [arabicConfirmationPendingId, setArabicConfirmationPendingId] = useState<string | null>(null);
@@ -107,6 +150,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const [doneFolder, setDoneFolder] = useState<string | null>(null);
   /** The paper the shelf panel is open for (mark as done / move). */
   const [shelving, setShelving] = useState<Paper | null>(null);
+  const shelvingOpenerRef = useRef<HTMLElement | null>(null);
   /** The Done-area folder whose name is being edited inline. */
   const [folderRenaming, setFolderRenaming] = useState<string | null>(null);
 
@@ -135,7 +179,23 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
         try {
           const metas = await listPapers();
           if (!alive) return;
-          setPapers(metas.map(metaToPaper));
+          if (!hasReceivedInitialListRef.current) {
+            metas.forEach((meta) => {
+              seenPaperIdsRef.current.add(meta.id);
+            });
+            metas.slice(0, 12).forEach((meta) => initialStaggerIdsRef.current.add(meta.id));
+            hasReceivedInitialListRef.current = true;
+          } else {
+            metas.forEach((meta) => {
+              if (!seenPaperIdsRef.current.has(meta.id) && !deletedPaperIdsRef.current.has(meta.id)) {
+                arrivingPaperIdsRef.current.add(meta.id);
+              }
+              seenPaperIdsRef.current.add(meta.id);
+            });
+          }
+          setPapers(metas
+            .filter((meta) => !deletedPaperIdsRef.current.has(meta.id))
+            .map(metaToPaper));
           setLoadError(null);
           anyProcessing = metas.some((m) => m.status !== 'complete' && m.status !== 'failed');
         } catch (e) {
@@ -268,6 +328,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     if (!ok) return;
     try {
       await deletePaper(p.id);
+      deletedPaperIdsRef.current.add(p.id);
       setPapers((prev) => prev.filter((x) => x.id !== p.id));
     } catch (e) {
       window.alert(`Delete failed: ${(e as Error).message}`);
@@ -342,7 +403,9 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
       const result = await confirmArabicWritingStyle(paper.id, style);
       setNotice(result.message);
       const metas = await listPapers();
-      setPapers(metas.map(metaToPaper));
+      setPapers(metas
+        .filter((meta) => !deletedPaperIdsRef.current.has(meta.id))
+        .map(metaToPaper));
     } catch (error) {
       const message = (error as Error).message || 'Could not confirm Arabic writing style.';
       setPapers((previous) => previous.map((item) => item.id === paper.id
@@ -454,7 +517,10 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     onCancelRename: () => setRenaming(null),
     onCommitRename: (next: string) => void commitRename(p, next),
     area,
-    onShelve: () => setShelving(p),
+    onShelve: (opener: HTMLElement) => {
+      shelvingOpenerRef.current = opener;
+      setShelving(p);
+    },
     onUnshelve: () => void shelve(p, false, null),
     onConfirmWritingStyle: (style: ArabicWritingStyle) => void confirmWritingStyle(p, style),
     confirmationPending: arabicConfirmationPendingId === p.id,
@@ -503,7 +569,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               {libraryCounts.done > 0 && ` · ${libraryCounts.done} done`}
             </span>
             <span className="hidden sm:inline-block mx-2 h-4 w-px" style={{ background: 'var(--border)' }} />
-            <button
+            <Pressable
               onClick={onOpenDesk}
               className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
               style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
@@ -511,15 +577,15 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             >
               <span style={{ color: 'var(--accent)', fontSize: 11 }}>◈</span>
               Desk
-            </button>
-            <button
+            </Pressable>
+            <Pressable
               onClick={onOpenRawFiles}
               className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
               style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
             >
               <IconDoc className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />
               Raw files
-            </button>
+            </Pressable>
             <ExportWizard papers={papers} />
             <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
             <UserMenuInline />
@@ -552,8 +618,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
 
           {/* dropzone */}
           <div
-            onClick={() => onUpload()}
-            className={`dropzone${fileOver ? ' is-over' : ''} cursor-pointer rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
+            className={`dropzone${fileOver ? ' is-over' : ''} rounded-xl px-4 sm:px-7 py-3 sm:py-4 flex items-center gap-3 sm:gap-6`}
             style={{ background: fileOver ? undefined : 'var(--bg-2)' }}
           >
             <div
@@ -570,17 +635,18 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 Extraction, VLM enhancement, and embedding run entirely on-device.
               </div>
             </div>
-            <div className="hidden sm:flex flex-col items-end gap-1.5 shrink-0">
-              <div className="text-[10.5px] font-mono" style={{ color: 'var(--muted)' }}>
+            <div className="ml-auto flex flex-col items-end gap-1.5 shrink-0">
+              <div className="hidden sm:block text-[10.5px] font-mono" style={{ color: 'var(--muted)' }}>
                 PDF · large books OK · stays on this machine
               </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); onUpload(); }}
+              <Pressable
+                type="button"
+                onClick={(e) => onUpload(undefined, e.currentTarget)}
                 className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
                 style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
                 <IconPlus className="w-3.5 h-3.5" /> Add paper
-              </button>
+              </Pressable>
             </div>
           </div>
 
@@ -605,7 +671,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 }}
               />
             </div>
-            <button
+            <Pressable
               type="button"
               onClick={() => { setArea((a) => (a === 'done' ? 'reading' : 'done')); setDoneFolder(null); }}
               className="lib-done-toggle px-3 py-2 rounded-md text-[12.5px] flex items-center gap-1.5 shrink-0"
@@ -623,8 +689,8 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               {libraryCounts.done > 0 && (
                 <span className="font-mono text-[10.5px] opacity-80">{libraryCounts.done}</span>
               )}
-            </button>
-            <div className="flex items-center gap-1 ml-auto">
+            </Pressable>
+            <div className="lib-filter-controls flex items-center gap-1 ml-auto">
               {/* Kind filter chips: each toggles independently, so "Books" +
                   "Articles" together (papers hidden) is a valid combination.
                   None active = unconstrained, matching kindFilters' own
@@ -633,10 +699,10 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 {KIND_FILTERS.map(({ key, label }) => {
                   const active = kindFilters.has(key);
                   return (
-                    <button
+                    <Pressable
                       key={key}
                       onClick={() => toggleKindFilter(key)}
-                      className="px-2.5 py-1.5 rounded-md text-[12px]"
+                      className="lib-filter-chip px-2.5 py-1.5 rounded-md text-[12px]"
                       style={{
                         background: active ? 'var(--accent)' : 'var(--bg-2)',
                         color: active ? 'var(--accent-fg)' : 'var(--muted)',
@@ -645,27 +711,27 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                       }}
                     >
                       {label}
-                    </button>
+                    </Pressable>
                   );
                 })}
               </div>
-              <button
+              <Pressable
                 onClick={() => {
                   const idx = cycleSorts.indexOf(sort);
                   setSort(cycleSorts[(idx + 1) % cycleSorts.length]);
                 }}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px]"
+                className="lib-filter-sort flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px]"
                 style={{ color: 'var(--muted)' }}
               >
                 <IconSort className="w-3.5 h-3.5" />
                 Sort · {sort}
-              </button>
+              </Pressable>
               <div
                 className="flex items-center rounded-md p-0.5 ml-1"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
               >
                 {(['grid', 'list'] as LibraryLayout[]).map((v) => (
-                  <button
+                  <Pressable
                     key={v}
                     onClick={() => setLayout(v)}
                     className="p-1.5 rounded"
@@ -675,7 +741,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                     }}
                   >
                     {v === 'grid' ? <IconGrid className="w-3.5 h-3.5" /> : <IconList className="w-3.5 h-3.5" />}
-                  </button>
+                  </Pressable>
                 ))}
               </div>
             </div>
@@ -686,22 +752,33 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
       {/* ── Scrollable papers ── */}
       <main className="flex-1 min-h-0 overflow-y-auto thin-scroll">
         <div className="max-w-[1240px] mx-auto px-8 py-6 pb-10">
-          {notice && (
-            <div className="lib-notice">
-              <span>{notice}</span>
-              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</button>
-            </div>
-          )}
+          <AnimatePresence initial={false}>
+            {notice && (
+              <m.div
+                key={notice}
+                className="lib-notice"
+                initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -18, height: 0 }}
+                animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, height: 'auto' }}
+                exit={reducedMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, y: -8, height: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0 }}
+                transition={reducedMotion ? reducedMotionFade : gentle}
+              >
+                <span>{notice}</span>
+                <Pressable type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</Pressable>
+              </m.div>
+            )}
+          </AnimatePresence>
 
           {area === 'done' && (
             <nav className="lib-crumbs" aria-label="Where you are in Done Reading">
-              <button type="button" onClick={() => setArea('reading')}>Library</button>
+              <Pressable type="button" onClick={() => setArea('reading')}>Library</Pressable>
               <span className="lib-crumb-sep">›</span>
               {doneFolder === null ? (
                 <span className="is-here">Done Reading</span>
               ) : (
                 <>
-                  <button type="button" onClick={() => setDoneFolder(null)}>Done Reading</button>
+                  <Pressable type="button" onClick={() => setDoneFolder(null)}>Done Reading</Pressable>
                   <span className="lib-crumb-sep">›</span>
                   <span className="is-here"><IconFolder className="w-3.5 h-3.5" /> {doneFolder}</span>
                 </>
@@ -713,7 +790,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             <div className="lib-folders">
               {folderCards.map((f) => (
                 <div key={f.name} className={`lib-folder${folderRenaming === f.name ? ' is-renaming' : ''}`}>
-                  <button
+                  <Pressable
                     type="button"
                     className="lib-folder-open"
                     onClick={() => { if (folderRenaming !== f.name) setDoneFolder(f.name); }}
@@ -730,17 +807,18 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                       <span className="lib-folder-name" title={f.name}>{f.name}</span>
                     )}
                     <span className="lib-folder-count">{f.count}</span>
-                  </button>
+                  </Pressable>
                   {folderRenaming !== f.name && (
                     <div className="paper-actions">
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); setFolderRenaming(f.name); }}
+                    <Pressable
+                      type="button"
+                      intensity="calm"
+                      onClick={(e) => { e.stopPropagation(); setFolderRenaming(f.name); }}
                         title="Rename this folder"
                         aria-label={`Rename folder ${f.name}`}
                       >
                         <IconPencil className="w-3.5 h-3.5" />
-                      </button>
+                      </Pressable>
                     </div>
                   )}
                 </div>
@@ -757,8 +835,8 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 <div key={i} className="paper-card is-skeleton" aria-hidden="true">
                   <div className="paper-cover is-blank" />
                   <div className="paper-body">
-                    <div className="skeleton-line" style={{ width: '80%' }} />
-                    <div className="skeleton-line" style={{ width: '45%' }} />
+                    <SkeletonLine width="80%" />
+                    <SkeletonLine width="45%" />
                   </div>
                 </div>
               ))}
@@ -767,18 +845,97 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
               Could not reach the backend ({loadError}).
             </p>
-          ) : layout === 'grid' ? (
-            <div className="lib-grid">
-              {filtered.map((p) => (
-                <PaperCard key={p.id} {...cardProps(p)} />
-              ))}
-            </div>
           ) : (
-            <div className="lib-rows">
-              {filtered.map((p) => (
-                <PaperRow key={p.id} {...cardProps(p)} />
-              ))}
-            </div>
+            <LayoutGroup>
+              <AnimatePresence mode="wait">
+                <PresenceAwarePaper
+                  key={layout}
+                  data-testid="library-motion-layout"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={reducedMotion ? reducedMotionFade : calm}
+                >
+                  <div className={layout === 'grid' ? 'lib-grid' : 'lib-rows'}>
+                    <AnimatePresence mode="popLayout" custom={deletedPaperIdsRef.current}>
+                      {filtered.map((p, index) => {
+                        const isArrival = arrivingPaperIdsRef.current.has(p.id)
+                          && !completedEntranceIds.has(p.id);
+                        const shouldStagger = layout === 'grid'
+                          && initialStaggerIdsRef.current.has(p.id)
+                          && !completedEntranceIds.has(p.id);
+                        const shouldShowArrivalGlow = arrivingPaperIdsRef.current.has(p.id)
+                          && !completedArrivalGlowIds.has(p.id);
+                        return (
+                          <PresenceAwarePaper
+                            key={p.id}
+                            data-testid="paper-motion-item"
+                            data-arrival={isArrival ? 'true' : undefined}
+                            className="relative"
+                            layout="position"
+                            initial={isArrival
+                              ? reducedMotion
+                                ? { opacity: 0 }
+                                : { opacity: 0, y: -40, rotate: -4, scale: 0.9 }
+                              : shouldStagger ? reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 } : false}
+                            animate={isArrival
+                              ? reducedMotion
+                                ? { opacity: 1 }
+                                : { opacity: 1, y: 0, rotate: 0, scale: 1 }
+                              : shouldStagger ? { opacity: 1, y: 0 } : undefined}
+                            variants={{
+                              exit: (deletedIds: Set<string> | undefined) => {
+                                const deleted = (deletedIds ?? deletedPaperIdsRef.current).has(p.id);
+                                if (reducedMotion) return { opacity: 0, transition: reducedMotionFade };
+                                return deleted
+                                  ? { opacity: 0, scale: 0.6, rotate: 6, transition: playful }
+                                  : { opacity: 0, scale: 0.8, transition: calm };
+                              },
+                            }}
+                            exit="exit"
+                            transition={reducedMotion
+                              ? reducedMotionFade
+                              : {
+                                  ...playful,
+                                  delay: shouldStagger ? Math.min(index, 11) * 0.07 : 0,
+                                }}
+                            onAnimationComplete={() => {
+                              if (isArrival || shouldStagger) {
+                                setCompletedEntranceIds((completed) => {
+                                  if (completed.has(p.id)) return completed;
+                                  const next = new Set(completed);
+                                  next.add(p.id);
+                                  return next;
+                                });
+                              }
+                            }}
+                          >
+                            {shouldShowArrivalGlow && (
+                              <ArrivalGlow
+                                key="arrival-glow"
+                                paperId={p.id}
+                                reducedMotion={reducedMotion}
+                                onComplete={() => {
+                                  setCompletedArrivalGlowIds((completed) => {
+                                    if (completed.has(p.id)) return completed;
+                                    const next = new Set(completed);
+                                    next.add(p.id);
+                                    return next;
+                                  });
+                                }}
+                              />
+                            )}
+                            {layout === 'grid'
+                              ? <PaperCard {...cardProps(p)} />
+                              : <PaperRow {...cardProps(p)} />}
+                          </PresenceAwarePaper>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </div>
+                </PresenceAwarePaper>
+              </AnimatePresence>
+            </LayoutGroup>
           )}
           {!loading && !loadError && filtered.length === 0 && papers.length === 0 && (
             <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
@@ -807,15 +964,15 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             </p>
           )}
 
-          {shelving && (
-            <ShelfPanel
-              paper={shelving}
-              folders={folders}
-              onChoose={(folder) => void shelve(shelving, true, folder)}
-              onUnshelve={() => void shelve(shelving, false, null)}
-              onClose={() => setShelving(null)}
-            />
-          )}
+          <ShelfPanel
+            open={shelving !== null}
+            paper={shelving}
+            folders={folders}
+            onChoose={(folder) => { if (shelving) void shelve(shelving, true, folder); }}
+            onUnshelve={() => { if (shelving) void shelve(shelving, false, null); }}
+            onClose={() => setShelving(null)}
+            returnFocusRef={shelvingOpenerRef}
+          />
         </div>
       </main>
     </div>
@@ -833,7 +990,7 @@ interface CardProps {
   /** Which area the card is shown in — decides which shelf action it offers. */
   area: 'reading' | 'done';
   /** Open the shelf panel: "mark as done" on the reading shelf, "move" in Done. */
-  onShelve: () => void;
+  onShelve: (opener: HTMLElement) => void;
   /** Done area only: straight back to the reading shelf, no panel. */
   onUnshelve: () => void;
   onConfirmWritingStyle: (style: ArabicWritingStyle) => void;
@@ -850,60 +1007,81 @@ function CardActions({
 }: {
   area: 'reading' | 'done';
   onStartRename: () => void;
-  onShelve: () => void;
+  onShelve: (opener: HTMLElement) => void;
   onUnshelve: () => void;
   onDelete: () => void;
 }) {
   return (
     <div className="paper-actions">
-      <button
+      <Pressable
         type="button"
+        intensity="calm"
         onClick={(e) => { e.stopPropagation(); onStartRename(); }}
         title="Rename this paper"
         aria-label="Rename this paper"
       >
         <IconPencil className="w-3.5 h-3.5" />
-      </button>
+      </Pressable>
       {area === 'reading' ? (
-        <button
+        <Pressable
           type="button"
+          intensity="calm"
           className="is-done"
-          onClick={(e) => { e.stopPropagation(); onShelve(); }}
+          onClick={(e) => { e.stopPropagation(); onShelve(e.currentTarget); }}
           title="Done reading — move it to Done Reading"
           aria-label="Mark as done reading"
         >
           <IconCheck className="w-3.5 h-3.5" />
-        </button>
+        </Pressable>
       ) : (
         <>
-          <button
+          <Pressable
             type="button"
-            onClick={(e) => { e.stopPropagation(); onShelve(); }}
+            intensity="calm"
+            onClick={(e) => { e.stopPropagation(); onShelve(e.currentTarget); }}
             title="Move to a folder"
             aria-label="Move to a folder"
           >
             <IconFolder className="w-3.5 h-3.5" />
-          </button>
-          <button
+          </Pressable>
+          <Pressable
             type="button"
+            intensity="calm"
             onClick={(e) => { e.stopPropagation(); onUnshelve(); }}
             title="Back to the reading shelf"
             aria-label="Back to the reading shelf"
           >
             <IconUndo className="w-3.5 h-3.5" />
-          </button>
+          </Pressable>
         </>
       )}
-      <button
+      <Pressable
         type="button"
+        intensity="calm"
         className="is-danger"
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         title="Delete this paper"
         aria-label="Delete this paper"
       >
         <IconTrash className="w-3.5 h-3.5" />
-      </button>
+      </Pressable>
     </div>
+  );
+}
+
+function SkeletonLine({ width }: { width: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const active = usePauseWhenHidden(ref);
+  const reducedMotion = useReducedMotion();
+  const shimmer = active && !reducedMotion;
+  return (
+    <m.div
+      ref={ref}
+      className="skeleton-line"
+      style={{ width }}
+      animate={shimmer ? { opacity: [0.5, 0.95, 0.5] } : { opacity: 0.62 }}
+      transition={shimmer ? { duration: 1.6, ease: 'easeInOut', repeat: Infinity } : calm}
+    />
   );
 }
 
@@ -924,6 +1102,7 @@ function PaperCard({
   confirmationPending,
 }: CardProps) {
   const processing = isProcessing(paper);
+  const reducedMotion = useReducedMotion();
   return (
     <article className={`paper-card${renaming ? ' is-renaming' : ''}`}>
       {/*
@@ -938,8 +1117,10 @@ function PaperCard({
         A card being renamed is not an open target at all: a stray click
         inside the editor would otherwise open the reader mid-edit.
       */}
-      <div
+      <m.div
         className="paper-open"
+        whileTap={!renaming && !reducedMotion ? jellyPress : undefined}
+        transition={playful}
         onClick={renaming ? undefined : onOpen}
         role={renaming ? undefined : 'button'}
         tabIndex={renaming ? undefined : 0}
@@ -952,7 +1133,23 @@ function PaperCard({
           }
         }}
       >
-        <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
+        <div className="paper-cover-stage">
+          <div className="paper-page-stack" aria-hidden="true">
+            <span className="paper-page-edge paper-page-edge-back" />
+            <span className="paper-page-edge paper-page-edge-middle" />
+            <span className="paper-page-face">
+              <span className="paper-page-lines" />
+            </span>
+          </div>
+          <m.div
+            className="paper-cover-motion"
+            style={{ transformOrigin: 'left center' }}
+            whileHover={!reducedMotion && !renaming ? { rotateY: -30, rotateZ: -3 } : undefined}
+            transition={playful}
+          >
+            <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
+          </m.div>
+        </div>
 
         <div className="paper-body">
           <div className="paper-head">
@@ -980,7 +1177,7 @@ function PaperCard({
             </span>
           </div>
         </div>
-      </div>
+      </m.div>
 
       <ArabicOcrStatus
         errorCode={paper.arabicErrorCode}
@@ -1080,10 +1277,13 @@ function PaperRow({
   confirmationPending,
 }: CardProps) {
   const processing = isProcessing(paper);
+  const reducedMotion = useReducedMotion();
   return (
-    <div
+    <m.div
       onClick={renaming ? undefined : onOpen}
       className={`paper-row${renaming ? ' is-renaming' : ''}`}
+      whileHover={!reducedMotion && !renaming ? { x: 4 } : undefined}
+      transition={reducedMotion ? calm : playful}
     >
       <PaperCover
         paperId={paper.id}
@@ -1125,7 +1325,7 @@ function PaperRow({
         </span>
       </div>
       {!renaming && <CardActions area={area} onStartRename={onStartRename} onShelve={onShelve} onUnshelve={onUnshelve} onDelete={onDelete} />}
-    </div>
+    </m.div>
   );
 }
 
@@ -1138,64 +1338,76 @@ function PaperRow({
 // classes so it reads as the app's one modal.
 
 function ShelfPanel({
+  open,
   paper,
   folders,
   onChoose,
   onUnshelve,
   onClose,
+  returnFocusRef,
 }: {
-  paper: Paper;
+  open: boolean;
+  paper: Paper | null;
   folders: string[];
   /** null = the top of Done Reading, otherwise the folder name. */
   onChoose: (folder: string | null) => void;
   onUnshelve: () => void;
   onClose: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   const [newName, setNewName] = useState('');
-  const moving = Boolean(paper.doneAt);
+  const moving = Boolean(paper?.doneAt);
   const clean = newName.trim();
   const exists = folders.some((f) => f.toLowerCase() === clean.toLowerCase());
+  const newFolderRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    if (open) setNewName('');
+  }, [open]);
 
   return (
-    <div className="confirm-backdrop" role="dialog" aria-modal="true" aria-labelledby="shelf-title" onClick={onClose}>
+    <Sheet
+      open={open}
+      onClose={onClose}
+      labelledBy="shelf-title"
+      initialFocusRef={newFolderRef}
+      returnFocusRef={returnFocusRef}
+      panelClassName="motion-sheet-panel--content"
+    >
       <div className="confirm-card shelf-panel" onClick={(e) => e.stopPropagation()}>
         <h2 className="confirm-title" id="shelf-title">
           {moving ? 'Move' : 'Done reading'}
         </h2>
         <p className="confirm-body">
-          <span className="shelf-panel-paper">{paper.title}</span>
+          <span className="shelf-panel-paper">{paper?.title}</span>
           {moving
             ? ' — where should it go?'
             : ' — it leaves the reading shelf but stays in your library, your notes and the Desk. Where should it go?'}
         </p>
 
         <div className="shelf-options">
-          <button
+          <Pressable
             type="button"
-            className={`shelf-option${moving && !paper.doneFolder ? ' is-current' : ''}`}
+            intensity="calm"
+            className={`shelf-option${moving && !paper?.doneFolder ? ' is-current' : ''}`}
             onClick={() => onChoose(null)}
           >
             <IconCheck className="w-4 h-4" />
             <span>Done Reading</span>
             <span className="shelf-option-hint">no folder</span>
-          </button>
+          </Pressable>
           {folders.map((f) => (
-            <button
+            <Pressable
               key={f}
               type="button"
-              className={`shelf-option${paper.doneFolder === f ? ' is-current' : ''}`}
+              intensity="calm"
+              className={`shelf-option${paper?.doneFolder === f ? ' is-current' : ''}`}
               onClick={() => onChoose(f)}
             >
               <IconFolder className="w-4 h-4" />
               <span>{f}</span>
-              {paper.doneFolder === f && <span className="shelf-option-hint">here now</span>}
-            </button>
+              {paper?.doneFolder === f && <span className="shelf-option-hint">here now</span>}
+            </Pressable>
           ))}
         </div>
 
@@ -1207,26 +1419,27 @@ function ShelfPanel({
           <input
             dir="auto"
             value={newName}
+            ref={newFolderRef}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="New folder, e.g. Technical Books"
             maxLength={80}
             aria-label="New folder name"
             autoFocus
           />
-          <button type="submit" className="confirm-go" disabled={!clean || exists}>
+          <Pressable type="submit" className="confirm-go" disabled={!clean || exists}>
             {exists ? 'Exists' : 'Create & move'}
-          </button>
+          </Pressable>
         </form>
 
         <div className="confirm-actions">
           {moving && (
-            <button type="button" className="confirm-cancel shelf-unshelve" onClick={onUnshelve}>
+            <Pressable type="button" className="confirm-cancel shelf-unshelve" onClick={onUnshelve}>
               <IconUndo className="w-3.5 h-3.5" /> Back to reading
-            </button>
+            </Pressable>
           )}
-          <button type="button" className="confirm-cancel" onClick={onClose}>Cancel</button>
+          <Pressable type="button" className="confirm-cancel" onClick={onClose}>Cancel</Pressable>
         </div>
       </div>
-    </div>
+    </Sheet>
   );
 }

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { groupByShelf, type Shelvable, type ShelfKey } from '../lib/shelves';
+import { Pressable } from '../motion';
 
 /**
  * A list of documents shown as collapsible shelves — Books, Research,
@@ -41,8 +42,9 @@ export function ShelfGroups<T extends Shelvable & { id: string }>({
     const open = !closed.has(k);
     return (
       <div className={`shelf-head${depth ? ' is-folder' : ''}`}>
-        <button
+        <Pressable
           type="button"
+          intensity="calm"
           className="shelf-toggle"
           onClick={() => toggle(k)}
           aria-expanded={open}
@@ -52,7 +54,7 @@ export function ShelfGroups<T extends Shelvable & { id: string }>({
           {depth === 1 && <span className="shelf-folder-glyph" aria-hidden="true">▤</span>}
           <span className="shelf-label">{label}</span>
           <span className="shelf-count">{count}</span>
-        </button>
+        </Pressable>
         {extra}
       </div>
     );

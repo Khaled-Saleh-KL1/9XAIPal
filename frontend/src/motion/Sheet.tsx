@@ -1,17 +1,9 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { createPortal } from 'react-dom';
-import type { ReactNode, RefObject, MouseEvent, KeyboardEvent } from 'react';
+import type { ReactNode, RefObject, MouseEvent } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { calm, playful, reducedMotionFade } from './springs';
-
-const focusableSelector = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
+import { useFocusTrap } from './useFocusTrap';
 
 export function Sheet({
   open,
@@ -20,6 +12,7 @@ export function Sheet({
   children,
   initialFocusRef,
   returnFocusRef,
+  panelClassName,
 }: {
   open: boolean;
   onClose: () => void;
@@ -27,21 +20,19 @@ export function Sheet({
   children: ReactNode;
   initialFocusRef?: RefObject<HTMLElement | null>;
   returnFocusRef?: RefObject<HTMLElement | null>;
+  panelClassName?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const backdropStarted = useRef(false);
   const reducedMotion = useReducedMotion();
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const initial = initialFocusRef?.current ?? panelRef.current?.querySelector<HTMLElement>(focusableSelector);
-    (initial ?? panelRef.current)?.focus();
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [open, initialFocusRef]);
+  const handleKeyDown = useFocusTrap({
+    active: open,
+    containerRef: panelRef,
+    initialFocusRef,
+    returnFocusRef,
+    onEscape: onClose,
+    lockScroll: true,
+  });
 
   const handleBackdropDown = (event: MouseEvent<HTMLDivElement>) => {
     backdropStarted.current = event.target === event.currentTarget;
@@ -52,40 +43,12 @@ export function Sheet({
     backdropStarted.current = false;
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      onClose();
-      return;
-    }
-    if (event.key !== 'Tab' || !panelRef.current) return;
-
-    const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(focusableSelector))
-      .filter((element) => element.getAttribute('aria-hidden') !== 'true');
-    if (!focusable.length) {
-      event.preventDefault();
-      panelRef.current.focus();
-      return;
-    }
-
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || !panelRef.current.contains(active))) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && (active === last || !panelRef.current.contains(active))) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
-
   const panelMotion = reducedMotion
-    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: reducedMotionFade }
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0, pointerEvents: 'none' }, transition: reducedMotionFade }
     : {
         initial: { y: 40, opacity: 0, rotate: -1, scale: 0.96 },
         animate: { y: 0, opacity: 1, rotate: 0, scale: 1 },
-        exit: { y: 24, opacity: 0, scale: 0.96 },
+        exit: { y: 24, opacity: 0, scale: 0.96, pointerEvents: 'none' },
         transition: playful,
       };
 
@@ -100,7 +63,7 @@ export function Sheet({
           data-testid="sheet-backdrop"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
           transition={reducedMotion ? reducedMotionFade : calm}
           onMouseDown={handleBackdropDown}
           onClick={handleBackdropClick}
@@ -108,7 +71,7 @@ export function Sheet({
           <m.div
             {...panelMotion}
             ref={panelRef}
-            className="motion-sheet-panel"
+            className={['motion-sheet-panel', panelClassName].filter(Boolean).join(' ')}
             role="dialog"
             aria-modal="true"
             aria-labelledby={labelledBy}
