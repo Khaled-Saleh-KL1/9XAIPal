@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { m, useReducedMotion } from 'motion/react';
 import { LogoMark } from '../components/LogoMark';
 import { BetaBadge } from '../components/BetaBadge';
 import { IconBack, IconPencil, IconPlus, IconTrash } from '../components/Icons';
@@ -9,6 +10,8 @@ import { ShelfGroups } from '../components/ShelfGroups';
 import { StickyBoard } from './StickyBoard';
 import { StudyChat, type PendingTurn } from './StudyChat';
 import { createPacer } from '../lib/pacer';
+import { Pressable, useFocusTrap, useTilt } from '../motion';
+import { calm, gentle, playful, reducedMotionFade } from '../motion/springs';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
   LIBRARY_SCOPE,
@@ -78,6 +81,13 @@ export function DeskView({
   onOpenPaper: (documentId: string, sequenceId?: number) => void;
 }) {
   const confirm = useConfirm();
+  const reducedMotion = useReducedMotion();
+  const [mobileLayout, setMobileLayout] = useState(
+    () => typeof window !== 'undefined' && Boolean(window.matchMedia?.('(max-width: 820px)').matches),
+  );
+  const [narrowLayout, setNarrowLayout] = useState(
+    () => typeof window !== 'undefined' && (window.matchMedia?.('(max-width: 1180px)').matches ?? window.innerWidth <= 1180),
+  );
   const [studies, setStudies] = useState<Study[]>([]);
   const [scope, setScope] = useState<string>(initialScope || LIBRARY_SCOPE);
   const [study, setStudy] = useState<Study | null>(null);
@@ -94,6 +104,9 @@ export function DeskView({
   const [wallNotes, setWallNotes] = useState<Sticky[]>([]);
   const [library, setLibrary] = useState<PaperMeta[]>([]);
   const [picking, setPicking] = useState(false);
+  const pickerOpenerRef = useRef<HTMLButtonElement>(null);
+  const chatBoardOpenerRef = useRef<HTMLButtonElement>(null);
+  const chatBoardDrawerRef = useRef<HTMLElement>(null);
   const [renaming, setRenaming] = useState(false);
   /** A study just created, whose rename box opens once it has loaded. */
   const [pendingRename, setPendingRename] = useState<string | null>(null);
@@ -120,6 +133,31 @@ export function DeskView({
    * a phone. This opens it as a slide-over instead.
    */
   const [railOpenMobile, setRailOpenMobile] = useState(false);
+  const [chatBoardOpen, setChatBoardOpen] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(max-width: 820px)');
+    if (!media) return;
+    const update = () => setMobileLayout(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  useEffect(() => {
+    const media = window.matchMedia?.('(max-width: 1180px)');
+    if (!media) return;
+    const update = () => setNarrowLayout(media.matches);
+    update();
+    media.addEventListener?.('change', update);
+    return () => media.removeEventListener?.('change', update);
+  }, []);
+  const closeChatBoard = useCallback(() => setChatBoardOpen(false), []);
+  const handleChatBoardKeyDown = useFocusTrap({
+    active: narrowLayout && chatBoardOpen,
+    containerRef: chatBoardDrawerRef,
+    returnFocusRef: chatBoardOpenerRef,
+    onEscape: closeChatBoard,
+  });
   const toggleBoard = useCallback(() => {
     setBoardHidden((v) => {
       const next = !v;
@@ -507,11 +545,27 @@ export function DeskView({
         <button
           type="button"
           className="desk-rail-toggle"
-          onClick={() => setRailOpenMobile(true)}
+          onClick={() => { setChatBoardOpen(false); setRailOpenMobile(true); }}
           title="Studies and papers"
         >
           Papers
         </button>
+
+        {page === 'study' && narrowLayout && (
+          <button
+            ref={chatBoardOpenerRef}
+            type="button"
+            className="desk-board-toggle"
+            aria-controls={chatBoardOpen ? 'chat-notes-drawer' : undefined}
+            aria-expanded={chatBoardOpen}
+            onClick={() => {
+              setRailOpenMobile(false);
+              setChatBoardOpen((open) => !open);
+            }}
+          >
+            Chat notes
+          </button>
+        )}
 
         <nav className="desk-tabs">
           <button
@@ -524,7 +578,7 @@ export function DeskView({
           <button
             type="button"
             className={`desk-tab${page === 'notes' ? ' is-on' : ''}`}
-            onClick={() => onPageChange('notes')}
+            onClick={() => { setChatBoardOpen(false); onPageChange('notes'); }}
           >
             Notes
             {wallNotes.length > 0 && <span className="marg-badge">{wallNotes.length}</span>}
@@ -559,12 +613,45 @@ export function DeskView({
         <div className={`desk-grid${boardHidden ? ' is-board-hidden' : ''}`}>
           {/* Only does anything below 820px (see .rail-backdrop): closes the
               slide-over on an outside tap, same as tapping a scope does. */}
-          <div
-            className={`rail-backdrop${railOpenMobile ? ' is-on' : ''}`}
+          <m.div
+            className={`rail-backdrop${mobileLayout ? ' is-mobile-layer' : ''}${railOpenMobile ? ' is-on' : ''}`}
+            initial={false}
+            animate={mobileLayout ? { opacity: railOpenMobile ? 1 : 0 } : { opacity: 0 }}
+            transition={reducedMotion ? reducedMotionFade : calm}
+            aria-hidden={!mobileLayout || !railOpenMobile}
+            inert={!mobileLayout || !railOpenMobile}
+            style={{
+              display: mobileLayout ? 'block' : 'none',
+              pointerEvents: mobileLayout && railOpenMobile ? 'auto' : 'none',
+            }}
             onClick={() => setRailOpenMobile(false)}
           />
           {/* ── Scopes ── */}
-          <nav className={`rail thin-scroll${railOpenMobile ? ' is-mobile-open' : ''}`}>
+          <m.nav
+            className={`rail thin-scroll${mobileLayout ? ' is-mobile-layer' : ''}`}
+            initial={false}
+            animate={mobileLayout
+              ? reducedMotion
+                ? { opacity: railOpenMobile ? 1 : 0 }
+                : { x: railOpenMobile ? 0 : '-100%', opacity: railOpenMobile ? 1 : 0 }
+              : { x: 0, opacity: 1 }}
+            transition={reducedMotion ? reducedMotionFade : gentle}
+            aria-hidden={mobileLayout && !railOpenMobile}
+            inert={mobileLayout && !railOpenMobile}
+            style={mobileLayout ? {
+              display: 'flex',
+              flexDirection: 'column',
+              position: 'fixed',
+              top: 52,
+              bottom: 0,
+              left: 0,
+              width: '82vw',
+              maxWidth: 320,
+              zIndex: 45,
+              pointerEvents: railOpenMobile ? 'auto' : 'none',
+              x: reducedMotion ? 0 : undefined,
+            } : undefined}
+          >
             <div className="rail-head">
               <h2>Studies</h2>
               <button type="button" className="board-add" onClick={newStudy} title="New study">
@@ -582,21 +669,19 @@ export function DeskView({
             </button>
 
             {studies.map((s) => (
-              <button
+              <StudyRailRow
                 key={s.id}
-                type="button"
-                className={`rail-row${scope === s.id ? ' is-on' : ''}`}
-                onClick={() => { setScope(s.id); setRailOpenMobile(false); }}
-              >
-                <span className="rail-row-name">{s.name}</span>
-                <span className="rail-row-count">{s.paper_count}</span>
-              </button>
+                study={s}
+                active={scope === s.id}
+                onSelect={() => { setScope(s.id); setRailOpenMobile(false); }}
+              />
             ))}
 
             <div className="rail-head rail-head-papers">
               <h2>{isLibrary ? 'Every paper' : 'In this study'}</h2>
               {!isLibrary && (
                 <button
+                  ref={pickerOpenerRef}
                   type="button"
                   className="rail-choose"
                   onClick={() => setPicking(true)}
@@ -662,7 +747,7 @@ export function DeskView({
                 </button>
               </div>
             )}
-          </nav>
+          </m.nav>
 
           <StudyChat
             scopeName={scopeName}
@@ -682,15 +767,55 @@ export function DeskView({
             onModelChange={chooseModel}
           />
 
-          <StickyBoard
-            notes={chatNotes}
-            scopeName={scopeName}
-            collapsed={boardHidden}
-            onToggle={toggleBoard}
-            onCreate={() => void addNote('chat')}
-            onSave={(id, patch) => void saveNote('chat', id, patch)}
-            onDelete={(id) => void removeNote('chat', id)}
-          />
+          {narrowLayout ? (
+            chatBoardOpen && (
+              <>
+                <button
+                  type="button"
+                  className="chat-notes-backdrop"
+                  aria-label="Close chat notes backdrop"
+                  tabIndex={-1}
+                  onClick={closeChatBoard}
+                />
+                <aside
+                  ref={chatBoardDrawerRef}
+                  id="chat-notes-drawer"
+                  className="chat-notes-drawer"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="chat-notes-drawer-title"
+                  tabIndex={-1}
+                  onKeyDown={handleChatBoardKeyDown}
+                >
+                  <div className="chat-notes-drawer-header">
+                    <h2 id="chat-notes-drawer-title">Chat notes</h2>
+                    <button type="button" className="chat-notes-drawer-close" aria-label="Close chat notes" onClick={closeChatBoard}>
+                      ×
+                    </button>
+                  </div>
+                  <StickyBoard
+                    notes={chatNotes}
+                    scopeName={scopeName}
+                    collapsed={boardHidden}
+                    onToggle={toggleBoard}
+                    onCreate={() => void addNote('chat')}
+                    onSave={(id, patch) => void saveNote('chat', id, patch)}
+                    onDelete={(id) => void removeNote('chat', id)}
+                  />
+                </aside>
+              </>
+            )
+          ) : (
+            <StickyBoard
+              notes={chatNotes}
+              scopeName={scopeName}
+              collapsed={boardHidden}
+              onToggle={toggleBoard}
+              onCreate={() => void addNote('chat')}
+              onSave={(id, patch) => void saveNote('chat', id, patch)}
+              onDelete={(id) => void removeNote('chat', id)}
+            />
+          )}
         </div>
       )}
 
@@ -700,8 +825,50 @@ export function DeskView({
         chosen={papers}
         onApply={(ids) => void applyPapers(ids)}
         onClose={() => setPicking(false)}
+        returnFocusRef={pickerOpenerRef}
       />
     </div>
+  );
+}
+
+function StudyRailRow({
+  study,
+  active,
+  onSelect,
+}: {
+  study: Study;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const tilt = useTilt<HTMLButtonElement>(6);
+  const reducedMotion = useReducedMotion();
+
+  return (
+    <Pressable
+      ref={tilt.ref}
+      data-testid="study-rail-row"
+      data-study-id={study.id}
+      type="button"
+      className={`rail-row${active ? ' is-on' : ''}`}
+      onClick={onSelect}
+      onPointerMove={tilt.onPointerMove}
+      onPointerLeave={tilt.onPointerLeave}
+      style={reducedMotion ? undefined : tilt.style}
+    >
+      {active && (reducedMotion ? (
+        <span className="rail-row-indicator" data-testid="active-study-indicator" aria-hidden="true" />
+      ) : (
+        <m.span
+          layoutId="active-study-indicator"
+          data-testid="active-study-indicator"
+          className="rail-row-indicator"
+          aria-hidden="true"
+          transition={playful}
+        />
+      ))}
+      <span className="rail-row-name">{study.name}</span>
+      <span className="rail-row-count">{study.paper_count}</span>
+    </Pressable>
   );
 }
 

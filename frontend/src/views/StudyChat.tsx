@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react';
+import { m, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
@@ -8,6 +9,8 @@ import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
 import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
 import { textDirection } from '../lib/documentDirection';
+import { playful, Pressable, reducedMotionFade } from '../motion';
+import { StreamingCaret } from './StreamingCaret';
 
 /**
  * The desk's chat.
@@ -64,34 +67,46 @@ function Answer({
   papers: StudyPaper[];
   onOpenPaper?: (documentId: string, sequenceId: number) => void;
 }) {
+  // The study owner currently passes an inline `onOpenPaper` callback. Keep
+  // current values in refs so ReactMarkdown's component map can stay stable
+  // while a streamed answer grows; otherwise React remounts CitationRef and
+  // discards its open state and fetched passage on every token.
+  const papersRef = useRef(papers);
+  papersRef.current = papers;
+  const onOpenPaperRef = useRef(onOpenPaper);
+  onOpenPaperRef.current = onOpenPaper;
+  const components = useMemo(() => ({
+    // Shared first: images and diagrams. The citation anchor below is the
+    // desk's own and must win, so it is spread after.
+    ...MARKDOWN_COMPONENTS,
+    a({ href, children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement>) {
+      const m = /^#cite-(\d+)-(\d+)$/.exec(href || '');
+      if (!m) return <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
+      const currentPapers = papersRef.current;
+      const paper = currentPapers[Number(m[1]) - 1];
+      // A citation into a paper the study no longer holds cannot be
+      // opened. Plain struck-through text is honest; a dead button is not.
+      if (!paper) return <span className="cite-dead">P{m[1]}:{m[2]}</span>;
+      return (
+        <CitationRef
+          key={`${paper.id}:${m[2]}`}
+          cite={{
+            paper: Number(m[1]),
+            document_id: paper.id,
+            label: paper.title,
+            sequence_id: Number(m[2]),
+          }}
+          onOpenPaper={onOpenPaperRef.current}
+        />
+      );
+    },
+  }), []);
+
   return (
     <ReactMarkdown
       remarkPlugins={MARKDOWN_REMARK}
       rehypePlugins={MARKDOWN_REHYPE}
-      components={{
-        // Shared first: images and diagrams. The citation anchor below is the
-        // desk's own and must win, so it is spread after.
-        ...MARKDOWN_COMPONENTS,
-        a({ href, children, ...rest }) {
-          const m = /^#cite-(\d+)-(\d+)$/.exec(href || '');
-          if (!m) return <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
-          const paper = papers[Number(m[1]) - 1];
-          // A citation into a paper the study no longer holds cannot be
-          // opened. Plain struck-through text is honest; a dead button is not.
-          if (!paper) return <span className="cite-dead">P{m[1]}:{m[2]}</span>;
-          return (
-            <CitationRef
-              cite={{
-                paper: Number(m[1]),
-                document_id: paper.id,
-                label: paper.title,
-                sequence_id: Number(m[2]),
-              }}
-              onOpenPaper={onOpenPaper}
-            />
-          );
-        },
-      }}
+      components={components}
     >
       {withCitationLinks(text)}
     </ReactMarkdown>
@@ -206,6 +221,12 @@ export function StudyChat({
   };
 
   const empty = turns.length === 0 && !pending;
+  const reducedMotion = useReducedMotion();
+  const messageInitial = reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6, rotate: -3, y: 12 };
+  const messageAnimate = reducedMotion
+    ? { opacity: 1 }
+    : { opacity: 1, scale: 1, rotate: 0, y: 0 };
+  const messageTransition = reducedMotion ? reducedMotionFade : playful;
 
   return (
     <section className="chat">
@@ -253,9 +274,28 @@ export function StudyChat({
           turns.map((turn) => (
             <Fragment key={turn.id}>
               {turn.role === 'user' ? (
-                <div className="msg is-user"><div className="msg-body" dir={textDirection(turn.content) ?? 'auto'}>{turn.content}</div></div>
+                <m.div
+                  key={`${turn.id}-message`}
+                  data-testid="study-message-motion"
+                  data-study-message-key={turn.id}
+                  initial={false}
+                  animate={messageAnimate}
+                  transition={messageTransition}
+                  style={{ transformOrigin: 'center' }}
+                >
+                  <div className="msg is-user"><div className="msg-body" dir={textDirection(turn.content) ?? 'auto'}>{turn.content}</div></div>
+                </m.div>
               ) : (
-                <div className="msg is-assistant">
+                <m.div
+                  key={`${turn.id}-message`}
+                  data-testid="study-message-motion"
+                  data-study-message-key={turn.id}
+                  initial={false}
+                  animate={messageAnimate}
+                  transition={messageTransition}
+                  style={{ transformOrigin: 'center' }}
+                  className="msg is-assistant"
+                >
                   <div className="msg-meta">
                     {turn.model && <span className="note-model">{turn.model}</span>}
                   </div>
@@ -282,7 +322,7 @@ export function StudyChat({
                       ))}
                     </div>
                   )}
-                </div>
+                </m.div>
               )}
             </Fragment>
           ))
@@ -290,8 +330,28 @@ export function StudyChat({
 
         {pending && (
           <>
-            <div className="msg is-user"><div className="msg-body" dir={textDirection(pending.question) ?? 'auto'}>{pending.question}</div></div>
-            <div className="msg is-assistant">
+            <m.div
+              key={`${pending.clientId}-user`}
+              data-testid="study-message-motion"
+              data-study-message-key={`${pending.clientId}-user`}
+              initial={messageInitial}
+              animate={messageAnimate}
+              transition={messageTransition}
+              style={{ transformOrigin: 'center' }}
+            >
+              <div className="msg is-user"><div className="msg-body" dir={textDirection(pending.question) ?? 'auto'}>{pending.question}</div></div>
+            </m.div>
+            <m.div
+              key={`${pending.clientId}-assistant`}
+              data-testid="study-message-motion"
+              data-study-message-key={`${pending.clientId}-assistant`}
+              data-streaming={pending.answer && !pending.verifying && !pending.error ? 'true' : undefined}
+              initial={messageInitial}
+              animate={messageAnimate}
+              transition={messageTransition}
+              style={{ transformOrigin: 'center' }}
+              className="msg is-assistant"
+            >
               {/* Live, the trail IS the progress indicator: the answer has not
                   started yet and a bare spinner says nothing about what it is
                   doing across five papers. */}
@@ -308,6 +368,7 @@ export function StudyChat({
                     papers={papers}
                     onOpenPaper={onOpenPaper}
                   />
+                  {!pending.verifying && <StreamingCaret />}
                   <EvidencePanel report={null} verifying={pending.verifying} />
                 </div>
               ) : (
@@ -316,7 +377,7 @@ export function StudyChat({
                   {pending.status || 'Thinking…'}
                 </div>
               )}
-            </div>
+            </m.div>
           </>
         )}
       </div>
@@ -341,14 +402,14 @@ export function StudyChat({
         />
         <div className="chat-composer-row">
           <ModelPicker catalog={catalog} model={model} onChange={onModelChange} />
-          <button
+          <Pressable
             type="button"
             className="chat-send"
             onClick={send}
             disabled={!draft.trim() || !!pending}
           >
             {pending ? 'Working…' : 'Ask'}
-          </button>
+          </Pressable>
         </div>
       </div>
     </section>

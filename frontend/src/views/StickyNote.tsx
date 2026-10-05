@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { m, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import type { Sticky, StickyColor } from '../api';
+import { playful, reducedMotionFade, usePauseWhenHidden, useTilt } from '../motion';
 
 /**
  * One sticky note, shared by the chat strip and the universal board.
@@ -53,6 +55,8 @@ export function StickyNote({
   pinned = false,
   tilt = 0,
   footer,
+  entrance,
+  exitOnRemove = true,
 }: {
   note: Sticky;
   onSave: (patch: { body?: string; color?: StickyColor; pinned?: boolean }) => void;
@@ -60,6 +64,8 @@ export function StickyNote({
   pinned?: boolean;
   tilt?: number;
   footer?: React.ReactNode;
+  entrance?: 'pop' | 'none';
+  exitOnRemove?: boolean;
 }) {
   const [editing, setEditing] = useState(note.body === '' && note.origin === 'user');
   const [draft, setDraft] = useState(note.body);
@@ -76,10 +82,25 @@ export function StickyNote({
   const [clipped, setClipped] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const clickWasDrag = useRef(false);
+  const clickResetTimer = useRef<number | null>(null);
+  const tiltMotion = useTilt(6);
+  const inView = usePauseWhenHidden(tiltMotion.ref);
+  const reducedMotion = useReducedMotion();
+  const actualEntrance = entrance ?? (note.body === '' && note.origin === 'user' ? 'pop' : 'none');
+  const sway = !reducedMotion && !editing && inView;
+
+  useEffect(() => () => {
+    if (clickResetTimer.current != null) window.clearTimeout(clickResetTimer.current);
+  }, []);
 
   useEffect(() => {
     if (editing) ref.current?.focus({ preventScroll: true });
   }, [editing]);
+
+  useEffect(() => {
+    if (editing && pinned) tiltMotion.onPointerLeave();
+  }, [editing, pinned, tiltMotion.onPointerLeave]);
 
   // The body can change under us: the assistant edits notes too. So a card
   // that is not being edited follows the server.
@@ -119,17 +140,90 @@ export function StickyNote({
     if (draft !== note.body) onSave({ body: draft });
   };
 
+  const ignoreControlDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest('button, textarea, input, select, a')) {
+      event.stopPropagation();
+    }
+  };
+
+  const onDragStart = () => {
+    clickWasDrag.current = true;
+  };
+
+  const onDragEnd = () => {
+    if (clickResetTimer.current != null) window.clearTimeout(clickResetTimer.current);
+    clickResetTimer.current = window.setTimeout(() => {
+      clickWasDrag.current = false;
+      clickResetTimer.current = null;
+    }, 0);
+  };
+
+  const openEditor = () => {
+    if (clickWasDrag.current) {
+      clickWasDrag.current = false;
+      if (clickResetTimer.current != null) window.clearTimeout(clickResetTimer.current);
+      clickResetTimer.current = null;
+      return;
+    }
+    setDraft(note.body);
+    setEditing(true);
+  };
+
+  const animateSway = sway ? [0, 1.5, -1.5, 0] : 0;
+  const rotateTransition = sway
+    ? { type: 'tween' as const, duration: 3.6, ease: 'easeInOut' as const, repeat: Infinity, delay: swayPhase(note.id) }
+    : playful;
+  const editingTransition = editing && actualEntrance !== 'pop'
+    ? { type: 'tween' as const, duration: 0 }
+    : rotateTransition;
+
   return (
-    <article
-      className={[
-        'sticky',
-        `tone-${note.color}`,
-        note.pinned ? 'is-pinned' : '',
-        note.origin === 'assistant' ? 'is-ai' : '',
-        pinned ? 'is-tacked' : '',
-      ].filter(Boolean).join(' ')}
-      style={pinned ? { transform: `rotate(${tilt}deg)` } : undefined}
+    <m.div
+      ref={tiltMotion.ref}
+      data-testid="sticky-motion-wrapper"
+      data-motion-key={note.id}
+      layout={reducedMotion ? false : 'position'}
+      drag={!editing && !reducedMotion}
+      dragListener={!editing && !reducedMotion}
+      dragElastic={0.6}
+      dragSnapToOrigin
+      dragTransition={{ bounceStiffness: 500, bounceDamping: 15 }}
+      whileDrag={!editing && !reducedMotion ? { scale: 1.08, rotate: 4, zIndex: 10 } : undefined}
+      onPointerDownCapture={ignoreControlDrag}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      initial={reducedMotion || actualEntrance === 'none'
+        ? false
+        : { opacity: 0, scale: 0.5, rotate: -8, y: 12 }}
+      animate={reducedMotion
+        ? { opacity: 1 }
+        : { opacity: 1, scale: 1, rotate: editing && actualEntrance !== 'pop' ? 0 : animateSway, y: 0 }}
+      exit={exitOnRemove
+        ? reducedMotion
+          ? { opacity: 0, pointerEvents: 'none' }
+          : { opacity: 0, scale: 0.4, rotate: 20, pointerEvents: 'none' }
+        : undefined}
+      transition={reducedMotion
+        ? reducedMotionFade
+        : { ...playful, rotate: editing ? editingTransition : rotateTransition }}
+      whileHover={!editing && !reducedMotion
+        ? { rotate: [0, -4, 3, -2, 0], y: -3, scale: 1.02, transition: { type: 'tween', duration: 0.5, ease: 'easeInOut' } }
+        : undefined}
+      onPointerMove={pinned && !editing ? tiltMotion.onPointerMove : undefined}
+      onPointerLeave={pinned && !editing ? tiltMotion.onPointerLeave : undefined}
+      style={!reducedMotion && pinned && !editing ? tiltMotion.style : undefined}
     >
+      <article
+        className={[
+          'sticky',
+          `tone-${note.color}`,
+          note.pinned ? 'is-pinned' : '',
+          note.origin === 'assistant' ? 'is-ai' : '',
+          pinned ? 'is-tacked' : '',
+        ].filter(Boolean).join(' ')}
+        style={pinned && !reducedMotion ? { transform: `rotate(${tilt}deg)` } : undefined}
+      >
       {pinned && <span className="sticky-tack" aria-hidden="true" />}
 
       <div className="sticky-top">
@@ -194,7 +288,7 @@ export function StickyNote({
         <div
           ref={bodyRef}
           className={`sticky-body md-body${clipped ? ' is-clipped' : ''}`}
-          onClick={() => { setDraft(note.body); setEditing(true); }}
+          onClick={openEditor}
           title={clipped ? 'Click to read and edit the rest' : 'Click to edit'}
         >
           {note.body ? (
@@ -208,6 +302,13 @@ export function StickyNote({
       )}
 
       {footer && <div className="sticky-foot">{footer}</div>}
-    </article>
+      </article>
+    </m.div>
   );
+}
+
+function swayPhase(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  return (Math.abs(hash) % 4) * 0.18;
 }

@@ -1,19 +1,22 @@
 import { forwardRef } from 'react';
 import type { ComponentPropsWithoutRef, Ref } from 'react';
 import { m, useReducedMotion } from 'motion/react';
+import type { MotionStyle } from 'motion/react';
 import { calm, jellyPress, playful } from './springs';
 
-type Intensity = 'playful' | 'calm';
+type Intensity = 'playful' | 'calm' | 'citation';
 type MotionEventCollisions = 'onDrag' | 'onDragStart' | 'onDragEnd' | 'onAnimationStart';
 type NativeMotionHandlers<T extends 'button' | 'a'> = Pick<ComponentPropsWithoutRef<T>, MotionEventCollisions>;
 type ButtonProps = {
   as?: 'button';
   intensity?: Intensity;
-} & ComponentPropsWithoutRef<'button'> & NativeMotionHandlers<'button'>;
+  style?: MotionStyle;
+} & Omit<ComponentPropsWithoutRef<'button'>, 'style'> & NativeMotionHandlers<'button'>;
 type AnchorProps = {
   as: 'a';
   intensity?: Intensity;
-} & ComponentPropsWithoutRef<'a'> & NativeMotionHandlers<'a'>;
+  style?: MotionStyle;
+} & Omit<ComponentPropsWithoutRef<'a'>, 'style'> & NativeMotionHandlers<'a'>;
 export type PressableProps = ButtonProps | AnchorProps;
 
 function PressableImpl(
@@ -25,10 +28,14 @@ function PressableImpl(
   const disabled = as === 'button' && Boolean((rest as ComponentPropsWithoutRef<'button'>).disabled);
   const canAnimate = !reducedMotion && !disabled;
   const whileHover = canAnimate
-    ? intensity === 'playful' ? { y: -3, scale: 1.05, rotate: -1 } : { y: -1 }
+    ? intensity === 'playful'
+      ? { y: -3, scale: 1.05, rotate: -1 }
+      : intensity === 'citation'
+        ? { y: -1, scale: 1.06 }
+        : { y: -1 }
     : undefined;
   const whileTap = canAnimate
-    ? intensity === 'playful' ? jellyPress : { scale: 0.97 }
+    ? intensity === 'calm' ? { scale: 0.97 } : jellyPress
     : undefined;
   const motionClassName = ['motion-pressable', className].filter(Boolean).join(' ');
 
@@ -46,7 +53,7 @@ function PressableImpl(
         onAnimationStartCapture={onAnimationStart}
         whileHover={whileHover}
         whileTap={whileTap}
-        transition={intensity === 'playful' ? playful : calm}
+        transition={intensity === 'calm' ? calm : playful}
       />
     );
   }
@@ -65,7 +72,7 @@ function PressableImpl(
       onAnimationStartCapture={onAnimationStart}
       whileHover={whileHover}
       whileTap={whileTap}
-      transition={intensity === 'playful' ? playful : calm}
+      transition={intensity === 'calm' ? calm : playful}
     />
   );
 }

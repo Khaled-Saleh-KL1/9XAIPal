@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { formatRelativeTime } from '../lib/time';
 import type { NoteGroup } from './NoteCard';
 import type { NoteDeck, PersonalBookmark, PersonalNote } from '../lib/personalNotes';
 import type { OutlineEntry } from '../api';
+import { useFocusTrap } from '../motion/useFocusTrap';
+import { calm, gentle, reducedMotionFade } from '../motion/springs';
 
 /**
  * One panel that answers "what is in this paper, and what have I done to it?"
@@ -108,6 +111,7 @@ export function MarginaliaPanel({
   onRemoveBookmark,
   onAddBookmark,
   currentSeq,
+  returnFocusRef,
 }: {
   open: boolean;
   tab: Tab;
@@ -121,9 +125,21 @@ export function MarginaliaPanel({
   onAddBookmark: () => void;
   /** The block currently at the top of the viewport, highlighted in the list. */
   currentSeq: number | null;
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }) {
   const [query, setQuery] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const reducedMotion = useReducedMotion();
+  const handlePanelKeyDown = useFocusTrap({
+    active: open,
+    containerRef: panelRef,
+    initialFocusRef: searchRef,
+    returnFocusRef,
+    onEscape: onClose,
+    shouldHandleEscape: () => !document.querySelector('.lightbox-backdrop'),
+    lockScroll: true,
+  });
 
   useEffect(() => {
     if (open) searchRef.current?.focus({ preventScroll: true });
@@ -132,7 +148,9 @@ export function MarginaliaPanel({
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !document.querySelector('.lightbox-backdrop')) onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
@@ -153,8 +171,6 @@ export function MarginaliaPanel({
     [rows, query],
   );
 
-  if (!open) return null;
-
   const go = (seq: number) => {
     onJump(seq);
     onClose();
@@ -167,12 +183,32 @@ export function MarginaliaPanel({
   };
 
   return (
-    <div className="marg-scrim" onClick={onClose}>
-      <aside
+    <AnimatePresence onExitComplete={() => returnFocusRef?.current?.focus()}>
+      {open && (
+      <m.div
+        key="marginalia-scrim"
+        className="marg-scrim"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0, pointerEvents: 'none' }}
+        transition={reducedMotion ? reducedMotionFade : calm}
+        onClick={onClose}
+      >
+      <m.aside
+        ref={panelRef}
         className="marg-panel thin-scroll"
+        initial={reducedMotion ? { opacity: 0 } : { x: 28, opacity: 0 }}
+        animate={reducedMotion ? { opacity: 1 } : { x: 0, opacity: 1 }}
+        exit={reducedMotion
+          ? { opacity: 0, pointerEvents: 'none' }
+          : { x: 18, opacity: 0, pointerEvents: 'none', transition: calm }}
+        transition={reducedMotion ? reducedMotionFade : gentle}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={handlePanelKeyDown}
         role="dialog"
+        aria-modal="true"
         aria-label="Contents, bookmarks and notes"
+        tabIndex={-1}
       >
         <div className="marg-head">
           <div className="marg-tabs">
@@ -329,7 +365,9 @@ export function MarginaliaPanel({
             )
           )}
         </div>
-      </aside>
-    </div>
+      </m.aside>
+      </m.div>
+      )}
+    </AnimatePresence>
   );
 }

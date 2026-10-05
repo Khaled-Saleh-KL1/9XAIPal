@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { m, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE , MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
@@ -15,6 +16,8 @@ import { EvidencePanel } from './EvidencePanel';
 import { citeChips, usePageMap } from '../lib/pageMap';
 import type { AgentStep, PaperNote } from '../api';
 import { textDirection } from '../lib/documentDirection';
+import { playful, reducedMotionFade } from '../motion';
+import { StreamingCaret } from './StreamingCaret';
 
 /**
  * A margin note: one question, its answer, and any follow-ups, rendered as a
@@ -88,6 +91,22 @@ function Answer({ text }: { text: string }) {
         {text}
       </ReactMarkdown>
     </div>
+  );
+}
+
+function PendingAnswer({ text }: { text: string }) {
+  const reducedMotion = useReducedMotion();
+
+  return (
+    <m.div
+      data-testid="pending-note-stream-answer"
+      initial={reducedMotion ? false : { opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={reducedMotion ? reducedMotionFade : playful}
+    >
+      <Answer text={text} />
+      <StreamingCaret />
+    </m.div>
   );
 }
 
@@ -228,7 +247,7 @@ export function PendingNoteCard({
             // Still streaming: withhold a half-written LaTeX span so the reader
             // doesn't watch raw markup type itself out and then snap into a symbol.
             <>
-              <Answer text={withCitationLinks(maskIncompleteMath(note.answer))} />
+              <PendingAnswer text={withCitationLinks(maskIncompleteMath(note.answer))} />
               <EvidencePanel report={null} verifying={note.verifying} />
             </>
           ) : (

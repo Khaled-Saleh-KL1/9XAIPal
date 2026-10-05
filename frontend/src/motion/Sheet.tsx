@@ -12,6 +12,7 @@ export function Sheet({
   children,
   initialFocusRef,
   returnFocusRef,
+  backdropClassName,
   panelClassName,
 }: {
   open: boolean;
@@ -20,6 +21,7 @@ export function Sheet({
   children: ReactNode;
   initialFocusRef?: RefObject<HTMLElement | null>;
   returnFocusRef?: RefObject<HTMLElement | null>;
+  backdropClassName?: string;
   panelClassName?: string;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -59,7 +61,7 @@ export function Sheet({
       {open && (
         <m.div
           key="sheet-backdrop"
-          className="motion-sheet-backdrop motion-sheet-backdrop--centered"
+          className={['motion-sheet-backdrop', 'motion-sheet-backdrop--centered', backdropClassName].filter(Boolean).join(' ')}
           data-testid="sheet-backdrop"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}

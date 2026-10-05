@@ -1294,7 +1294,6 @@ body {
   z-index: 30;
   background: color-mix(in oklab, var(--bg), transparent 45%);
   backdrop-filter: blur(3px);
-  animation: marg-fade 140ms ease;
 }
 @keyframes marg-fade { from { opacity: 0; } to { opacity: 1; } }
 .marg-panel {
@@ -1309,11 +1308,6 @@ body {
   background: var(--bg);
   border-left: 1px solid var(--border);
   box-shadow: -24px 0 60px -40px rgba(0, 0, 0, 0.5);
-  animation: marg-slide 180ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-@keyframes marg-slide {
-  from { transform: translateX(18px); opacity: 0; }
-  to   { transform: translateX(0); opacity: 1; }
 }
 .marg-head {
   display: flex;
@@ -2438,7 +2432,7 @@ body {
   transition: color 140ms ease;
 }
 .trail-toggle:hover { color: var(--muted); }
-.trail-caret { font-size: 8px; }
+.trail-caret { display: inline-block; font-size: 8px; }
 .trail-count { margin-left: auto; opacity: 0.8; }
 
 .trail-steps {
@@ -2631,34 +2625,7 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 }
 .evidence-unavailable { color: var(--muted); font-style: italic; }
 
-/* ── The assistant panel (the holistic level) ────────────────────────────
-   Docked LEFT, because the button that opens it is in the bottom-left corner
-   and a panel that flies in from the opposite side of the screen to the
-   control that summoned it reads as a different thing appearing. */
-.asst-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 45;
-  background: color-mix(in oklch, var(--fg), transparent 88%);
-  animation: marg-fade 140ms ease;
-}
-.asst-panel {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: min(440px, 92vw);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  border-right: 1px solid var(--border);
-  box-shadow: 24px 0 60px -30px rgba(0, 0, 0, 0.35);
-  animation: asst-slide 180ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-@keyframes asst-slide {
-  from { transform: translateX(-16px); opacity: 0; }
-  to   { transform: translateX(0);     opacity: 1; }
-}
+/* ── The assistant panel's content ─────────────────────────────────────── */
 .asst-head {
   display: flex;
   align-items: center;
@@ -3017,8 +2984,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 
 @media (prefers-reduced-motion: reduce) {
   .deck-face,
-  .marg-panel,
-  .marg-scrim,
   .ask-pill-group { animation: none; }
   /* DeckCard also skips the two-phase swap entirely under this preference,
      so the card changes in one commit rather than sitting at 86°. */
@@ -3087,10 +3052,9 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
    between "put away" and "gone". */
 .desk-grid.is-board-hidden { grid-template-columns: 250px minmax(0, 1fr) 38px; }
 @media (max-width: 1180px) {
-  /* The board folds away first: notes are a companion to the chat, and the
-     chat is unusable below a certain width. */
+  /* The chat notes open in a drawer at this width, leaving the chat column
+     room to keep its controls and transcript usable. */
   .desk-grid { grid-template-columns: 220px minmax(0, 1fr); }
-  .board { display: none; }
 }
 @media (max-width: 820px) {
   .desk-grid { grid-template-columns: minmax(0, 1fr); }
@@ -3099,7 +3063,8 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 
 /* Header button that reopens the rail once the grid has hidden it. Hidden
    above 820px, since the rail is just always there and this would be redundant. */
-.desk-rail-toggle {
+.desk-rail-toggle,
+.desk-board-toggle {
   display: none;
   font-size: 12px;
   padding: 5px 10px;
@@ -3111,13 +3076,16 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 @media (max-width: 820px) {
   .desk-rail-toggle { display: inline-flex; align-items: center; }
 }
+@media (max-width: 1180px) {
+  .desk-board-toggle { display: inline-flex; align-items: center; }
+}
 /* Slide-over: same .rail markup and behaviour as the desktop sidebar, just
    pulled out of grid flow and pinned over the chat instead of beside it.
    Scoped to the same breakpoint as the rest of this mobile treatment so
    resizing across 820px with the drawer open can't strand it as a fixed
    overlay on a desktop-width layout. */
 @media (max-width: 820px) {
-  .rail.is-mobile-open {
+  .rail.is-mobile-layer {
     display: flex;
     flex-direction: column;
     position: fixed;
@@ -3134,11 +3102,11 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   display: none;
 }
 @media (max-width: 820px) {
-  .rail-backdrop.is-on {
+  .rail-backdrop.is-mobile-layer {
     display: block;
     position: fixed;
     inset: 52px 0 0 0;
-    background: rgba(0, 0, 0, 0.32);
+    background: color-mix(in oklab, var(--fg), transparent 68%);
     z-index: 44;
   }
 }
@@ -3166,6 +3134,7 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   color: var(--faint);
 }
 .rail-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3178,7 +3147,16 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   transition: background 120ms ease, color 120ms ease;
 }
 .rail-row:hover { background: var(--bg-3); color: var(--fg); }
-.rail-row.is-on { background: var(--bg); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+.rail-row.is-on { background: var(--bg); color: var(--fg); }
+.rail-row-indicator {
+  position: absolute;
+  left: 0;
+  top: 20%;
+  width: 2px;
+  height: 60%;
+  border-radius: 2px;
+  background: var(--accent);
+}
 .rail-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-row-count {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -3457,6 +3435,15 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   transition: opacity 140ms ease;
 }
 .chat-send:disabled { opacity: 0.4; }
+.chat-stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-inline-start: 3px;
+  border-radius: 1px;
+  background: var(--accent);
+  vertical-align: -0.12em;
+}
 
 /* ── Citations that open where they sit ──────────────────────────────────
    The reason the desk can claim to serve reading without opening papers: a
@@ -3464,6 +3451,8 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 .cite-wrap { position: relative; }
 .cite-group { display: inline-flex; gap: 3px; margin: 0 2px; vertical-align: baseline; }
 .cite-chip {
+  display: inline-block;
+  vertical-align: baseline;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 9.5px;
   padding: 1px 6px;
@@ -3568,11 +3557,13 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 /* ── Sticky board ── */
 .board {
   border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   min-height: 0;
   background: var(--bg-2);
+  overflow: hidden;
 }
+.board-expanded { grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .board-head {
   flex-shrink: 0;
   display: flex;
@@ -3852,6 +3843,7 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
      scrap-of-paper look the tilt and the tack are doing. */
   align-items: start;
 }
+.wall-grid > .wall-motion-card { min-width: 0; }
 .wall-grid .sticky {
   padding: 16px 14px 12px;
   font-size: 13px;
@@ -3864,6 +3856,13 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   box-shadow: 0 16px 30px -16px rgba(0, 0, 0, 0.6);
   z-index: 2;
   position: relative;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wall-grid .sticky,
+  .wall-grid .sticky:hover {
+    transition: none;
+    transform: none !important;
+  }
 }
 /* A long note is allowed to be long, but not to own the row. Clamped, and
    clicking it opens the editor where the whole thing is visible. */
@@ -3921,11 +3920,10 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 /* ── The chat strip, folded away ── */
 .board.is-collapsed {
   padding: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
 }
 .board-reopen {
+  grid-area: 1 / 1;
+  align-self: start;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3959,6 +3957,62 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   color: var(--faint);
 }
 .board-hide:hover { color: var(--fg); }
+.chat-notes-backdrop {
+  position: fixed;
+  inset: 52px 0 0;
+  z-index: 46;
+  width: 100%;
+  height: calc(100vh - 52px);
+  padding: 0;
+  border: 0;
+  background: color-mix(in oklab, var(--fg), transparent 68%);
+}
+.chat-notes-drawer {
+  position: fixed;
+  top: 52px;
+  right: 0;
+  bottom: 0;
+  z-index: 47;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100vw - 20px));
+  min-height: 0;
+  background: var(--bg-2);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px -12px rgba(0, 0, 0, 0.35);
+}
+.chat-notes-drawer-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.chat-notes-drawer-header h2 {
+  font-family: 'Newsreader', ui-serif, Georgia, serif;
+  font-size: 17px;
+  color: var(--fg);
+}
+.chat-notes-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+}
+.chat-notes-drawer-close:hover { color: var(--fg); background: var(--bg-3); }
+.chat-notes-drawer .board {
+  flex: 1;
+  min-height: 0;
+  border-left: 0;
+}
 
 /* ── Desk tabs ── */
 .desk-tabs { display: flex; gap: 2px; margin-left: 10px; }
@@ -3979,17 +4033,13 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
    Two halves, because there are two facts to see: what is in the study and in
    what order (the citation numbering), and what else the library holds. A flat
    checkbox list showed neither. */
-.picker-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
+.motion-sheet-backdrop.picker-backdrop {
   align-items: center;
   justify-content: center;
   padding: 5vh 24px;
   background: color-mix(in oklch, var(--fg), transparent 82%);
   backdrop-filter: blur(3px);
-  animation: marg-fade 140ms ease;
+  -webkit-backdrop-filter: blur(3px);
 }
 .picker {
   width: min(880px, 100%);

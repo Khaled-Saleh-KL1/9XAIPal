@@ -16,6 +16,7 @@ export function useFocusTrap({
   initialFocusRef,
   returnFocusRef,
   onEscape,
+  shouldHandleEscape,
   lockScroll = false,
 }: {
   active: boolean;
@@ -23,6 +24,8 @@ export function useFocusTrap({
   initialFocusRef?: RefObject<HTMLElement | null>;
   returnFocusRef?: RefObject<HTMLElement | null>;
   onEscape?: () => void;
+  /** Return false to let a higher layer handle Escape. */
+  shouldHandleEscape?: () => boolean;
   lockScroll?: boolean;
 }) {
   useLayoutEffect(() => {
@@ -42,6 +45,7 @@ export function useFocusTrap({
 
   return useCallback((event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape' && onEscape) {
+      if (shouldHandleEscape && !shouldHandleEscape()) return;
       event.preventDefault();
       event.stopPropagation();
       onEscape();
@@ -67,5 +71,5 @@ export function useFocusTrap({
       event.preventDefault();
       first.focus();
     }
-  }, [containerRef, onEscape]);
+  }, [containerRef, onEscape, shouldHandleEscape]);
 }
