@@ -118,6 +118,17 @@ afterEach(() => {
 });
 
 describe('LibraryView motion', () => {
+  it('renders a decorative page stack behind the animated grid cover', async () => {
+    mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper')]);
+    renderLibrary();
+    const open = await screen.findByRole('button', { name: 'Open Alpha paper' });
+
+    const stage = open.querySelector('.paper-cover-stage');
+    expect(stage).not.toBeNull();
+    expect(stage?.querySelector('.paper-page-stack')).toHaveAttribute('aria-hidden', 'true');
+    expect(stage?.querySelector('.paper-page-stack + .paper-cover-motion')).toBeInTheDocument();
+  });
+
   it('does not resurrect a deleted card when a refresh returns its old row during exit', async () => {
     const oldRows = [meta('alpha', 'Alpha paper')];
     mocks.listPapers.mockResolvedValue(oldRows);

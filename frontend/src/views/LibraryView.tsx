@@ -690,7 +690,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 <span className="font-mono text-[10.5px] opacity-80">{libraryCounts.done}</span>
               )}
             </Pressable>
-            <div className="flex items-center gap-1 ml-auto">
+            <div className="lib-filter-controls flex items-center gap-1 ml-auto">
               {/* Kind filter chips: each toggles independently, so "Books" +
                   "Articles" together (papers hidden) is a valid combination.
                   None active = unconstrained, matching kindFilters' own
@@ -702,7 +702,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                     <Pressable
                       key={key}
                       onClick={() => toggleKindFilter(key)}
-                      className="px-2.5 py-1.5 rounded-md text-[12px]"
+                      className="lib-filter-chip px-2.5 py-1.5 rounded-md text-[12px]"
                       style={{
                         background: active ? 'var(--accent)' : 'var(--bg-2)',
                         color: active ? 'var(--accent-fg)' : 'var(--muted)',
@@ -720,7 +720,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                   const idx = cycleSorts.indexOf(sort);
                   setSort(cycleSorts[(idx + 1) % cycleSorts.length]);
                 }}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px]"
+                className="lib-filter-sort flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[12px]"
                 style={{ color: 'var(--muted)' }}
               >
                 <IconSort className="w-3.5 h-3.5" />
@@ -1133,14 +1133,23 @@ function PaperCard({
           }
         }}
       >
-        <m.div
-          className="paper-cover-motion"
-          style={{ transformOrigin: 'left center' }}
-          whileHover={!reducedMotion && !renaming ? { rotateY: -28, rotateZ: -3, y: -5 } : undefined}
-          transition={playful}
-        >
-          <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
-        </m.div>
+        <div className="paper-cover-stage">
+          <div className="paper-page-stack" aria-hidden="true">
+            <span className="paper-page-edge paper-page-edge-back" />
+            <span className="paper-page-edge paper-page-edge-middle" />
+            <span className="paper-page-face">
+              <span className="paper-page-lines" />
+            </span>
+          </div>
+          <m.div
+            className="paper-cover-motion"
+            style={{ transformOrigin: 'left center' }}
+            whileHover={!reducedMotion && !renaming ? { rotateY: -30, rotateZ: -3, y: -8 } : undefined}
+            transition={playful}
+          >
+            <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
+          </m.div>
+        </div>
 
         <div className="paper-body">
           <div className="paper-head">
