@@ -269,6 +269,29 @@ def test_chat_sync_raises_after_every_target_fails(monkeypatch):
         client.chat_sync([{"role": "user", "content": "hi"}])
 
 
+def test_chat_sync_deadline_bounds_provider_fallback(monkeypatch):
+    import inspect
+
+    assert "timeout" in inspect.signature(client.chat_sync).parameters
+    targets = [_target("openai"), _target("anthropic")]
+    monkeypatch.setattr(resolver, "targets_for_sync", lambda model, ollama_up=None: targets)
+    clock = {"now": 100.0}
+    monkeypatch.setattr(client.time, "monotonic", lambda: clock["now"])
+    attempts = []
+
+    def slow_failure(target, _messages, **kwargs):
+        attempts.append((target.provider, kwargs.get("timeout")))
+        clock["now"] = 146.0
+        raise ModelUnavailable("provider timed out")
+
+    monkeypatch.setattr(client, "_chat_sync_once", slow_failure)
+
+    with pytest.raises(TimeoutError):
+        client.chat_sync([{"role": "user", "content": "hi"}], timeout=45.0)
+
+    assert attempts == [("openai", 45.0)]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # is_available() — true if ANY cascade target answers
 # ─────────────────────────────────────────────────────────────────────────────

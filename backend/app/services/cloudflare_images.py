@@ -38,7 +38,11 @@ _QUOTA_TEXT = re.compile(r"neurons?|quota|daily\s+limit", re.IGNORECASE)
 
 
 class QuotaExhaustedError(RuntimeError):
-    """No configured Cloudflare account can be tried before the next retry."""
+    """Every configured account confirmed that its daily quota is exhausted."""
+
+
+class CircuitBreakersOpenError(RuntimeError):
+    """Every configured Cloudflare account is skipped by an open breaker."""
 
 
 def _request_fields(model: str, prompt: str) -> tuple[dict[str, Any] | None, dict[str, tuple[None, str]] | None]:
@@ -206,7 +210,10 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
         if not circuit_breaker.is_open(breaker_name)
     }
     if not eligible_accounts:
-        raise QuotaExhaustedError("all configured Cloudflare accounts are temporarily unavailable")
+        logger.warning("Cloudflare image generation skipped because all account breakers are open")
+        raise CircuitBreakersOpenError(
+            "all configured Cloudflare account circuit breakers are open"
+        )
 
     attempt_deadline = time.monotonic() + _TOTAL_ATTEMPT_TIMEOUT_SECONDS
     all_accounts_quota_exhausted = True

@@ -331,7 +331,9 @@ def test_open_account_is_skipped_when_another_account_is_healthy(monkeypatch):
     assert f"/{_ACCOUNT_B}/" in attempted[0]
 
 
-def test_all_open_account_breakers_skip_requests_and_raise_for_later_retry(monkeypatch):
+def test_all_open_account_breakers_skip_requests_and_raise_non_quota_error(
+    monkeypatch,
+):
     from app.core import circuit_breaker
     from app.services import cloudflare_images
 
@@ -346,12 +348,14 @@ def test_all_open_account_breakers_skip_requests_and_raise_for_later_retry(monke
 
     _mock_request_response(monkeypatch, response)
 
-    with pytest.raises(cloudflare_images.QuotaExhaustedError):
+    with pytest.raises(RuntimeError) as error:
         cloudflare_images.generate_image(
             "prompt",
             config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b", "model-one"),
         )
 
+    assert type(error.value).__name__ == "CircuitBreakersOpenError"
+    assert not isinstance(error.value, cloudflare_images.QuotaExhaustedError)
     assert attempted == []
 
 

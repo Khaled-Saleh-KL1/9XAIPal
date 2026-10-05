@@ -34,6 +34,7 @@ data: URIs, so call sites never care which provider is active.
 """
 
 import json
+import time
 from typing import AsyncIterator, Callable, Optional
 
 import httpx
@@ -451,12 +452,13 @@ def _chat_sync_once(
     resolved: str,
     temperature: float,
     images: Optional[list[str]],
+    timeout: Optional[float] = None,
 ) -> dict:
     """One provider, one attempt. Raises ModelUnavailable on any failure."""
     if target.provider == "ollama":
         return ollama_client.chat_sync(
             messages, model=resolved, temperature=temperature, images=images,
-            api_key=target.api_key,
+            api_key=target.api_key, timeout=timeout,
         )
 
     final_messages = list(messages)
@@ -470,7 +472,7 @@ def _chat_sync_once(
     url = f"{target.base_url}/chat/completions"
     if target.provider == "nvidia":
         resolver.throttle_nvidia_key_sync(target.key_index)
-    with httpx.Client(timeout=300.0) as client:
+    with httpx.Client(timeout=timeout if timeout is not None else 300.0) as client:
         try:
             response = client.post(url, json=payload, headers=_headers(target))
             response.raise_for_status()
@@ -502,6 +504,7 @@ def chat_sync(
     role: str = "chat",
     temperature: float = 0.3,
     images: Optional[list[str]] = None,
+    timeout: Optional[float] = None,
 ) -> dict:
     """Provider-dispatched synchronous chat for Celery workers.
 
@@ -509,19 +512,35 @@ def chat_sync(
     messages until one succeeds. No streaming here, so no partial-output
     caveat — every failure is a clean fall-through.
     """
+    deadline = time.monotonic() + timeout if timeout is not None else None
     targets = resolver.targets_for_sync(model)
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("LLM chat deadline exceeded while resolving providers")
+
     last_error: Optional[ModelUnavailable] = None
     for target in targets:
+        remaining = deadline - time.monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise TimeoutError("LLM chat deadline exceeded before provider attempt")
         resolved = model or target.model_for_role(role)
         try:
             result = _chat_sync_once(
-                target, messages, resolved=resolved, temperature=temperature, images=images,
+                target,
+                messages,
+                resolved=resolved,
+                temperature=temperature,
+                images=images,
+                timeout=remaining,
             )
         except ModelUnavailable as e:
             logger.warning(f"[sync] {target.provider} chat failed, falling through: {e}")
             circuit_breaker.record_failure(target.breaker_id)
             last_error = e
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("LLM chat deadline exceeded during provider attempt") from e
             continue
         circuit_breaker.record_success(target.breaker_id)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("LLM chat deadline exceeded during provider attempt")
         return result
     raise last_error or ModelUnavailable("no LLM provider configured")
