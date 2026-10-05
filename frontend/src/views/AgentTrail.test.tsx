@@ -101,6 +101,35 @@ describe('Reasoning rounds', () => {
     expect(screen.getByText('3 matches')).toBeInTheDocument();
   });
 
+  it('keeps the round chevron and marks it rotated when expanded', () => {
+    view([step()]);
+
+    const toggle = screen.getByRole('button', { name: 'The paper defines the setup here.' });
+    const chevron = toggle.querySelector('.trail-round-caret');
+    expect(chevron).toHaveTextContent('›');
+    expect(chevron).not.toHaveClass('is-expanded');
+    expect(chevron).toHaveAttribute('aria-hidden', 'true');
+
+    fireEvent.click(toggle);
+    expect(chevron).toHaveTextContent('›');
+    expect(chevron).toHaveClass('is-expanded');
+  });
+
+  it('marks expanded web source links for quiet styling', () => {
+    view([step({
+      tool: 'WEB',
+      arg: 'https://docs.example.com/guide',
+      think: null,
+      label: 'Documentation',
+      result: 'Found the official guide',
+      seqs: [],
+      sources: [{ title: 'Official guide', url: 'https://www.docs.example.com/guide' }],
+    })]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'See reasoning' }));
+    expect(screen.getByRole('link', { name: '→ docs.example.com' })).toHaveClass('trail-source-link');
+  });
+
   it('folds rounds after six and reveals the remaining rows', () => {
     const steps = Array.from({ length: 8 }, (_, index) => step({
       id: `step-${index + 1}`,

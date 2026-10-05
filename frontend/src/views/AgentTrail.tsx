@@ -69,7 +69,7 @@ function StepRow({
         <ul className="trail-sources">
           {step.sources.map((src) => (
             <li key={src.url}>
-              <a href={src.url} target="_blank" rel="noreferrer noopener" title={src.title}>
+              <a className="trail-source-link" href={src.url} target="_blank" rel="noreferrer noopener" title={src.title}>
                 → {hostOf(src.url)}
               </a>
             </li>
@@ -217,7 +217,14 @@ export function Reasoning({
                     return next;
                   })}
                 >
-                  <span className="trail-caret trail-round-caret" aria-hidden="true">{expanded ? '▾' : '›'}</span>
+                  <m.span
+                    className={`trail-caret trail-round-caret${expanded ? ' is-expanded' : ''}`}
+                    aria-hidden="true"
+                    animate={{ rotate: expanded ? 90 : 0 }}
+                    transition={reducedMotion ? { duration: 0 } : playful}
+                  >
+                    ›
+                  </m.span>
                   <span className="trail-round-label">{label}</span>
                 </button>
                 <AnimatePresence initial={false}>
