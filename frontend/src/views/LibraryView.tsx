@@ -17,6 +17,7 @@ import { textDirection } from '../lib/documentDirection';
 import { stageProgress } from '../lib/progress';
 import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
+import { BetaBadge } from '../components/BetaBadge';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -486,6 +487,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             <span className="text-[14px] font-medium tracking-tight" style={{ color: 'var(--fg)' }}>
               9XAIPal
             </span>
+            <BetaBadge />
           </div>
           {/*
             This group can be wider than a phone screen (paper count, two

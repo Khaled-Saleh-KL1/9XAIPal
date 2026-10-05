@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogoMark } from '../components/LogoMark';
+import { BetaBadge } from '../components/BetaBadge';
 import { IconBack, IconPencil, IconPlus, IconTrash } from '../components/Icons';
 import { UserMenuInline } from '../components/UserMenu';
 import { NoteWall } from './NoteWall';
@@ -501,6 +502,7 @@ export function DeskView({
         <span className="reader-sep" />
         <LogoMark />
         <span className="desk-bar-title">Desk</span>
+        <BetaBadge />
 
         <button
           type="button"
