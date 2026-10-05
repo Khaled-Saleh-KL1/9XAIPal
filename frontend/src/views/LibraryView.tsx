@@ -39,8 +39,23 @@ function deriveProgress(m: PaperMeta): number {
   return stageProgress(m.status, m.job_status, m.job_progress_fraction);
 }
 
-const arrivalGlowStart = '0 0 0 3px color-mix(in oklab, var(--accent) 42%, transparent)';
-const arrivalGlowEnd = '0 0 0 0 transparent';
+const arrivalGlowShadow = '0 0 0 3px var(--accent)';
+
+function ArrivalGlow({ paperId, reducedMotion, onComplete }: { paperId: string; reducedMotion: boolean | null; onComplete: () => void }) {
+  return (
+    <m.div
+      data-testid="paper-arrival-glow"
+      data-paper-id={paperId}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-10 rounded-xl"
+      initial={{ opacity: 0.42 }}
+      animate={{ opacity: 0 }}
+      transition={{ opacity: { duration: reducedMotion ? 0.15 : 0.8, ease: 'easeOut' } }}
+      style={{ boxShadow: arrivalGlowShadow }}
+      onAnimationComplete={onComplete}
+    />
+  );
+}
 
 function metaToPaper(m: PaperMeta): Paper {
   return {
@@ -99,6 +114,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const seenPaperIdsRef = useRef(new Set<string>());
   const arrivingPaperIdsRef = useRef(new Set<string>());
   const [completedEntranceIds, setCompletedEntranceIds] = useState<Set<string>>(() => new Set());
+  const [completedArrivalGlowIds, setCompletedArrivalGlowIds] = useState<Set<string>>(() => new Set());
   const deletedPaperIdsRef = useRef(new Set<string>());
   const reducedMotion = useReducedMotion();
   /** The paper whose title is being edited inline, if any. */
@@ -832,7 +848,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           ) : (
             <LayoutGroup>
               <AnimatePresence mode="wait">
-                <m.div
+                <PresenceAwarePaper
                   key={layout}
                   data-testid="library-motion-layout"
                   initial={{ opacity: 0 }}
@@ -848,21 +864,24 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                         const shouldStagger = layout === 'grid'
                           && initialStaggerIdsRef.current.has(p.id)
                           && !completedEntranceIds.has(p.id);
+                        const shouldShowArrivalGlow = arrivingPaperIdsRef.current.has(p.id)
+                          && !completedArrivalGlowIds.has(p.id);
                         return (
                           <PresenceAwarePaper
                             key={p.id}
                             data-testid="paper-motion-item"
                             data-arrival={isArrival ? 'true' : undefined}
+                            className="relative"
                             layout="position"
                             initial={isArrival
                               ? reducedMotion
-                                ? { opacity: 0, boxShadow: arrivalGlowStart }
-                                : { opacity: 0, y: -40, rotate: -4, scale: 0.9, boxShadow: arrivalGlowStart }
+                                ? { opacity: 0 }
+                                : { opacity: 0, y: -40, rotate: -4, scale: 0.9 }
                               : shouldStagger ? reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 } : false}
                             animate={isArrival
                               ? reducedMotion
-                                ? { opacity: 1, boxShadow: arrivalGlowEnd }
-                                : { opacity: 1, y: 0, rotate: 0, scale: 1, boxShadow: arrivalGlowEnd }
+                                ? { opacity: 1 }
+                                : { opacity: 1, y: 0, rotate: 0, scale: 1 }
                               : shouldStagger ? { opacity: 1, y: 0 } : undefined}
                             variants={{
                               exit: (deletedIds: Set<string> | undefined) => {
@@ -879,7 +898,6 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                               : {
                                   ...playful,
                                   delay: shouldStagger ? Math.min(index, 11) * 0.07 : 0,
-                                  ...(isArrival ? { boxShadow: { duration: 0.8, ease: 'easeOut' } } : {}),
                                 }}
                             onAnimationComplete={() => {
                               if (isArrival || shouldStagger) {
@@ -892,6 +910,21 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                               }
                             }}
                           >
+                            {shouldShowArrivalGlow && (
+                              <ArrivalGlow
+                                key="arrival-glow"
+                                paperId={p.id}
+                                reducedMotion={reducedMotion}
+                                onComplete={() => {
+                                  setCompletedArrivalGlowIds((completed) => {
+                                    if (completed.has(p.id)) return completed;
+                                    const next = new Set(completed);
+                                    next.add(p.id);
+                                    return next;
+                                  });
+                                }}
+                              />
+                            )}
                             {layout === 'grid'
                               ? <PaperCard {...cardProps(p)} />
                               : <PaperRow {...cardProps(p)} />}
@@ -900,7 +933,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                       })}
                     </AnimatePresence>
                   </div>
-                </m.div>
+                </PresenceAwarePaper>
               </AnimatePresence>
             </LayoutGroup>
           )}

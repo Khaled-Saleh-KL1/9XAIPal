@@ -23,8 +23,13 @@ vi.mock('motion/react', async (importOriginal) => {
   const React = await import('react');
   const InspectableMotionDiv = React.forwardRef<HTMLDivElement, Record<string, any>>((props, ref) => {
     if (props['data-testid'] === 'paper-motion-item') {
-      const paperId = React.isValidElement(props.children) ? (props.children.props as any).paper?.id : undefined;
+      const paperChild = React.Children.toArray(props.children)
+        .find((child) => React.isValidElement(child) && (child.props as any).paper);
+      const paperId = React.isValidElement(paperChild) ? (paperChild.props as any).paper?.id : undefined;
       if (paperId) mocks.paperMotionProps.set(paperId, props);
+    }
+    if (props['data-testid'] === 'paper-arrival-glow') {
+      mocks.paperMotionProps.set(`arrival-glow:${props['data-paper-id']}`, props);
     }
     if (props['data-testid'] === 'library-motion-layout') mocks.paperMotionProps.set('layout', props);
     return React.createElement(actual.m.div, { ...props, ref });
@@ -83,6 +88,9 @@ function renderLibrary(refreshToken = 0) {
     props,
     rerenderWithRefreshToken: (next: number) => view.rerender(
       <MotionRoot><LibraryView {...props} refreshToken={next} /></MotionRoot>,
+    ),
+    rerenderWithLayout: (next: 'grid' | 'list') => view.rerender(
+      <MotionRoot><LibraryView {...props} layout={next} /></MotionRoot>,
     ),
   };
 }
@@ -185,7 +193,7 @@ describe('LibraryView motion', () => {
     expect(mocks.paperMotionProps.get('beta')?.animate).toEqual(entrance.animate);
   });
 
-  it('gives new arrivals an accent halo that fades over 800ms', async () => {
+  it('fades a static accent halo through opacity over 800ms', async () => {
     mocks.listPapers
       .mockResolvedValueOnce([meta('alpha', 'Alpha paper')])
       .mockResolvedValueOnce([meta('alpha', 'Alpha paper'), meta('beta', 'Beta book')]);
@@ -194,10 +202,18 @@ describe('LibraryView motion', () => {
     view.rerenderWithRefreshToken(1);
     await screen.findByRole('button', { name: 'Open Beta book' });
 
-    const entrance = mocks.paperMotionProps.get('beta')!;
-    expect((entrance.initial as Record<string, unknown>).boxShadow).toContain('var(--accent)');
-    expect((entrance.animate as Record<string, unknown>).boxShadow).toBe('0 0 0 0 transparent');
-    expect((entrance.transition as { boxShadow: { duration: number } }).boxShadow.duration).toBe(0.8);
+    const glow = mocks.paperMotionProps.get('arrival-glow:beta')!;
+    expect(glow).toBeDefined();
+    expect(glow.style).toMatchObject({ boxShadow: '0 0 0 3px var(--accent)' });
+    expect(glow.initial).toMatchObject({ opacity: expect.any(Number) });
+    expect(glow.animate).toEqual({ opacity: 0 });
+    expect((glow.transition as { opacity: { duration: number } }).opacity.duration).toBe(0.8);
+
+    const glowNode = screen.getByTestId('paper-arrival-glow');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 400)); });
+    const intermediateOpacity = Number((glowNode as HTMLElement).style.opacity);
+    expect(intermediateOpacity).toBeGreaterThan(0);
+    expect(intermediateOpacity).toBeLessThan(Number((glow.initial as { opacity: number }).opacity));
   });
 
   it('keeps cards transform-free with reduced motion enabled', async () => {
@@ -206,23 +222,30 @@ describe('LibraryView motion', () => {
     renderLibrary();
     await screen.findByRole('button', { name: 'Open Alpha paper' });
 
-    const item = screen.getByTestId('paper-motion-item');
+    const item = screen.getByRole('button', { name: 'Open Alpha paper' })
+      .closest('[data-testid="paper-motion-item"]') as HTMLElement;
     expect((item as HTMLElement).style.transform).not.toMatch(/translate|rotate|scale/);
   });
 
   it('caps library entrance and exit fades at 150ms with reduced motion', async () => {
     mocks.reducedMotion = true;
-    mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper')]);
-    renderLibrary();
+    mocks.listPapers
+      .mockResolvedValueOnce([meta('alpha', 'Alpha paper')])
+      .mockResolvedValueOnce([meta('alpha', 'Alpha paper'), meta('beta', 'Beta book')]);
+    const view = renderLibrary();
     await screen.findByRole('button', { name: 'Open Alpha paper' });
+    view.rerenderWithRefreshToken(1);
+    await screen.findByRole('button', { name: 'Open Beta book' });
 
     const layout = mocks.paperMotionProps.get('layout')!;
     const card = mocks.paperMotionProps.get('alpha')!;
+    const arrivalGlow = mocks.paperMotionProps.get('arrival-glow:beta')!;
     const exit = (card.variants as { exit: (custom: Set<string>) => { transition: { duration: number } } })
       .exit(new Set());
     expect((layout.transition as { duration: number }).duration).toBeLessThanOrEqual(0.15);
     expect((card.transition as { duration: number }).duration).toBeLessThanOrEqual(0.15);
     expect(exit.transition.duration).toBeLessThanOrEqual(0.15);
+    expect((arrivalGlow.transition as { opacity: { duration: number } }).opacity.duration).toBeLessThanOrEqual(0.15);
   });
 
   it('keeps the mobile upload trigger keyboard reachable and passes it as the focus-return target', async () => {
@@ -267,6 +290,20 @@ describe('LibraryView motion', () => {
     expect(exitingCard).toHaveAttribute('inert');
     expect(exitingCard).toHaveStyle({ pointerEvents: 'none' });
     view.unmount();
+  });
+
+  it('makes the outgoing layout and its cards inert while switching grid and list', async () => {
+    mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper')]);
+    const view = renderLibrary();
+    await screen.findByRole('button', { name: 'Open Alpha paper' });
+    const outgoingLayout = screen.getByTestId('library-motion-layout');
+
+    view.rerenderWithLayout('list');
+
+    expect(outgoingLayout).toHaveAttribute('aria-hidden', 'true');
+    expect(outgoingLayout).toHaveAttribute('inert');
+    expect(outgoingLayout).toHaveStyle({ pointerEvents: 'none' });
+    expect(within(outgoingLayout).queryByRole('button', { name: 'Open Alpha paper' })).toBeNull();
   });
 
   it('keeps the shelf sheet mounted during its close animation', async () => {
