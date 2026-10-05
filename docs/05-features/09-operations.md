@@ -5,7 +5,7 @@
 > [operations.md](../01-orientation/operations.md),
 > [DEPLOYMENT-PRODUCTION.md](../../backend/DEPLOYMENT-PRODUCTION.md).
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-10-05 (branch HEAD 48cb8c6).
 
 ---
 
@@ -79,10 +79,10 @@ created months ago, without a migration history to keep in step.
 
 ## 104. CI and automatic deploy with rollback
 
-**What it does.** Every PR runs CI (backend suite against a real Postgres + Redis service
-container, frontend `tsc` + `vite build`, a change detector that skips what didn't change). A
-merge to `main` deploys to the box **only after CI for that exact commit succeeds**, and a deploy
-whose health check fails rolls back to the last good commit automatically.
+**What it does.** CI runs on every PR and push to main. A change detector selects the backend
+suite or frontend TypeScript check/build when those paths change; a docs-only change runs the
+detector but skips both code jobs. A merge to main deploys to the box only after the CI workflow
+succeeds for that commit, and a deploy whose health check fails rolls back to the last good commit automatically.
 
 **Where.** [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml),
 [`deploy.yml`](../../.github/workflows/deploy.yml), [`scripts/deploy-once.sh`](../../scripts/deploy-once.sh),
@@ -171,33 +171,20 @@ way it is will "fix" it back.
 
 ## 107. The test suite
 
-**What it does.** 613 backend tests (`backend/tests/`) run against a real Postgres + Redis, plus
-render tests for the UI: `renderToString` for every state of the export wizard, the evidence
-panel and the citation chips, and real-DOM (happy-dom + react-dom) behaviour tests for the book
-reader's reveal, retry and reading-order and for the citation queue.
+**What it does.** Backend pytest coverage spans ingestion, chunking, retrieval, API ownership,
+queues, Arabic OCR, chat/provider behavior, article import, and article thumbnails. Frontend
+Vitest component and behavior tests cover interactions such as landing/reduced motion, shared
+motion, PDF selection, reasoning rows, and cover refresh. There are no browser end-to-end tests.
+CI runs the backend suite and the frontend TypeScript check/build when their paths change; it does
+not run frontend Vitest or documentation checks.
 
-**Where.** `backend/tests/` (`conftest.py`, `pytest.ini`), `backend/tests/README.md`,
-`docs/04-testing/test-plan.md`, CI's `backend` job.
+**Where.** [backend/tests](../../backend/tests/), [frontend/src](../../frontend/src),
+[backend/tests/README.md](../../backend/tests/README.md),
+[docs/04-testing/test-plan.md](../04-testing/test-plan.md), and
+[.github/workflows/ci.yml](../../.github/workflows/ci.yml).
 
-**How it works.** ⚠ **Every test truncates `documents CASCADE`** — chunks, assets, conversations,
-notes go with it. `conftest.py` refuses to start unless `POSTGRES_DB` contains "test"
-(`ALLOW_DESTRUCTIVE_TESTS=1` overrides), which is why the suite is never run against the live box's
-database; on the VPS it runs against a throwaway `pgvector/pgvector:pg16` + `redis:7-alpine` pair
-on the compose network with the production image and the checkout's `app/` mounted. The
-HTTP-layer tests use `httpx.ASGITransport` with `DEBUG=true` (the session cookie is `Secure` unless
-debug, and a plain-HTTP test client cannot see a `Secure` cookie). Concurrency-critical modules
-(capacity, the pacer) test against real Redis rather than a mock — their correctness is about how
-the commands compose, which a mock would only restate.
-
-**Why the render tests exist.** The clickable-citations regression shipped because `tsc` and a
-build passed while the component threw on first render; the export wizard's first version sent
-zero requests to the API. A component split into a pure render and a thin stateful wrapper can
-have every state asserted without clicking through it.
-
-## Celery queue split
-
-Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
-consumes the light/default queue `celery` (retaining the old backlog).
-`LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
-Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
-for routing, ingest limits, startup recovery and migration caveats.
+**Safety.** Backend fixtures truncate documents CASCADE; conftest.py refuses to run unless
+POSTGRES_DB contains test, unless ALLOW_DESTRUCTIVE_TESTS=1 explicitly overrides that guard.
+Use a disposable database and Redis. The CI workflow provisions disposable PostgreSQL/pgvector and
+Redis services. Focused tests do not replace a full browser acceptance pass; see the
+[manual acceptance script](../04-testing/test-plan.md#2-manual-acceptance-script).

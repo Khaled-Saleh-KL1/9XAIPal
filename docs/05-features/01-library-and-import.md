@@ -9,7 +9,7 @@
 
 ## 1. PDF upload: drag-and-drop or click
 
-**What it does.** Drop a PDF **anywhere on the library view** (or click the dashed card), say
+**What it does.** Drop a PDF **anywhere on the library view** (or choose Add paper), say
 whether it is a *book* or a *research paper*, and it is stored and queued for extraction. The
 processing overlay takes over until the document is readable.
 
@@ -76,6 +76,8 @@ and `_stream_pdf_upload`.
   stale count (feature 18). A full queue rolls the whole thing back and removes the files.
 - *If Celery dispatch fails* (Redis down), the document is marked `failed` with a message naming
   the broker, rather than sitting `queued` forever.
+
+The centered Add paper chooser has its own PDF drop zone and picker; see the detailed [Add paper drop-zone feature](12-add-paper-drop-zone.md).
 
 **See it.** Drop a PDF on the library. Try a 3 MB text file renamed `.pdf` → 415. Watch the
 network tab: one `POST /papers/upload`, then `GET /progress` once a second.
@@ -220,13 +222,14 @@ map removes the possibility.
 
 ## 6. Library shelf with cover thumbnails
 
-**What it does.** Every card leads with the paper's first page as a picture.
+**What it does.** Every card leads with a cover image: a PDF's first page, or an optional generated thumbnail for an imported article when its background task succeeds.
 
 **Where.** [`services/covers.py`](../../backend/app/services/covers.py), `GET /papers/{id}/cover`,
 [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx).
 
-**How it works.** On first request, PyMuPDF rasterises page 1 at 480 px wide, JPEG quality 78, to
-`storage/covers/<id>.jpg`; every later request is a file read. Rendering runs in
+**How it works.** PDF covers are rasterised by PyMuPDF on first request at 480 px wide and JPEG quality 78.
+Imported articles may instead use an asynchronously generated Cloudflare Workers AI cover. Both
+use the storage/covers/<id>.jpg cache; details are in [feature 117](13-article-thumbnails.md). Rendering runs in
 `run_in_threadpool` (50–200 ms of native CPU, and the grid asks for every cover at once). A paper
 with no renderable cover answers **204, not 404**; `<img>` reports 204 as a load error, so
 `PaperCover` keeps its `onError` fallback glyph. Cards use a fixed aspect `1 / 1.294` with
@@ -269,6 +272,8 @@ the server for semantic hits — "find by what it's about". Sort cycles recent �
 Cosine similarity below 0.3 is dropped (found empirically: below that it is "not what you typed"
 more often than a real hit). The keyword filter still reaches everything below the line, so the
 threshold only trims the semantic side's tail.
+
+If query embedding fails or times out, the semantic search path degrades to the English/Arabic full-text results instead of returning a 503 (library_search.py).
 
 **Why.** Most documents are fast-ingested with **no whole-document chunk embeddings**; only the
 small figure-only index is built for image retrieval. There is nothing useful for library search to
@@ -501,10 +506,11 @@ moment the reader leaves. The first version showed the same sentence under a "Fa
 with the *Extracting structure* step in red and only "Back to library" — a decline dressed as a
 crash, and the file had to be picked again.
 
-**Why.** The Celery worker runs `--concurrency=1`; this is what stops an upload burst from growing
-disk and DB rows unbounded. The first version checked the count *before* the transaction, so
-concurrent requests could all pass a stale count ([docs/issues/007](../issues/007-ingestion-queue-capacity-check-races.md)).
-An advisory lock needs no schema row and cannot be forgotten open.
+**Why.** The limit bounds queued and in-progress uploads across the ingest queue. Production
+Compose's ingest worker runs two tasks concurrently; the advisory lock keeps simultaneous
+admission checks from oversubscribing the shared cap. The first version checked the count before
+the transaction, so concurrent requests could all pass a stale count
+([docs/issues/007](../issues/007-ingestion-queue-capacity-check-races.md)).
 
 ---
 

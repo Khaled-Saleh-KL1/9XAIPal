@@ -119,3 +119,16 @@ consumes the light/default queue `celery` (retaining the old backlog).
 `LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
 Rebuild/update `api` and both workers together. See [deployment queue details](../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
 for routing, ingest limits, startup recovery and migration caveats.
+
+
+2026-10-05  Kept: contextual Arabic embeddings disabled by default.  Because: the golden-set measurement in backend/app/core/config.py reduced MRR@10 from 0.542 to 0.497 without reranking and from 0.803 to 0.762 with reranking; the opt-in flag remains false.
+
+2026-10-05  Chose: a shared reduced-motion-aware motion layer for controls, sheets, reveals, and route entry.  Because: MotionRoot centralizes MotionConfig and lazy feature loading, while shared primitives use named calm, gentle, and playful transitions and honor the user's reduced-motion preference. See frontend/src/motion/.
+
+2026-10-05  Kept: the article text column stationary while notes and reader panels move around it.  Because: adding a margin note must not shift the text the reader is following; ArticleReader.tsx uses a symmetric gutter/article/gutter layout for this.
+
+2026-10-05  Chose: route transitions animate the incoming route only.  Effect: PageTransition.tsx has an initial and animate state but no exit state; reduced-motion users get an opacity-only transition.
+
+2026-10-05  Chose: Cloudflare Workers AI is the only image-generation provider for article covers, with fallback across configured Cloudflare accounts and models.  Because: generation is a best-effort light-queue task, so an unavailable image service does not hold article ingestion open or mark the imported article failed. See backend/app/services/cloudflare_images.py and backend/app/workers/tasks.py.
+
+2026-10-05  Chose: show one reasoning row per agent round, with the THINK line as its summary and the round's tool steps underneath.  Because: the reader can scan why each round proceeded while keeping its tool activity attached to that round. See frontend/src/views/AgentTrail.tsx.

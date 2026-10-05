@@ -463,25 +463,25 @@ pages and always show `¶N`.
 
 ## 50. The agent trail
 
-**What it does.** Above the answer, what the model fetched before it wrote: `SECTION 31`,
-`SEARCH "sliding window"`, `READ 40–52`, `WEB …`, `THINK …` — each with its result count, live
-while running, collapsed to one line ("How this was answered · 2 from the paper · 1 from the web")
-once saved.
+**What it does.** The trail records individual tool steps live and after reload, then groups the
+reader-facing display into collapsible reasoning rows: one row per agent round, titled from that
+round's optional THINK summary. Expanding a row shows its individual SECTION, SEARCH, READ, WEB,
+and other steps. The backend remains step-based; grouping is a presentation detail.
 
-**Where.** [`AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx), `step` SSE events,
-`paper_notes.agent_steps` / `conversation_turns.agent_steps`. Protocol:
+**Where.** [AgentTrail.tsx](../../frontend/src/views/AgentTrail.tsx), step SSE events,
+paper_notes.agent_steps / conversation_turns.agent_steps. Protocol:
 [chat-and-ask.md § The trail](../02-architecture/chat-and-ask.md#the-trail-every-fetch-is-reported-not-just-logged).
+The current row layout and live status are documented in
+[feature 115](11-reasoning-ui.md).
 
-**How it works.** ⚠ Upsert by `step.id`, never append: each call arrives twice (`running`, then
-`done`); appending renders every fetch as two rows, the first spinning forever. The trail stays up
-while the answer types itself out — collapsing on the first token would snatch away the record of
-the fetches at the exact moment they become checkable. A `WEB` step is coloured differently
-(`--deck`, not `--accent`): whether an answer drew on anything outside the paper is the one
-distinction worth seeing without reading. `THINK` executes nothing and costs no round; it is the
-model's own reason for the round, shown above the fetches it triggered.
+**How it works.** Each tool step is upserted by its step ID because it arrives as running and then
+done; appending both events would duplicate the step and leave its first copy spinning. Rounds
+group steps by their round number. The first nonempty THINK summary labels the row; without one,
+the row uses the generic reasoning label. Page citations jump to the source block, and web sources
+link to their host.
 
-**Why.** "An agent that silently disappears for twenty seconds and comes back with an answer is
-indistinguishable from one that hallucinated." Every fetch is reported, not just logged.
+**Why.** Individual steps remain inspectable while a compact round summary makes the trail easier
+to scan. The persisted step data preserves the evidence trail after the answer finishes.
 
 ---
 
