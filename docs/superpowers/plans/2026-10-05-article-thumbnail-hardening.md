@@ -55,10 +55,10 @@
 - Consumes Task 1's bounded stream request path.
 - Builds eligible account indexes using `circuit_breaker.is_open` and raises `QuotaExhaustedError` when no configured account is eligible, allowing the task's existing delayed retry.
 
-- [ ] Add tests for one open account plus one healthy account, and for every account breaker open; assert open accounts receive no request and all-open raises `QuotaExhaustedError`.
-- [ ] Run those tests and confirm they fail against the current fallback behavior.
-- [ ] Implement strict filtering locally without changing the shared circuit-breaker behavior used by other providers.
-- [ ] Run the new and existing Cloudflare failover tests; commit with the required trailer.
+- [x] Add tests for one open account plus one healthy account, and for every account breaker open; assert open accounts receive no request and all-open raises `QuotaExhaustedError`.
+- [x] Run those tests and confirm they fail against the current fallback behavior.
+- [x] Implement strict filtering locally without changing the shared circuit-breaker behavior used by other providers.
+- [x] Run the new and existing Cloudflare failover tests; commit with the required trailer.
 
 ### Task 3: Bound total account/model attempts
 

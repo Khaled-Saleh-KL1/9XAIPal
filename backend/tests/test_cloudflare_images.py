@@ -267,6 +267,54 @@ def test_model_failure_before_quota_still_retries_accounts_next_day(monkeypatch)
         )
 
 
+def test_open_account_is_skipped_when_another_account_is_healthy(monkeypatch):
+    from app.core import circuit_breaker
+    from app.services import cloudflare_images
+
+    for _ in range(circuit_breaker.FAILURE_THRESHOLD):
+        circuit_breaker.record_failure("cloudflare#0")
+    attempted = []
+
+    def response(url, **_kwargs):
+        attempted.append(url)
+        return _response(content=b"image", content_type="image/png")
+
+    _mock_stream(monkeypatch, response)
+
+    result = cloudflare_images.generate_image(
+        "prompt",
+        config=_settings("account-a:secret-a,account-b:secret-b", "model-one"),
+    )
+
+    assert result == b"image"
+    assert len(attempted) == 1
+    assert "/account-b/" in attempted[0]
+
+
+def test_all_open_account_breakers_skip_requests_and_raise_for_later_retry(monkeypatch):
+    from app.core import circuit_breaker
+    from app.services import cloudflare_images
+
+    for index in range(2):
+        for _ in range(circuit_breaker.FAILURE_THRESHOLD):
+            circuit_breaker.record_failure(f"cloudflare#{index}")
+    attempted = []
+
+    def response(url, **_kwargs):
+        attempted.append(url)
+        return _response(503)
+
+    _mock_stream(monkeypatch, response)
+
+    with pytest.raises(cloudflare_images.QuotaExhaustedError):
+        cloudflare_images.generate_image(
+            "prompt",
+            config=_settings("account-a:secret-a,account-b:secret-b", "model-one"),
+        )
+
+    assert attempted == []
+
+
 def test_no_configured_accounts_is_a_quiet_noop(monkeypatch, caplog):
     from app.services import cloudflare_images
 

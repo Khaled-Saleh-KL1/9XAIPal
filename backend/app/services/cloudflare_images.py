@@ -35,7 +35,7 @@ _QUOTA_TEXT = re.compile(r"neurons?|quota|daily\s+limit", re.IGNORECASE)
 
 
 class QuotaExhaustedError(RuntimeError):
-    """Every configured Cloudflare account reported its daily quota exhausted."""
+    """No configured Cloudflare account can be tried before the next retry."""
 
 
 def _request_fields(model: str, prompt: str) -> tuple[dict[str, Any] | None, dict[str, tuple[None, str]] | None]:
@@ -147,13 +147,19 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
 
     models = config.cloudflare_image_models or DEFAULT_MODELS
     breaker_names = [f"cloudflare#{index}" for index in range(len(accounts))]
-    active_breakers = set(circuit_breaker.filter_open(breaker_names))
+    eligible_accounts = {
+        index
+        for index, breaker_name in enumerate(breaker_names)
+        if not circuit_breaker.is_open(breaker_name)
+    }
+    if not eligible_accounts:
+        raise QuotaExhaustedError("all configured Cloudflare accounts are temporarily unavailable")
+
     all_accounts_quota_exhausted = True
 
     for account_index, (account_id, token) in enumerate(accounts):
         breaker_name = breaker_names[account_index]
-        if breaker_name not in active_breakers:
-            all_accounts_quota_exhausted = False
+        if account_index not in eligible_accounts:
             continue
 
         account_failed = False
