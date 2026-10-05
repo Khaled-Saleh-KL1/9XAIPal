@@ -1144,7 +1144,7 @@ function PaperCard({
           <m.div
             className="paper-cover-motion"
             style={{ transformOrigin: 'left center' }}
-            whileHover={!reducedMotion && !renaming ? { rotateY: -30, rotateZ: -3, y: -8 } : undefined}
+            whileHover={!reducedMotion && !renaming ? { rotateY: -30, rotateZ: -3 } : undefined}
             transition={playful}
           >
             <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />

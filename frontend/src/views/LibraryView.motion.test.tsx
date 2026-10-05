@@ -32,6 +32,7 @@ vi.mock('motion/react', async (importOriginal) => {
       mocks.paperMotionProps.set(`arrival-glow:${props['data-paper-id']}`, props);
     }
     if (props['data-testid'] === 'library-motion-layout') mocks.paperMotionProps.set('layout', props);
+    if (props.className === 'paper-cover-motion') mocks.paperMotionProps.set('cover-hover', props);
     return React.createElement(actual.m.div, { ...props, ref });
   });
   const inspectedM = new Proxy(actual.m, {
@@ -127,6 +128,21 @@ describe('LibraryView motion', () => {
     expect(stage).not.toBeNull();
     expect(stage?.querySelector('.paper-page-stack')).toHaveAttribute('aria-hidden', 'true');
     expect(stage?.querySelector('.paper-page-stack + .paper-cover-motion')).toBeInTheDocument();
+  });
+
+  it('keeps the hinged cover from lifting toward the toolbar', async () => {
+    mocks.listPapers.mockResolvedValue([meta('alpha', 'Alpha paper')]);
+    renderLibrary();
+    await screen.findByRole('button', { name: 'Open Alpha paper' });
+
+    const hoverTarget = mocks.paperMotionProps.get('cover-hover')?.whileHover as {
+      rotateY?: number;
+      rotateZ?: number;
+      y?: number;
+    };
+    expect(hoverTarget.rotateY).toBe(-30);
+    expect(hoverTarget.rotateZ).toBe(-3);
+    expect(hoverTarget.y ?? 0).toBeGreaterThanOrEqual(0);
   });
 
   it('does not resurrect a deleted card when a refresh returns its old row during exit', async () => {
@@ -236,6 +252,7 @@ describe('LibraryView motion', () => {
     const item = screen.getByRole('button', { name: 'Open Alpha paper' })
       .closest('[data-testid="paper-motion-item"]') as HTMLElement;
     expect((item as HTMLElement).style.transform).not.toMatch(/translate|rotate|scale/);
+    expect(mocks.paperMotionProps.get('cover-hover')?.whileHover).toBeUndefined();
   });
 
   it('caps library entrance and exit fades at 150ms with reduced motion', async () => {

@@ -130,7 +130,7 @@ body {
 }
 .paper-cover-stage {
   position: relative;
-  perspective: 1100px;
+  perspective: 5000px;
   transform-style: preserve-3d;
   isolation: isolate;
 }
