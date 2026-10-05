@@ -120,19 +120,23 @@ describe('LandingView', () => {
   it('waits for the pile scene to be half visible before gathering on small screens', async () => {
     const observed: Array<{
       target: Element;
+      root: Element | Document | null;
       threshold: number;
       trigger: (ratio: number) => void;
     }> = [];
     class ControlledIntersectionObserver {
       constructor(private callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        this.root = options?.root ?? null;
         this.threshold = typeof options?.threshold === 'number' ? options.threshold : 0;
       }
 
+      private root: Element | Document | null;
       private threshold: number;
 
       observe(target: Element) {
         observed.push({
           target,
+          root: this.root,
           threshold: this.threshold,
           trigger: (ratio) => this.callback([{
             isIntersecting: ratio > 0,
@@ -163,16 +167,19 @@ describe('LandingView', () => {
       const { container } = renderLanding();
       const chapter = container.querySelector('#chapter-pile')!;
       const scene = container.querySelector('.pile-scene')!;
+      const scrollContainer = container.querySelector('.landing-page')!;
       const chapterObserver = observed.find(({ target }) => target === chapter);
       const sceneObserver = observed.find(({ target }) => target === scene);
 
       expect(sceneObserver).toBeDefined();
+      expect(sceneObserver?.root).toBe(scrollContainer);
       expect(sceneObserver?.threshold).toBe(0.5);
       expect(chapterObserver).toBeDefined();
 
       act(() => chapterObserver!.trigger(1));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
       expect(Array.from(scene.querySelectorAll<HTMLElement>('.pile-document')).map((card) => Number.parseFloat(card.style.left)))
-        .not.toEqual([0, 13, 26, 39, 52, 65, 78]);
+        .toEqual([9, 62, 39, 69, 15, 48, 29]);
 
       act(() => sceneObserver!.trigger(0.5));
       await waitFor(() => {
