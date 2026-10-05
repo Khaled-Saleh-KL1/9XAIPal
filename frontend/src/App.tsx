@@ -10,7 +10,7 @@ import { AuthForm } from './views/AuthForm';
 import { LandingView } from './views/LandingView';
 import { WaitingRoomView } from './views/WaitingRoomView';
 import { useAuth } from './contexts/AuthContext';
-import { Sheet } from './motion';
+import { Pressable, Sheet } from './motion';
 import { isWelcomeHash, useWelcomeRoute } from './lib/welcomeRoute';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
@@ -927,7 +927,7 @@ function UploadKindModal({
             </div>
             <div className="px-7 py-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* The card's padding belongs to the buttons, not the wrapper.
-                  This whole card used to be one <button>, so every pixel of it
+                  This whole card used to be one <Pressable>, so every pixel of it
                   picked the kind; holding the padding out here would leave a
                   dead ring around the text that silently does nothing. */}
               <div
@@ -936,19 +936,19 @@ function UploadKindModal({
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <button onClick={() => onChoose('book')} className="text-left w-full flex-1 px-4 pt-4">
+                <Pressable onClick={() => onChoose('book')} className="text-left w-full flex-1 px-4 pt-4">
                   <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
                   <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
                     Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
                   </div>
-                </button>
-                <button
+                </Pressable>
+                <Pressable
                   onClick={() => openUrlMode('book')}
                   className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
                   style={{ color: 'var(--muted)' }}
                 >
                   <IconLink className="w-3 h-3" /> or paste a link
-                </button>
+                </Pressable>
               </div>
               <div
                 className="rounded-xl transition-colors flex flex-col"
@@ -956,21 +956,21 @@ function UploadKindModal({
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <button onClick={() => onChoose('paper')} className="text-left w-full flex-1 px-4 pt-4">
+                <Pressable onClick={() => onChoose('paper')} className="text-left w-full flex-1 px-4 pt-4">
                   <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
                   <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
                     Linear reading, front to back, no chapter navigation. Best for articles and papers.
                   </div>
-                </button>
-                <button
+                </Pressable>
+                <Pressable
                   onClick={() => openUrlMode('paper')}
                   className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
                   style={{ color: 'var(--muted)' }}
                 >
                   <IconLink className="w-3 h-3" /> or paste a link
-                </button>
+                </Pressable>
               </div>
-              <button
+              <Pressable
                 onClick={() => openUrlMode(null)}
                 className="sm:col-span-2 text-left rounded-xl p-4 flex items-center gap-3 transition-colors"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
@@ -989,24 +989,24 @@ function UploadKindModal({
                     Paste a link: reads exactly like a paper, with margin notes, search, and the AI panel.
                   </div>
                 </div>
-              </button>
+              </Pressable>
             </div>
             <div className="px-7 py-3.5 flex items-center" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
-              <button onClick={onCancel} className="ml-auto text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
+              <Pressable onClick={onCancel} className="ml-auto text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
                 Cancel
-              </button>
+              </Pressable>
             </div>
           </>
         ) : (
           <>
             <div className="px-7 pt-7 pb-2">
-              <button
+              <Pressable
                 onClick={() => { setMode('choose'); setUrlKind(null); }}
                 className="text-[12px] mb-2"
                 style={{ color: 'var(--muted)' }}
               >
                 ← Back
-              </button>
+              </Pressable>
               <div className="font-serif text-[20px] tracking-tight" style={{ color: 'var(--fg)' }}>
                 {urlCopy.title}
               </div>
@@ -1034,16 +1034,16 @@ function UploadKindModal({
               )}
             </div>
             <div className="px-7 py-3.5 flex items-center gap-3" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
-              <button onClick={onCancel} className="text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
+              <Pressable onClick={onCancel} className="text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
                 Cancel
-              </button>
-              <button
+              </Pressable>
+              <Pressable
                 onClick={submitUrl}
                 className="ml-auto text-[12.5px] px-3 py-1.5 rounded-md"
                 style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
                 Import
-              </button>
+              </Pressable>
             </div>
           </>
         )}

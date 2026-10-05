@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { WELCOME_HASH } from '../lib/welcomeRoute';
+import { Pressable } from '../motion';
 
 /**
  * User badge + logout dropdown. Meant to sit inline as the trailing item in
@@ -69,9 +70,10 @@ export function UserMenuInline() {
 
   return (
     <>
-      <button
+      <Pressable
         ref={nameRef}
         type="button"
+        intensity="calm"
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -79,10 +81,10 @@ export function UserMenuInline() {
         style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--fg-2)' }}
       >
         {user.display_name || user.email}
-      </button>
+      </Pressable>
       {open && pos && createPortal(
         <div ref={popRef} className="user-menu-pop" role="menu" style={{ top: pos.top, right: pos.right }}>
-          <button
+          <Pressable
             type="button"
             role="menuitem"
             className="user-menu-about"
@@ -90,15 +92,15 @@ export function UserMenuInline() {
             onClick={() => { setOpen(false); window.location.hash = WELCOME_HASH; }}
           >
             About 9XAIPal
-          </button>
-          <button
+          </Pressable>
+          <Pressable
             type="button"
             role="menuitem"
             className="user-menu-signout"
             onClick={() => { setOpen(false); void logout(); }}
           >
             Sign out
-          </button>
+          </Pressable>
         </div>,
         document.body,
       )}

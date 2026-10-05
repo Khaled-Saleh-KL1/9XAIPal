@@ -18,6 +18,7 @@ import { stageProgress } from '../lib/progress';
 import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
 import { BetaBadge } from '../components/BetaBadge';
+import { Pressable } from '../motion';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -503,7 +504,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               {libraryCounts.done > 0 && ` · ${libraryCounts.done} done`}
             </span>
             <span className="hidden sm:inline-block mx-2 h-4 w-px" style={{ background: 'var(--border)' }} />
-            <button
+            <Pressable
               onClick={onOpenDesk}
               className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
               style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
@@ -511,15 +512,15 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             >
               <span style={{ color: 'var(--accent)', fontSize: 11 }}>◈</span>
               Desk
-            </button>
-            <button
+            </Pressable>
+            <Pressable
               onClick={onOpenRawFiles}
               className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
               style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
             >
               <IconDoc className="w-3.5 h-3.5" style={{ color: 'var(--muted)' }} />
               Raw files
-            </button>
+            </Pressable>
             <ExportWizard papers={papers} />
             <span className="mx-1 h-4 w-px" style={{ background: 'var(--border)' }} />
             <UserMenuInline />
@@ -574,13 +575,13 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               <div className="text-[10.5px] font-mono" style={{ color: 'var(--muted)' }}>
                 PDF · large books OK · stays on this machine
               </div>
-              <button
+              <Pressable
                 onClick={(e) => { e.stopPropagation(); onUpload(); }}
                 className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
                 style={{ background: 'var(--accent)', color: 'var(--accent-fg)' }}
               >
                 <IconPlus className="w-3.5 h-3.5" /> Add paper
-              </button>
+              </Pressable>
             </div>
           </div>
 
@@ -605,7 +606,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 }}
               />
             </div>
-            <button
+            <Pressable
               type="button"
               onClick={() => { setArea((a) => (a === 'done' ? 'reading' : 'done')); setDoneFolder(null); }}
               className="lib-done-toggle px-3 py-2 rounded-md text-[12.5px] flex items-center gap-1.5 shrink-0"
@@ -623,7 +624,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               {libraryCounts.done > 0 && (
                 <span className="font-mono text-[10.5px] opacity-80">{libraryCounts.done}</span>
               )}
-            </button>
+            </Pressable>
             <div className="flex items-center gap-1 ml-auto">
               {/* Kind filter chips: each toggles independently, so "Books" +
                   "Articles" together (papers hidden) is a valid combination.
@@ -633,7 +634,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 {KIND_FILTERS.map(({ key, label }) => {
                   const active = kindFilters.has(key);
                   return (
-                    <button
+                    <Pressable
                       key={key}
                       onClick={() => toggleKindFilter(key)}
                       className="px-2.5 py-1.5 rounded-md text-[12px]"
@@ -645,11 +646,11 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                       }}
                     >
                       {label}
-                    </button>
+                    </Pressable>
                   );
                 })}
               </div>
-              <button
+              <Pressable
                 onClick={() => {
                   const idx = cycleSorts.indexOf(sort);
                   setSort(cycleSorts[(idx + 1) % cycleSorts.length]);
@@ -659,13 +660,13 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               >
                 <IconSort className="w-3.5 h-3.5" />
                 Sort · {sort}
-              </button>
+              </Pressable>
               <div
                 className="flex items-center rounded-md p-0.5 ml-1"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
               >
                 {(['grid', 'list'] as LibraryLayout[]).map((v) => (
-                  <button
+                  <Pressable
                     key={v}
                     onClick={() => setLayout(v)}
                     className="p-1.5 rounded"
@@ -675,7 +676,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                     }}
                   >
                     {v === 'grid' ? <IconGrid className="w-3.5 h-3.5" /> : <IconList className="w-3.5 h-3.5" />}
-                  </button>
+                  </Pressable>
                 ))}
               </div>
             </div>
@@ -689,19 +690,19 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           {notice && (
             <div className="lib-notice">
               <span>{notice}</span>
-              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</button>
+              <Pressable type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</Pressable>
             </div>
           )}
 
           {area === 'done' && (
             <nav className="lib-crumbs" aria-label="Where you are in Done Reading">
-              <button type="button" onClick={() => setArea('reading')}>Library</button>
+              <Pressable type="button" onClick={() => setArea('reading')}>Library</Pressable>
               <span className="lib-crumb-sep">›</span>
               {doneFolder === null ? (
                 <span className="is-here">Done Reading</span>
               ) : (
                 <>
-                  <button type="button" onClick={() => setDoneFolder(null)}>Done Reading</button>
+                  <Pressable type="button" onClick={() => setDoneFolder(null)}>Done Reading</Pressable>
                   <span className="lib-crumb-sep">›</span>
                   <span className="is-here"><IconFolder className="w-3.5 h-3.5" /> {doneFolder}</span>
                 </>
@@ -713,7 +714,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             <div className="lib-folders">
               {folderCards.map((f) => (
                 <div key={f.name} className={`lib-folder${folderRenaming === f.name ? ' is-renaming' : ''}`}>
-                  <button
+                  <Pressable
                     type="button"
                     className="lib-folder-open"
                     onClick={() => { if (folderRenaming !== f.name) setDoneFolder(f.name); }}
@@ -730,17 +731,18 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                       <span className="lib-folder-name" title={f.name}>{f.name}</span>
                     )}
                     <span className="lib-folder-count">{f.count}</span>
-                  </button>
+                  </Pressable>
                   {folderRenaming !== f.name && (
                     <div className="paper-actions">
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); setFolderRenaming(f.name); }}
+                    <Pressable
+                      type="button"
+                      intensity="calm"
+                      onClick={(e) => { e.stopPropagation(); setFolderRenaming(f.name); }}
                         title="Rename this folder"
                         aria-label={`Rename folder ${f.name}`}
                       >
                         <IconPencil className="w-3.5 h-3.5" />
-                      </button>
+                      </Pressable>
                     </div>
                   )}
                 </div>
@@ -856,53 +858,58 @@ function CardActions({
 }) {
   return (
     <div className="paper-actions">
-      <button
+      <Pressable
         type="button"
+        intensity="calm"
         onClick={(e) => { e.stopPropagation(); onStartRename(); }}
         title="Rename this paper"
         aria-label="Rename this paper"
       >
         <IconPencil className="w-3.5 h-3.5" />
-      </button>
+      </Pressable>
       {area === 'reading' ? (
-        <button
+        <Pressable
           type="button"
+          intensity="calm"
           className="is-done"
           onClick={(e) => { e.stopPropagation(); onShelve(); }}
           title="Done reading — move it to Done Reading"
           aria-label="Mark as done reading"
         >
           <IconCheck className="w-3.5 h-3.5" />
-        </button>
+        </Pressable>
       ) : (
         <>
-          <button
+          <Pressable
             type="button"
+            intensity="calm"
             onClick={(e) => { e.stopPropagation(); onShelve(); }}
             title="Move to a folder"
             aria-label="Move to a folder"
           >
             <IconFolder className="w-3.5 h-3.5" />
-          </button>
-          <button
+          </Pressable>
+          <Pressable
             type="button"
+            intensity="calm"
             onClick={(e) => { e.stopPropagation(); onUnshelve(); }}
             title="Back to the reading shelf"
             aria-label="Back to the reading shelf"
           >
             <IconUndo className="w-3.5 h-3.5" />
-          </button>
+          </Pressable>
         </>
       )}
-      <button
+      <Pressable
         type="button"
+        intensity="calm"
         className="is-danger"
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         title="Delete this paper"
         aria-label="Delete this paper"
       >
         <IconTrash className="w-3.5 h-3.5" />
-      </button>
+      </Pressable>
     </div>
   );
 }
@@ -1176,26 +1183,28 @@ function ShelfPanel({
         </p>
 
         <div className="shelf-options">
-          <button
+          <Pressable
             type="button"
+            intensity="calm"
             className={`shelf-option${moving && !paper.doneFolder ? ' is-current' : ''}`}
             onClick={() => onChoose(null)}
           >
             <IconCheck className="w-4 h-4" />
             <span>Done Reading</span>
             <span className="shelf-option-hint">no folder</span>
-          </button>
+          </Pressable>
           {folders.map((f) => (
-            <button
+            <Pressable
               key={f}
               type="button"
+              intensity="calm"
               className={`shelf-option${paper.doneFolder === f ? ' is-current' : ''}`}
               onClick={() => onChoose(f)}
             >
               <IconFolder className="w-4 h-4" />
               <span>{f}</span>
               {paper.doneFolder === f && <span className="shelf-option-hint">here now</span>}
-            </button>
+            </Pressable>
           ))}
         </div>
 
@@ -1213,18 +1222,18 @@ function ShelfPanel({
             aria-label="New folder name"
             autoFocus
           />
-          <button type="submit" className="confirm-go" disabled={!clean || exists}>
+          <Pressable type="submit" className="confirm-go" disabled={!clean || exists}>
             {exists ? 'Exists' : 'Create & move'}
-          </button>
+          </Pressable>
         </form>
 
         <div className="confirm-actions">
           {moving && (
-            <button type="button" className="confirm-cancel shelf-unshelve" onClick={onUnshelve}>
+            <Pressable type="button" className="confirm-cancel shelf-unshelve" onClick={onUnshelve}>
               <IconUndo className="w-3.5 h-3.5" /> Back to reading
-            </button>
+            </Pressable>
           )}
-          <button type="button" className="confirm-cancel" onClick={onClose}>Cancel</button>
+          <Pressable type="button" className="confirm-cancel" onClick={onClose}>Cancel</Pressable>
         </div>
       </div>
     </div>

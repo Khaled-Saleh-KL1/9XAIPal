@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Paper } from '../types';
 import { downloadExport, type ExportFormat } from '../api';
 import { IconSearch, IconCheck } from './Icons';
+import { Pressable } from '../motion';
 
 /**
  * Export, as a four-step panel opened from one "Export" button:
@@ -126,7 +127,7 @@ export function ExportPanel(p: ExportPanelProps) {
                 {KINDS.map(({ key, label }) => {
                   const active = p.kinds.has(key);
                   return (
-                    <button
+                    <Pressable
                       key={key}
                       type="button"
                       onClick={() => p.onToggleKind(key)}
@@ -139,7 +140,7 @@ export function ExportPanel(p: ExportPanelProps) {
                       }}
                     >
                       {label}
-                    </button>
+                    </Pressable>
                   );
                 })}
               </div>
@@ -167,8 +168,8 @@ export function ExportPanel(p: ExportPanelProps) {
             </div>
 
             <div className="confirm-actions">
-              <button type="button" className="confirm-cancel" onClick={p.onClose}>Cancel</button>
-              <button type="button" className="confirm-go" disabled={n === 0} onClick={p.onNext}>Next</button>
+              <Pressable type="button" className="confirm-cancel" onClick={p.onClose}>Cancel</Pressable>
+              <Pressable type="button" className="confirm-go" disabled={n === 0} onClick={p.onNext}>Next</Pressable>
             </div>
           </>
         )}
@@ -181,7 +182,7 @@ export function ExportPanel(p: ExportPanelProps) {
             </p>
             <div className="export-formats">
               {FORMATS.map((f) => (
-                <button
+                <Pressable
                   key={f.key}
                   type="button"
                   onClick={() => p.onFormat(f.key)}
@@ -190,12 +191,12 @@ export function ExportPanel(p: ExportPanelProps) {
                 >
                   <span className="export-format-label">{f.label}</span>
                   <span className="export-format-hint">{f.hint}</span>
-                </button>
+                </Pressable>
               ))}
             </div>
             <div className="confirm-actions">
-              <button type="button" className="confirm-cancel" onClick={p.onBack}>Back</button>
-              <button type="button" className="confirm-go" disabled={!p.format} onClick={p.onRun}>Export</button>
+              <Pressable type="button" className="confirm-cancel" onClick={p.onBack}>Back</Pressable>
+              <Pressable type="button" className="confirm-go" disabled={!p.format} onClick={p.onRun}>Export</Pressable>
             </div>
           </>
         )}
@@ -212,7 +213,7 @@ export function ExportPanel(p: ExportPanelProps) {
               <span>{Math.round(p.progress * 100)}%</span>
             </div>
             <div className="confirm-actions">
-              <button type="button" className="export-cancel-run" onClick={p.onCancelRun}>Cancel</button>
+              <Pressable type="button" className="export-cancel-run" onClick={p.onCancelRun}>Cancel</Pressable>
             </div>
           </>
         )}
@@ -225,7 +226,7 @@ export function ExportPanel(p: ExportPanelProps) {
               <p className="confirm-body">{p.savedAs ?? chosen?.file} has been saved to your downloads.</p>
             </div>
             <div className="confirm-actions">
-              <button type="button" className="confirm-go" onClick={p.onClose}>Done</button>
+              <Pressable type="button" className="confirm-go" onClick={p.onClose}>Done</Pressable>
             </div>
           </>
         )}
@@ -235,8 +236,8 @@ export function ExportPanel(p: ExportPanelProps) {
             <h2 className="confirm-title" id="export-title">Export could not be created</h2>
             <p className="confirm-body">{p.error}</p>
             <div className="confirm-actions">
-              <button type="button" className="confirm-cancel" onClick={p.onClose}>Close</button>
-              <button type="button" className="confirm-go" onClick={p.onRetry}>Try again</button>
+              <Pressable type="button" className="confirm-cancel" onClick={p.onClose}>Close</Pressable>
+              <Pressable type="button" className="confirm-go" onClick={p.onRetry}>Try again</Pressable>
             </div>
           </>
         )}
@@ -330,7 +331,7 @@ export function ExportWizard({ papers }: { papers: Paper[] }) {
 
   return (
     <>
-      <button
+      <Pressable
         onClick={() => setOpen(true)}
         className="text-[12.5px] px-3 py-1.5 rounded-md flex items-center gap-1.5"
         style={{ border: '1px solid var(--border)', color: 'var(--fg)', background: 'var(--bg)' }}
@@ -338,7 +339,7 @@ export function ExportWizard({ papers }: { papers: Paper[] }) {
       >
         <span style={{ color: 'var(--accent)', fontSize: 11 }}>⇩</span>
         Export
-      </button>
+      </Pressable>
 
       {open && (
         <ExportPanel

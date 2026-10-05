@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { Pressable } from '../motion';
 
 /**
  * In-app replacement for `window.confirm`.
@@ -100,10 +101,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             </h2>
             {options.body && <p className="confirm-body">{options.body}</p>}
             <div className="confirm-actions">
-              <button type="button" className="confirm-cancel" onClick={() => settle(false)}>
+              <Pressable type="button" className="confirm-cancel" onClick={() => settle(false)}>
                 {options.cancelLabel ?? 'Cancel'}
-              </button>
-              <button
+              </Pressable>
+              <Pressable
                 type="button"
                 ref={confirmButtonRef}
                 className={
@@ -112,7 +113,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 onClick={() => settle(true)}
               >
                 {options.confirmLabel ?? 'Confirm'}
-              </button>
+              </Pressable>
             </div>
           </div>
         </div>
