@@ -231,7 +231,7 @@ referenced them.
 | `id`         | `UUID`     | PK.                                             |
 | `chunk_id`   | `UUID`     | FK → `chunks.id`, cascade.                      |
 | `asset_type` | `TEXT`     | `image`, etc.                                   |
-| file_path | TEXT | Relative to images_dir(). Served through authenticated GET /api/v1/papers/{doc_id}/assets/{file_path}. |
+| `file_path`  | `TEXT`     | Relative to `images_dir()`. Served through authenticated `GET /api/v1/papers/{doc_id}/assets/{file_path}`. |
 | `mime_type`  | `TEXT`     |                                                 |
 | `width`      | `INTEGER`  | Currently null.                                 |
 | `height`     | `INTEGER`  | Currently null.                                 |

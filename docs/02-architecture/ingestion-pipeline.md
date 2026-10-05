@@ -12,7 +12,8 @@
 > [operations.md](../01-orientation/operations.md): repairing a stuck ingestion.
 >
 > **Status:** current · **Source reconciled:** 2026-10-05 (48cb8c6), against the current extraction
-> and worker code. This documentation update did not contact a running service.> **Verify with:** `pytest tests/test_ingestion_pipeline.py -v`
+> and worker code. This documentation update did not contact a running service.
+> **Verify with:** `pytest tests/test_ingestion_pipeline.py -v`
 
 This is the path a PDF takes from "the user dragged it onto the library" to "I can read it and
 ask grounded questions about it."

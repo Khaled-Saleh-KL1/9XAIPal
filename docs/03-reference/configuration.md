@@ -229,8 +229,8 @@ Compose passes both settings to the API and light worker; see the
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| CLOUDFLARE_AI_ACCOUNTS | (empty) | Optional comma-separated failover list. Each entry has the placeholder shape &lt;account_id&gt;:&lt;token&gt;; provide actual credentials only through the runtime environment or a secret store, never in tracked files or documentation. |
-| CLOUDFLARE_IMAGE_MODELS | (empty → code defaults) | Optional comma-separated model order. The default order is maintained in app/services/cloudflare_images.py; model identifiers are not repeated here. |
+| `CLOUDFLARE_AI_ACCOUNTS` | `(empty)` | Optional comma-separated failover list. Each entry has the placeholder shape `<account_id>:<token>`; provide actual credentials only through the runtime environment or a secret store, never in tracked files or documentation. |
+| `CLOUDFLARE_IMAGE_MODELS` | `(empty → code defaults)` | Optional comma-separated model order. The default order is maintained in `app/services/cloudflare_images.py`; model identifiers are not repeated here. |
 
 ## Bibliography citations
 

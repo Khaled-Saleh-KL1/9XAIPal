@@ -120,7 +120,6 @@ consumes the light/default queue `celery` (retaining the old backlog).
 Rebuild/update `api` and both workers together. See [deployment queue details](../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
 for routing, ingest limits, startup recovery and migration caveats.
 
-
 2026-10-05  Kept: contextual Arabic embeddings disabled by default.  Because: the golden-set measurement in backend/app/core/config.py reduced MRR@10 from 0.542 to 0.497 without reranking and from 0.803 to 0.762 with reranking; the opt-in flag remains false.
 
 2026-10-05  Chose: a shared reduced-motion-aware motion layer for controls, sheets, reveals, and route entry.  Because: MotionRoot centralizes MotionConfig and lazy feature loading, while shared primitives use named calm, gentle, and playful transitions and honor the user's reduced-motion preference. See frontend/src/motion/.

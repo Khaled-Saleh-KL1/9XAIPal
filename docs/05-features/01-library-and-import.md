@@ -77,7 +77,8 @@ and `_stream_pdf_upload`.
 - *If Celery dispatch fails* (Redis down), the document is marked `failed` with a message naming
   the broker, rather than sitting `queued` forever.
 
-The centered Add paper chooser has its own PDF drop zone and picker; see the detailed [Add paper drop-zone feature](12-add-paper-drop-zone.md).
+The centered Add paper chooser has its own PDF drop zone and picker; see the detailed
+[Add paper drop-zone feature](12-add-paper-drop-zone.md).
 
 **See it.** Drop a PDF on the library. Try a 3 MB text file renamed `.pdf` → 415. Watch the
 network tab: one `POST /papers/upload`, then `GET /progress` once a second.
@@ -222,14 +223,16 @@ map removes the possibility.
 
 ## 6. Library shelf with cover thumbnails
 
-**What it does.** Every card leads with a cover image: a PDF's first page, or an optional generated thumbnail for an imported article when its background task succeeds.
+**What it does.** Every card leads with a cover image: a PDF's first page, or an optional generated
+thumbnail for an imported article when its background task succeeds.
 
 **Where.** [`services/covers.py`](../../backend/app/services/covers.py), `GET /papers/{id}/cover`,
 [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx).
 
-**How it works.** PDF covers are rasterised by PyMuPDF on first request at 480 px wide and JPEG quality 78.
-Imported articles may instead use an asynchronously generated Cloudflare Workers AI cover. Both
-use the storage/covers/<id>.jpg cache; details are in [feature 117](13-article-thumbnails.md). Rendering runs in
+**How it works.** PDF covers are rasterised by PyMuPDF on first request at 480 px wide and JPEG
+quality 78. Imported articles may instead use an asynchronously generated Cloudflare Workers AI
+cover. Both use the `storage/covers/<id>.jpg` cache; details are in
+[feature 117](13-article-thumbnails.md). Rendering runs in
 `run_in_threadpool` (50–200 ms of native CPU, and the grid asks for every cover at once). A paper
 with no renderable cover answers **204, not 404**; `<img>` reports 204 as a load error, so
 `PaperCover` keeps its `onError` fallback glyph. Cards use a fixed aspect `1 / 1.294` with

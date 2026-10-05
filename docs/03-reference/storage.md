@@ -100,12 +100,12 @@ The API serves private files through authenticated routes that check ownership:
 
 | Resource | Route | Notes |
 | --- | --- | --- |
-| Chunk-linked figure, table, or equation crop | /api/v1/papers/<doc_id>/assets/<file_path> | The path must match a chunk_assets row for the owned document. |
-| Original PDF | /api/v1/papers/<doc_id>/raw | Serves the owned PDF from assets, with a documents fallback. |
-| Cover image | /api/v1/papers/<doc_id>/cover | Returns the generated article cache when present; otherwise renders a source PDF page. |
-| Research-agent image | /api/v1/media/research/<conversation_id>/<filename> | The conversation must belong to the caller; the filename is a bare name. |
+| Chunk-linked figure, table, or equation crop | `/api/v1/papers/<doc_id>/assets/<file_path>` | The path must match a `chunk_assets` row for the owned document. |
+| Original PDF | `/api/v1/papers/<doc_id>/raw` | Serves the owned PDF from `assets/`, with a `documents/` fallback. |
+| Cover image | `/api/v1/papers/<doc_id>/cover` | Returns the generated article cache when present; otherwise renders a source PDF page. |
+| Research-agent image | `/api/v1/media/research/<conversation_id>/<filename>` | The conversation must belong to the caller; the filename is a bare name. |
 
-There is no public StaticFiles mount for storage. Vite retains a legacy /static
+There is no public `StaticFiles` mount for storage. Vite retains a legacy `/static`
 proxy rule in development, but current stored files use the authenticated API
 routes above.
 

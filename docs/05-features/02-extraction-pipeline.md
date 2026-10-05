@@ -239,7 +239,11 @@ endpoint.
 without touching chunks; the *embedding pin* (feature 99) refuses to start if the configured
 dimension disagrees with what is stored.
 
-**Contextual Arabic embeddings remain disabled.** The optional title/section prefix lowered measured MRR@10 on the Arabic golden set, so CONTEXTUAL_EMBEDDINGS_ARABIC_ENABLED defaults to false; see [config.py](../../backend/app/core/config.py) for the recorded comparison and [test_arabic_contextual_embeddings.py](../../backend/tests/test_arabic_contextual_embeddings.py) for flag coverage.
+**Contextual Arabic embeddings remain disabled.** The optional title/section prefix lowered
+measured MRR@10 on the Arabic golden set, so `CONTEXTUAL_EMBEDDINGS_ARABIC_ENABLED` defaults
+to false; see [`config.py`](../../backend/app/core/config.py) for the recorded comparison and
+[`test_arabic_contextual_embeddings.py`](../../backend/tests/test_arabic_contextual_embeddings.py)
+for flag coverage.
 
 ---
 
@@ -345,7 +349,10 @@ many documents run at once; `EMBEDDING_MAX_CONCURRENCY` bounds batches within on
 from nothing for as long as the pass takes. The embedding pin (feature 99) is what forces a model
 swap to be this explicit pass rather than a silent mix of incompatible vectors.
 
-The launcher has a help mode and a database-reading dry-run mode. Run it from the API container with python scripts/reembed_library.py [--dry-run]; the [re-embedding runbook](../runbooks/reembed-library.md) explains which documents are queued and how to monitor completion.
+The launcher has a help mode and a database-reading dry-run mode. Run it from the API container
+with `python scripts/reembed_library.py [--dry-run]`; the
+[re-embedding runbook](../runbooks/reembed-library.md) explains which documents are queued and
+how to monitor completion.
 
 ---
 

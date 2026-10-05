@@ -81,8 +81,8 @@ All calls go through `/api/v1` and are proxied by Vite to `http://localhost:8000
 | `listModels()`          | `GET /models` → `ModelCatalog`                      |
 | `askPaper(id, q, seq, conv)` | `POST /papers/{id}/ask` → `AskResponse` (book reader) |
 | `checkHealth()`         | `GET /health`                                       |
-| getRawFileUrl(id) | /api/v1/papers/{id}/raw |
-| getStaticPdfUrl(id) | /api/v1/papers/{id}/raw (compatibility wrapper used by PdfViewer) |
+| `getRawFileUrl(id)` | `/api/v1/papers/{id}/raw` |
+| `getStaticPdfUrl(id)` | `/api/v1/papers/{id}/raw` (compatibility wrapper used by `PdfViewer`) |
 
 All functions throw on non-`2xx`.
 
