@@ -48,9 +48,9 @@ export function Sheet({
   const panelMotion = reducedMotion
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0, pointerEvents: 'none' }, transition: reducedMotionFade }
     : {
-        initial: { y: 40, opacity: 0, rotate: -1, scale: 0.96 },
+        initial: { y: 24, opacity: 0, scale: 0.96 },
         animate: { y: 0, opacity: 1, rotate: 0, scale: 1 },
-        exit: { y: 24, opacity: 0, scale: 0.96, pointerEvents: 'none' },
+        exit: { y: 32, opacity: 0, scale: 0.96, pointerEvents: 'none' },
         transition: playful,
       };
 
@@ -61,7 +61,7 @@ export function Sheet({
       {open && (
         <m.div
           key="sheet-backdrop"
-          className={['motion-sheet-backdrop', backdropClassName].filter(Boolean).join(' ')}
+          className={['motion-sheet-backdrop', 'motion-sheet-backdrop--centered', backdropClassName].filter(Boolean).join(' ')}
           data-testid="sheet-backdrop"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -73,7 +73,7 @@ export function Sheet({
           <m.div
             {...panelMotion}
             ref={panelRef}
-            className={['motion-sheet-panel', panelClassName].filter(Boolean).join(' ')}
+            className={['motion-sheet-panel', 'motion-sheet-panel--centered', panelClassName].filter(Boolean).join(' ')}
             role="dialog"
             aria-modal="true"
             aria-labelledby={labelledBy}

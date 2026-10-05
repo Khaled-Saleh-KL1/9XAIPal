@@ -100,6 +100,13 @@ async function flushLibraryLoad() {
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 }
 
+function dropFiles(target: Element, files: File[]) {
+  const event = new Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'dataTransfer', { value: { files, types: ['Files'], dropEffect: 'none' } });
+  fireEvent(target, event);
+  return event;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.paperMotionProps.clear();
@@ -287,6 +294,40 @@ describe('LibraryView motion', () => {
     await userEvent.keyboard('{Enter}');
 
     expect(view.props.onUpload).toHaveBeenCalledWith(undefined, upload);
+  });
+
+  it('opens the upload callback with the first PDF from a library-background drop', async () => {
+    mocks.listPapers.mockResolvedValue([]);
+    const view = renderLibrary();
+    await screen.findByText('Your library is empty. Drop a PDF above to add your first paper.');
+    const first = new File(['first'], 'first.pdf', { type: 'application/pdf' });
+    const second = new File(['second'], 'second.pdf', { type: 'application/pdf' });
+    const event = dropFiles(view.container.firstElementChild!, [first, second]);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.props.onUpload).toHaveBeenCalled();
+    expect(view.props.onUpload.mock.calls[0][0]).toBe(first);
+    expect(await screen.findByText('Only one file at a time: using first.pdf.')).toBeInTheDocument();
+  });
+
+  it('keeps a non-PDF library drop as a notice and opens no upload dialog', async () => {
+    mocks.listPapers.mockResolvedValue([]);
+    const view = renderLibrary();
+    await screen.findByText('Your library is empty. Drop a PDF above to add your first paper.');
+    dropFiles(view.container.firstElementChild!, [new File(['word'], 'notes.docx')]);
+
+    expect(await screen.findByText(/notes\.docx is not a PDF/)).toBeInTheDocument();
+    expect(view.props.onUpload).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when a library-background drop has no files', async () => {
+    mocks.listPapers.mockResolvedValue([]);
+    const view = renderLibrary();
+    await screen.findByText('Your library is empty. Drop a PDF above to add your first paper.');
+    const event = dropFiles(view.container.firstElementChild!, []);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.props.onUpload).not.toHaveBeenCalled();
   });
 
   it('keeps the same card nodes when a processing poll returns fresh objects for the same ids', async () => {

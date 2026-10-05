@@ -30,6 +30,8 @@ vi.mock('./views/LibraryView', () => ({
         <button onClick={(event) => onUpload(undefined, event.currentTarget)}>Add paper</button>
         <button onClick={() => onOpenDesk()}>Open desk</button>
         <button onClick={(event) => onUpload(new File(['sample'], 'sample.pdf', { type: 'application/pdf' }), event.currentTarget)}>Start processing</button>
+        <button onClick={() => onUpload(new File(['dropped'], 'dropped.pdf', { type: 'application/pdf' }))}>Library drop PDF</button>
+        <button onClick={() => onUpload(new File(['text'], 'notes.docx'))}>Pass non-PDF to upload flow</button>
       </div>
     );
   },
@@ -60,6 +62,13 @@ import { App } from './App';
 
 const renderApp = () => render(<MotionRoot><App /></MotionRoot>);
 
+function dropFiles(target: Element, files: File[]) {
+  const event = new Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'dataTransfer', { value: { files, types: ['Files'], dropEffect: 'none' } });
+  fireEvent(target, event);
+  return event;
+}
+
 beforeEach(() => {
   authState.user = null;
   authState.loading = false;
@@ -67,7 +76,7 @@ beforeEach(() => {
   authState.queuePosition = null;
   authState.refreshAdmission.mockReset().mockResolvedValue(undefined);
   authState.libraryMounts = 0;
-  vi.mocked(uploadPaper).mockResolvedValue({ id: 'upload-id' } as never);
+  vi.mocked(uploadPaper).mockReset().mockResolvedValue({ id: 'upload-id' } as never);
   window.history.replaceState(null, '', '#/library');
 });
 
@@ -147,7 +156,7 @@ describe('App gate', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Start processing' }));
     const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Book/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Upload as book' }));
 
     expect(screen.getByText('LIBRARY')).toBeInTheDocument();
     expect(screen.getByText('PROCESSING')).toBeInTheDocument();
@@ -182,6 +191,181 @@ describe('App gate', () => {
 
     expect(dialog).toBeInTheDocument();
     await vi.waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('opens the constrained PDF picker from Book and keeps link options visible without a file', async () => {
+    const clickPicker = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    const input = dialog.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.accept).toBe('application/pdf,.pdf');
+    expect(within(dialog).getAllByRole('button', { name: /or paste a link/i })).toHaveLength(2);
+    expect(within(dialog).getByRole('button', { name: /^Article by URL/ })).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Book\b/ }));
+    expect(clickPicker).toHaveBeenCalledOnce();
+    const dropZone = within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' });
+    dropZone.focus();
+    await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard(' ');
+    expect(clickPicker).toHaveBeenCalledTimes(3);
+    clickPicker.mockRestore();
+  });
+
+  it('keeps the chooser open and explains a non-PDF returned by the native picker', async () => {
+    const clickPicker = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {});
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: /^Book\b/ }));
+    const input = dialog.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(['word'], 'notes.docx')] } });
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('notes.docx is not a PDF.');
+    expect(screen.getByRole('dialog', { name: 'What are you adding?' })).toBeInTheDocument();
+    expect(uploadPaper).not.toHaveBeenCalled();
+    clickPicker.mockRestore();
+  });
+
+  it('attaches a dropped PDF, focuses Upload as book, and uploads it as a research paper', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    const file = new File(['sample pdf'], 'a-research-paper.pdf', { type: 'application/pdf' });
+    const event = dropFiles(within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' }), [file]);
+
+    expect(event.defaultPrevented).toBe(true);
+    const chip = await within(dialog).findByTestId('upload-file-chip');
+    expect(chip).toHaveTextContent(file.name);
+    expect(chip.querySelector('[title]')).toHaveAttribute('title', file.name);
+    expect(chip).toHaveTextContent(/\bB\b/);
+    expect(within(dialog).getByRole('button', { name: 'Upload as book' })).toHaveFocus();
+    expect(within(dialog).getByRole('button', { name: 'Upload as research paper' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: /^Book\b/ })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /or paste a link/i })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Article by URL' })).toBeNull();
+    expect(within(dialog).getByText('Links are for web pages and online PDFs. Remove the file to paste a link.')).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Upload as research paper' }));
+    await vi.waitFor(() => expect(uploadPaper).toHaveBeenCalledWith(file, 'paper'));
+    await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'What are you adding?' })).not.toBeInTheDocument());
+  });
+
+  it('shows a rejection alert for a non-PDF dropped on the modal without attaching it', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    dropFiles(within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' }), [new File(['word'], 'notes.docx')]);
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'notes.docx is not a PDF. Only PDF books and research papers can be uploaded.',
+    );
+    expect(within(dialog).queryByTestId('upload-file-chip')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Upload as book' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: /^Book\b/ })).toBeInTheDocument();
+  });
+
+  it('keeps the drop-zone button mounted and focused after a rejected drop', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    const dropZone = within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' });
+    dropZone.focus();
+
+    dropFiles(dropZone, [new File(['word'], 'notes.docx')]);
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('notes.docx is not a PDF.');
+    expect(dropZone.isConnected).toBe(true);
+    expect(dropZone).toHaveFocus();
+
+    const pdf = new File(['sample pdf'], 'follow-up.pdf', { type: 'application/pdf' });
+    dropFiles(dropZone, [pdf]);
+
+    expect(await within(dialog).findByTestId('upload-file-chip')).toHaveTextContent(pdf.name);
+  });
+
+  it('does nothing when the modal drop zone receives an empty drop', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    const event = dropFiles(within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' }), []);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    expect(within(dialog).queryByTestId('upload-file-chip')).toBeNull();
+  });
+
+  it('uses the first PDF from a multi-PDF modal drop and reports the other files', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    const first = new File(['one'], 'first.pdf');
+    const second = new File(['two'], 'second.pdf');
+    dropFiles(within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' }), [first, second]);
+
+    expect(await within(dialog).findByTestId('upload-file-chip')).toHaveTextContent('first.pdf');
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Only one file at a time: using first.pdf.');
+  });
+
+  it('removes an attached PDF and restores the link choices', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    dropFiles(within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' }), [new File(['pdf'], 'notes.pdf')]);
+    await within(dialog).findByTestId('upload-file-chip');
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove file' }));
+    expect(within(dialog).queryByTestId('upload-file-chip')).toBeNull();
+    expect(within(dialog).getAllByRole('button', { name: /or paste a link/i })).toHaveLength(2);
+    expect(within(dialog).getByRole('button', { name: /^Article by URL/ })).toBeInTheDocument();
+  });
+
+  it('attaches a library-dropped PDF to the same upload dialog', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Library drop PDF' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+
+    expect(await within(dialog).findByTestId('upload-file-chip')).toHaveTextContent('dropped.pdf');
+    expect(within(dialog).getByRole('button', { name: 'Upload as book' })).toHaveFocus();
+    expect(within(dialog).getByRole('button', { name: 'Upload as research paper' })).toBeInTheDocument();
+  });
+
+  it('clears a pending library drop when Escape cancels the upload dialog', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Library drop PDF' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    expect(await within(dialog).findByTestId('upload-file-chip')).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    await vi.waitFor(() => expect(screen.queryByRole('dialog', { name: 'What are you adding?' })).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const reopened = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    expect(within(reopened).queryByTestId('upload-file-chip')).toBeNull();
+    expect(within(reopened).getByRole('button', { name: /^Article by URL/ })).toBeInTheDocument();
+  });
+
+  it('does not send a non-PDF to the upload API even if passed directly to the upload flow', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Pass non-PDF to upload flow' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    expect(await within(dialog).findByTestId('upload-file-chip')).toHaveTextContent('notes.docx');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Upload as book' }));
+
+    expect(uploadPaper).not.toHaveBeenCalled();
+    expect(screen.queryByText('PROCESSING')).toBeNull();
   });
 
   it('shows the landing page at #/welcome to a signed-in user and closes into the library', async () => {

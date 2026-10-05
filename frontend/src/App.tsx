@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useId, lazy, Suspense } from 'react';
-import type { RefObject } from 'react';
+import type { ChangeEvent, DragEvent as ReactDragEvent, RefObject } from 'react';
+import { m, useAnimate, useReducedMotion } from 'motion/react';
 import type { Route, LibraryLayout, UploadingFile } from './types';
 import type { Paper } from './types';
 import { LibraryView } from './views/LibraryView';
@@ -12,7 +13,9 @@ import { LandingView } from './views/LandingView';
 import { WaitingRoomView } from './views/WaitingRoomView';
 import { useAuth } from './contexts/AuthContext';
 import { PageTransition, Pressable, Sheet } from './motion';
+import { playful, reducedMotionFade } from './motion/springs';
 import { isWelcomeHash, useWelcomeRoute } from './lib/welcomeRoute';
+import { isPdfFile, pickFirstPdf } from './lib/pdfFiles';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
 // keeps it out of the initial bundle so the library/reading views appear
@@ -22,7 +25,7 @@ const PdfViewer = lazy(() =>
 );
 import { RawArticleViewer } from './views/RawArticleViewer';
 import { uploadPaper, importArticleUrl, getPaperProgress, listPapers, getPaper, deletePaper, pageToSequence, confirmArabicWritingStyle, QueueFullError, type PaperMeta, type DocKind, type ArabicWritingStyle } from './api';
-import { IconLink } from './components/Icons';
+import { IconDoc, IconLink, IconUpload } from './components/Icons';
 import { displayTitle } from './lib/titles';
 import { stageProgress } from './lib/progress';
 
@@ -164,6 +167,7 @@ export function App() {
   // (a drop can't say whether it's a book or a paper), so the file waits here
   // until a kind is picked, and then skips the native file picker entirely.
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [pendingFileNotice, setPendingFileNotice] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Tracks the document id of the in-flight upload so Cancel can actually
   // delete it on the backend (a ref, because Cancel may fire before the
@@ -283,6 +287,8 @@ export function App() {
 
   // Real file upload handler
   const handleFileUpload = useCallback(async (file: File, kind: DocKind) => {
+    if (!isPdfFile(file)) return;
+
     setUploadingFile({
       name: file.name,
       size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
@@ -382,38 +388,30 @@ export function App() {
   const submitImportUrl = useCallback((url: string, kind: 'book' | 'paper' | null) => {
     setKindPickerOpen(false);
     setPendingFile(null);
+    setPendingFileNotice(null);
     handleArticleImport(url, kind);
   }, [handleArticleImport]);
 
   // Step 1 of upload: ask whether this is a book or a research paper. A drop
   // already carries the file, so it comes in as `file` and we hold onto it;
   // the button passes nothing and the file gets picked in step 2.
-  const startUpload = useCallback((file?: File, opener?: HTMLElement) => {
+  const startUpload = useCallback((file?: File, opener?: HTMLElement, notice?: string) => {
     uploadOpenerRef.current = opener ?? null;
     setPendingFile(file ?? null);
+    setPendingFileNotice(notice ?? null);
     setKindPickerOpen(true);
   }, []);
 
-  // Step 2: once the kind is chosen, upload the dropped file if we already have
-  // one; otherwise open the native file picker.
-  const pickFileWithKind = useCallback((kind: DocKind) => {
+  // The chooser owns the native picker so rejected files can be explained
+  // without dismissing the sheet.
+  const pickFileWithKind = useCallback((kind: DocKind, selectedFile?: File) => {
+    const file = selectedFile ?? pendingFile;
+    if (!file) return;
+
     setKindPickerOpen(false);
-
-    if (pendingFile) {
-      setPendingFile(null);
-      handleFileUpload(pendingFile, kind);
-      return;
-    }
-
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.pdf';
-    input.onchange = (e) => {
-      const target = e.target as HTMLInputElement;
-      const file = target.files?.[0];
-      if (file) handleFileUpload(file, kind);
-    };
-    input.click();
+    setPendingFile(null);
+    setPendingFileNotice(null);
+    handleFileUpload(file, kind);
   }, [handleFileUpload, pendingFile]);
 
   const openPaper = useCallback((p: Paper) => {
@@ -824,8 +822,16 @@ export function App() {
         open={kindPickerOpen}
         onChoose={pickFileWithKind}
         onImportUrl={submitImportUrl}
+        pendingFile={pendingFile}
+        pendingFileNotice={pendingFileNotice}
+        onPendingFileChange={setPendingFile}
+        onPendingFileNoticeChange={setPendingFileNotice}
         returnFocusRef={uploadOpenerRef}
-        onCancel={() => { setKindPickerOpen(false); setPendingFile(null); }}
+        onCancel={() => {
+          setKindPickerOpen(false);
+          setPendingFile(null);
+          setPendingFileNotice(null);
+        }}
       />
 
       {/* Raw Files slide-over panel */}
@@ -850,17 +856,33 @@ export function App() {
 // Asks whether the PDF is a book (chapter-by-chapter reading navigation) or a
 // research paper (linear reading), then opens the file picker.
 
+const rejectedDropShake = [0, -8, 7, -5, 3, 0];
+
+function formatUploadFileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function UploadKindModal({
   open,
   onChoose,
   onImportUrl,
   onCancel,
+  pendingFile,
+  pendingFileNotice,
+  onPendingFileChange,
+  onPendingFileNoticeChange,
   returnFocusRef,
 }: {
   open: boolean;
-  onChoose: (kind: DocKind) => void;
+  onChoose: (kind: DocKind, file?: File) => void;
   onImportUrl: (url: string, kind: 'book' | 'paper' | null) => void;
   onCancel: () => void;
+  pendingFile: File | null;
+  pendingFileNotice: string | null;
+  onPendingFileChange: (file: File | null) => void;
+  onPendingFileNoticeChange: (notice: string | null) => void;
   returnFocusRef: RefObject<HTMLElement | null>;
 }) {
   // A URL can be pasted for any of the three choices, not just the generic
@@ -875,6 +897,12 @@ function UploadKindModal({
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
   const firstChoiceRef = useRef<HTMLButtonElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pickerKindRef = useRef<DocKind | null>(null);
+  const dragDepth = useRef(0);
+  const [fileOver, setFileOver] = useState(false);
+  const [dropZoneRef, animate] = useAnimate();
+  const reducedMotion = useReducedMotion();
 
   const openUrlMode = (kind: 'book' | 'paper' | null) => {
     setUrlKind(kind);
@@ -884,12 +912,15 @@ function UploadKindModal({
     // reader has typed anything into it.
     setUrl('');
     setError(null);
+    onPendingFileNoticeChange(null);
     setMode('url');
   };
 
   useEffect(() => {
-    if (open && mode === 'url') urlInputRef.current?.focus();
-  }, [open, mode]);
+    if (!open) return;
+    if (mode === 'url') urlInputRef.current?.focus();
+    else firstChoiceRef.current?.focus();
+  }, [open, mode, pendingFile]);
 
   useEffect(() => {
     if (!open) {
@@ -911,6 +942,77 @@ function UploadKindModal({
       return;
     }
     onImportUrl(trimmed, urlKind);
+  };
+
+  const selectionNotice = (rejected: File[], pdf: File | null, extraPdfs: number) => {
+    const messages: string[] = [];
+    if (rejected.length === 1) {
+      messages.push(`${rejected[0].name} is not a PDF. Only PDF books and research papers can be uploaded.`);
+    } else if (rejected.length > 1) {
+      messages.push(`${rejected.map((file) => file.name).join(', ')} are not PDFs. Only PDF books and research papers can be uploaded.`);
+    }
+    if (pdf && extraPdfs > 0) messages.push(`Only one file at a time: using ${pdf.name}.`);
+    return messages.length ? messages.join(' ') : null;
+  };
+
+  const handleFiles = (files: File[], requestedKind: DocKind | null) => {
+    if (files.length === 0) return;
+    const result = pickFirstPdf(files);
+    onPendingFileNoticeChange(selectionNotice(result.rejected, result.pdf, result.extraPdfs));
+    if (result.rejected.length > 0 && !reducedMotion && dropZoneRef.current) {
+      void animate(dropZoneRef.current, { x: rejectedDropShake }, { duration: 0.4, ease: 'easeInOut' });
+    }
+
+    if (!result.pdf) return;
+    if (requestedKind) {
+      onChoose(requestedKind, result.pdf);
+      return;
+    }
+    onPendingFileChange(result.pdf);
+  };
+
+  const openFilePicker = (kind: DocKind | null) => {
+    pickerKindRef.current = kind;
+    onPendingFileNoticeChange(null);
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    const kind = pickerKindRef.current;
+    pickerKindRef.current = null;
+    event.currentTarget.value = '';
+    handleFiles(files, kind);
+  };
+
+  const carriesFiles = (event: ReactDragEvent<HTMLButtonElement>) =>
+    Array.from(event.dataTransfer.types).includes('Files');
+
+  const handleDragEnter = (event: ReactDragEvent<HTMLButtonElement>) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    dragDepth.current += 1;
+    setFileOver(true);
+  };
+
+  const handleDragOver = (event: ReactDragEvent<HTMLButtonElement>) => {
+    if (!carriesFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setFileOver(true);
+  };
+
+  const handleDragLeave = (event: ReactDragEvent<HTMLButtonElement>) => {
+    if (!carriesFiles(event)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setFileOver(false);
+  };
+
+  const handleDrop = (event: ReactDragEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    dragDepth.current = 0;
+    setFileOver(false);
+    handleFiles(Array.from(event.dataTransfer.files), null);
   };
 
   const urlCopy = urlKind === 'book'
@@ -954,6 +1056,60 @@ function UploadKindModal({
                 This sets how you read it. You can re-process later if you pick wrong.
               </div>
             </div>
+            <div className="px-7 pt-3">
+              <m.button
+                ref={dropZoneRef}
+                type="button"
+                aria-label="Drop a PDF here, or browse"
+                className={`upload-pdf-drop-zone${fileOver ? ' is-over' : ''}`}
+                initial={reducedMotion ? false : { scale: 1 }}
+                animate={{
+                  scale: !reducedMotion && fileOver ? 1.025 : 1,
+                }}
+                transition={reducedMotion
+                  ? reducedMotionFade
+                  : { scale: playful }}
+                onClick={() => openFilePicker(null)}
+                onDragEnter={handleDragEnter}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+              >
+                <IconUpload className="upload-pdf-drop-icon" aria-hidden="true" />
+                <span className="upload-pdf-drop-copy">
+                  <span className="upload-pdf-drop-title">Drop a PDF here, or browse</span>
+                  <span className="upload-pdf-drop-subtitle">One PDF at a time · books and research papers</span>
+                </span>
+              </m.button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                hidden
+                onChange={handleFileChange}
+              />
+              {pendingFile && (
+                <div className="upload-file-chip" data-testid="upload-file-chip">
+                  <IconDoc className="upload-file-icon" aria-hidden="true" />
+                  <div className="upload-file-details">
+                    <span className="upload-file-name" title={pendingFile.name}>{pendingFile.name}</span>
+                    <span className="upload-file-size">{formatUploadFileSize(pendingFile.size)}</span>
+                  </div>
+                  <Pressable
+                    type="button"
+                    aria-label="Remove file"
+                    className="upload-file-remove"
+                    onClick={() => {
+                      onPendingFileChange(null);
+                      onPendingFileNoticeChange(null);
+                    }}
+                  >
+                    ×
+                  </Pressable>
+                </div>
+              )}
+              {pendingFileNotice && <div className="upload-file-alert" role="alert">{pendingFileNotice}</div>}
+            </div>
             <div className="px-7 py-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* The card's padding belongs to the buttons, not the wrapper.
                   This whole card used to be one <Pressable>, so every pixel of it
@@ -965,19 +1121,26 @@ function UploadKindModal({
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <Pressable ref={firstChoiceRef} onClick={() => onChoose('book')} className="text-left w-full flex-1 px-4 pt-4">
-                  <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Book</div>
+                <Pressable
+                  ref={firstChoiceRef}
+                  aria-label={pendingFile ? 'Upload as book' : undefined}
+                  onClick={() => pendingFile ? onChoose('book') : openFilePicker('book')}
+                  className="text-left w-full flex-1 px-4 pt-4"
+                >
+                  <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>{pendingFile ? 'Upload as book' : 'Book'}</div>
                   <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
                     Read chapter by chapter: pick Introduction, Chapter 1, 2, 3… instead of paging the whole book at once.
                   </div>
                 </Pressable>
-                <Pressable
-                  onClick={() => openUrlMode('book')}
-                  className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
-                  style={{ color: 'var(--muted)' }}
-                >
-                  <IconLink className="w-3 h-3" /> or paste a link
-                </Pressable>
+                {!pendingFile && (
+                  <Pressable
+                    onClick={() => openUrlMode('book')}
+                    className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
+                    style={{ color: 'var(--muted)' }}
+                  >
+                    <IconLink className="w-3 h-3" /> or paste a link
+                  </Pressable>
+                )}
               </div>
               <div
                 className="rounded-xl transition-colors flex flex-col"
@@ -985,20 +1148,27 @@ function UploadKindModal({
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
               >
-                <Pressable onClick={() => onChoose('paper')} className="text-left w-full flex-1 px-4 pt-4">
-                  <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>Research paper</div>
+                <Pressable
+                  aria-label={pendingFile ? 'Upload as research paper' : undefined}
+                  onClick={() => pendingFile ? onChoose('paper') : openFilePicker('paper')}
+                  className="text-left w-full flex-1 px-4 pt-4"
+                >
+                  <div className="font-serif text-[16px]" style={{ color: 'var(--fg)' }}>{pendingFile ? 'Upload as research paper' : 'Research paper'}</div>
                   <div className="text-[12px] mt-1 leading-[1.5]" style={{ color: 'var(--muted)' }}>
                     Linear reading, front to back, no chapter navigation. Best for articles and papers.
                   </div>
                 </Pressable>
-                <Pressable
-                  onClick={() => openUrlMode('paper')}
-                  className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
-                  style={{ color: 'var(--muted)' }}
-                >
-                  <IconLink className="w-3 h-3" /> or paste a link
-                </Pressable>
+                {!pendingFile && (
+                  <Pressable
+                    onClick={() => openUrlMode('paper')}
+                    className="text-[11.5px] mt-2.5 mb-4 mx-4 self-start inline-flex items-center gap-1"
+                    style={{ color: 'var(--muted)' }}
+                  >
+                    <IconLink className="w-3 h-3" /> or paste a link
+                  </Pressable>
+                )}
               </div>
+              {!pendingFile ? (
               <Pressable
                 onClick={() => openUrlMode(null)}
                 className="sm:col-span-2 text-left rounded-xl p-4 flex items-center gap-3 transition-colors"
@@ -1019,6 +1189,11 @@ function UploadKindModal({
                   </div>
                 </div>
               </Pressable>
+              ) : (
+                <div className="upload-file-link-hint sm:col-span-2">
+                  Links are for web pages and online PDFs. Remove the file to paste a link.
+                </div>
+              )}
             </div>
             <div className="px-7 py-3.5 flex items-center" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
               <Pressable onClick={onCancel} className="ml-auto text-[12px] px-3 py-1.5 rounded-md" style={{ color: 'var(--muted)', border: '1px solid var(--border)', background: 'var(--bg)' }}>
@@ -1053,13 +1228,13 @@ function UploadKindModal({
                 className="w-full px-3 py-2.5 rounded-md text-[13px]"
                 style={{
                   background: 'var(--bg-2)',
-                  border: `1px solid ${error ? '#ef4444' : 'var(--border)'}`,
+                  border: `1px solid ${error ? 'var(--accent)' : 'var(--border)'}`,
                   color: 'var(--fg)',
                   outline: 'none',
                 }}
               />
               {error && (
-                <div className="text-[12px] mt-2" style={{ color: '#ef4444' }}>{error}</div>
+                <div className="text-[12px] mt-2" style={{ color: 'var(--accent)' }}>{error}</div>
               )}
             </div>
             <div className="px-7 py-3.5 flex items-center gap-3" style={{ background: 'var(--bg-2)', borderTop: '1px solid var(--border)' }}>
