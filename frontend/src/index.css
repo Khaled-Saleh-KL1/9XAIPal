@@ -4253,6 +4253,82 @@ button img,
 .beta-badge { min-width: 38px; padding: 4px 7px; border: 1px solid var(--accent); border-radius: 999px; background: var(--bg); color: var(--accent); font-size: 9px !important; font-weight: 750 !important; letter-spacing: 0.08em; line-height: 1.1; cursor: help; }
 .beta-tooltip { position: absolute; z-index: 24; top: calc(100% + 11px); left: 50%; width: max-content; max-width: min(280px, calc(100vw - 32px)); padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); color: var(--fg-2); box-shadow: 0 10px 30px color-mix(in oklch, var(--fg) 12%, transparent); font-size: 11px; font-weight: 450; letter-spacing: 0; line-height: 1.45; transform: translateX(-50%); }
 
+.upload-pdf-drop-zone {
+  width: 100%;
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+.upload-pdf-drop-zone:hover,
+.upload-pdf-drop-zone.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 14%, transparent);
+}
+.upload-pdf-drop-zone:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.upload-pdf-drop-icon { width: 21px; height: 21px; flex: none; color: var(--accent); }
+.upload-pdf-drop-copy { min-width: 0; display: grid; gap: 3px; }
+.upload-pdf-drop-title { color: var(--fg); font-size: 13px; font-weight: 550; }
+.upload-pdf-drop-subtitle { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.upload-file-chip {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--bg-2);
+}
+.upload-file-icon { width: 18px; height: 18px; flex: none; color: var(--accent); }
+.upload-file-details { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.upload-file-name { overflow: hidden; color: var(--fg); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.upload-file-size { color: var(--muted); font-size: 10.5px; }
+.upload-file-remove {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+.upload-file-remove:hover { border-color: var(--accent); color: var(--accent); }
+.upload-file-link-hint {
+  grid-column: 1 / -1;
+  padding: 2px 3px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.upload-file-alert {
+  margin-top: 9px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--border));
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 /* Respect the OS "reduce motion" setting for the hand-written keyframes too. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -4261,4 +4337,5 @@ button img,
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+  .upload-pdf-drop-zone { transition: none; }
 }

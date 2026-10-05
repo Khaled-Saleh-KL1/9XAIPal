@@ -16,6 +16,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import { displayTitle } from '../lib/titles';
 import { textDirection } from '../lib/documentDirection';
 import { stageProgress } from '../lib/progress';
+import { pickFirstPdf } from '../lib/pdfFiles';
 import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
 import { BetaBadge } from '../components/BetaBadge';
@@ -26,7 +27,7 @@ interface Props {
   onOpenPaper: (p: Paper) => void;
   /** Called with the dropped file when the source is a drag-and-drop, and with
    *  nothing when the user clicked (the file is chosen later, in a picker). */
-  onUpload: (file?: File, opener?: HTMLElement) => void;
+  onUpload: (file?: File, opener?: HTMLElement, notice?: string) => void;
   onOpenRawFiles: () => void;
   onOpenDesk: () => void;
   layout: LibraryLayout;
@@ -481,31 +482,30 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     dragDepth.current = 0;
     setFileOver(false);
     const files = Array.from(e.dataTransfer.files);
-    const pdfs = files.filter(
-      (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'),
-    );
-    if (pdfs.length === 0) {
+    if (files.length === 0) return;
+    const { pdf, rejected, extraPdfs } = pickFirstPdf(files);
+    if (!pdf) {
       // Say why nothing happened. Opening the file picker here (the old
       // behaviour) reads as "the drop was lost", not "that file type is not
       // accepted" — and a web page is imported by URL, not by dropping it.
-      const names = files.map((f) => f.name).slice(0, 3).join(', ');
+      const names = rejected.map((f) => f.name).slice(0, 3).join(', ');
       setNotice(
         `${names || 'That'} is not a PDF — only PDF files can be dropped here. ` +
           'For a web page, choose "Add paper" and paste its address.',
       );
       return;
     }
-    if (pdfs.length > 1) {
-      // The book/paper question is asked per file, so a multi-file drop
-      // takes the first and says so rather than silently dropping the rest.
-      setNotice(
-        `Dropped ${pdfs.length} PDFs — added "${pdfs[0].name}". ` +
-          'Drop the others one at a time, so each can be marked as a book or a paper.',
-      );
+    const messages: string[] = [];
+    if (rejected.length > 0) {
+      const names = rejected.map((file) => file.name).join(', ');
+      messages.push(`${names} ${rejected.length === 1 ? 'is not a PDF' : 'are not PDFs'} — only PDF files can be dropped here.`);
     }
+    if (extraPdfs > 0) messages.push(`Only one file at a time: using ${pdf.name}.`);
+    const notice = messages.length > 0 ? messages.join(' ') : null;
+    if (notice) setNotice(notice);
     // Carry the dropped file through to the upload flow. Without this the drop
     // falls back to the click path, which asks the user to find the file again.
-    onUpload(pdfs[0]);
+    onUpload(pdf, undefined, notice ?? undefined);
   };
 
   const cardProps = (p: Paper) => ({

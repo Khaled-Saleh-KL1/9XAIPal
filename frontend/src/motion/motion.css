@@ -49,6 +49,7 @@
 .motion-sheet-panel--content {
   width: min(100%, 35rem);
   display: flex;
+  align-items: flex-start;
   justify-content: center;
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
