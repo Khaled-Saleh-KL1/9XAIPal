@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { StickyNote } from './StickyNote';
 import type { Sticky, StickyColor } from '../api';
+import { playful, reducedMotionFade } from '../motion';
 
 /**
  * The universal board: notes that belong to no conversation.
@@ -39,6 +41,8 @@ export function NoteWall({
 }) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const entered = useRef(new Set<string>());
+  const reducedMotion = useReducedMotion();
 
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -52,6 +56,10 @@ export function NoteWall({
       );
     });
   }, [notes, query, filter]);
+
+  useLayoutEffect(() => {
+    shown.forEach((note) => entered.current.add(note.id));
+  }, [shown]);
 
   const byAssistant = notes.filter((n) => n.origin === 'assistant').length;
 
@@ -96,7 +104,49 @@ export function NoteWall({
       </header>
 
       <div className="wall-surface thin-scroll">
-        {shown.length === 0 ? (
+        <div className="wall-grid">
+          <AnimatePresence mode="popLayout">
+            {shown.map((n, index) => {
+              const entering = !entered.current.has(n.id);
+              return (
+                <m.div
+                  key={n.id}
+                  data-testid="wall-motion-item"
+                  data-note-motion-key={n.id}
+                  className="wall-motion-card"
+                  layout={reducedMotion ? false : 'position'}
+                  initial={reducedMotion || !entering ? false : { opacity: 0, rotateX: -70 }}
+                  animate={reducedMotion ? { opacity: 1 } : { opacity: 1, rotateX: 0 }}
+                  exit={reducedMotion
+                    ? { opacity: 0, pointerEvents: 'none' }
+                    : { opacity: 0, scale: 0.9, rotateX: 18, pointerEvents: 'none' }}
+                  transition={reducedMotion
+                    ? reducedMotionFade
+                    : { ...playful, delay: entering && index < 12 ? index * 0.055 : 0 }}
+                  style={reducedMotion ? undefined : { transformPerspective: 900 }}
+                >
+                  <StickyNote
+                    note={n}
+                    pinned
+                    tilt={tiltFor(n.id)}
+                    entrance="none"
+                    exitOnRemove={false}
+                    onSave={(patch) => onSave(n.id, patch)}
+                    onDelete={() => onDelete(n.id)}
+                    footer={
+                      n.papers.length > 0 ? (
+                        <span className="sticky-scope" title={n.papers.map((p) => p.label).join(', ')}>
+                          {n.papers.length === 1 ? n.papers[0].label : `${n.papers.length} papers`}
+                        </span>
+                      ) : null
+                    }
+                  />
+                </m.div>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+        {shown.length === 0 && (
           <div className="wall-empty">
             <p className="chat-empty-lead">
               {notes.length === 0 ? 'An empty board.' : 'Nothing matches.'}
@@ -115,26 +165,6 @@ export function NoteWall({
                 </p>
               </>
             )}
-          </div>
-        ) : (
-          <div className="wall-grid">
-            {shown.map((n) => (
-              <StickyNote
-                key={n.id}
-                note={n}
-                pinned
-                tilt={tiltFor(n.id)}
-                onSave={(patch) => onSave(n.id, patch)}
-                onDelete={() => onDelete(n.id)}
-                footer={
-                  n.papers.length > 0 ? (
-                    <span className="sticky-scope" title={n.papers.map((p) => p.label).join(', ')}>
-                      {n.papers.length === 1 ? n.papers[0].label : `${n.papers.length} papers`}
-                    </span>
-                  ) : null
-                }
-              />
-            ))}
           </div>
         )}
       </div>

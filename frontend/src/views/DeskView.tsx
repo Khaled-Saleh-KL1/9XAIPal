@@ -10,7 +10,8 @@ import { ShelfGroups } from '../components/ShelfGroups';
 import { StickyBoard } from './StickyBoard';
 import { StudyChat, type PendingTurn } from './StudyChat';
 import { createPacer } from '../lib/pacer';
-import { calm, gentle, reducedMotionFade } from '../motion/springs';
+import { Pressable, useTilt } from '../motion';
+import { calm, gentle, playful, reducedMotionFade } from '../motion/springs';
 import { useConfirm } from '../components/ConfirmDialog';
 import {
   LIBRARY_SCOPE,
@@ -631,15 +632,12 @@ export function DeskView({
             </button>
 
             {studies.map((s) => (
-              <button
+              <StudyRailRow
                 key={s.id}
-                type="button"
-                className={`rail-row${scope === s.id ? ' is-on' : ''}`}
-                onClick={() => { setScope(s.id); setRailOpenMobile(false); }}
-              >
-                <span className="rail-row-name">{s.name}</span>
-                <span className="rail-row-count">{s.paper_count}</span>
-              </button>
+                study={s}
+                active={scope === s.id}
+                onSelect={() => { setScope(s.id); setRailOpenMobile(false); }}
+              />
             ))}
 
             <div className="rail-head rail-head-papers">
@@ -753,6 +751,46 @@ export function DeskView({
         returnFocusRef={pickerOpenerRef}
       />
     </div>
+  );
+}
+
+function StudyRailRow({
+  study,
+  active,
+  onSelect,
+}: {
+  study: Study;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const tilt = useTilt<HTMLButtonElement>(6);
+  const reducedMotion = useReducedMotion();
+
+  return (
+    <Pressable
+      data-testid="study-rail-row"
+      data-study-id={study.id}
+      type="button"
+      className={`rail-row${active ? ' is-on' : ''}`}
+      onClick={onSelect}
+      onPointerMove={tilt.onPointerMove}
+      onPointerLeave={tilt.onPointerLeave}
+      style={reducedMotion ? undefined : tilt.style}
+    >
+      {active && (reducedMotion ? (
+        <span className="rail-row-indicator" data-testid="active-study-indicator" aria-hidden="true" />
+      ) : (
+        <m.span
+          layoutId="active-study-indicator"
+          data-testid="active-study-indicator"
+          className="rail-row-indicator"
+          aria-hidden="true"
+          transition={playful}
+        />
+      ))}
+      <span className="rail-row-name">{study.name}</span>
+      <span className="rail-row-count">{study.paper_count}</span>
+    </Pressable>
   );
 }
 

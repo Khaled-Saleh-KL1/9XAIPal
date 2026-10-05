@@ -1,6 +1,7 @@
 import { forwardRef } from 'react';
 import type { ComponentPropsWithoutRef, Ref } from 'react';
 import { m, useReducedMotion } from 'motion/react';
+import type { MotionStyle } from 'motion/react';
 import { calm, jellyPress, playful } from './springs';
 
 type Intensity = 'playful' | 'calm' | 'citation';
@@ -9,11 +10,13 @@ type NativeMotionHandlers<T extends 'button' | 'a'> = Pick<ComponentPropsWithout
 type ButtonProps = {
   as?: 'button';
   intensity?: Intensity;
-} & ComponentPropsWithoutRef<'button'> & NativeMotionHandlers<'button'>;
+  style?: MotionStyle;
+} & Omit<ComponentPropsWithoutRef<'button'>, 'style'> & NativeMotionHandlers<'button'>;
 type AnchorProps = {
   as: 'a';
   intensity?: Intensity;
-} & ComponentPropsWithoutRef<'a'> & NativeMotionHandlers<'a'>;
+  style?: MotionStyle;
+} & Omit<ComponentPropsWithoutRef<'a'>, 'style'> & NativeMotionHandlers<'a'>;
 export type PressableProps = ButtonProps | AnchorProps;
 
 function PressableImpl(

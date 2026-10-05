@@ -3131,6 +3131,7 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   color: var(--faint);
 }
 .rail-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3143,7 +3144,16 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   transition: background 120ms ease, color 120ms ease;
 }
 .rail-row:hover { background: var(--bg-3); color: var(--fg); }
-.rail-row.is-on { background: var(--bg); color: var(--fg); box-shadow: inset 2px 0 0 var(--accent); }
+.rail-row.is-on { background: var(--bg); color: var(--fg); }
+.rail-row-indicator {
+  position: absolute;
+  left: 0;
+  top: 20%;
+  width: 2px;
+  height: 60%;
+  border-radius: 2px;
+  background: var(--accent);
+}
 .rail-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-row-count {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -3544,11 +3554,13 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 /* ── Sticky board ── */
 .board {
   border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   min-height: 0;
   background: var(--bg-2);
+  overflow: hidden;
 }
+.board-expanded { grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .board-head {
   flex-shrink: 0;
   display: flex;
@@ -3828,6 +3840,7 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
      scrap-of-paper look the tilt and the tack are doing. */
   align-items: start;
 }
+.wall-grid > .wall-motion-card { min-width: 0; }
 .wall-grid .sticky {
   padding: 16px 14px 12px;
   font-size: 13px;
@@ -3840,6 +3853,13 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   box-shadow: 0 16px 30px -16px rgba(0, 0, 0, 0.6);
   z-index: 2;
   position: relative;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wall-grid .sticky,
+  .wall-grid .sticky:hover {
+    transition: none;
+    transform: none !important;
+  }
 }
 /* A long note is allowed to be long, but not to own the row. Clamped, and
    clicking it opens the editor where the whole thing is visible. */
@@ -3897,11 +3917,10 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 /* ── The chat strip, folded away ── */
 .board.is-collapsed {
   padding: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
 }
 .board-reopen {
+  grid-area: 1 / 1;
+  align-self: start;
   display: flex;
   flex-direction: column;
   align-items: center;

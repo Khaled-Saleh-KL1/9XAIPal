@@ -1,5 +1,7 @@
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { StickyNote } from './StickyNote';
 import type { Sticky, StickyColor } from '../api';
+import { calm, reducedMotionFade } from '../motion/springs';
 
 /**
  * The chat's own notes, in a strip beside the transcript.
@@ -30,62 +32,79 @@ export function StickyBoard({
   onSave: (id: string, patch: { body?: string; color?: StickyColor; pinned?: boolean }) => void;
   onDelete: (id: string) => void;
 }) {
-  if (collapsed) {
-    return (
-      <aside className="board is-collapsed">
-        <button
-          type="button"
-          className="board-reopen"
-          onClick={onToggle}
-          title="Show this chat's notes"
-          aria-label="Show this chat's notes"
-        >
-          <span className="board-reopen-glyph" aria-hidden="true">‹</span>
-          <span className="board-reopen-label">Notes</span>
-          {notes.length > 0 && <span className="board-reopen-count">{notes.length}</span>}
-        </button>
-      </aside>
-    );
-  }
+  const reducedMotion = useReducedMotion();
+  const transition = reducedMotion ? reducedMotionFade : calm;
 
   return (
-    <aside className="board">
-      <header className="board-head">
-        <h2>Notes · this chat</h2>
-        <button type="button" className="board-add" onClick={onCreate} title="New note">
-          +
-        </button>
-        <button
-          type="button"
-          className="board-hide"
-          onClick={onToggle}
-          title="Hide the notes"
-          aria-label="Hide the notes"
-        >
-          ›
-        </button>
-      </header>
-
-      <div className="board-list thin-scroll">
-        {notes.length === 0 ? (
-          <div className="board-empty">
-            <p>No notes on {scopeName} yet.</p>
-            <p className="marg-hint">
-              These stay with this conversation. The assistant can pin here too,
-              its notes are badged, and only you can remove one.
-            </p>
-          </div>
+    <aside className={`board${collapsed ? ' is-collapsed' : ''}`}>
+      <AnimatePresence initial={false}>
+        {collapsed ? (
+          <m.button
+            key="collapsed-board"
+            type="button"
+            className="board-reopen"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, pointerEvents: 'none' }}
+            transition={transition}
+            onClick={onToggle}
+            title="Show this chat's notes"
+            aria-label="Show this chat's notes"
+          >
+            <span className="board-reopen-glyph" aria-hidden="true">‹</span>
+            <span className="board-reopen-label">Notes</span>
+            {notes.length > 0 && <span className="board-reopen-count">{notes.length}</span>}
+          </m.button>
         ) : (
-          notes.map((n) => (
-            <StickyNote
-              key={n.id}
-              note={n}
-              onSave={(patch) => onSave(n.id, patch)}
-              onDelete={() => onDelete(n.id)}
-            />
-          ))
+          <m.div
+            key="expanded-board"
+            className="board-expanded"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, pointerEvents: 'none' }}
+            transition={transition}
+          >
+            <header className="board-head">
+              <h2>Notes · this chat</h2>
+              <button type="button" className="board-add" onClick={onCreate} title="New note">
+                +
+              </button>
+              <button
+                type="button"
+                className="board-hide"
+                onClick={onToggle}
+                title="Hide the notes"
+                aria-label="Hide the notes"
+              >
+                ›
+              </button>
+            </header>
+
+            <div className="board-list thin-scroll">
+              {notes.length === 0 ? (
+                <div className="board-empty">
+                  <p>No notes on {scopeName} yet.</p>
+                  <p className="marg-hint">
+                    These stay with this conversation. The assistant can pin here too,
+                    its notes are badged, and only you can remove one.
+                  </p>
+                </div>
+              ) : (
+                <AnimatePresence initial={false}>
+                  {notes.map((n) => (
+                    <StickyNote
+                      key={n.id}
+                      note={n}
+                      onSave={(patch) => onSave(n.id, patch)}
+                      onDelete={() => onDelete(n.id)}
+                    />
+                  ))}
+                </AnimatePresence>
+              )}
+            </div>
+          </m.div>
         )}
-      </div>
+      </AnimatePresence>
     </aside>
   );
 }
