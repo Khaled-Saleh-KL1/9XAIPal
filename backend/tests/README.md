@@ -1,57 +1,36 @@
 # Test Plan
 
-## ⚠ How to run these
+## Safety
 
-```bash
-POSTGRES_DB=9xaipal_test pytest
-```
+Run the backend suite only with a disposable PostgreSQL database whose name contains test.
+The fixtures truncate documents CASCADE, including dependent chunks, assets, conversations,
+and notes. conftest.py blocks other database names unless ALLOW_DESTRUCTIVE_TESTS=1 is set.
+The override disables a safety check; it does not make a development database safe.
 
-**Every test truncates `documents CASCADE`.** That cascade takes chunks,
-assets, conversations, and notes with it, so running the suite against the
-development database deletes your entire library: the rows go, and only the
-PDFs on disk survive. `conftest.py` refuses to start unless `POSTGRES_DB`
-contains "test" (override with `ALLOW_DESTRUCTIVE_TESTS=1` if you genuinely
-mean it).
+The backend suite uses PostgreSQL and Redis for database, vector, session, queue, and rate-limit
+behavior. CI provisions disposable PostgreSQL/pgvector and Redis services; see
+[the workflow](../../.github/workflows/ci.yml).
 
-First-time setup of the scratch database:
+## Coverage map
 
-```bash
-docker exec 9xaipal-postgres psql -U 9xaipal -d postgres -c 'CREATE DATABASE "9xaipal_test"'
-docker exec 9xaipal-postgres psql -U 9xaipal -d 9xaipal_test \
-  -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
-```
+- Ingestion and chunking: test_ingestion_pipeline.py, test_chunker_*.py,
+  test_heading_repair.py, and test_glyph_repair_dropped_f.py.
+- Retrieval and embeddings: test_vector_retrieval.py, test_library_search.py,
+  test_document_search_embedding.py, test_cross_language_retrieval.py, and
+  test_retrieval_reranking.py.
+- Arabic routing, OCR, recovery, and language parity: test_arabic_*.py.
+- Chat routes, provider fallback, streaming, agent tools, and tracing:
+  test_chat_routing_fallback.py, test_llm_client_cascade.py,
+  test_agent_tools_streaming.py, and test_tracing_*.py.
+- Article fetch, extraction, and generated thumbnails: test_article_*.py,
+  test_cloudflare_images.py, and test_backfill_article_thumbnails.py.
+- API authentication, ownership, queue capacity, and worker behavior:
+  test_auth_http.py, test_ownership.py, test_capacity.py, test_celery_queues.py,
+  and test_worker_restore.py.
 
-## Purpose
+These are focused tests; they do not constitute a browser end-to-end test of the complete
+application. test_context_router.py is still a placeholder and does not test route selection.
+The test suite does not verify production integrations or their credentials.
 
-The `tests` directory validates architectural guarantees.
-
-## Required Test Areas
-
-### `test_chunk_sequence.py`
-
-Verifies that sequence IDs are assigned in physical order and that sequential
-chunk retrieval works.
-
-### `test_vector_retrieval.py`
-
-Verifies that embeddings are stored for chunks in PostgreSQL, pgvector search
-returns chunk IDs, and retrieved chunks can be ordered by similarity.
-
-### `test_context_router.py`
-
-Verifies that LOCAL prompts route to LOCAL, document-wide prompts route to
-GLOBAL, overview prompts route to OVERVIEW, and web-dependent prompts route to
-EXTERNAL.
-
-### `test_ingestion_pipeline.py`
-
-Verifies that MinerU output becomes normalized chunks, images are attached
-correctly, ingestion is transactional, and failed ingestion does not expose
-partial documents. Also pins the profile split: a paper under
-`INGEST_PROFILE=fast` is ready at chunking; only the optional retrieval-only
-figure task is dispatched, while a book still runs the full embed → summarize
-chain.
-
-### `test_subthread_conversations.py`
-
-Verifies sub-thread creation, history isolation, and thread-aware compaction.
+See [the project test plan](../../docs/04-testing/test-plan.md) for the frontend Vitest inventory,
+CI scope, and the manual acceptance script.

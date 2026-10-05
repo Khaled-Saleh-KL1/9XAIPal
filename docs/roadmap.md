@@ -7,7 +7,7 @@
 > **Owns:** known gaps, debt, and planned direction.
 > **Does not own:** how anything currently works.
 >
-> **Status:** current · **Last verified:** 2026-07-25 (`main`, ad43845)
+> **Status:** current · **Reconciled with source:** 2026-10-05 (branch HEAD 48cb8c6). No service was contacted.
 
 Tense tags are load-bearing here: unmarked = a verified current gap, `[planned]` = intended work,
 `[historical]` = context for why something looks the way it does.
@@ -21,7 +21,7 @@ The application code is more mature than the tooling around it. These are the ch
 
 | Gap | Impact | Fix |
 | --- | --- | --- |
-| **No CI at all**: no `.github/` | 7 test files exist and nothing runs them | A workflow running `pytest` + `tsc --noEmit` + `npm run build` |
+| **No documentation-specific CI checks** | Markdown changes do not trigger the backend or frontend jobs, and there is no Markdown/link checker in the workflow | Add a docs-only validation job for links and formatting |
 | ~~**Nothing is pinned**~~ | ~~`fastapi`, `sqlalchemy`, `httpx` all floated in `requirements.txt`~~ | **Fixed 2026-08-29**: migrated to `pyproject.toml` + `uv.lock`, which pins every dependency (including transitive ones) exactly |
 | ~~**`pyproject.toml` is gitignored**~~ | ~~It was not in the clone, so `pip install -e .` failed for everyone~~ | **Fixed 2026-08-29**: `pyproject.toml`/`uv.lock` removed from `.gitignore` and committed |
 | **No linter or formatter** | No ruff/black/ESLint anywhere | Add ruff + an ESLint config |
@@ -33,8 +33,10 @@ The application code is more mature than the tooling around it. These are the ch
 - **[`test_context_router.py`](../backend/tests/test_context_router.py) is a one-line placeholder
   comment.** The route table is the single most behavior-defining piece of logic in the app and it
   is untested.
-- **The two largest and most complex modules have no direct tests**:
-  `chat/orchestrator.py` (1061 lines) and `extraction/chunker.py` (1141 lines).
+- ~~**The two largest and most complex modules have no direct tests**~~: **updated 2026-10-05.**
+  Chunker behavior now has focused tests in test_chunker_*.py. The remaining gap is an end-to-end
+  test that exercises the complete ask route from routing through agent tools and persistence to
+  the final response.
 - ~~⚠ **`conftest.py` `TRUNCATE`s a real database.** Tests cannot run without live Postgres, and
   pointing them at a dev DB destroys it. There is no isolation and no throwaway-DB guard.~~
   **wrong since 2026-08-26** (`502272b`, three weeks after this was written, went uncorrected
@@ -52,7 +54,7 @@ The application code is more mature than the tooling around it. These are the ch
   open — `get_embeddings_batch_sync` *is* the function that calls `shape_embedding`
   (`embeddings/model.py`), so a mock at this layer still means `shape_embedding`'s truncate+renorm
   (or zero-pad) path is never exercised. Nothing in the suite tests it directly today.
-- No frontend tests of any kind.
+- ~~No frontend tests of any kind.~~ **Updated 2026-10-05:** frontend Vitest component and behavior tests now exist, including landing, motion, PDF selection, reasoning, and cover behavior. There are no browser end-to-end tests, and CI does not run Vitest.
 
 ## Data & schema
 
@@ -92,7 +94,7 @@ The application code is more mature than the tooling around it. These are the ch
   `READ 1-400` returned 40 blocks, 20 past the ceiling — so a book being read one unit at a time
   could have the rest of it fetched in a single call, with the reading-companion prompt then
   earnestly not mentioning it. A spoiler bug, not a security one (see the ⚠ in
-  [chat-and-ask.md](../02-architecture/chat-and-ask.md#the-progress-ceiling)), but it silently
+  [chat-and-ask.md](02-architecture/chat-and-ask.md#the-progress-ceiling)), but it silently
   defeated the feature it belonged to.
 - ~~**OVERVIEW handed part-way readers the whole document's summary**~~: **fixed 2026-09-08.**
   Two separate holes on the route [`overview_context`](../backend/app/chat/overview_context.py)
@@ -106,16 +108,15 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Product gaps
 
-- **Cross-paper search is not surfaced.** `search_chunks` already accepts `document_id=None`, so
-  the retrieval layer supports a library-wide GLOBAL route, but the orchestrator simply never calls
-  it. This is the closest thing to free functionality in the repo.
+- **No library-wide chunk retrieval in the single-paper ask route.** That route stays scoped to its paper. Cross-paper questions are available through studies, while the study index is a heading-level map rather than a library-wide body-chunk search. See [chat-and-ask.md](02-architecture/chat-and-ask.md).
+
 - **No cleanup for research images.** They accumulate under
   `images/research/<conversation_id>/` forever.
 - **`DELETE /papers/{id}` disk cleanup is best-effort**; orphans are tolerated and never
   garbage-collected on a schedule.
 - **Section summarization is single-pass** per `(document, prompt template)`. Long books may
   exceed the model's effective context.
-- **No multi-tenant isolation**: one database, all data shared.
+- **No organization-level tenancy.** Per-user ownership checks isolate user-owned documents and related records; there is no organization membership or shared-workspace layer.
 - **No retry queue** for failed ingestions beyond `embed_document`'s in-Celery retries.
 - **Web-search images outside the research agent are not persisted**: remote URLs in older chat
   answers rot.
@@ -154,12 +155,8 @@ The application code is more mature than the tooling around it. These are the ch
 
 ## Planned direction
 
-- ~~**Replace SearXNG with Exa + Firecrawl**~~: **superseded 2026-08-26** by **Tavily**, then
-  **2026-08-31** by a 6-provider cascade (google, tavily, linkup, exa, serpapi) with a
-  DuckDuckGo library fallback needing no key at all — see
-  [`app/search/web.py`](../backend/app/search/web.py). SearXNG itself is gone; Exa ended up
-  joining the cascade anyway, just not paired with Firecrawl. Original design, never implemented:
-  [archive/2026-08-26/exa-firecrawl-research-stack.md](archive/2026-08-26/exa-firecrawl-research-stack.md).
+- ~~**Replace SearXNG with Exa + Firecrawl**~~: **superseded 2026-08-26** by Tavily. The active web-search cascade has five providers: Tavily, Linkup, Exa, SerpApi, and DuckDuckGo. Google API integrations were removed on 2026-09-01. See [app/search/web.py](../backend/app/search/web.py). SearXNG itself is gone; Exa joined the cascade, while Firecrawl remains outside this web-search provider list. Original design: [archive/2026-08-26/exa-firecrawl-research-stack.md](archive/2026-08-26/exa-firecrawl-research-stack.md).
+
 - ~~**Paper-only mode**~~: **superseded 2026-07-25** by `INGEST_PROFILE=fast`, which skips the
   whole post-chunking chain for papers rather than embeddings alone, and answers at question time
   via [`chat/paper_agent.py`](../backend/app/chat/paper_agent.py). The `PAPER_ONLY_*` settings
