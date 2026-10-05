@@ -26,6 +26,8 @@ export interface Paper {
   jobStatus?: string | null;
   // "book" | "paper" | "article" — drives the library's kind filter chips.
   docKind?: string | null;
+  // Generated article-cover mtime used as a cache-busting URL version.
+  coverVersion?: number | null;
   // Shelved as "done reading"? ISO timestamp when so, and the Done-area
   // folder it sits in (null = the top of the Done area). See PaperMeta.
   doneAt: string | null;

@@ -71,6 +71,7 @@ function metaToPaper(m: PaperMeta): Paper {
     rawStatus: m.status,
     jobStatus: m.job_status ?? null,
     docKind: m.doc_kind ?? null,
+    coverVersion: m.doc_kind === 'article' ? m.cover_version ?? null : null,
     doneAt: m.done_at ?? null,
     doneFolder: m.done_folder ?? null,
     arabicErrorCode: m.error_code ?? null,
@@ -1147,7 +1148,13 @@ function PaperCard({
             whileHover={!reducedMotion && !renaming ? { rotateY: -30, rotateZ: -3 } : undefined}
             transition={playful}
           >
-            <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
+            <PaperCover
+              paperId={paper.id}
+              title={paper.title}
+              ready={!processing}
+              coverVersion={paper.docKind === 'article' ? paper.coverVersion : undefined}
+              showTitle
+            />
           </m.div>
         </div>
 
@@ -1289,6 +1296,7 @@ function PaperRow({
         paperId={paper.id}
         title={paper.title}
         ready={!processing}
+        coverVersion={paper.docKind === 'article' ? paper.coverVersion : undefined}
         className="is-thumb"
       />
       <div className="flex-1 min-w-0">

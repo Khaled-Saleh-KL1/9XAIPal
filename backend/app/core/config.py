@@ -1,9 +1,15 @@
 """Application settings loaded from environment variables."""
 
+import re
 from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+_CLOUDFLARE_ACCOUNT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 class Settings(BaseSettings):
@@ -322,6 +328,39 @@ class Settings(BaseSettings):
         """Every configured Tavily key, in rotation order. May be empty."""
         return self._split_keys(self.tavily_api_key)
 
+    @property
+    def cloudflare_ai_accounts(self) -> list[tuple[str, str]]:
+        """Configured (account id, token) pairs; malformed entries are ignored."""
+        accounts = []
+        for index, entry in enumerate(self._split_keys(self.cloudflare_ai_accounts_raw), start=1):
+            account_id, separator, token = entry.partition(":")
+            if not separator:
+                logger.warning(
+                    "Ignoring Cloudflare AI account entry %d without an account/token separator",
+                    index,
+                )
+                continue
+            account_id = account_id.strip()
+            if not _CLOUDFLARE_ACCOUNT_ID_RE.fullmatch(account_id):
+                logger.warning(
+                    "Ignoring Cloudflare AI account entry %d with an invalid account ID",
+                    index,
+                )
+                continue
+            if not token.strip():
+                logger.warning(
+                    "Ignoring Cloudflare AI account entry %d without a token",
+                    index,
+                )
+                continue
+            accounts.append((account_id, token.strip()))
+        return accounts
+
+    @property
+    def cloudflare_image_models(self) -> list[str]:
+        """Optional image model order, with blanks removed."""
+        return self._split_keys(self.cloudflare_image_models_raw)
+
     # ── Ingest profile ──────────────────────────────────────────────────────
     # "fast" (default): a paper is DONE the moment MinerU has extracted it and
     # the chunker has run. No whole-document embedding pass or section
@@ -464,6 +503,18 @@ class Settings(BaseSettings):
     # or rejected it moves to the next, and only reports failure once every
     # key is spent. A single key still works exactly as before.
     tavily_api_key: str = ""
+    # Cloudflare Workers AI accounts in failover order. Each entry is
+    # <account_id>:<api_token>; the whole value is comma-separated.
+    cloudflare_ai_accounts_raw: str = Field(
+        default="",
+        validation_alias=AliasChoices("CLOUDFLARE_AI_ACCOUNTS", "cloudflare_ai_accounts_raw"),
+    )
+    # Optional comma-separated image model order. Empty uses the defaults in
+    # services/cloudflare_images.py.
+    cloudflare_image_models_raw: str = Field(
+        default="",
+        validation_alias=AliasChoices("CLOUDFLARE_IMAGE_MODELS", "cloudflare_image_models_raw"),
+    )
     # "basic" (one credit, fast) or "advanced" (two credits, deeper extraction
     # and better recall on niche research queries).
     tavily_search_depth: str = "basic"

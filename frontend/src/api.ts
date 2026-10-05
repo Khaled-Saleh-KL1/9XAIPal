@@ -67,6 +67,8 @@ export interface PaperMeta {
   updated_at: string | null;
   extractor?: string | null;            // "mineru" | "pymupdf_fallback" | "trafilatura" | "tavily-extract"
   doc_kind?: string | null;             // "book" | "paper" | "article"
+  /** Cover file mtime for article-thumbnail cache busting; null until generated. */
+  cover_version?: number | null;
   /** The page a doc_kind='article' row was imported from. null otherwise. */
   source_url?: string | null;
   reading_order?: number[] | null;
@@ -1147,8 +1149,9 @@ export async function renameDoneFolder(from: string, to: string): Promise<number
  * A 404 would be worse: the library requests one per card, and a console full
  * of them makes a working library look broken.
  */
-export function getCoverUrl(paperId: string): string {
-  return `${BASE}/papers/${paperId}/cover`;
+export function getCoverUrl(paperId: string, version?: number | null): string {
+  const url = `${BASE}/papers/${paperId}/cover`;
+  return version == null ? url : `${url}?v=${encodeURIComponent(String(version))}`;
 }
 
 export async function deletePaper(paperId: string): Promise<void> {

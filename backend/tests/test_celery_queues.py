@@ -16,6 +16,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
     ("9xaipal.process_ingestion", "ingest"),
     ("9xaipal.reconstruct_reading_order", "ingest"),
     ("9xaipal.process_article_ingestion", "celery"),
+    ("9xaipal.generate_article_thumbnail", "celery"),
     ("9xaipal.embed_document", "celery"),
     ("9xaipal.generate_section_summaries", "celery"),
     ("9xaipal.generate_figure_descriptions", "celery"),
@@ -28,6 +29,12 @@ def test_tasks_route_without_call_site_options(name, queue):
 def test_queues_declared_and_unknown_tasks_use_legacy_default():
     assert {queue.name for queue in celery_app.conf.task_queues} == {"ingest", "celery"}
     assert celery_app.amqp.router.route({}, "tests.future_task")["queue"].name == "celery"
+
+
+def test_article_thumbnail_task_has_an_explicit_light_queue_route():
+    assert celery_app.conf.task_routes["9xaipal.generate_article_thumbnail"] == {
+        "queue": "celery"
+    }
 
 
 @pytest.mark.parametrize("compose_file,heavy_memory,heavy_concurrency", [

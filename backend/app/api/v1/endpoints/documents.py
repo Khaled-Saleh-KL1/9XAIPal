@@ -56,6 +56,18 @@ router = APIRouter()
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
+def _article_cover_version(document: dict) -> int | None:
+    if document.get("doc_kind") != "article":
+        return None
+    try:
+        path = cover_service.cover_path(document["id"])
+        if path.is_file() and path.stat().st_size > 0:
+            return int(path.stat().st_mtime)
+    except (KeyError, OSError):
+        pass
+    return None
+
+
 async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int) -> int:
     """Write an upload with a hard byte limit and without materializing it.
 
@@ -471,7 +483,16 @@ async def list_papers(
     docs = await doc_service.list_documents(db, current_user["id"], limit=limit, offset=offset)
     total = await doc_service.count_documents(db, current_user["id"])
     return DocumentListResponse(
-        documents=[DocumentResponse(**{**d, **document_error_fields(d)}) for d in docs],
+        documents=[
+            DocumentResponse(
+                **{
+                    **d,
+                    **document_error_fields(d),
+                    "cover_version": _article_cover_version(d),
+                }
+            )
+            for d in docs
+        ],
         total=total,
     )
 
@@ -705,7 +726,7 @@ async def get_paper_cover(
         cover_service.render_cover, paper_id, doc.get("filename")
     )
     if not path:
-        return Response(status_code=204)
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
     return FileResponse(
         path=str(path),
