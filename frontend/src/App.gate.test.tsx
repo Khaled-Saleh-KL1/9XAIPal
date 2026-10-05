@@ -271,6 +271,26 @@ describe('App gate', () => {
     expect(within(dialog).getByRole('button', { name: /^Book\b/ })).toBeInTheDocument();
   });
 
+  it('keeps the drop-zone button mounted and focused after a rejected drop', async () => {
+    authState.user = { id: 'u', email: 'a@b.co' };
+    renderApp();
+    await userEvent.click(screen.getByRole('button', { name: 'Add paper' }));
+    const dialog = await screen.findByRole('dialog', { name: 'What are you adding?' });
+    const dropZone = within(dialog).getByRole('button', { name: 'Drop a PDF here, or browse' });
+    dropZone.focus();
+
+    dropFiles(dropZone, [new File(['word'], 'notes.docx')]);
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('notes.docx is not a PDF.');
+    expect(dropZone.isConnected).toBe(true);
+    expect(dropZone).toHaveFocus();
+
+    const pdf = new File(['sample pdf'], 'follow-up.pdf', { type: 'application/pdf' });
+    dropFiles(dropZone, [pdf]);
+
+    expect(await within(dialog).findByTestId('upload-file-chip')).toHaveTextContent(pdf.name);
+  });
+
   it('does nothing when the modal drop zone receives an empty drop', async () => {
     authState.user = { id: 'u', email: 'a@b.co' };
     renderApp();

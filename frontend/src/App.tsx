@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useId, lazy, Suspense } from 'react';
 import type { ChangeEvent, DragEvent as ReactDragEvent, RefObject } from 'react';
-import { m, useReducedMotion } from 'motion/react';
+import { m, useAnimate, useReducedMotion } from 'motion/react';
 import type { Route, LibraryLayout, UploadingFile } from './types';
 import type { Paper } from './types';
 import { LibraryView } from './views/LibraryView';
@@ -901,7 +901,7 @@ function UploadKindModal({
   const pickerKindRef = useRef<DocKind | null>(null);
   const dragDepth = useRef(0);
   const [fileOver, setFileOver] = useState(false);
-  const [shakeKey, setShakeKey] = useState(0);
+  const [dropZoneRef, animate] = useAnimate();
   const reducedMotion = useReducedMotion();
 
   const openUrlMode = (kind: 'book' | 'paper' | null) => {
@@ -959,7 +959,9 @@ function UploadKindModal({
     if (files.length === 0) return;
     const result = pickFirstPdf(files);
     onPendingFileNoticeChange(selectionNotice(result.rejected, result.pdf, result.extraPdfs));
-    if (result.rejected.length > 0) setShakeKey((key) => key + 1);
+    if (result.rejected.length > 0 && !reducedMotion && dropZoneRef.current) {
+      void animate(dropZoneRef.current, { x: rejectedDropShake }, { duration: 0.4, ease: 'easeInOut' });
+    }
 
     if (!result.pdf) return;
     if (requestedKind) {
@@ -1056,18 +1058,17 @@ function UploadKindModal({
             </div>
             <div className="px-7 pt-3">
               <m.button
-                key={shakeKey}
+                ref={dropZoneRef}
                 type="button"
                 aria-label="Drop a PDF here, or browse"
                 className={`upload-pdf-drop-zone${fileOver ? ' is-over' : ''}`}
-                initial={reducedMotion ? false : { x: 0, scale: 1 }}
+                initial={reducedMotion ? false : { scale: 1 }}
                 animate={{
-                  x: !reducedMotion && shakeKey > 0 ? rejectedDropShake : 0,
                   scale: !reducedMotion && fileOver ? 1.025 : 1,
                 }}
                 transition={reducedMotion
                   ? reducedMotionFade
-                  : { x: { type: 'tween', duration: 0.4, ease: 'easeInOut' }, scale: playful }}
+                  : { scale: playful }}
                 onClick={() => openFilePicker(null)}
                 onDragEnter={handleDragEnter}
                 onDragOver={handleDragOver}
