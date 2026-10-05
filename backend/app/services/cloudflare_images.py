@@ -28,6 +28,9 @@ DEFAULT_MODELS = [
 
 _BASE_URL = "https://api.cloudflare.com/client/v4/accounts"
 _TIMEOUT_SECONDS = 60.0
+_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_MAX_JSON_IMAGE_BYTES = _MAX_RESPONSE_BYTES
+_RESPONSE_CHUNK_BYTES = 64 * 1024
 _QUOTA_TEXT = re.compile(r"neurons?|quota|daily\s+limit", re.IGNORECASE)
 
 
@@ -68,6 +71,24 @@ def _json_body(response: httpx.Response) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _read_bounded_response(response: httpx.Response) -> httpx.Response | None:
+    """Buffer at most 8 MiB from a streamed response, then close the stream."""
+    chunks: list[bytes] = []
+    total_bytes = 0
+    for chunk in response.iter_bytes(chunk_size=_RESPONSE_CHUNK_BYTES):
+        if total_bytes + len(chunk) > _MAX_RESPONSE_BYTES:
+            return None
+        chunks.append(chunk)
+        total_bytes += len(chunk)
+
+    return httpx.Response(
+        status_code=response.status_code,
+        headers=response.headers,
+        content=b"".join(chunks),
+        request=response.request,
+    )
+
+
 def _error_text(body: dict[str, Any] | None, response: httpx.Response) -> str:
     parts: list[str] = []
     if body:
@@ -103,6 +124,8 @@ def _image_bytes(response: httpx.Response) -> bytes | None:
         return None
     if encoded.startswith("data:") and "," in encoded:
         encoded = encoded.split(",", 1)[1]
+    if len(encoded) > _MAX_JSON_IMAGE_BYTES:
+        return None
     try:
         image = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error):
@@ -114,8 +137,8 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
     """Return generated image bytes, or ``None`` when generation failed.
 
     Requests are made only when at least one valid account is configured.
-    Tests replace :func:`httpx.post`; this client never has an implicit local
-    model or a second provider fallback.
+    Tests replace :func:`httpx.stream`; this client never has an implicit
+    local model or a second provider fallback.
     """
     config = config or settings
     accounts = config.cloudflare_ai_accounts
@@ -147,12 +170,21 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
                     kwargs["files"] = multipart_fields
                 else:
                     kwargs["json"] = json_payload
-                response = httpx.post(url, **kwargs)
+                with httpx.stream("POST", url, **kwargs) as streamed_response:
+                    response = _read_bounded_response(streamed_response)
             except httpx.RequestError:
                 account_failed = True
                 continue
             except Exception:
                 account_failed = True
+                continue
+
+            if response is None:
+                account_failed = True
+                logger.warning(
+                    "Cloudflare image response exceeded %d bytes",
+                    _MAX_RESPONSE_BYTES,
+                )
                 continue
 
             status = response.status_code
