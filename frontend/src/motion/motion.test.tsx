@@ -51,6 +51,14 @@ function SheetHarness() {
 }
 
 describe('Sheet', () => {
+  it('marks the backdrop and panel as centered', async () => {
+    render(<SheetHarness />);
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }));
+
+    expect(screen.getByTestId('sheet-backdrop')).toHaveClass('motion-sheet-backdrop--centered');
+    expect(screen.getByRole('dialog', { name: 'Title' })).toHaveClass('motion-sheet-panel--centered');
+  });
+
   it('moves focus into the sheet synchronously when it opens', () => {
     const frame = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1);
     try {
