@@ -465,6 +465,7 @@ body {
 
 .lib-notice {
   display: flex;
+  overflow: hidden;
   align-items: center;
   gap: 10px;
   margin-bottom: 16px;
@@ -2688,7 +2689,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   position: absolute;
   top: 64px;
   left: 50%;
-  transform: translateX(-50%);
   z-index: 35;
   display: flex;
   align-items: center;
@@ -2703,7 +2703,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   border: 1px solid var(--border-strong);
   box-shadow: 0 14px 40px -22px rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(10px);
-  animation: toast-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .reader-toast.is-error {
   color: #c0392b;
@@ -2718,13 +2717,6 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   flex-shrink: 0;
 }
 .reader-toast button:hover { color: var(--fg); background: var(--bg-3); }
-@keyframes toast-in {
-  from { opacity: 0; transform: translate(-50%, -8px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .reader-toast { animation: none; }
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
    Decks: several cards sharing one slot in the margin.

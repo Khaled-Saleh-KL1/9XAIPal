@@ -1,8 +1,11 @@
 import type { UploadingFile, StepState } from '../types';
 import { IconDoc, IconCheck } from '../components/Icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { m, useReducedMotion } from 'motion/react';
 import { stageProgress } from '../lib/progress';
 import type { ArabicWritingStyle } from '../api';
+import { usePauseWhenHidden } from '../motion/usePauseWhenHidden';
+import { calm, gentle, playful, reducedMotionFade } from '../motion/springs';
 
 /**
  * Backend-driven processing overlay. The visible step states are derived
@@ -183,6 +186,7 @@ export function ProcessingOverlay({
   const complete = status === 'complete';
   const failed = status === 'failed';
   const declined = status === 'queue_full';
+  const reducedMotion = useReducedMotion();
   const allowedActions = allowedActionsInput ?? [];
   const handwrittenUnavailable = errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_gemini_pro_not_configured';
   const classifierUnavailable = errorCode === 'arabic_classifier_unavailable';
@@ -218,12 +222,20 @@ export function ProcessingOverlay({
   const overall = failed || declined ? 0 : stageProgress(status, null, progressFraction);
 
   return (
-    <div
+    <m.div
       className="fixed inset-0 z-30 flex items-center justify-center px-6"
+      data-testid="processing-overlay"
+      initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 14 }}
+      animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+      transition={reducedMotion ? reducedMotionFade : playful}
       style={{ background: 'color-mix(in oklch, var(--bg), transparent 8%)', backdropFilter: 'blur(6px)' }}
     >
-      <div
+      <m.div
         className="w-full max-w-[680px] rounded-2xl overflow-hidden"
+        data-testid="processing-card"
+        initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
+        animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+        transition={reducedMotion ? reducedMotionFade : gentle}
         style={{
           background: 'var(--bg)',
           border: '1px solid var(--border)',
@@ -231,33 +243,36 @@ export function ProcessingOverlay({
         }}
       >
         {/* header */}
-        <div className="px-7 pt-7 pb-5 flex items-start gap-5">
-          <div
-            className="w-11 h-12 rounded flex items-center justify-center shrink-0"
-            style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
-          >
-            <IconDoc className="w-5 h-5" style={{ color: 'var(--muted)' }} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-[12px] font-mono uppercase tracking-wider" style={{ color: 'var(--muted)' }}>
-              {complete ? 'Indexed · ready' : handwrittenUnavailable ? 'Handwritten Arabic unavailable' : failed ? 'Failed' : declined ? 'HTTP 429 · queue full' : 'Processing'}
-            </div>
-            <div className="mt-1 font-serif text-[20px] tracking-tight truncate" style={{ color: 'var(--fg)' }}>
-              {file.name}
-            </div>
-            <div className="text-[12px] mt-1" style={{ color: 'var(--muted)' }}>
-              {effectiveKind === 'article' ? file.size : `${file.size} · runs locally`}
-            </div>
-          </div>
-          {!complete && !failed && !declined && (
-            <button
-              onClick={onCancel}
-              className="text-[12px] px-2 py-1 rounded"
-              style={{ color: 'var(--muted)' }}
+        <div className="relative overflow-hidden px-7 pt-7 pb-5">
+          <DocumentSweep />
+          <div className="relative z-10 flex items-start gap-5">
+            <div
+              className="w-11 h-12 rounded flex items-center justify-center shrink-0"
+              style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
             >
-              Cancel
-            </button>
-          )}
+              <IconDoc className="w-5 h-5" style={{ color: 'var(--muted)' }} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[12px] font-mono uppercase tracking-wider" style={{ color: 'var(--muted)' }}>
+                {complete ? 'Indexed · ready' : handwrittenUnavailable ? 'Handwritten Arabic unavailable' : failed ? 'Failed' : declined ? 'HTTP 429 · queue full' : 'Processing'}
+              </div>
+              <div className="mt-1 font-serif text-[20px] tracking-tight truncate" style={{ color: 'var(--fg)' }}>
+                {file.name}
+              </div>
+              <div className="text-[12px] mt-1" style={{ color: 'var(--muted)' }}>
+                {effectiveKind === 'article' ? file.size : `${file.size} · runs locally`}
+              </div>
+            </div>
+            {!complete && !failed && !declined && (
+              <button
+                onClick={onCancel}
+                className="text-[12px] px-2 py-1 rounded"
+                style={{ color: 'var(--muted)' }}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
         </div>
 
         {/* overall progress bar */}
@@ -273,14 +288,21 @@ export function ProcessingOverlay({
               {Math.round(overall * 100)}%
             </span>
           </div>
-          <div className="h-[3px] rounded-full overflow-hidden" style={{ background: 'var(--bg-3)' }}>
-            <div
-              className="h-full transition-[width] duration-200 ease-linear"
+          <div className="relative h-[3px] rounded-full overflow-hidden" style={{ background: 'var(--bg-3)' }}>
+            <m.div
+              data-testid="processing-progress-fill"
+              className="absolute inset-y-0 left-0 h-full"
+              initial={reducedMotion ? false : { scaleX: 0 }}
+              animate={reducedMotion ? { opacity: 1 } : { scaleX: overall }}
+              transition={reducedMotion ? calm : gentle}
               style={{
-                width: `${overall * 100}%`,
+                width: reducedMotion ? `${overall * 100}%` : '100%',
+                transformOrigin: 'left center',
                 background: failed || declined ? 'var(--muted)' : complete ? 'var(--ok)' : 'var(--accent)',
               }}
-            />
+            >
+              {!reducedMotion && !complete && !failed && !declined && <ProgressWobble />}
+            </m.div>
           </div>
         </div>
 
@@ -431,8 +453,45 @@ export function ProcessingOverlay({
             Back to library
           </button>
         </div>
-      </div>
-    </div>
+      </m.div>
+    </m.div>
+  );
+}
+
+function DocumentSweep() {
+  const ref = useRef<HTMLDivElement>(null);
+  const visible = usePauseWhenHidden(ref);
+  const reducedMotion = useReducedMotion();
+  const sweep = visible && !reducedMotion;
+  return (
+    <m.div
+      ref={ref}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-y-0 left-0 w-[42%]"
+      initial={false}
+      animate={sweep ? { x: ['-140%', '340%'], opacity: [0, 0.8, 0] } : { opacity: 0 }}
+      transition={sweep
+        ? { duration: 3.8, ease: 'easeInOut', repeat: Infinity, repeatDelay: 1 }
+        : calm}
+      style={{ background: 'linear-gradient(110deg, transparent, color-mix(in oklab, var(--accent) 16%, transparent), transparent)' }}
+    />
+  );
+}
+
+function ProgressWobble() {
+  const ref = useRef<HTMLDivElement>(null);
+  const visible = usePauseWhenHidden(ref);
+  const reducedMotion = useReducedMotion();
+  const wobble = visible && !reducedMotion;
+  return (
+    <m.div
+      ref={ref}
+      aria-hidden="true"
+      className="absolute right-[-3px] top-[-1.5px] h-[6px] w-[6px] rounded-full"
+      animate={wobble ? { scaleY: [0.8, 1.2, 0.9, 1.08, 0.8] } : { opacity: 0 }}
+      transition={wobble ? { duration: 0.9, ease: 'easeInOut', repeat: Infinity } : calm}
+      style={{ background: 'var(--accent)' }}
+    />
   );
 }
 
@@ -497,20 +556,24 @@ function StepRow({
 function StepIndicator({ id, state }: { id: number; state: StepState }) {
   const r = 11;
   const circ = 2 * Math.PI * r;
+  const reducedMotion = useReducedMotion();
 
   return (
     <div className="shrink-0 w-7 flex flex-col items-center">
       <div className="relative w-7 h-7">
         {state === 'done' ? (
-          <div
+          <m.div
             className="w-7 h-7 rounded-full flex items-center justify-center"
+            initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6 }}
+            animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+            transition={reducedMotion ? reducedMotionFade : playful}
             style={{ background: 'var(--ok)', color: 'var(--bg)' }}
           >
             <IconCheck className="w-3.5 h-3.5" />
-          </div>
+          </m.div>
         ) : state === 'active' ? (
           // Indeterminate spinner
-          <svg viewBox="0 0 28 28" className="w-7 h-7 ring-anim spin-slow">
+          <svg viewBox="0 0 28 28" className={`w-7 h-7 ring-anim${reducedMotion ? '' : ' spin-slow'}`}>
             <circle cx="14" cy="14" r={r} stroke="var(--border)" strokeWidth="2" fill="none" />
             <circle
               cx="14" cy="14" r={r}

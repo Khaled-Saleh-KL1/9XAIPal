@@ -20,7 +20,7 @@ import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPap
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
 import { BetaBadge } from '../components/BetaBadge';
 import { Pressable, Sheet, usePauseWhenHidden } from '../motion';
-import { calm, jellyPress, playful } from '../motion/springs';
+import { calm, gentle, jellyPress, playful, reducedMotionFade } from '../motion/springs';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -720,12 +720,23 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
       {/* ── Scrollable papers ── */}
       <main className="flex-1 min-h-0 overflow-y-auto thin-scroll">
         <div className="max-w-[1240px] mx-auto px-8 py-6 pb-10">
-          {notice && (
-            <div className="lib-notice">
-              <span>{notice}</span>
-              <Pressable type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</Pressable>
-            </div>
-          )}
+          <AnimatePresence initial={false}>
+            {notice && (
+              <m.div
+                key={notice}
+                className="lib-notice"
+                initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -18, height: 0 }}
+                animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, height: 'auto' }}
+                exit={reducedMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, y: -8, height: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0 }}
+                transition={reducedMotion ? reducedMotionFade : gentle}
+              >
+                <span>{notice}</span>
+                <Pressable type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</Pressable>
+              </m.div>
+            )}
+          </AnimatePresence>
 
           {area === 'done' && (
             <nav className="lib-crumbs" aria-label="Where you are in Done Reading">
