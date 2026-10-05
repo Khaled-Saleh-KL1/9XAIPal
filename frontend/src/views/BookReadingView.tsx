@@ -959,11 +959,8 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
       >
 
         {/* Left: reading pane */}
-        <m.section
+        <section
           className="relative flex flex-col min-h-0"
-          initial={false}
-          animate={narrow ? { opacity: mobilePane === 'read' ? 1 : 0 } : undefined}
-          transition={reducedMotion ? reducedMotionFade : calm}
           aria-hidden={narrow && mobilePane !== 'read' ? true : undefined}
           inert={narrow && mobilePane !== 'read'}
           style={
@@ -972,7 +969,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
                   position: 'absolute',
                   inset: 0,
                   width: '100%',
-                  display: 'flex',
+                  display: mobilePane === 'read' ? 'flex' : 'none',
                   pointerEvents: mobilePane === 'read' ? 'auto' : 'none',
                   background: 'var(--bg)',
                 }
@@ -1190,7 +1187,7 @@ export function BookReadingView({ paper, paperId, onBack, jumpToSequence = null,
               </div>
             </div>
           )}
-        </m.section>
+        </section>
 
         {/* Drag handle: 6px wide, full-height, becomes accent-colored on hover/drag.
             Only meaningful when both panes share the width, so it's dropped
