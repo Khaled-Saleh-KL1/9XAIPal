@@ -10,6 +10,7 @@ import math
 import os
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from uuid import UUID, uuid4
@@ -53,6 +54,7 @@ _ARTICLE_THUMBNAIL_SUFFIX = (
     "soft risograph grain, gentle light, no text, no letters, no watermark"
 )
 _ARTICLE_THUMBNAIL_PROMPT_TIMEOUT_SECONDS = 45.0
+_ARTICLE_THUMBNAIL_PROMPT_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 _ARTICLE_THUMBNAIL_FALLBACK_RULE = (
     "No written material, including books, pages, documents, signs, screens, or labels."
 )
@@ -193,14 +195,15 @@ def _article_thumbnail_fallback_prompt(article_text: str) -> str:
 def _article_thumbnail_prompt(article_text: str) -> str:
     """Ask the chat model for a description, or use a bounded title fallback."""
     try:
-        reply = chat_sync(
+        future = _ARTICLE_THUMBNAIL_PROMPT_EXECUTOR.submit(
+            chat_sync,
             [
                 {"role": "system", "content": _ARTICLE_THUMBNAIL_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Article subject matter:\n{article_text}"},
             ],
             temperature=0.2,
-            timeout=_ARTICLE_THUMBNAIL_PROMPT_TIMEOUT_SECONDS,
         )
+        reply = future.result(timeout=_ARTICLE_THUMBNAIL_PROMPT_TIMEOUT_SECONDS)
     except Exception as exc:
         logger.warning("article thumbnail prompt generation failed error=%s", type(exc).__name__)
         return _article_thumbnail_fallback_prompt(article_text)

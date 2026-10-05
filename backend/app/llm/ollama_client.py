@@ -1,7 +1,6 @@
 """Ollama chat and generation API wrapper."""
 
 import json
-import time
 from typing import AsyncIterator, Optional
 
 import httpx
@@ -262,14 +261,14 @@ async def is_available() -> bool:
 import hashlib
 
 
-def _resolve_model_tag_sync(requested: str, *, timeout: float = 10.0) -> str:
+def _resolve_model_tag_sync(requested: str) -> str:
     """Synchronous version of model tag resolution."""
     import httpx
 
     from app.core.config import settings
 
     try:
-        with httpx.Client(timeout=timeout) as client:
+        with httpx.Client(timeout=10.0) as client:
             resp = client.get(f"{settings.ollama_base_url}/api/tags", headers=_ollama_headers())
             resp.raise_for_status()
             installed = [m.get("name", "") for m in resp.json().get("models", [])]
@@ -294,7 +293,6 @@ def chat_sync(
     temperature: float = 0.3,   # Slightly lower default for factual summarization
     images: Optional[list[str]] = None,  # base64 encoded images for vision models
     api_key: Optional[str] = None,
-    timeout: Optional[float] = None,
 ) -> dict:
     """Synchronous chat completion for Celery workers (supports vision via images)."""
     import httpx
@@ -304,16 +302,7 @@ def chat_sync(
     requested_model = model or settings.chat_model
     url = f"{settings.ollama_base_url}/api/chat"
 
-    deadline = time.monotonic() + timeout if timeout is not None else None
-    resolve_timeout = (
-        min(10.0, deadline - time.monotonic()) if deadline is not None else 10.0
-    )
-    if resolve_timeout <= 0:
-        raise TimeoutError("Ollama chat deadline exceeded before model resolution")
-    resolved_model = _resolve_model_tag_sync(requested_model, timeout=resolve_timeout)
-    request_timeout = min(300.0, deadline - time.monotonic()) if deadline is not None else 300.0
-    if request_timeout <= 0:
-        raise TimeoutError("Ollama chat deadline exceeded before completion request")
+    resolved_model = _resolve_model_tag_sync(requested_model)
 
     # Attach images at the message level for Ollama vision (same as async path)
     final_messages = list(messages)
@@ -331,7 +320,7 @@ def chat_sync(
         "options": {"temperature": temperature},
     }
 
-    with httpx.Client(timeout=request_timeout) as client:
+    with httpx.Client(timeout=300.0) as client:  # 5 minutes per section is generous
         try:
             response = client.post(url, json=payload, headers=_ollama_headers(api_key))
             response.raise_for_status()
@@ -354,3 +343,4 @@ def chat_sync(
 def hash_prompt(prompt_text: str) -> str:
     """Stable short hash for a prompt template (used for invalidation)."""
     return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:16]
+

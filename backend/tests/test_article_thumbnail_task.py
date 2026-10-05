@@ -3,7 +3,9 @@
 import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import logging
 import threading
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -81,6 +83,7 @@ def test_prompt_has_house_style_suffix_and_stays_within_character_cap(monkeypatc
 
     def chat(messages, **kwargs):
         captured["messages"] = messages
+        captured["kwargs"] = kwargs
         return {"content": '"A detailed reef scene\nwith colorful fish"'}
 
     monkeypatch.setattr(tasks, "chat_sync", chat)
@@ -92,23 +95,26 @@ def test_prompt_has_house_style_suffix_and_stays_within_character_cap(monkeypatc
     assert len(captured["prompt"]) <= 400
     assert "\n" not in captured["prompt"]
     assert '"' not in captured["prompt"]
+    assert captured["prompt"].startswith("A detailed reef scene with colorful fish ")
+    assert "timeout" not in captured["kwargs"]
     assert result["status"] == "complete"
 
 
-def test_prompt_model_timeout_falls_back_to_title_and_still_generates_cover(
-    monkeypatch, tmp_path
+def test_prompt_model_exception_falls_back_without_logging_sensitive_text(
+    monkeypatch, tmp_path, caplog
 ):
     title = "Coral reef resilience"
+    private_text = "PRIVATE ARTICLE BODY token=do-not-log"
     tasks = _harness(
         monkeypatch,
         tmp_path,
-        article_text=f"{title}\n\nResearchers describe recovering reefs.",
+        article_text=f"{title}\n\n{private_text}",
     )
-    captured = {"timeouts": [], "prompts": []}
+    caplog.set_level(logging.WARNING)
+    captured = {"prompts": []}
 
-    def chat(_messages, **kwargs):
-        captured["timeouts"].append(kwargs.get("timeout"))
-        raise TimeoutError("prompt model timed out")
+    def chat(_messages, **_kwargs):
+        raise RuntimeError(private_text)
 
     monkeypatch.setattr(tasks, "chat_sync", chat)
     monkeypatch.setattr(
@@ -119,17 +125,71 @@ def test_prompt_model_timeout_falls_back_to_title_and_still_generates_cover(
 
     result = tasks.generate_article_thumbnail.run(str(uuid4()))
 
-    assert captured["timeouts"] == [45.0]
     assert result["status"] == "complete"
     assert len(captured["prompts"]) == 1
     prompt = captured["prompts"][0]
     assert title in prompt
-    assert "Researchers describe recovering reefs" not in prompt
+    assert private_text not in prompt
     assert "no written material" in prompt.lower()
     for term in ("books", "pages", "documents", "signs", "screens", "labels"):
         assert term in prompt.lower()
     assert prompt.endswith(_SUFFIX)
     assert len(prompt) <= 400
+    assert private_text not in caplog.text
+
+
+def test_hanging_prompt_model_call_falls_back_within_timeout(monkeypatch, tmp_path):
+    title = "Coral reef resilience"
+    tasks = _harness(
+        monkeypatch,
+        tmp_path,
+        article_text=f"{title}\n\nResearchers describe recovering reefs.",
+    )
+    monkeypatch.setattr(tasks, "_ARTICLE_THUMBNAIL_PROMPT_TIMEOUT_SECONDS", 0.2)
+    chat_started = threading.Event()
+    release_chat = threading.Event()
+    task_finished = threading.Event()
+    captured = {"prompts": [], "result": None, "error": None}
+
+    def chat(_messages, **_kwargs):
+        chat_started.set()
+        release_chat.wait()
+        return {"content": "late model response"}
+
+    monkeypatch.setattr(tasks, "chat_sync", chat)
+    monkeypatch.setattr(
+        tasks.cloudflare_images,
+        "generate_image",
+        lambda prompt: captured["prompts"].append(prompt) or _PNG,
+    )
+
+    def run_task():
+        try:
+            captured["result"] = tasks.generate_article_thumbnail.run(str(uuid4()))
+        except BaseException as exc:
+            captured["error"] = exc
+        finally:
+            task_finished.set()
+
+    task_thread = threading.Thread(target=run_task, daemon=True)
+    started_at = time.monotonic()
+    task_thread.start()
+    try:
+        assert chat_started.wait(timeout=1)
+        completed_within_bound = task_finished.wait(timeout=0.8)
+        elapsed = time.monotonic() - started_at
+    finally:
+        release_chat.set()
+        task_thread.join(timeout=1)
+
+    assert completed_within_bound
+    assert elapsed < 0.8
+    assert not task_thread.is_alive()
+    assert captured["error"] is None
+    assert captured["result"]["status"] == "complete"
+    assert len(captured["prompts"]) == 1
+    assert title in captured["prompts"][0]
+    assert "Researchers describe recovering reefs" not in captured["prompts"][0]
 
 
 def test_article_instructions_are_passed_as_untrusted_subject_matter(monkeypatch, tmp_path):
