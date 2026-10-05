@@ -3954,6 +3954,9 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   color: var(--faint);
 }
 .board-hide:hover { color: var(--fg); }
+@media (max-width: 1180px) {
+  .board { display: none; }
+}
 
 /* ── Desk tabs ── */
 .desk-tabs { display: flex; gap: 2px; margin-left: 10px; }
