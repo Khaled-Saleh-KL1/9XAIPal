@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, type AnchorHTMLAttributes } from 'react';
+import { m as motion, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
@@ -11,6 +12,8 @@ import {
 import { AgentTrail } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { textDirection } from '../lib/documentDirection';
+import { Pressable, playful, reducedMotionFade } from '../motion';
+import { StreamingCaret } from './StreamingCaret';
 
 // The shared set already supplies the image and diagram renderers; chat only
 // overrides the anchor, which it wants without the shared component's extra
@@ -104,13 +107,45 @@ function previewLabel(c: ConversationSummary): string {
 
 const MAX_TEXTAREA_HEIGHT = 120;
 
+interface DisplayMessage {
+  id: string;
+  message: ChatMessage;
+  animate: boolean;
+  streaming?: boolean;
+}
+
+function historyMessages(turns: Awaited<ReturnType<typeof getPaperChat>>['turns']): DisplayMessage[] {
+  return turns.map((turn) => ({
+    id: `history-${turn.id}`,
+    animate: false,
+    message: {
+      role: turn.role,
+      text: turn.content,
+      refs: turn.role === 'assistant' ? citationsToRefs(turn.citations) : undefined,
+      agentSteps: turn.role === 'assistant' ? (turn.agent_steps ?? undefined) : undefined,
+      grounding: turn.role === 'assistant' ? turn.grounding : undefined,
+      parentTurnId: turn.parent_turn_id ?? undefined,
+      threadRootTurnId: turn.thread_root_turn_id ?? undefined,
+    },
+  }));
+}
+
 export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequenceId = null }: Props) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const nextMessageId = useRef(0);
+  const streamingMessageId = useRef<string | null>(null);
+  const reducedMotion = useReducedMotion();
+  const newMessage = useCallback((message: ChatMessage, id?: string): DisplayMessage => ({
+    id: id ?? `local-${++nextMessageId.current}`,
+    message,
+    animate: true,
+  }), []);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
   // In-progress streamed answer: text grows token by token; status carries a
   // transient line like "Researching the web…". null = no stream in flight.
   const [streaming, setStreaming] = useState<{ text: string; status: string | null } | null>(null);
+  const [streamStarted, setStreamStarted] = useState(false);
   // The agent's tool trail for the answer currently generating. Books are
   // answered by the paper agent, which reports every fetch it makes; keyed by
   // step id so the running→done update replaces rather than appends.
@@ -220,6 +255,8 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
     askAbortRef.current = null;
     setThinking(false);
     setStreaming(null);
+    setStreamStarted(false);
+    streamingMessageId.current = null;
     setMessages([]);
     setConversationId(null);
     setConversations([]);
@@ -239,15 +276,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
           if (!alive) return;
           setMaxDepth(md);
           setConversationId(head.conversation_id);
-          setMessages(turns.map((t) => ({
-            role: t.role,
-            text: t.content,
-            refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
-            agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
-            grounding: t.role === 'assistant' ? t.grounding : undefined,
-            parentTurnId: t.parent_turn_id ?? undefined,
-            threadRootTurnId: t.thread_root_turn_id ?? undefined,
-          })));
+          setMessages(historyMessages(turns));
         }
       } catch {
         // Backend hiccup, so leave the pane empty and let the user retry.
@@ -289,18 +318,10 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
     try {
       const { turns, maxDepth: md } = await getPaperChat(paperId, convId);
       setMaxDepth(md);
-      setMessages(turns.map((t) => ({
-        role: t.role,
-        text: t.content,
-        refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
-        agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
-        grounding: t.role === 'assistant' ? t.grounding : undefined,
-        parentTurnId: t.parent_turn_id ?? undefined,
-        threadRootTurnId: t.thread_root_turn_id ?? undefined,
-      })));
+      setMessages(historyMessages(turns));
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      setMessages([{ role: 'assistant', text: `Backend error: ${detail}` }]);
+      setMessages([{ id: `history-error-${convId}`, animate: false, message: { role: 'assistant', text: `Backend error: ${detail}` } }]);
     }
   }, [paperId, conversationId]);
 
@@ -323,18 +344,10 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
       if (serverDepth !== stack.length && tail === null) {
         // Main chat: server says 0, stack length must be 0.
       }
-      setMessages(turns.map((t) => ({
-        role: t.role,
-        text: t.content,
-        refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
-        agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
-        grounding: t.role === 'assistant' ? t.grounding : undefined,
-        parentTurnId: t.parent_turn_id ?? undefined,
-        threadRootTurnId: t.thread_root_turn_id ?? undefined,
-      })));
+      setMessages(historyMessages(turns));
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      setMessages([{ role: 'assistant', text: `Failed to load thread: ${detail}` }]);
+      setMessages([{ id: `thread-error-${tail ?? 'main'}`, animate: false, message: { role: 'assistant', text: `Failed to load thread: ${detail}` } }]);
     }
   }, [paperId, conversationId]);
 
@@ -387,10 +400,14 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
     const userBubbleText = userImageMarkdown
       ? `${userText}\n\n${userImageMarkdown}`
       : userText;
+    const userRow = newMessage({ role: 'user', text: userBubbleText });
+    const assistantMessageKey = `local-${++nextMessageId.current}`;
+    streamingMessageId.current = assistantMessageKey;
 
     setInput('');
     setAttachments([]);
-    setMessages((prev) => [...prev, { role: 'user', text: userBubbleText }]);
+    setMessages((prev) => [...prev, userRow]);
+    setStreamStarted(false);
     setThinking(true);
 
     const abort = new AbortController();
@@ -418,7 +435,10 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
           ? { imagesB64, ...threadOpts }
           : threadOpts,
         {
-          onToken: (t) => setStreaming((prev) => ({ text: (prev?.text ?? '') + t, status: null })),
+          onToken: (t) => {
+            setStreamStarted(true);
+            setStreaming((prev) => ({ text: (prev?.text ?? '') + t, status: null }));
+          },
           onStatus: (msg) => setStreaming((prev) => ({ text: prev?.text ?? '', status: msg })),
           // A research synthesis pass restreams the answer from scratch.
           onReplace: () => setStreaming({ text: '', status: 'Rewriting with research findings…' }),
@@ -443,7 +463,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
       setStreaming(null);
       setMessages((prev) => [
         ...prev,
-        {
+        newMessage({
           role: 'assistant',
           text: res.answer,
           refs: citationsToRefs(res.citations),
@@ -451,7 +471,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
           researchSummary: res.research_summary || undefined,
           agentSteps: liveSteps.length ? liveSteps : undefined,
           grounding: res.grounding ?? null,
-        },
+        }, assistantMessageKey),
       ]);
       setLiveSteps([]);
       // Refetch so the freshly-created user/assistant turns gain their server
@@ -462,15 +482,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
         try {
           const { turns, maxDepth: md } = await getPaperChat(paperId, newConvId, currentThreadRoot ?? undefined, abort.signal);
           setMaxDepth(md);
-          setMessages(turns.map((t) => ({
-            role: t.role,
-            text: t.content,
-            refs: t.role === 'assistant' ? citationsToRefs(t.citations) : undefined,
-            agentSteps: t.role === 'assistant' ? (t.agent_steps ?? undefined) : undefined,
-            grounding: t.role === 'assistant' ? t.grounding : undefined,
-            parentTurnId: t.parent_turn_id ?? undefined,
-            threadRootTurnId: t.thread_root_turn_id ?? undefined,
-          })));
+          setMessages(historyMessages(turns));
         } catch {
           // non-fatal: the optimistic bubbles are already on screen
         }
@@ -480,15 +492,14 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
       // Deliberate abort (paper switch / unmount): state was already reset.
       if (err instanceof DOMException && err.name === 'AbortError') return;
       const detail = err instanceof Error ? err.message : String(err);
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', text: `Backend error: ${detail}` },
-      ]);
+      setMessages((prev) => [...prev, newMessage({ role: 'assistant', text: `Backend error: ${detail}` }, assistantMessageKey)]);
     } finally {
       if (askAbortRef.current === abort) askAbortRef.current = null;
+      streamingMessageId.current = null;
       if (!abort.signal.aborted) {
         setThinking(false);
         setStreaming(null);
+        setStreamStarted(false);
       }
     }
   };
@@ -654,34 +665,54 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
                 : 'Ask anything grounded in the chunks you’ve revealed.'}
             </p>
           )}
-          {messages.map((m, i) => {
+          {(
+            streaming && streamStarted && streamingMessageId.current
+              ? [...messages, {
+                  id: streamingMessageId.current,
+                  animate: true,
+                  streaming: true,
+                  message: { role: 'assistant' as const, text: streaming.text },
+                }]
+              : messages
+          ).map((row, i, visibleMessages) => {
+            const message = row.message;
             // For user bubbles, inherit the threadRootTurnId from the next
             // assistant bubble (same exchange) so the user message is also
             // clickable to enter the sub-thread.
-            const pairRoot = m.threadRootTurnId
-              ?? (m.role === 'user' && messages[i + 1]?.role === 'assistant'
-                    ? messages[i + 1].threadRootTurnId
+            const pairRoot = message.threadRootTurnId
+              ?? (message.role === 'user' && visibleMessages[i + 1]?.message.role === 'assistant'
+                    ? visibleMessages[i + 1].message.threadRootTurnId
                     : undefined);
             // Hide the affordance when the user is already at the maximum
             // allowed sub-thread depth: opening a deeper sub-thread would
             // exceed the cap and the backend would reject it anyway.
             const canOpen = !!pairRoot && !atMaxDepth;
             return (
-              <MessageBubble
-                key={i}
-                m={m}
-                threadRoot={canOpen ? pairRoot : undefined}
-                onOpenThread={canOpen ? enterSubThread : undefined}
-              />
+              <motion.div
+                key={row.id}
+                data-testid="chat-message-motion"
+                data-motion-key={row.id}
+                data-message-key={row.id}
+                data-message-role={message.role}
+                data-streaming={row.streaming ? 'true' : undefined}
+                initial={row.animate && !reducedMotion ? { opacity: 0, scale: 0.6, rotate: -3, y: 12 } : false}
+                animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0, y: 0 }}
+                transition={reducedMotion ? reducedMotionFade : playful}
+                style={{ transformOrigin: 'center' }}
+              >
+                <MessageBubble
+                  m={message}
+                  streaming={row.streaming}
+                  threadRoot={canOpen ? pairRoot : undefined}
+                  onOpenThread={canOpen ? enterSubThread : undefined}
+                />
+              </motion.div>
             );
           })}
           {liveSteps.length > 0 && (
             <div className="mb-1">
               <AgentTrail steps={liveSteps} live />
             </div>
-          )}
-          {streaming && streaming.text && (
-            <MessageBubble m={{ role: 'assistant', text: streaming.text }} />
           )}
           {thinking && (!streaming || !streaming.text || streaming.status) && (
             <div className="flex items-center gap-2 text-[12.5px]" style={{ color: 'var(--muted)' }}>
@@ -710,8 +741,11 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2 px-1">
             {attachments.map((a, i) => (
-              <div
+              <motion.div
                 key={`${a.name}-${i}`}
+                initial={reducedMotion ? false : { opacity: 0, scale: 0.6, rotate: -3, y: 12 }}
+                animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0, y: 0 }}
+                transition={reducedMotion ? reducedMotionFade : playful}
                 className="relative group rounded overflow-hidden"
                 style={{ border: '1px solid var(--border)', background: 'var(--bg-2)' }}
               >
@@ -727,7 +761,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
                   className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center text-[11px] leading-none"
                   style={{ background: 'rgba(0,0,0,0.6)', color: 'white' }}
                 >×</button>
-              </div>
+              </motion.div>
             ))}
           </div>
         )}
@@ -803,7 +837,9 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
               outline: 'none',
             }}
           />
-          <button
+          <Pressable
+            type="button"
+            aria-label="Send message"
             onClick={send}
             disabled={!input.trim() && attachments.length === 0}
             className="w-7 h-7 rounded flex items-center justify-center shrink-0"
@@ -813,7 +849,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
             }}
           >
             <IconSend className="w-3.5 h-3.5" style={{ color: 'var(--accent-fg)' }} />
-          </button>
+          </Pressable>
         </div>
         <div className="mt-2 flex items-center gap-3 px-1">
           <span className="text-[10.5px] font-mono" style={{ color: 'var(--muted)' }}>
@@ -838,10 +874,12 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
 // is a string, and `onOpenThread` is the useCallback'd enterSubThread.
 const MessageBubble = memo(function MessageBubble({
   m,
+  streaming = false,
   threadRoot,
   onOpenThread,
 }: {
   m: ChatMessage;
+  streaming?: boolean;
   threadRoot?: string;
   onOpenThread?: (rootTurnId: string, preview: string) => void;
 }) {
@@ -950,6 +988,7 @@ const MessageBubble = memo(function MessageBubble({
         <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MD_COMPONENTS}>
           {normalizeMath(stripTrailingSourcesNone(m.text))}
         </ReactMarkdown>
+        {streaming && <StreamingCaret />}
       </div>
 
       {m.agentSteps && m.agentSteps.length > 0 && (

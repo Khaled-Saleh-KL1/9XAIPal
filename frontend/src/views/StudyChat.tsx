@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
@@ -8,6 +8,7 @@ import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
 import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
 import { textDirection } from '../lib/documentDirection';
+import { Pressable } from '../motion';
 
 /**
  * The desk's chat.
@@ -64,34 +65,45 @@ function Answer({
   papers: StudyPaper[];
   onOpenPaper?: (documentId: string, sequenceId: number) => void;
 }) {
+  // The study owner currently passes an inline `onOpenPaper` callback. Keep
+  // current values in refs so ReactMarkdown's component map can stay stable
+  // while a streamed answer grows; otherwise React remounts CitationRef and
+  // discards its open state and fetched passage on every token.
+  const papersRef = useRef(papers);
+  papersRef.current = papers;
+  const onOpenPaperRef = useRef(onOpenPaper);
+  onOpenPaperRef.current = onOpenPaper;
+  const components = useMemo(() => ({
+    // Shared first: images and diagrams. The citation anchor below is the
+    // desk's own and must win, so it is spread after.
+    ...MARKDOWN_COMPONENTS,
+    a({ href, children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement>) {
+      const m = /^#cite-(\d+)-(\d+)$/.exec(href || '');
+      if (!m) return <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
+      const currentPapers = papersRef.current;
+      const paper = currentPapers[Number(m[1]) - 1];
+      // A citation into a paper the study no longer holds cannot be
+      // opened. Plain struck-through text is honest; a dead button is not.
+      if (!paper) return <span className="cite-dead">P{m[1]}:{m[2]}</span>;
+      return (
+        <CitationRef
+          cite={{
+            paper: Number(m[1]),
+            document_id: paper.id,
+            label: paper.title,
+            sequence_id: Number(m[2]),
+          }}
+          onOpenPaper={onOpenPaperRef.current}
+        />
+      );
+    },
+  }), []);
+
   return (
     <ReactMarkdown
       remarkPlugins={MARKDOWN_REMARK}
       rehypePlugins={MARKDOWN_REHYPE}
-      components={{
-        // Shared first: images and diagrams. The citation anchor below is the
-        // desk's own and must win, so it is spread after.
-        ...MARKDOWN_COMPONENTS,
-        a({ href, children, ...rest }) {
-          const m = /^#cite-(\d+)-(\d+)$/.exec(href || '');
-          if (!m) return <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
-          const paper = papers[Number(m[1]) - 1];
-          // A citation into a paper the study no longer holds cannot be
-          // opened. Plain struck-through text is honest; a dead button is not.
-          if (!paper) return <span className="cite-dead">P{m[1]}:{m[2]}</span>;
-          return (
-            <CitationRef
-              cite={{
-                paper: Number(m[1]),
-                document_id: paper.id,
-                label: paper.title,
-                sequence_id: Number(m[2]),
-              }}
-              onOpenPaper={onOpenPaper}
-            />
-          );
-        },
-      }}
+      components={components}
     >
       {withCitationLinks(text)}
     </ReactMarkdown>
@@ -341,14 +353,14 @@ export function StudyChat({
         />
         <div className="chat-composer-row">
           <ModelPicker catalog={catalog} model={model} onChange={onModelChange} />
-          <button
+          <Pressable
             type="button"
             className="chat-send"
             onClick={send}
             disabled={!draft.trim() || !!pending}
           >
             {pending ? 'Working…' : 'Ask'}
-          </button>
+          </Pressable>
         </div>
       </div>
     </section>

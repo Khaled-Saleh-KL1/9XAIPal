@@ -3422,6 +3422,15 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   transition: opacity 140ms ease;
 }
 .chat-send:disabled { opacity: 0.4; }
+.chat-stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-inline-start: 3px;
+  border-radius: 1px;
+  background: var(--accent);
+  vertical-align: -0.12em;
+}
 
 /* ── Citations that open where they sit ──────────────────────────────────
    The reason the desk can claim to serve reading without opening papers: a
@@ -3429,6 +3438,8 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
 .cite-wrap { position: relative; }
 .cite-group { display: inline-flex; gap: 3px; margin: 0 2px; vertical-align: baseline; }
 .cite-chip {
+  display: inline-block;
+  vertical-align: baseline;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 9.5px;
   padding: 1px 6px;

@@ -1,6 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { resolveReferenceStream, addReferenceToLibrary, getPaperProgress, type ReferenceEntry, type ResolveQueueState, findReferenceOnWeb } from '../api';
 import type { ReferenceIndex } from '../lib/references';
+import { Pressable, gentle, reducedMotionFade } from '../motion';
 
 interface RowState {
   entry: ReferenceEntry;
@@ -50,6 +52,8 @@ export function BibCitationRef({
   onOpenPaper?: (documentId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  const reducedMotion = useReducedMotion();
   // Seeded once from refIndex at mount. Safe: a BibCitationRef only ever
   // exists because remarkCitationRefs already required every number in
   // `numbers` to be in refIndex.numbers, and refIndex.byNumber is built from
@@ -62,6 +66,24 @@ export function BibCitationRef({
     }
     return m;
   });
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
 
   const patchRow = (n: number, patch: Partial<RowState>) =>
     setRows((prev) => {
@@ -143,22 +165,34 @@ export function BibCitationRef({
   };
 
   return (
-    <span className="cite-wrap">
-      <button
+    <span className="cite-wrap" ref={wrapRef}>
+      <Pressable
+        as="button"
         type="button"
+        intensity="citation"
         className={`cite-chip${open ? ' is-open' : ''}`}
         onClick={toggle}
+        aria-expanded={open}
         title={numbers.length === 1 ? `Reference [${numbers[0]}]` : `References [${numbers.join(', ')}]`}
       >
         {label ?? `[${numbers.join(', ')}]`}
-      </button>
-      {open && (
-        <span className="cite-peek bib-ref-peek">
+      </Pressable>
+      <AnimatePresence initial={false}>
+        {open && (
+        <m.span
+          key="bib-ref-peek"
+          className="cite-peek bib-ref-peek"
+          initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, y: 4 }}
+          animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+          exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 2, pointerEvents: 'none' }}
+          transition={reducedMotion ? reducedMotionFade : gentle}
+        >
           {[...rows.entries()].map(([n, row]) => (
             <BibRefRow key={n} number={n} row={row} onResolve={() => resolveOne(n)} onAdd={() => addOne(n)} onFind={() => findOne(n)} onOpenPaper={onOpenPaper} />
           ))}
-        </span>
-      )}
+        </m.span>
+        )}
+      </AnimatePresence>
     </span>
   );
 }
