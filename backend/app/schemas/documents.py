@@ -36,6 +36,9 @@ class DocumentResponse(BaseModel):
     ocr_provider_summary: Optional[list[dict[str, Any]]] = None
     # The page a doc_kind='article' row was imported from; None otherwise.
     source_url: Optional[str] = None
+    # Integer file mtime used to refresh a generated article thumbnail in the
+    # library; null until the cover cache contains a non-empty image.
+    cover_version: Optional[int] = None
     # Fine-grained processing stage from the most-recent ingestion job
     # (queued / extracting / chunking / embedding / complete / failed).
     # Lets the library show a live progress bar without per-card /progress calls.

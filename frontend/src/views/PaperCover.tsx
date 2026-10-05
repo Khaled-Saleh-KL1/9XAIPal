@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconDoc } from '../components/Icons';
 import { getCoverUrl } from '../api';
 import { textDirection } from '../lib/documentDirection';
@@ -26,17 +26,23 @@ export function PaperCover({
   paperId,
   title,
   ready,
+  coverVersion,
   className = '',
   showTitle = false,
 }: {
   paperId: string;
   title: string;
+  coverVersion?: number | null;
   /** False while the paper is still being processed. */
   ready: boolean;
   className?: string;
   showTitle?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [paperId, coverVersion]);
 
   if (!ready || failed) {
     return (
@@ -49,7 +55,7 @@ export function PaperCover({
   return (
     <div className={`paper-cover ${className}`}>
       <img
-        src={getCoverUrl(paperId)}
+        src={getCoverUrl(paperId, coverVersion)}
         alt={`First page of ${title}`}
         loading="lazy"
         decoding="async"
