@@ -2414,30 +2414,106 @@ body {
   color: var(--accent-fg);
 }
 
-/* ── The agent trail ─────────────────────────────────────────────────────
-   What the model fetched before it answered. Live it is the progress
-   indicator; afterwards it is the audit trail, collapsed behind one line so
-   the answer keeps the top of the card. */
-.agent-trail { margin-top: 10px; }
-.trail-toggle {
+/* ── Reasoning rows and live thinking mark ─────────────────────────────── */
+.agent-trail { margin-top: 10px; min-width: 0; }
+.trail-rounds { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.trail-round { min-width: 0; }
+.trail-round-toggle {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 5px;
   width: 100%;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 10px;
-  letter-spacing: 0.03em;
-  color: var(--faint);
+  min-width: 0;
   padding: 3px 0;
-  transition: color 140ms ease;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
 }
-.trail-toggle:hover { color: var(--muted); }
+.trail-round-toggle:hover { color: var(--fg-2); }
 .trail-caret { display: inline-block; font-size: 8px; }
-.trail-count { margin-left: auto; opacity: 0.8; }
+.trail-round-caret {
+  width: 12px;
+  flex: 0 0 12px;
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+  transform-origin: center;
+}
+.trail-round-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trail-round-content { min-width: 0; }
+.trail-summary {
+  margin: 4px 0 2px 15px;
+  color: var(--faint);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+.trail-show-more {
+  align-self: flex-start;
+  padding: 3px 0 3px 15px;
+  background: transparent;
+  border: 0;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.trail-show-more:hover { color: var(--accent); }
+.trail-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.trail-progress-status {
+  min-width: 0;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.35;
+}
+.trail-progress-status > span { display: inline-block; overflow-wrap: anywhere; }
+
+.thinking-mark { position: relative; width: 34px; height: 34px; flex: 0 0 34px; }
+.thinking-mark-box {
+  position: absolute;
+  inset: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+}
+.thinking-mark-nine {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1;
+}
+.thinking-mark-dot {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+}
 
 .trail-steps {
   list-style: none;
-  margin: 6px 0 0;
+  margin: 2px 0 3px;
   padding: 0 0 0 9px;
   /* One continuous rule down the left: the calls are a sequence, and a border
      per row would read as four unrelated boxes. */
@@ -2447,13 +2523,6 @@ body {
   gap: 9px;
 }
 .trail-step { position: relative; padding-left: 10px; }
-.trail-think {
-  font-size: 11.5px;
-  font-style: italic;
-  line-height: 1.45;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
 .trail-line {
   display: flex;
   align-items: baseline;
@@ -2513,12 +2582,24 @@ body {
 }
 .trail-sources { list-style: none; margin: 5px 0 0; padding: 0; }
 .trail-sources li { margin-top: 2px; }
-.trail-sources a {
+.trail-sources .trail-source-link {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 10px;
-  color: var(--deck);
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 140ms ease;
+  overflow-wrap: anywhere;
+}
+.trail-sources .trail-source-link:hover,
+.trail-sources .trail-source-link:focus-visible {
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.trail-sources .trail-source-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* ── Evidence panel ───────────────────────────────────────────────────────

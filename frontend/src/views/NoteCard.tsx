@@ -11,7 +11,7 @@ import {
   useCardDrag,
   type CardDrag,
 } from './NoteChrome';
-import { AgentTrail } from './AgentTrail';
+import { Reasoning } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { citeChips, usePageMap } from '../lib/pageMap';
 import type { AgentStep, PaperNote } from '../api';
@@ -239,10 +239,9 @@ export function PendingNoteCard({
         </>
       ) : (
         <>
-          {/* The trail stays up while the answer types itself out. Collapsing
-              it the moment the first token lands would snatch away the only
-              record of the fetches at the exact moment they become checkable. */}
-          <AgentTrail steps={note.steps} live onJump={onJump} />
+          {/* Keep the reasoning rows with the streaming answer and let the live
+              status shift to writing after its first token. */}
+          <Reasoning steps={note.steps} live writing={Boolean(note.answer)} onJump={onJump} />
           {note.answer ? (
             // Still streaming: withhold a half-written LaTeX span so the reader
             // doesn't watch raw markup type itself out and then snap into a symbol.
@@ -250,12 +249,7 @@ export function PendingNoteCard({
               <PendingAnswer text={withCitationLinks(maskIncompleteMath(note.answer))} />
               <EvidencePanel report={null} verifying={note.verifying} />
             </>
-          ) : (
-            <div className="note-status">
-              <span className="note-dot" />
-              {note.status || 'Thinking…'}
-            </div>
-          )}
+          ) : null}
         </>
       )}
     </article>
@@ -343,7 +337,7 @@ export function NoteCardView({
             )}
             <Answer text={withCitationLinks(reply.answer)} />
             <CitationChips cited={reply.cited_sequence_ids} onJump={onJump} />
-            <AgentTrail steps={reply.agent_steps} onJump={onJump} />
+            <Reasoning steps={reply.agent_steps} onJump={onJump} />
             <EvidencePanel report={reply.grounding} onJump={(_doc, seq) => onJump(seq)} />
           </div>
         ))}
@@ -354,7 +348,7 @@ export function NoteCardView({
           so the one control that says how the answer was grounded is reachable
           only by first expanding the thing you were trying to check. It is
           collapsed by default anyway, so it costs one line here. */}
-      <AgentTrail steps={group.root.agent_steps} onJump={onJump} />
+      <Reasoning steps={group.root.agent_steps} onJump={onJump} />
       {/* Same placement, same reason: the claim-by-claim check is the other
           half of "how this was answered", and must stay reachable on a
           clipped card. Notes are single-paper, so the document id is dropped. */}

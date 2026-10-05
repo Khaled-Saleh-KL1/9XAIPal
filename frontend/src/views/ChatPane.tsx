@@ -4,12 +4,12 @@ import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import type { ChatMessage, ChatRef } from '../types';
-import { IconSend, IconSpinner } from '../components/Icons';
+import { IconSend } from '../components/Icons';
 import {
   askPaperStream, getPaperChat, listPaperConversations,
   type AgentStep, type Citation, type ConversationSummary,
 } from '../api';
-import { AgentTrail } from './AgentTrail';
+import { Reasoning } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { textDirection } from '../lib/documentDirection';
 import { Pressable, playful, reducedMotionFade } from '../motion';
@@ -709,16 +709,9 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
               </m.div>
             );
           })}
-          {liveSteps.length > 0 && (
+          {(thinking || liveSteps.length > 0) && (
             <div className="mb-1">
-              <AgentTrail steps={liveSteps} live />
-            </div>
-          )}
-          {thinking && (!streaming || !streaming.text || streaming.status) && (
-            <div className="flex items-center gap-2 text-[12.5px]" style={{ color: 'var(--muted)' }}>
-              <IconSpinner className="w-3.5 h-3.5 spin" />
-              <span>{streaming?.status || 'thinking…'}</span>
-              {!streaming?.status && <span className="opacity-60">(may include live research)</span>}
+              <Reasoning steps={liveSteps} live={thinking} writing={Boolean(streaming?.text)} />
             </div>
           )}
         </div>
@@ -993,7 +986,7 @@ const MessageBubble = memo(function MessageBubble({
 
       {m.agentSteps && m.agentSteps.length > 0 && (
         <div className="mt-1.5">
-          <AgentTrail steps={m.agentSteps} />
+          <Reasoning steps={m.agentSteps} />
         </div>
       )}
       {/* No jump: the book chat has no reader beside it to open a block in;

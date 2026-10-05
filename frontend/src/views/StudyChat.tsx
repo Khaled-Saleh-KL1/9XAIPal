@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { maskIncompleteMath } from '../lib/pacer';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
-import { AgentTrail } from './AgentTrail';
+import { Reasoning } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
 import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
@@ -299,7 +299,7 @@ export function StudyChat({
                   <div className="msg-meta">
                     {turn.model && <span className="note-model">{turn.model}</span>}
                   </div>
-                  <AgentTrail steps={turn.agent_steps} />
+                  <Reasoning steps={turn.agent_steps} />
                   <div className="msg-body md-body">
                     <Answer text={turn.content} papers={papers} onOpenPaper={onOpenPaper} />
                   </div>
@@ -352,10 +352,13 @@ export function StudyChat({
               style={{ transformOrigin: 'center' }}
               className="msg is-assistant"
             >
-              {/* Live, the trail IS the progress indicator: the answer has not
-                  started yet and a bare spinner says nothing about what it is
-                  doing across five papers. */}
-              <AgentTrail steps={pending.steps} live />
+              {/* The mascot status gives progress before the first tool step
+                  arrives and while answer text streams. */}
+              <Reasoning
+                steps={pending.steps}
+                live={!pending.error}
+                writing={Boolean(pending.answer)}
+              />
               {pending.error ? (
                 <>
                   <div className="note-error">{pending.error}</div>
@@ -371,12 +374,7 @@ export function StudyChat({
                   {!pending.verifying && <StreamingCaret />}
                   <EvidencePanel report={null} verifying={pending.verifying} />
                 </div>
-              ) : (
-                <div className="note-status">
-                  <span className="note-dot" />
-                  {pending.status || 'Thinking…'}
-                </div>
-              )}
+              ) : null}
             </m.div>
           </>
         )}
