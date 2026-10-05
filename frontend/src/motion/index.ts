@@ -3,6 +3,7 @@ export { Pressable } from './Pressable';
 export type { PressableProps } from './Pressable';
 export { Reveal, Stagger, StaggerItem } from './Reveal';
 export { Sheet } from './Sheet';
+export { PageTransition } from './PageTransition';
 export { useTilt } from './useTilt';
 export { usePauseWhenHidden } from './usePauseWhenHidden';
 export { useFocusTrap } from './useFocusTrap';

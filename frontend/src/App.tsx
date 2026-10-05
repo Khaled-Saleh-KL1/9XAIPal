@@ -11,7 +11,7 @@ import { AuthForm } from './views/AuthForm';
 import { LandingView } from './views/LandingView';
 import { WaitingRoomView } from './views/WaitingRoomView';
 import { useAuth } from './contexts/AuthContext';
-import { Pressable, Sheet } from './motion';
+import { PageTransition, Pressable, Sheet } from './motion';
 import { isWelcomeHash, useWelcomeRoute } from './lib/welcomeRoute';
 
 // react-pdf (pdf.js) is by far the heaviest dependency. Loading it lazily
@@ -691,8 +691,17 @@ export function App() {
     return <WaitingRoomView />;
   }
 
+  const pageTransitionKey = route === 'reading'
+    ? `reading:${activePaperId || activePaper?.id || ''}`
+    : route === 'pdf-viewer'
+    ? `pdf:${viewingPdf?.id || ''}`
+    : route === 'desk'
+    ? `desk:${deskScope}:${deskPage}`
+    : 'library';
+
   return (
     <>
+      <PageTransition routeKey={pageTransitionKey}>
       {(route === 'library' || route === 'processing') && (
         <LibraryView
           onOpenPaper={openPaper}
@@ -788,6 +797,7 @@ export function App() {
           </Suspense>
         )
       )}
+      </PageTransition>
 
       {route === 'processing' && uploadingFile && (
         <ProcessingOverlay
