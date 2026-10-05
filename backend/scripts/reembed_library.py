@@ -9,16 +9,38 @@ EMBEDDING_MAX_CONCURRENCY.
 
 Run inside the backend container, for example:
 
+    python scripts/reembed_library.py --dry-run
     python scripts/reembed_library.py
 """
 
-from sqlalchemy import create_engine, text
+import argparse
+import sys
+from pathlib import Path
 
-from app.core.config import settings
-from app.workers.tasks import embed_document
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 
-def main() -> None:
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="count the documents that would be re-embedded without queueing anything",
+    )
+    return parser.parse_args(argv)
+
+
+def _eligible_document_ids() -> list[str]:
+    # Imported here, not at module top: `--help` must not need the app,
+    # its settings or a database connection.
+    from sqlalchemy import create_engine, text
+
+    from app.core.config import settings
+
     engine = create_engine(settings.database_url_sync)
     try:
         with engine.connect() as connection:
@@ -37,13 +59,35 @@ def main() -> None:
             ).mappings().all()
     finally:
         engine.dispose()
+    return [str(row["id"]) for row in rows]
 
-    if not rows:
+
+def _embed_task():
+    from app.workers.tasks import embed_document
+
+    return embed_document
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    document_ids = _eligible_document_ids()
+
+    if not document_ids:
         print("No embedded documents with chunks found.")
-        return
+        return 0
 
-    for row in rows:
-        result = embed_document.delay(str(row["id"]), force=True)
-        print(f"queued document={row['id']} task={result.id}")
+    if args.dry_run:
+        print(f"Would queue safe full re-embedding for {len(document_ids)} document(s).")
+        return 0
 
-    print(f"Queued safe full re-embedding for {len(rows)} document(s).")
+    embed_document = _embed_task()
+    for document_id in document_ids:
+        result = embed_document.delay(document_id, force=True)
+        print(f"queued document={document_id} task={result.id}")
+
+    print(f"Queued safe full re-embedding for {len(document_ids)} document(s).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
