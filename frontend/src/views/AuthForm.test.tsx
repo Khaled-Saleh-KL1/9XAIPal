@@ -3,9 +3,18 @@ import userEvent from '@testing-library/user-event';
 import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MotionRoot } from '../motion';
+import { reducedMotionFade } from '../motion/springs';
+import { motionPrefs } from '../test/setup';
 
 const { login, signup } = vi.hoisted(() => ({ login: vi.fn(), signup: vi.fn() }));
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ login, signup }) }));
+vi.mock('motion/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('motion/react')>();
+  return {
+    ...actual,
+    useReducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  };
+});
 
 import { AuthForm } from './AuthForm';
 
@@ -65,5 +74,22 @@ describe('AuthForm', () => {
     await userEvent.type(screen.getByPlaceholderText('Password'), 'wrongpass');
     await userEvent.click(screen.getByRole('button', { name: 'Log in' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Invalid email or password');
+  });
+
+  it('uses short, transform-free reduced-motion transitions for auth changes and errors', async () => {
+    motionPrefs.reducedMotion = true;
+    signup.mockRejectedValue(new Error('Invalid email or password'));
+    const { container } = renderForm('login');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Sign up' }));
+    const title = await screen.findByRole('heading', { name: 'Create an account' });
+    expect(title.style.transform).not.toMatch(/translateY|matrix/);
+
+    await userEvent.type(screen.getByPlaceholderText('Email'), 'a@b.co');
+    await userEvent.type(screen.getByPlaceholderText('Password'), 'wrongpass');
+    await userEvent.click(screen.getByRole('button', { name: 'Sign up' }));
+    await screen.findByRole('alert');
+    expect(container.querySelector('form')?.style.transform).not.toMatch(/translateX|matrix/);
+    expect(reducedMotionFade.duration).toBeLessThanOrEqual(0.15);
   });
 });

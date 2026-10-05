@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode, RefObject, MouseEvent, KeyboardEvent } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
-import { calm, playful } from './springs';
+import { calm, playful, reducedMotionFade } from './springs';
 
 const focusableSelector = [
   'a[href]',
@@ -32,16 +32,13 @@ export function Sheet({
   const backdropStarted = useRef(false);
   const reducedMotion = useReducedMotion();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    const frame = requestAnimationFrame(() => {
-      const initial = initialFocusRef?.current ?? panelRef.current?.querySelector<HTMLElement>(focusableSelector);
-      (initial ?? panelRef.current)?.focus();
-    });
+    const initial = initialFocusRef?.current ?? panelRef.current?.querySelector<HTMLElement>(focusableSelector);
+    (initial ?? panelRef.current)?.focus();
     return () => {
-      cancelAnimationFrame(frame);
       document.body.style.overflow = previousOverflow;
     };
   }, [open, initialFocusRef]);
@@ -84,7 +81,7 @@ export function Sheet({
   };
 
   const panelMotion = reducedMotion
-    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: calm }
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: reducedMotionFade }
     : {
         initial: { y: 40, opacity: 0, rotate: -1, scale: 0.96 },
         animate: { y: 0, opacity: 1, rotate: 0, scale: 1 },
@@ -104,7 +101,7 @@ export function Sheet({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={calm}
+          transition={reducedMotion ? reducedMotionFade : calm}
           onMouseDown={handleBackdropDown}
           onClick={handleBackdropClick}
         >

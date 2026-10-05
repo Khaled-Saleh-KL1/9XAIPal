@@ -6,6 +6,8 @@ export const playful: Transition = { type: 'spring', stiffness: 400, damping: 17
 export const gentle: Transition = { type: 'spring', stiffness: 260, damping: 26 };
 /** A short tween for quiet transitions and reduced-motion fades. */
 export const calm: Transition = { type: 'tween', duration: 0.18, ease: 'easeOut' };
+/** A transform-free opacity fade capped at 150 ms for reduced-motion paths. */
+export const reducedMotionFade: Transition = { type: 'tween', duration: 0.15, ease: 'easeOut' };
 /** Jelly squash played while a control is pressed. */
 export const jellyPress = {
   scaleX: [1, 1.12, 0.94, 1.03, 1],

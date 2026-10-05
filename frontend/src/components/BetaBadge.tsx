@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { BETA_LABEL, BETA_NOTE } from '../landing/content';
-import { calm, playful } from '../motion/springs';
+import { playful, reducedMotionFade } from '../motion/springs';
 
 export function BetaBadge() {
   const [open, setOpen] = useState(false);
@@ -26,7 +26,7 @@ export function BetaBadge() {
         aria-describedby={tooltipId}
         initial={initial}
         animate={enter}
-        transition={reducedMotion ? calm : playful}
+        transition={reducedMotion ? reducedMotionFade : playful}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
@@ -45,7 +45,7 @@ export function BetaBadge() {
             initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
             animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            transition={reducedMotion ? calm : playful}
+            transition={reducedMotion ? reducedMotionFade : playful}
           >
             {BETA_NOTE}
           </m.span>

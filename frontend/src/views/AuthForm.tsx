@@ -3,7 +3,7 @@ import type { FormEvent, RefObject } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 import { Pressable, usePauseWhenHidden } from '../motion';
-import { gentle } from '../motion/springs';
+import { gentle, reducedMotionFade } from '../motion/springs';
 
 const inputStyle = {
   background: 'var(--bg-2)',
@@ -31,6 +31,7 @@ export function AuthForm({
   const spinnerRef = useRef<HTMLSpanElement>(null);
   const spinnerVisible = usePauseWhenHidden(spinnerRef);
   const reducedMotion = useReducedMotion();
+  const authTransition = reducedMotion ? reducedMotionFade : gentle;
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -60,10 +61,10 @@ export function AuthForm({
             key={mode}
             id={titleId}
             className="font-serif text-[20px] tracking-tight"
-            initial={{ opacity: 0, y: 5 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={gentle}
+            initial={{ opacity: 0, ...(reducedMotion ? {} : { y: 5 }) }}
+            animate={{ opacity: 1, ...(reducedMotion ? {} : { y: 0 }) }}
+            exit={{ opacity: 0, ...(reducedMotion ? {} : { y: -4 }) }}
+            transition={authTransition}
             style={{ color: 'var(--fg)' }}
           >
             {mode === 'login' ? 'Welcome back' : 'Create an account'}
@@ -76,7 +77,7 @@ export function AuthForm({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={gentle}
+            transition={authTransition}
             style={{ color: 'var(--muted)' }}
           >
             {mode === 'login' ? '9XAIPal: sign in to your library.' : 'Create your free account.'}
@@ -87,8 +88,8 @@ export function AuthForm({
       <m.form
         onSubmit={onSubmit}
         className="px-7 py-5 flex flex-col gap-3"
-        animate={error ? { x: [0, -10, 9, -6, 4, 0] } : { x: 0 }}
-        transition={{ duration: 0.4 }}
+        animate={reducedMotion ? undefined : error ? { x: [0, -10, 9, -6, 4, 0] } : { x: 0 }}
+        transition={reducedMotion ? undefined : { duration: 0.4 }}
       >
         <input
           ref={firstFieldRef}
@@ -114,10 +115,10 @@ export function AuthForm({
           {mode === 'signup' && (
             <m.div
               key="display-name"
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={gentle}
+              initial={{ opacity: 0, ...(reducedMotion ? {} : { y: -6 }) }}
+              animate={{ opacity: 1, ...(reducedMotion ? {} : { y: 0 }) }}
+              exit={{ opacity: 0, ...(reducedMotion ? {} : { y: -6 }) }}
+              transition={authTransition}
             >
               <input
                 dir="auto"
@@ -142,7 +143,7 @@ export function AuthForm({
         >
           <AnimatePresence mode="wait" initial={false}>
             {submitting ? (
-              <m.span key="waiting" className="inline-flex items-center justify-center gap-2" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={gentle}>
+              <m.span key="waiting" className="inline-flex items-center justify-center gap-2" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={authTransition}>
                 <m.span
                   ref={spinnerRef}
                   aria-hidden="true"
@@ -153,7 +154,7 @@ export function AuthForm({
                 <span>Please wait…</span>
               </m.span>
             ) : (
-              <m.span key="ready" className="inline-block" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={gentle}>
+              <m.span key="ready" className="inline-block" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={authTransition}>
                 {mode === 'login' ? 'Log in' : 'Sign up'}
               </m.span>
             )}

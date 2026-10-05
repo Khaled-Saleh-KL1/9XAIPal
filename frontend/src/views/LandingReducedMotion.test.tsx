@@ -6,6 +6,14 @@ import { MotionRoot } from '../motion';
 import { motionPrefs } from '../test/setup';
 import { CHAPTERS, NAVIGATION } from '../landing/content';
 
+vi.mock('motion/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('motion/react')>();
+  return {
+    ...actual,
+    useReducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  };
+});
+
 function stubScrollIntoView() {
   const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
   const scrollIntoView = vi.fn();
@@ -31,7 +39,7 @@ describe('Landing reduced motion', () => {
     expect(container.querySelector('.journey-progress-dot[aria-current="step"]')).toBeInTheDocument();
   });
 
-  it('keeps the small-screen pile in its scattered static pose with reduced motion', () => {
+  it('renders the pile in its shelf pose with reduced motion', () => {
     const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia');
     motionPrefs.reducedMotion = true;
     Object.defineProperty(window, 'matchMedia', {
@@ -53,14 +61,10 @@ describe('Landing reduced motion', () => {
       const { container } = render(
         <MotionRoot><LandingView signedIn={false} onRequestAuth={vi.fn()} onOpenLibrary={vi.fn()} /></MotionRoot>,
       );
-      const rotations = Array.from(container.querySelectorAll<HTMLElement>('.pile-document')).map((card) => {
-        const rotation = card.style.transform.match(/rotate\((-?[\d.]+)deg\)/)?.[1];
-        return rotation === undefined ? 0 : Number(rotation);
-      });
-
-      expect(rotations).toHaveLength(7);
-      expect(rotations.every(Number.isFinite)).toBe(true);
-      expect(Math.max(...rotations) - Math.min(...rotations)).toBeGreaterThanOrEqual(14);
+      const cards = Array.from(container.querySelectorAll<HTMLElement>('.pile-document'));
+      expect(cards).toHaveLength(7);
+      expect(cards.map((card) => Number.parseFloat(card.style.left))).toEqual([0, 13, 26, 39, 52, 65, 78]);
+      expect(cards.every((card) => card.style.top === '62%')).toBe(true);
     } finally {
       if (originalMatchMedia) Object.defineProperty(window, 'matchMedia', originalMatchMedia);
     }
@@ -72,7 +76,7 @@ describe('Landing reduced motion', () => {
 
     try {
       render(<MotionRoot><LandingView signedIn={false} onRequestAuth={vi.fn()} onOpenLibrary={vi.fn()} /></MotionRoot>);
-      await userEvent.click(screen.getByRole('button', { name: CHAPTERS[CHAPTERS.length - 1].label }));
+      await userEvent.click(await screen.findByRole('button', { name: CHAPTERS[CHAPTERS.length - 1].label }));
 
       expect(scroll.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' });
     } finally {

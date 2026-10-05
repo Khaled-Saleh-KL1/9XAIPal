@@ -40,6 +40,7 @@ function SheetHarness() {
   return (
     <MotionRoot>
       <button ref={opener} onClick={() => setOpen(true)}>Open</button>
+      <button>Outside</button>
       <Sheet open={open} onClose={() => setOpen(false)} labelledBy="t" initialFocusRef={first} returnFocusRef={opener}>
         <h2 id="t">Title</h2>
         <input ref={first} aria-label="first" />
@@ -50,6 +51,36 @@ function SheetHarness() {
 }
 
 describe('Sheet', () => {
+  it('moves focus into the sheet synchronously when it opens', () => {
+    const frame = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1);
+    try {
+      render(<SheetHarness />);
+      const opener = screen.getByRole('button', { name: 'Open' });
+      opener.focus();
+      fireEvent.click(opener);
+
+      expect(screen.getByLabelText('first')).toHaveFocus();
+      expect(frame).not.toHaveBeenCalled();
+    } finally {
+      frame.mockRestore();
+    }
+  });
+
+  it('keeps Tab inside the sheet during its opening transition', async () => {
+    const frame = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1);
+    try {
+      render(<SheetHarness />);
+      const opener = screen.getByRole('button', { name: 'Open' });
+      opener.focus();
+      fireEvent.click(opener);
+
+      await userEvent.tab();
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+    } finally {
+      frame.mockRestore();
+    }
+  });
+
   it('opens as a labelled modal dialog, focuses the first field, closes on Escape and returns focus', async () => {
     render(<SheetHarness />);
     await userEvent.click(screen.getByRole('button', { name: 'Open' }));

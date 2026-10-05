@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
 import { MotionRoot } from '../motion';
@@ -78,9 +78,10 @@ describe('LandingView', () => {
     expect(screen.getByRole('button', { name: /9XAIPal/ })).toHaveAccessibleName('9 9XAIPal');
   });
 
-  it('has a progress rail with one control per chapter', () => {
-    renderLanding();
-    const rail = screen.getByRole('navigation', { name: /journey progress/i });
+  it('has a progress rail with one control per chapter after its entrance fade', async () => {
+    const { container } = renderLanding();
+    const rail = container.querySelector<HTMLElement>('.journey-progress')!;
+    await waitFor(() => expect(rail).toHaveAttribute('aria-hidden', 'false'));
     expect(within(rail).getAllByRole('button')).toHaveLength(CHAPTERS.length);
   });
 
@@ -115,35 +116,51 @@ describe('LandingView', () => {
     }
   });
 
-  it('keeps the small-screen pile scattered while presenting the scene statically', () => {
-    const originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia');
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      writable: true,
-      value: (query: string) => ({
-        matches: query.includes('max-width: 899px'),
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      }),
-    });
+  it('keeps the progress rail hidden and inert until its entrance fade completes', async () => {
+    const observers: Array<{
+      target: Element | null;
+      trigger: (isIntersecting: boolean) => void;
+    }> = [];
+    class ControlledIntersectionObserver {
+      private entry: (typeof observers)[number];
+      constructor(callback: IntersectionObserverCallback) {
+        this.entry = {
+          target: null,
+          trigger: (isIntersecting) => {
+            if (!this.entry.target) return;
+            callback([{ isIntersecting, target: this.entry.target, intersectionRatio: isIntersecting ? 1 : 0 } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+          },
+        };
+        observers.push(this.entry);
+      }
+      observe(target: Element) { this.entry.target = target; }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    }
 
+    vi.stubGlobal('IntersectionObserver', ControlledIntersectionObserver);
     try {
       const { container } = renderLanding();
-      const rotations = Array.from(container.querySelectorAll<HTMLElement>('.pile-document')).map((card) => {
-        const rotation = card.style.transform.match(/rotate\((-?[\d.]+)deg\)/)?.[1];
-        return rotation === undefined ? 0 : Number(rotation);
-      });
+      const rail = container.querySelector('.journey-progress')!;
+      const controls = Array.from(rail.querySelectorAll('button'));
+      const journeyObserver = observers.find(({ target }) => target?.id === 'journey');
 
-      expect(rotations).toHaveLength(7);
-      expect(rotations.every(Number.isFinite)).toBe(true);
-      expect(Math.max(...rotations) - Math.min(...rotations)).toBeGreaterThanOrEqual(14);
+      expect(rail).toHaveAttribute('aria-hidden', 'true');
+      expect(rail).toHaveAttribute('inert');
+      expect(controls.every((button) => button.tabIndex === -1)).toBe(true);
+      expect(journeyObserver).toBeDefined();
+
+      act(() => journeyObserver!.trigger(true));
+
+      expect(rail).toHaveAttribute('aria-hidden', 'true');
+      expect(rail).toHaveAttribute('inert');
+      expect(controls.every((button) => button.tabIndex === -1)).toBe(true);
+      await waitFor(() => expect(rail).toHaveAttribute('aria-hidden', 'false'));
+      expect(rail).not.toHaveAttribute('inert');
+      expect(controls.every((button) => button.tabIndex === 0)).toBe(true);
     } finally {
-      if (originalMatchMedia) Object.defineProperty(window, 'matchMedia', originalMatchMedia);
+      vi.unstubAllGlobals();
     }
   });
 

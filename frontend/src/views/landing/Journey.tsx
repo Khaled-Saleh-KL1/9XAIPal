@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentType, KeyboardEvent, RefObject } from 'react';
-import { AnimatePresence, m, useInView, useReducedMotion, useScroll, useTransform } from 'motion/react';
+import { AnimatePresence, m, useInView, useMotionValue, useReducedMotion, useScroll, useTransform } from 'motion/react';
 import { Pressable, Reveal } from '../../motion';
 import { BETA_NOTE, CHAPTERS, HERO, JOURNEY as JOURNEY_COPY, NAVIGATION, PERSONAS, type Persona } from '../../landing/content';
 import { AskScene } from './scenes/AskScene';
@@ -57,18 +57,31 @@ function PersonaSwitch({ persona, onChange }: { persona: Persona; onChange: (per
 
 function JourneyProgress({ active, visible, progress }: { active: number; visible: boolean; progress: ReturnType<typeof useScroll>['scrollYProgress'] }) {
   const reducedMotion = useReducedMotion();
+  const [entranceComplete, setEntranceComplete] = useState(false);
+  const interactive = visible && entranceComplete;
+  const entranceDuration = reducedMotion ? 150 : 240;
   const fillY = useTransform(progress, [0, 1], [0, 1]);
   const fillX = useTransform(progress, [0, 1], [0, 1]);
+
+  useEffect(() => {
+    if (!visible) {
+      setEntranceComplete(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setEntranceComplete(true), entranceDuration);
+    return () => window.clearTimeout(timer);
+  }, [visible, entranceDuration]);
+
   return (
     <m.nav
       className="journey-progress"
       aria-label={JOURNEY_COPY.progressLabel}
-      aria-hidden={!visible}
-      inert={!visible}
-      initial={reducedMotion ? false : { opacity: 0, x: -12 }}
-      animate={{ opacity: visible ? 1 : 0, x: !reducedMotion && !visible ? -12 : 0 }}
-      transition={{ duration: reducedMotion ? 0.15 : 0.24, ease: 'easeOut' }}
-      style={{ pointerEvents: visible ? 'auto' : 'none' }}
+      aria-hidden={!interactive}
+      inert={!interactive}
+      initial={{ opacity: 0, ...(!reducedMotion ? { x: -12 } : {}) }}
+      animate={{ opacity: visible ? 1 : 0, ...(!reducedMotion ? { x: visible ? 0 : -12 } : {}) }}
+      transition={{ duration: entranceDuration / 1000, ease: 'easeOut' }}
+      style={{ pointerEvents: interactive ? 'auto' : 'none' }}
     >
       <div className="journey-progress-track" aria-hidden="true">
         {!reducedMotion && <m.span style={{ scaleY: fillY, originY: 0 }} />}
@@ -81,7 +94,7 @@ function JourneyProgress({ active, visible, progress }: { active: number; visibl
             className={`journey-progress-dot${active === index ? ' is-current' : ''}`}
             aria-label={chapter.label}
             aria-current={active === index ? 'step' : undefined}
-            tabIndex={visible ? 0 : -1}
+            tabIndex={interactive ? 0 : -1}
             onClick={() => document.getElementById(`chapter-${chapter.key}`)?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'center' })}
           >
             <span />
@@ -111,15 +124,22 @@ function ChapterSection({
   const reducedMotion = useReducedMotion();
   const inView = useInView(chapterRef, { root: scrollContainer, amount: 0.34 });
   const { scrollYProgress } = useScroll({ container: scrollContainer, target: chapterRef, offset: ['start end', 'end start'] });
-  const sceneProgress = useTransform(scrollYProgress, (value) => {
-    if (chapter.key === 'pile' && (small || reducedMotion)) return 0;
-    return small || reducedMotion ? 1 : value;
-  });
+  const mappedProgress = useTransform(scrollYProgress, (value) => small || reducedMotion ? 1 : value);
+  const pileProgress = useMotionValue(reducedMotion ? 1 : 0);
+  const sceneProgress = chapter.key === 'pile'
+    ? (small || reducedMotion ? pileProgress : scrollYProgress)
+    : mappedProgress;
   const Scene = SCENES[chapter.key];
+  const scene = chapter.key === 'pile'
+    ? <PileScene progress={sceneProgress} persona={persona} small={small} />
+    : <Scene progress={sceneProgress} persona={persona} />;
 
   useEffect(() => {
-    if (inView) onActive(index);
-  }, [inView, index, onActive]);
+    if (inView) {
+      if (chapter.key === 'pile' && (small || reducedMotion)) pileProgress.set(1);
+      onActive(index);
+    }
+  }, [inView, index, onActive, chapter.key, small, reducedMotion, pileProgress]);
 
   return (
     <section ref={chapterRef} id={`chapter-${chapter.key}`} className={`journey-chapter chapter-${chapter.key}`} aria-labelledby={`chapter-title-${chapter.key}`}>
@@ -132,7 +152,7 @@ function ChapterSection({
       </div>
       <div className="chapter-visual-column">
         <div className="journey-scene-sticky">
-          {small ? <Reveal className="journey-scene-reveal"><Scene progress={sceneProgress} persona={persona} /></Reveal> : <Scene progress={sceneProgress} persona={persona} />}
+          {small ? <Reveal className="journey-scene-reveal">{scene}</Reveal> : scene}
         </div>
       </div>
     </section>

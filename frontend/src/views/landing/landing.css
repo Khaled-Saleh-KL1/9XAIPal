@@ -156,7 +156,7 @@
 .chapter-label-line { width: 24px; height: 1px; background: var(--accent); }
 .journey-chapter h3 { max-width: 470px; margin: 0; font-family: 'Newsreader', ui-serif, Georgia, serif; font-size: clamp(35px, 4.6vw, 57px); font-weight: 400; letter-spacing: -0.05em; line-height: 1.02; text-wrap: balance; }
 .chapter-body { max-width: 380px; margin: 22px 0 0; color: var(--fg-2); font-size: 14px; line-height: 1.75; }
-.chapter-visual-column { min-width: 0; }
+.chapter-visual-column { min-width: 0; align-self: stretch; }
 .journey-scene-sticky { position: sticky; top: 90px; min-width: 0; display: flex; align-items: center; justify-content: center; }
 .chapter-read .chapter-copy, .chapter-collect .chapter-copy { order: 2; }
 .chapter-read .chapter-visual-column, .chapter-collect .chapter-visual-column { order: 1; }
