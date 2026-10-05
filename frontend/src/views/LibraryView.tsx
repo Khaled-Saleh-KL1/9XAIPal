@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, type DragEvent, type RefObject } from 'react';
+import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'motion/react';
 import type { Paper, LibraryLayout, SortKey } from '../types';
 import { LogoMark } from '../components/LogoMark';
 import {
@@ -18,7 +19,8 @@ import { stageProgress } from '../lib/progress';
 import { confirmArabicWritingStyle, listPapers, deletePaper, renamePaper, setPaperDone, renameDoneFolder, searchPapersSemantic, type ArabicWritingStyle, type PaperMeta } from '../api';
 import { ArabicOcrStatus } from '../components/ArabicOcrStatus';
 import { BetaBadge } from '../components/BetaBadge';
-import { Pressable, Sheet } from '../motion';
+import { Pressable, Sheet, usePauseWhenHidden } from '../motion';
+import { calm, jellyPress, playful } from '../motion/springs';
 
 interface Props {
   onOpenPaper: (p: Paper) => void;
@@ -75,6 +77,14 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
   const [papers, setPapers] = useState<Paper[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const hasReceivedInitialListRef = useRef(false);
+  const initialStaggerIdsRef = useRef(new Set<string>());
+  const initialStaggerStartedIdsRef = useRef(new Set<string>());
+  const seenPaperIdsRef = useRef(new Set<string>());
+  const arrivingPaperIdsRef = useRef(new Set<string>());
+  const arrivalStartedIdsRef = useRef(new Set<string>());
+  const deletedPaperIdsRef = useRef(new Set<string>());
+  const reducedMotion = useReducedMotion();
   /** The paper whose title is being edited inline, if any. */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [arabicConfirmationPendingId, setArabicConfirmationPendingId] = useState<string | null>(null);
@@ -137,7 +147,23 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
         try {
           const metas = await listPapers();
           if (!alive) return;
-          setPapers(metas.map(metaToPaper));
+          if (!hasReceivedInitialListRef.current) {
+            metas.forEach((meta) => {
+              seenPaperIdsRef.current.add(meta.id);
+            });
+            metas.slice(0, 12).forEach((meta) => initialStaggerIdsRef.current.add(meta.id));
+            hasReceivedInitialListRef.current = true;
+          } else {
+            metas.forEach((meta) => {
+              if (!seenPaperIdsRef.current.has(meta.id) && !deletedPaperIdsRef.current.has(meta.id)) {
+                arrivingPaperIdsRef.current.add(meta.id);
+              }
+              seenPaperIdsRef.current.add(meta.id);
+            });
+          }
+          setPapers(metas
+            .filter((meta) => !deletedPaperIdsRef.current.has(meta.id))
+            .map(metaToPaper));
           setLoadError(null);
           anyProcessing = metas.some((m) => m.status !== 'complete' && m.status !== 'failed');
         } catch (e) {
@@ -270,6 +296,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     if (!ok) return;
     try {
       await deletePaper(p.id);
+      deletedPaperIdsRef.current.add(p.id);
       setPapers((prev) => prev.filter((x) => x.id !== p.id));
     } catch (e) {
       window.alert(`Delete failed: ${(e as Error).message}`);
@@ -344,7 +371,9 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
       const result = await confirmArabicWritingStyle(paper.id, style);
       setNotice(result.message);
       const metas = await listPapers();
-      setPapers(metas.map(metaToPaper));
+      setPapers(metas
+        .filter((meta) => !deletedPaperIdsRef.current.has(meta.id))
+        .map(metaToPaper));
     } catch (error) {
       const message = (error as Error).message || 'Could not confirm Arabic writing style.';
       setPapers((previous) => previous.map((item) => item.id === paper.id
@@ -763,8 +792,8 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
                 <div key={i} className="paper-card is-skeleton" aria-hidden="true">
                   <div className="paper-cover is-blank" />
                   <div className="paper-body">
-                    <div className="skeleton-line" style={{ width: '80%' }} />
-                    <div className="skeleton-line" style={{ width: '45%' }} />
+                    <SkeletonLine width="80%" />
+                    <SkeletonLine width="45%" />
                   </div>
                 </div>
               ))}
@@ -773,18 +802,63 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
               Could not reach the backend ({loadError}).
             </p>
-          ) : layout === 'grid' ? (
-            <div className="lib-grid">
-              {filtered.map((p) => (
-                <PaperCard key={p.id} {...cardProps(p)} />
-              ))}
-            </div>
           ) : (
-            <div className="lib-rows">
-              {filtered.map((p) => (
-                <PaperRow key={p.id} {...cardProps(p)} />
-              ))}
-            </div>
+            <LayoutGroup>
+              <AnimatePresence mode="wait">
+                <m.div
+                  key={layout}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={calm}
+                >
+                  <div className={layout === 'grid' ? 'lib-grid' : 'lib-rows'}>
+                    <AnimatePresence mode="popLayout" custom={deletedPaperIdsRef.current}>
+                      {filtered.map((p, index) => {
+                        const isArrival = arrivingPaperIdsRef.current.has(p.id)
+                          && !arrivalStartedIdsRef.current.has(p.id);
+                        const shouldStagger = layout === 'grid'
+                          && initialStaggerIdsRef.current.has(p.id)
+                          && !initialStaggerStartedIdsRef.current.has(p.id);
+                        return (
+                          <m.div
+                            key={p.id}
+                            data-testid="paper-motion-item"
+                            data-arrival={isArrival ? 'true' : undefined}
+                            layout="position"
+                            initial={isArrival
+                              ? reducedMotion ? { opacity: 0 } : { opacity: 0, y: -40, rotate: -4, scale: 0.9 }
+                              : shouldStagger ? reducedMotion ? { opacity: 0 } : { opacity: 0, y: 12 } : false}
+                            animate={isArrival
+                              ? reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, rotate: 0, scale: 1 }
+                              : shouldStagger ? { opacity: 1, y: 0 } : undefined}
+                            variants={{
+                              exit: (deletedIds: Set<string> | undefined) => {
+                                const deleted = (deletedIds ?? deletedPaperIdsRef.current).has(p.id);
+                                if (reducedMotion) return { opacity: 0, transition: calm };
+                                return deleted
+                                  ? { opacity: 0, scale: 0.6, rotate: 6, transition: playful }
+                                  : { opacity: 0, scale: 0.8, transition: calm };
+                              },
+                            }}
+                            exit="exit"
+                            transition={reducedMotion ? calm : { ...playful, delay: shouldStagger ? Math.min(index, 11) * 0.07 : 0 }}
+                            onAnimationStart={() => {
+                              if (isArrival) arrivalStartedIdsRef.current.add(p.id);
+                              if (shouldStagger) initialStaggerStartedIdsRef.current.add(p.id);
+                            }}
+                          >
+                            {layout === 'grid'
+                              ? <PaperCard {...cardProps(p)} />
+                              : <PaperRow {...cardProps(p)} />}
+                          </m.div>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </div>
+                </m.div>
+              </AnimatePresence>
+            </LayoutGroup>
           )}
           {!loading && !loadError && filtered.length === 0 && papers.length === 0 && (
             <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
@@ -919,6 +993,22 @@ function CardActions({
   );
 }
 
+function SkeletonLine({ width }: { width: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const active = usePauseWhenHidden(ref);
+  const reducedMotion = useReducedMotion();
+  const shimmer = active && !reducedMotion;
+  return (
+    <m.div
+      ref={ref}
+      className="skeleton-line"
+      style={{ width }}
+      animate={shimmer ? { opacity: [0.5, 0.95, 0.5] } : { opacity: 0.62 }}
+      transition={shimmer ? { duration: 1.6, ease: 'easeInOut', repeat: Infinity } : calm}
+    />
+  );
+}
+
 // ── PaperCard ─────────────────────────────────────────────────────────────────
 
 function PaperCard({
@@ -936,6 +1026,7 @@ function PaperCard({
   confirmationPending,
 }: CardProps) {
   const processing = isProcessing(paper);
+  const reducedMotion = useReducedMotion();
   return (
     <article className={`paper-card${renaming ? ' is-renaming' : ''}`}>
       {/*
@@ -950,8 +1041,10 @@ function PaperCard({
         A card being renamed is not an open target at all: a stray click
         inside the editor would otherwise open the reader mid-edit.
       */}
-      <div
+      <m.div
         className="paper-open"
+        whileTap={!renaming && !reducedMotion ? jellyPress : undefined}
+        transition={playful}
         onClick={renaming ? undefined : onOpen}
         role={renaming ? undefined : 'button'}
         tabIndex={renaming ? undefined : 0}
@@ -964,7 +1057,14 @@ function PaperCard({
           }
         }}
       >
-        <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
+        <m.div
+          className="paper-cover-motion"
+          style={{ transformOrigin: 'left center' }}
+          whileHover={!reducedMotion && !renaming ? { rotateY: -28, rotateZ: -3, y: -5 } : undefined}
+          transition={playful}
+        >
+          <PaperCover paperId={paper.id} title={paper.title} ready={!processing} showTitle />
+        </m.div>
 
         <div className="paper-body">
           <div className="paper-head">
@@ -992,7 +1092,7 @@ function PaperCard({
             </span>
           </div>
         </div>
-      </div>
+      </m.div>
 
       <ArabicOcrStatus
         errorCode={paper.arabicErrorCode}
@@ -1092,10 +1192,13 @@ function PaperRow({
   confirmationPending,
 }: CardProps) {
   const processing = isProcessing(paper);
+  const reducedMotion = useReducedMotion();
   return (
-    <div
+    <m.div
       onClick={renaming ? undefined : onOpen}
       className={`paper-row${renaming ? ' is-renaming' : ''}`}
+      whileHover={!reducedMotion && !renaming ? { x: 4 } : undefined}
+      transition={reducedMotion ? calm : playful}
     >
       <PaperCover
         paperId={paper.id}
@@ -1137,7 +1240,7 @@ function PaperRow({
         </span>
       </div>
       {!renaming && <CardActions area={area} onStartRename={onStartRename} onShelve={onShelve} onUnshelve={onUnshelve} onDelete={onDelete} />}
-    </div>
+    </m.div>
   );
 }
 
