@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, memo, type AnchorHTMLAttributes } from 'react';
-import { m as motion, useReducedMotion } from 'motion/react';
+import { m, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
@@ -688,7 +688,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
             // exceed the cap and the backend would reject it anyway.
             const canOpen = !!pairRoot && !atMaxDepth;
             return (
-              <motion.div
+              <m.div
                 key={row.id}
                 data-testid="chat-message-motion"
                 data-motion-key={row.id}
@@ -706,7 +706,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
                   threadRoot={canOpen ? pairRoot : undefined}
                   onOpenThread={canOpen ? enterSubThread : undefined}
                 />
-              </motion.div>
+              </m.div>
             );
           })}
           {liveSteps.length > 0 && (
@@ -741,7 +741,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2 px-1">
             {attachments.map((a, i) => (
-              <motion.div
+              <m.div
                 key={`${a.name}-${i}`}
                 initial={reducedMotion ? false : { opacity: 0, scale: 0.6, rotate: -3, y: 12 }}
                 animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 0, y: 0 }}
@@ -761,7 +761,7 @@ export function ChatPane({ paperId, currentSequenceOrder, revealedCount, maxSequ
                   className="absolute top-0 right-0 w-4 h-4 flex items-center justify-center text-[11px] leading-none"
                   style={{ background: 'rgba(0,0,0,0.6)', color: 'white' }}
                 >×</button>
-              </motion.div>
+              </m.div>
             ))}
           </div>
         )}
