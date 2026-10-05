@@ -306,3 +306,64 @@ def test_non_pdf_url_with_paper_kind_still_becomes_an_article(db_session_sync):
     ).mappings().one()
     assert doc["doc_kind"] == "article"
     assert doc["extractor"] == "trafilatura"
+
+
+def _patch_article_ingestion_task(monkeypatch, pipeline):
+    from contextlib import contextmanager
+
+    from app.workers import tasks
+
+    @contextmanager
+    def session_factory():
+        yield object()
+
+    monkeypatch.setattr(tasks.sync_engine, "dispose", lambda: None)
+    monkeypatch.setattr(tasks, "sync_session", session_factory)
+    monkeypatch.setattr(tasks, "run_article_pipeline_sync", pipeline)
+    monkeypatch.setattr(tasks, "_queue_search_vector_if_embedding_skipped", lambda *_: None)
+    return tasks
+
+
+def test_successful_article_ingestion_enqueues_thumbnail(monkeypatch):
+    doc_id, job_id = uuid4(), uuid4()
+    tasks = _patch_article_ingestion_task(monkeypatch, lambda *_args, **_kwargs: None)
+    enqueued = []
+    monkeypatch.setattr(tasks.generate_article_thumbnail, "delay", lambda document_id: enqueued.append(document_id))
+
+    result = tasks.process_article_ingestion.run(str(doc_id), str(job_id), "https://example.com/article")
+
+    assert result["status"] == "complete"
+    assert enqueued == [str(doc_id)]
+
+
+def test_pdf_handoff_does_not_enqueue_thumbnail(monkeypatch):
+    from celery.exceptions import Ignore
+
+    doc_id, job_id = uuid4(), uuid4()
+
+    def pipeline(_session, *, document_id, job_id, pdf_handoff, **_kwargs):
+        pdf_handoff(document_id, job_id, "handoff.pdf")
+
+    tasks = _patch_article_ingestion_task(monkeypatch, pipeline)
+    monkeypatch.setattr(tasks.process_article_ingestion, "replace", lambda _sig: (_ for _ in ()).throw(Ignore()))
+    enqueued = []
+    monkeypatch.setattr(tasks.generate_article_thumbnail, "delay", lambda document_id: enqueued.append(document_id))
+
+    with pytest.raises(Ignore):
+        tasks.process_article_ingestion.run(str(doc_id), str(job_id), "https://example.com/article")
+
+    assert enqueued == []
+
+
+def test_thumbnail_dispatch_exception_does_not_fail_ingestion(monkeypatch):
+    doc_id, job_id = uuid4(), uuid4()
+    tasks = _patch_article_ingestion_task(monkeypatch, lambda *_args, **_kwargs: None)
+
+    def fail_dispatch(_document_id):
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(tasks.generate_article_thumbnail, "delay", fail_dispatch)
+
+    result = tasks.process_article_ingestion.run(str(doc_id), str(job_id), "https://example.com/article")
+
+    assert result["status"] == "complete"
