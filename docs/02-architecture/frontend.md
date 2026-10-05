@@ -5,21 +5,19 @@
 > **Owns:** client-side state and view behavior.
 > **Does not own:** endpoint contracts ([api.md](../03-reference/api.md)).
 >
-> **Status:** current · **Last verified:** the library, the desk, and the agent trail 2026-08-26,
-> driven in a real browser against a live backend;
-> [`frontend/src/App.tsx`](../../frontend/src/App.tsx) 2026-08-18 (`main`, 79903be).
-> The ArticleReader's anchoring and table sections were verified 2026-08-18 against
-> [`views/ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) and
-> [`views/ArticleBlock.tsx`](../../frontend/src/views/ArticleBlock.tsx) (`8fb153b`); its
-> remaining sections 2026-07-28 (`main`, 5471870).
+> **Status:** current · **Source reconciled:** 2026-10-05 (48cb8c6). This pass inspected source
+> only; earlier browser checks are dated in the commit history.
 > **Verify with:** `cd frontend && npm run build` (runs `tsc` first)
 > **Cross-engine:** layout regressions here have been WebKit-only twice. Check
 > Safari, or drive it headlessly: `npx playwright install webkit`, then load
 > the page and assert no element reports more than one client rect
 > (`el.getClientRects().length > 1` means it fragmented).
 
-Vite + React + Tailwind, no router library: a tiny state machine in
-[App.tsx](../../frontend/src/App.tsx) toggles between five views.
+Vite + React + Tailwind, no router library. App.tsx coordinates the signed-out landing page,
+the waiting room, and the authenticated library, processing, reading, PDF-viewer, and desk surfaces.
+The welcome hash route is synchronized separately from the main view state.
+
+Landing/auth flow and shared motion: [feature 113–114](../05-features/10-landing-and-motion.md). The grouped agent reasoning UI is [feature 115](../05-features/11-reasoning-ui.md); the Add paper PDF chooser is [feature 116](../05-features/12-add-paper-drop-zone.md).
 
 ## Two readers, chosen by `doc_kind`
 
@@ -83,8 +81,8 @@ All calls go through `/api/v1` and are proxied by Vite to `http://localhost:8000
 | `listModels()`          | `GET /models` → `ModelCatalog`                      |
 | `askPaper(id, q, seq, conv)` | `POST /papers/{id}/ask` → `AskResponse` (book reader) |
 | `checkHealth()`         | `GET /health`                                       |
-| `getRawPdfUrl(id)`      | `/api/v1/papers/{id}/raw`                           |
-| `getStaticPdfUrl(id)`   | `/static/assets/{id}.pdf`                           |
+| getRawFileUrl(id) | /api/v1/papers/{id}/raw |
+| getStaticPdfUrl(id) | /api/v1/papers/{id}/raw (compatibility wrapper used by PdfViewer) |
 
 All functions throw on non-`2xx`.
 
@@ -98,7 +96,7 @@ ids. On mount, calls `listPapers()`. Features:
   passes the dropped `File`, a click passes nothing. See
   [Upload + processing](#upload--processing-apptsx).
 - **Cover thumbnails**: [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx) renders
-  `GET /papers/{id}/cover`, the first page as a JPEG, rendered server-side on first request.
+  `GET /papers/{id}/cover`, a cached generated article cover when available, otherwise page one of an available PDF rendered server-side on first request. Optional generation runs after ingestion on the light worker; see [feature 117](../05-features/13-article-thumbnails.md).
 - **Inline rename**: the pencil on hover swaps the title for an input. Enter commits, Escape
   reverts, blur commits.
 - Local search (substring match over title and authors).
@@ -143,8 +141,8 @@ Keeping the actions as siblings of the open target yields three correctly-named 
 
 | Concern | Decision |
 | --- | --- |
-| When rendered | Lazily, on first `GET /cover`, never at ingestion. Ingestion is already the slow path the reader waits on, and a cover is worth nothing until the library is looked at. Papers ingested before covers existed get them for free. |
-| Cache | `storage/covers/<id>.jpg`, keyed by document id alone. A document's first page cannot change: re-extraction rewrites derived text, never the source PDF, so there is no invalidation problem. |
+| When rendered | PDF covers are rasterized lazily on first `GET /cover`. Optional article covers are generated after article ingestion when Cloudflare Workers AI is configured; if absent, a source PDF can still use the lazy raster path. |
+| Cache | `storage/covers/<id>.jpg`, keyed by document id. Article-list responses expose an API-only `cover_version` from the cache file mtime so the UI can refresh the image URL when generation finishes. |
 | Missing | The endpoint answers **204, not 404**. The grid asks for one cover per card; a wall of 404s makes a working library look broken. `<img>` reports 204 as a load error, so `PaperCover` must keep its `onError` fallback. |
 | Aspect | Fixed `1 / 1.294` with `object-position: top`. A Letter page and an A4 page are different shapes, and rows of mismatched heights read as a broken layout; cropping from the bottom keeps the title and authors. |
 | Off the event loop | `run_in_threadpool`: rasterising is 50–200ms of CPU in a native extension, and the grid requests every cover at once. |

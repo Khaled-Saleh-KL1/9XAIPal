@@ -22,7 +22,7 @@ Reading dense material is cognitively expensive, whether it's a 12-page paper or
 
 Either way you learn by asking, not just by highlighting, and for papers the question and its answer stay pinned to the paragraph that provoked them.
 
-Everything runs locally by default. Your documents and conversations never leave your machine: only a search query does, and only when a question needs the live web.
+Documents and conversations are stored by the backend you configure. External calls depend on the feature and its settings: cloud model requests can carry the prompt, selected context, and relevant images; web search carries the query; URL imports can send the requested URL to configured scraping providers; citation resolution can send bibliography text to Semantic Scholar; Arabic OCR can send page images to its configured provider; and optional article thumbnails send article text to the configured prompt-writing model and an image prompt to Cloudflare Workers AI. See [configuration](docs/03-reference/configuration.md), the [Arabic OCR runbook](docs/runbooks/arabic-document-ocr.md), and [article thumbnails](docs/05-features/13-article-thumbnails.md).
 
 ---
 
@@ -33,18 +33,21 @@ Everything runs locally by default. Your documents and conversations never leave
 | **Frontend** | Vite + React 19 + Tailwind CSS + KaTeX | Fast dev/build cycle, precise math rendering, responsive dark/light mode |
 | **API** | FastAPI + Pydantic v2 | Async Python backend, automatic validation, native OpenAPI docs |
 | **Database** | PostgreSQL 16 + **pgvector** | ACID document storage; native vector similarity search so no extra vector DB is needed |
-| **Embeddings** | Ollama (local) or OpenAI (cloud) | Local-first for privacy; cloud auto-fallback when the host is offline |
-| **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Grok / DeepSeek | Same auto-fallback chain: local first, cloud only if needed, no config switching |
+| **Embeddings** | Ollama (local) or OpenAI (cloud) | Provider resolution uses the configured backend; cloud embedding requests send chunk text to that provider |
+| **LLM** | Ollama (Gemma 4, etc.) or GPT-4o / Claude / Grok / DeepSeek | The selected backend receives the prompt and context; configured cloud providers process requests off-host |
 | **PDF extraction** | **MinerU** 3.x (with PyMuPDF fallback) | State-of-the-art structural extraction: OCR, table recognition, equation → LaTeX |
 | **Background jobs** | Celery + Redis | Heavy extraction runs asynchronously so uploads never hang |
-| **Web search** | Tavily → Linkup → Exa → SerpApi → DuckDuckGo, cascading | Each is tried in order; a provider that errors or comes back empty falls through to the next automatically, so one being down or out of quota never leaves a question unanswered. ⚠ All four are third parties: the **query string** leaves the machine for whichever one answers (never paper text, chunks, or chat history), see [configuration](docs/03-reference/configuration.md#web-search) |
+| **Web search** | Tavily → Linkup → Exa → SerpApi → DuckDuckGo, cascading | Each is tried in order; a provider error or empty result falls through to the next. The query is sent to the provider handling the request; see [configuration](docs/03-reference/configuration.md#web-search). |
 | **Vector index** | pgvector HNSW | Fast approximate nearest neighbors inside Postgres; no extra service to run |
 
 ---
 
 ## Features
 
-- **Drag-and-drop PDF upload.** A paper is readable the moment MinerU and the chunker finish: no embedding pass, no summarization, nothing to wait for.
+- **PDF-only upload.** Drop or browse for a PDF in the library or Add paper dialog, choose book or research paper, and follow the processing overlay. Papers use the fast ingest profile by default; see [the upload flow](docs/05-features/12-add-paper-drop-zone.md).
+- **A landing journey and shared motion system**, with reduced-motion handling and an auth sheet; see [landing and motion](docs/05-features/10-landing-and-motion.md).
+- **Reasoning rows** summarize each agent round and expose the underlying tool activity; see [reasoning UI](docs/05-features/11-reasoning-ui.md).
+- **Generated article thumbnails** are an optional background feature when Cloudflare Workers AI is configured; see [article thumbnails](docs/05-features/13-article-thumbnails.md).
 - **Article reading for papers**: the whole document at once, in serif prose, with KaTeX math, extracted figures, and real tables that scroll in their own box with the header row pinned.
 - **Margin notes**: highlight text, or pick a figure, an equation, or a table, and ask. The answer streams into a card beside it, keeps the quote highlighted in the page, and offers jump chips back to the blocks it cites. Notes persist, thread with follow-ups, and can sit in either margin.
 - **Your own notes and bookmarks**: write a note beside any passage, and mark as many places as you like. Bookmarks show as ribbons in the text and as ticks on the progress rail, so the paper carries a map of where you have been. One panel puts contents, bookmarks and every note behind a single search.
@@ -87,8 +90,11 @@ cp .env.example .env
 # Start the API
 uvicorn app.main:app --reload --port 8000
 
-# Start the Celery worker in a separate terminal (same venv)
-celery -A app.core.celery_app worker --loglevel=info
+# Terminal 1: PDF extraction and other heavy jobs
+WORKER_ROLE=ingest celery -A app.core.celery_app worker --loglevel=info -Q ingest --hostname=ingest@%h
+
+# Terminal 2: article imports, embeddings, summaries, and other light jobs
+WORKER_ROLE=light celery -A app.core.celery_app worker --loglevel=info -Q celery --concurrency=2 --hostname=light@%h
 ```
 
 ### 3. Start the frontend
@@ -103,7 +109,7 @@ npm run dev      # opens at http://localhost:5173
 cd backend
 docker compose up -d --build
 ```
-Brings up Postgres, Redis, the Celery worker, the API, and a one-shot container that builds the
+Brings up Postgres, Redis, both Celery workers, the API, and a one-shot container that builds the
 SPA, then serves **the UI and the API on a single port**: <http://localhost:8000>. No Node or
 Python needed on the host. Ollama stays on your machine.
 
@@ -137,6 +143,9 @@ to the right document by task.
 | Understand the system | [docs/02-architecture/overview.md](docs/02-architecture/overview.md) |
 | Look something up | [docs/03-reference/](docs/03-reference/) |
 | See what's missing | [docs/roadmap.md](docs/roadmap.md) |
+| Learn the landing, motion, reasoning, or upload UI | [feature catalogue](docs/05-features/README.md) |
+| Configure or backfill article thumbnails | [thumbnail runbook](docs/runbooks/article-thumbnails.md) |
+| Re-embed the library safely | [re-embedding runbook](docs/runbooks/reembed-library.md) |
 
 A sample paper for testing ingestion ships at
 [`samples/attention-is-all-you-need.pdf`](samples/).

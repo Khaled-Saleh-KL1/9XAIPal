@@ -7,9 +7,9 @@
 > **Does not own:** how to start them ([setup.md](setup.md)), env-var meanings
 > ([configuration.md](../03-reference/configuration.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-25 against
-> [`docker-compose.yml`](../../backend/docker-compose.yml) and
-> [`main.py`](../../backend/app/main.py)
+> **Status:** current · Reconciled with code: 2026-10-05 (48cb8c6), checked against
+> [docker-compose.yml](../../backend/docker-compose.yml) and [main.py](../../backend/app/main.py).
+> No running service was contacted.
 > **Verify with:** `docker compose ps` · `curl localhost:8000/api/v1/health`
 
 ---
@@ -19,7 +19,7 @@
 | Service | Default URL | Required | Notes |
 | --- | --- | --- | --- |
 | FastAPI | `http://localhost:8000` | Yes | `uvicorn app.main:app` |
-| Vite dev server | `http://localhost:5173` | Dev only | Proxies `/api` and `/static` to `:8000` |
+| Vite dev server | `http://localhost:5173` | Dev only | Proxies `/api` and legacy `/static` paths to `:8000`; current stored files use authenticated API routes |
 | PostgreSQL | `localhost:5432` | Yes | `pgvector/pgvector:pg16`; needs `vector` + `uuid-ossp` |
 | Redis | `localhost:6379` | Yes | Celery broker **and** result backend |
 | Celery ingest worker | n/a | Yes | `celery_worker`, queue `ingest` |
@@ -42,7 +42,7 @@
         │  dev:  localhost:5173  (Vite)        │
         │  prod: localhost:8000  (SPA from API)│
         └──────────────┬───────────────────────┘
-                       │ /api/v1/*  ·  /static/*
+                       │ /api/v1/*
                        │ (dev: proxied by Vite → :8000)
                        ▼
         ┌──────────────────────────────────────┐
@@ -50,8 +50,7 @@
         │   middleware: CORS → RateLimit →     │
         │               SecurityHeaders        │
         │   /api/v1/*         (router)         │
-        │   /static/images    /static/assets   │
-        │   /static/extracted /static/images/research
+        │   authenticated /assets, /raw, /media │
         └───┬──────────────────────┬───────────┘
             │ asyncpg              │ .delay()
             ▼                      ▼
@@ -62,11 +61,12 @@
             ▲                      │ consumes
             │ psycopg2 (sync)      ▼
             │            ┌──────────────────────────┐
-            └────────────┤ Celery worker            │
-                         │  process_ingestion       │
-                         │  embed_document          │
-                         │  generate_section_summaries
-                         │  reconstruct_reading_order
+            └────────────┤ Celery workers           │
+                         │ ingest: PDF extraction,   │
+                         │   reading-order repair    │
+                         │ light: article imports,   │
+                         │   embeddings, summaries,   │
+                         │   article thumbnails       │
                          └──┬────────────────┬──────┘
                             │ subprocess     │ HTTP
                             ▼                ▼
@@ -77,16 +77,13 @@
                                     │ OR cloud API fallback   │
                                     └─────────────────────────┘
 
-                  ┌──────────────────────────────┐
-                  │ search/web.py — cascade,     │
-                  │ first configured one to      │
-                  │ answer wins:                 │
-                  │   1. tavily    4. serpapi    │  ⚠ leaves the host
-                  │   2. linkup    5. duckduckgo  ─┼──► whichever answers
-                  │   3. exa                      │     (query string only)
-                  └──────────────────────────────┘     — #5 needs no key,
-                     the ONLY egress to the public internet, and only on the   always eligible
-                     EXTERNAL route or the paper agent's WEB tool
+                  ┌───────────────────────────────────────────────┐
+                  │ External calls depend on configuration/use:    │
+                  │ web search (query only), cloud models, OCR,    │
+                  │ article fetchers, Cloudflare image generation  │
+                  └───────────────────────────────────────────────┘
+                  Web search: Tavily → Linkup → Exa → SerpApi →
+                  DuckDuckGo (no key; last fallback).
 ```
 
 ### (rendered)
@@ -94,13 +91,17 @@
 ```mermaid
 %%{init: {'themeVariables': {'fontFamily': 'ui-monospace, SFMono-Regular, Menlo, monospace', 'lineColor': '#8b949e'}}}%%
 flowchart TD
-    B([Browser]) -->|"/api/v1 · /static"| API[FastAPI :8000]
+    B([Browser]) -->|"/api/v1"| API[FastAPI :8000]
     API --> PG[(Postgres :5432<br/>pgvector HNSW)]
     API -->|".delay()"| RD[(Redis :6379)]
-    RD --> W[Celery worker]
-    W --> PG
-    W -->|subprocess| MU[MinerU CLI]
-    W -->|HTTP| OL([Ollama :11434])
+    RD --> WI["Celery ingest worker · ingest"]
+    RD --> WL["Celery light worker · celery"]
+    WI --> PG
+    WL --> PG
+    WI -->|subprocess| MU[MinerU CLI]
+    WI -->|HTTP| OL([Ollama :11434])
+    WL -->|HTTP · configured image generation| CF([Cloudflare Workers AI])
+    WL -->|HTTP · configured article fetch| SCRAPE([scraping providers])
     API -->|HTTP| OL
     API -->|"EXTERNAL route · WEB tool"| SX{{"search/web.py cascade"}}
     SX -->|"1st — rotates across its key list"| TV([api.tavily.com])
@@ -108,7 +109,8 @@ flowchart TD
     SX -.->|"3rd, on failure"| EX([api.exa.ai])
     SX -.->|"4th, on failure"| SP([serpapi.com])
     SX -.->|"5th, on failure — no key needed"| DDG([DuckDuckGo scrape])
-    OL -.->|"when unreachable"| CLOUD([cloud LLM API])
+    OL -.->|"when selected or fallback is needed"| CLOUD([cloud LLM API])
+    API -.->|"configured LLM / OCR requests"| CLOUD
     TV --> NET([public internet])
     LK -.-> NET
     EX -.-> NET
@@ -118,15 +120,15 @@ flowchart TD
     classDef owned stroke:#3b82f6,stroke-width:2px
     classDef store stroke:#10b981,stroke-width:2px
     classDef ext stroke:#f59e0b,stroke-dasharray:4 3
-    class API,W,MU owned
+    class API,WI,WL,MU owned
     class PG,RD store
-    class OL,TV,LK,EX,SP,DDG,CLOUD,NET ext
+    class OL,TV,LK,EX,SP,DDG,CLOUD,CF,SCRAPE,NET ext
 ```
 
 > 🟦 owned process · 🟩 data store · 🟨 external / optional.
-> Two edges are worth memorising: **the worker talks to Postgres over psycopg2 (sync), the API
-> over asyncpg (async)**, two separate pools against one database; and **web search is the only
-> arrow leaving the machine**, which is what makes the local-first claim true.
+> The API uses asyncpg and Celery workers use psycopg2 against the same Postgres database.
+> Outbound traffic is conditional: configured model, search, article-fetch, OCR, and thumbnail
+> features call their providers when used.
 
 ---
 
@@ -141,7 +143,7 @@ flowchart TD
 ⚠ In compose, `OLLAMA_BASE_URL` is deliberately **not** inherited from the host `.env`. It is
 hardcoded to `http://host.docker.internal:11434`, because a value like `http://localhost:11434`
 inside a container resolves to *that container* and every model call fails with
-connection-refused. The four web search providers don't have this trap — they're all reached over
+connection-refused. The five web search providers don't have this trap — they're all reached over
 the public internet by a fixed hostname, not a compose service name, so their API keys ARE
 inherited from the host `.env` unchanged.
 
@@ -153,20 +155,20 @@ Two mechanisms, covering two different failure modes:
 
 | Mechanism | Covers | Applies to |
 | --- | --- | --- |
-| `restart: unless-stopped` | Process **exits**, crash, OOM-kill (exit 137) | `postgres`, `redis`, `celery_worker`, `api` |
+| `restart: unless-stopped` | Process **exits**, crash, OOM-kill (exit 137) | `postgres`, `redis`, `celery_worker`, `celery_worker_light`, `api` |
 | `autoheal` watchdog | Process **hangs**, running but healthcheck unhealthy | containers labeled `autoheal=true`: `api`, `postgres`, `redis` |
 
 `restart:` cannot see a hung-but-alive container, which is why autoheal exists; it needs
 `/var/run/docker.sock` mounted to issue restarts. Neither mechanism touches data volumes.
 
-The worker has a memory limit (`WORKER_MEM_LIMIT`, default 12 G) so a MinerU OOM on a large book
+The ingest worker has a memory limit (`WORKER_MEM_LIMIT`, default 12 G) so a MinerU OOM on a large book
 kills *that container* cleanly and it restarts, rather than pressuring the host. ⚠ This limit must
 stay below Docker Desktop's total VM memory or the worker is OOM-killed mid-extraction every time.
 
 ## Celery queue split
 
 Current workers: `celery_worker` consumes `ingest`; `celery_worker_light`
-consumes the light/default queue `celery` (retaining the old backlog).
+consumes the light/default queue `celery` (retaining the old backlog), including article-thumbnail generation when configured.
 `LIGHT_WORKER_CONCURRENCY=2` and `LIGHT_WORKER_MEM_LIMIT=2G` are the defaults.
 Rebuild/update `api` and both workers together. See [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split)
 for routing, ingest limits, startup recovery and migration caveats.

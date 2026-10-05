@@ -5,14 +5,8 @@
 > **Owns:** endpoint paths, request/response shapes, status codes.
 > **Does not own:** why a route behaves as it does ([chat-and-ask.md](../02-architecture/chat-and-ask.md)).
 >
-> **Status:** current · **Last verified:** the file routes, `/search/web` auth, upload `413`/`415`
-> and the conversation/deck scoping 2026-09-10 over HTTP against a throwaway API on the VPS
-> (`fix/audit-followup`); the `/auth/*` routes 2026-08-27 against
-> [`endpoints/auth.py`](../../backend/app/api/v1/endpoints/auth.py) (`main`, 502272b); the rest
-> 2026-07-28 against [`api/v1/router.py`](../../backend/app/api/v1/router.py) (`main`, 5471870).
-> The note anchor payload was re-read 2026-08-18 against
-> [`endpoints/notes.py`](../../backend/app/api/v1/endpoints/notes.py) (`8fb153b`): **not**
-> against live OpenAPI, which was not running.
+> **Status:** current · **Source reconciled:** 2026-10-05 (48cb8c6). The new cover behavior and
+> response field were checked against source; this pass did not contact a running API.
 > **Verify with:** `http://localhost:8000/docs` (live OpenAPI, always authoritative)
 >
 > ⚠ Every route below except `/health` and `/auth/*` requires a logged-in session (an
@@ -131,26 +125,28 @@ Source: [endpoints/health.py](../../backend/app/api/v1/endpoints/health.py).
   "version": "2.0.0",                  // app.core.version — the build actually running
   "status": "ok" | "degraded",
   "database": "ok" | "unavailable",
-  "ollama":   "ok" | "unavailable",
+  "ollama":   "ok" | "unavailable",       // legacy field name; checks the configured LLM cascade
   "web_search": "ok" | "unavailable",
-  "web_search_provider": "google" | "tavily" | "linkup" | "exa" | "serpapi" | "duckduckgo" | "none"
+  "web_search_provider": "tavily" | "linkup" | "exa" | "serpapi" | "duckduckgo" | "none",
+  "tripped_providers": { "<provider>": <consecutive_failure_count> } | null
 }
 ```
 
-Probes the DB, Ollama (`/api/tags`), and the web search cascade. Overall `status` is `degraded` if
-the database is unavailable.
+Checks the database, the configured LLM targets (Ollama or cloud endpoints), and whether the
+current web-search configuration produces a non-empty cascade. The health check does not run a
+search. The response retains the `ollama` field name for compatibility, though it checks the LLM
+cascade. Overall `status` is `degraded` only when the database is unavailable.
 
-⚠ `web_search_provider` names the **first** provider in cascade order that has a key configured —
-not necessarily the one that answers any given query, since a later provider may serve a request
-the first one failed or returned empty for. See [configuration.md § Web
-search](configuration.md#web-search) for the full cascade order.
+⚠ `web_search_provider` names the **first** provider the current configuration and circuit-breaker
+state would try, not necessarily the one that answers a query. A later provider may serve the
+request if the first errors or returns no results. See [configuration.md § Web
+search](configuration.md#web-search) for the cascade order.
 
-⚠ **`web_search` does not prove a key actually works.** None of the five keyed providers expose a
-health endpoint, so the only way to verify a key is to spend a search credit, and this endpoint is
-the container healthcheck polled every 15-30 seconds. The field means "at least one provider is
-usable" — which, since `duckduckgo` needs no key at all, is effectively always true; a bad key
-surfaces as a logged `401`/`403` on the first real search for that
-provider, and the cascade falls through to the next one.
+⚠ **`web_search` does not prove a key or provider endpoint works.** It indicates that the current
+settings yield at least one provider to attempt. In `auto`, DuckDuckGo normally keeps the cascade
+non-empty without credentials; the health check itself does not contact it. Provider failures are
+observed when a search runs, and the cascade then tries later providers. `tripped_providers`, when
+present, reports providers currently skipped for repeated failures.
 
 ---
 
@@ -298,6 +294,7 @@ Response:
   original_filename: string,
   title: string | null,               // reader-chosen name; null = use original_filename
   file_size_bytes: number | null,
+  cover_version: number | null,          // API-only article-cover file mtime; null until generated
   page_count: number | null,
   status: "queued" | "extracting" | "chunking" | "embedding" | "complete" | "failed",
   error_message: string | null,
@@ -330,9 +327,9 @@ The frontend's polling endpoint during ingestion.
 }
 ```
 
-`queue_position` is 1-based, only while `job_status === "queued"` — this box's Celery worker runs
-`--concurrency=1`, so it's a real wait, not decoration: how many other still-queued jobs got there
-first. `null` once extraction actually starts.
+`queue_position` is a 1-based rank while a job is queued, computed from earlier queued
+ingestion jobs. Production Compose's ingest worker runs with concurrency 2, so this value is a
+queue rank, not a time estimate. It becomes null once extraction starts.
 
 `raw_snapshot_status`/`raw_page_count` are `article`-only (`"none"` for a `paper`/`book`) — the
 raw HTML snapshot (`GET /papers/{paper_id}/raw`, above) is saved inline, using the HTML already
@@ -400,13 +397,15 @@ declaration order and `done-folders` is one segment, exactly like `{paper_id}`.
 
 ### `GET /papers/{paper_id}/cover`
 
-The paper's first page as `image/jpeg`, ~480px wide, `Cache-Control: public, max-age=86400`.
-Rendered with PyMuPDF on first request and cached at `storage/covers/<id>.jpg`.
+Returns the cached cover as image/jpeg with Cache-Control: public, max-age=86400. If a generated
+article cover is already cached, it is returned directly; otherwise the API lazily rasterizes page
+one of an available source PDF with PyMuPDF and caches it at storage/covers/<id>.jpg. Article-cover
+generation itself is an optional background task; see the article thumbnail runbook.
 
 | Status | When |
 | --- | --- |
 | `200` | The cover exists or was just rendered. |
-| `204` | No source PDF, or the first page would not rasterise. |
+| `204` | No cached cover and no usable source PDF, or the first page would not rasterise. |
 | `404` | No such paper. |
 
 ⚠ **204, not 404, for a missing cover.** The library requests one per card; a wall of 404s makes a
@@ -414,8 +413,12 @@ working library look broken. ⚠ A browser reports 204 to `<img>` as a **load er
 client needs an `onError` placeholder: see
 [`PaperCover.tsx`](../../frontend/src/views/PaperCover.tsx).
 
-⚠ The cache is keyed by document id alone and is never invalidated. A document's first page cannot
-change: re-extraction and re-chunking rewrite derived text, never the source PDF.
+The list response includes `cover_version` only for articles: it is the cached image file's mtime
+or null until a non-empty cover exists. This is an API response field, not a database column. The
+frontend uses it as a cache-busting query value on the cover URL when a generated image appears.
+PDF first-page covers remain stable because re-extraction and re-chunking do not change the source
+PDF. For article-thumbnail retry/backfill behavior, see the
+[article thumbnail runbook](../runbooks/article-thumbnails.md).
 
 ### `DELETE /papers/{paper_id}`
 

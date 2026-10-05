@@ -7,11 +7,11 @@
 > **Does not own:** how the provider chain resolves ([ai-backend.md](../02-architecture/ai-backend.md)),
 > how to bring the stack up ([setup.md](../01-orientation/setup.md)).
 >
-> **Status:** current · **Last verified:** the paper-agent and web-search keys 2026-08-26 by
-> running the command below against [`app/core/config.py`](../../backend/app/core/config.py);
-> every other key 2026-07-25 (`main`, 9b75500)
-> **Verify with:** `python -c "from app.core.config import settings; print(settings.model_dump())"`
-> **Volatile:** the whole file mirrors `config.py`, so re-verify on any change to that file.
+> **Status:** current · **Reconciled with source:** 2026-10-05 (48cb8c6), checked against
+> app/core/config.py and the Compose files. This documentation update did not read runtime
+> environment files or contact a running service.
+> **Verify with:** python -c "from app.core.config import settings; print(settings.model_dump())"
+> **Volatile:** the whole file mirrors config.py, so re-verify on any change to that file.
 
 Loaded by pydantic-settings from `backend/.env`, falling back to the process environment.
 `extra="ignore"`, so an unknown key never breaks startup, and never warns either. ⚠ A typo'd key
@@ -34,7 +34,7 @@ is silently ignored; if a setting seems not to apply, check the spelling first.
 | `POSTGRES_PORT` | `5432` | |
 | `POSTGRES_DB` | `9xaipal` | |
 | `POSTGRES_USER` | `9xaipal` | |
-| `POSTGRES_PASSWORD` | `9xaipal_dev_password` | ⚠ Startup warns while this default is in place. Rotate before exposing the app to anything. |
+| `POSTGRES_PASSWORD` | development-only preset (value omitted) | ⚠ Startup warns while this default is in place. Replace it before exposing the app to anything. |
 | `DB_POOL_SIZE` | `10` | SQLAlchemy pool. Raise for many concurrent `/ask`. |
 | `DB_MAX_OVERFLOW` | `15` | |
 
@@ -84,6 +84,7 @@ cloud API; each cloud provider has its own `*_CHAT_MODEL` above.
 | `EMBEDDING_API_KEY` | (falls back to `LLM_API_KEY`) | Override only. |
 | `EMBEDDING_BASE_URL` | (falls back) | Override only. |
 | `EMBED_MAX_CHARS` | `3000` | Chars per chunk sent to the embedder. Ollama 400s on over-window input; dense tables tokenize heavily. Raise for cloud embedders. |
+| `CONTEXTUAL_EMBEDDINGS_ARABIC_ENABLED` | `false` | Optional title/section prefixes for Arabic passage embeddings. It remains off: the 2026-09-30 Arabic golden-set measurement reduced MRR@10 from 0.542 to 0.497 without reranking and from 0.803 to 0.762 with reranking; see app/core/config.py. |
 | `VECTOR_DIMENSION` | `1024` | Stored vector size. Larger model outputs are truncated + renormalized (valid for MRL-trained models); smaller are zero-padded. ⚠ Keep ≤ 2000: pgvector's HNSW index has a hard 2000-dim limit, and without the index every search is a full scan. ⚠ Changing this wipes and re-embeds the library. |
 
 ## Extraction
@@ -182,19 +183,18 @@ and never from a provider module.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `WEB_SEARCH_PROVIDER` | `auto` | `auto` \| `google` \| `tavily` \| `linkup` \| `exa` \| `serpapi` \| `duckduckgo` \| `none`. `auto` tries every configured key below in cascade order and falls through to the next the moment one errors or returns zero results. Pinning to one name forces exactly that provider with no fallback (debugging only). `none` makes every web call return `[]` and withdraws the `WEB` tool from the paper agent — the only way to fully disable web search, since `duckduckgo` needs no key. |
+| `WEB_SEARCH_PROVIDER` | `auto` | `auto` \| `tavily` \| `linkup` \| `exa` \| `serpapi` \| `duckduckgo` \| `none`. `auto` tries every configured key below in cascade order and falls through to the next the moment one errors or returns zero results. Pinning to one name forces exactly that provider with no fallback (debugging only). `none` makes every web call return `[]` and withdraws the `WEB` tool from the paper agent — the only way to fully disable web search, since `duckduckgo` needs no key. |
 | `TAVILY_API_KEY` | (empty) | Key from <https://app.tavily.com>. Free tier is 1,000 searches/month **per key**. ⚠ Accepts a **comma-separated list** — the client rotates through them, moving to the next when one is exhausted or rejected, and only falls through to Linkup once every key is spent. More free headroom = more keys, no code change. |
 | `TAVILY_SEARCH_DEPTH` | `basic` | `basic` (1 credit, fast) or `advanced` (2 credits, deeper extraction, better recall on niche research queries). |
 | `LINKUP_API_KEY` | (empty) | Key from <https://app.linkup.so>. Real page content per result, plus a proper image-search mode. |
 | `EXA_API_KEY` | (empty) | Key from <https://exa.ai>. Neural/semantic search, strong on academic sources. No image-search endpoint — a document index, not a SERP. |
-| `SERPAPI_API_KEY` | (empty) | Key from <https://serpapi.com>. Genuine Google SERP data (organic + image results) via a paid scraping API — a different product from `GOOGLE_API_KEY` above. |
-| *(none — `ddgs` library)* | always on | DuckDuckGo via the `ddgs` package. Last in the cascade, no key, no quota — the one provider that's always "configured". Least reliable of the six: it scrapes an undocumented endpoint, since DuckDuckGo has no official search API. |
+| `SERPAPI_API_KEY` | (empty) | Key from <https://serpapi.com>. Genuine Google SERP data (organic + image results) via a paid scraping API — the current Google SERP integration; the Google APIs themselves are not active providers. |
+| *(none — `ddgs` library)* | always on | DuckDuckGo via the `ddgs` package. Last in the cascade, no key, no quota — the one provider that's always "configured". Least reliable of the five: it scrapes an undocumented endpoint, since DuckDuckGo has no official search API. |
 
-⚠ **This is a privacy setting as much as a quality one.** The first four providers are hosted
-third parties: **the query string** leaves the machine for whichever one answers a given call.
-duckduckgo is a direct scrape, not a hosted API, but the query still leaves the machine. Paper
-text, chunks, and chat history never leave — callers pass a query and nothing else. See
-[overview.md §7](../02-architecture/overview.md#7-what-never-happens).
+⚠ **Web-search data flow:** a selected provider receives the query string. Search callers do not
+send paper text, chunks, or chat history. This statement is specific to web search: configured
+cloud models, managed article fetchers, enabled Arabic OCR, and optional article-image generation
+have separate external data flows. See [overview.md §7](../02-architecture/overview.md#7-network-and-data-boundaries).
 
 ⚠ **`/api/v1/health` does not probe Tavily.** Tavily exposes no health endpoint, so the only way to
 verify a key is to spend a search credit, and the container healthcheck polls `/health` every 30
@@ -219,6 +219,18 @@ own docstring for the full cascade order and reasoning.
 ⚠ Leaving both `FIRECRAWL_API_KEY` and `CRW_API_KEY` empty is not a broken configuration — the
 cascade just skips straight to the free direct fetch, which is exactly what article import already
 did before these existed. They only change behavior for the pages that fetch would have failed on.
+
+## Article thumbnail image generation
+
+Optional generated covers for imported articles use Cloudflare Workers AI. If no usable account is
+configured, the background task reports disabled and the imported article remains complete.
+Compose passes both settings to the API and light worker; see the
+[article thumbnail runbook](../runbooks/article-thumbnails.md).
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| CLOUDFLARE_AI_ACCOUNTS | (empty) | Optional comma-separated failover list. Each entry has the placeholder shape &lt;account_id&gt;:&lt;token&gt;; provide actual credentials only through the runtime environment or a secret store, never in tracked files or documentation. |
+| CLOUDFLARE_IMAGE_MODELS | (empty → code defaults) | Optional comma-separated model order. The default order is maintained in app/services/cloudflare_images.py; model identifiers are not repeated here. |
 
 ## Bibliography citations
 
@@ -252,7 +264,7 @@ above: a different provider for a different question ("what paper is this citati
 | `SESSION_COOKIE_SAMESITE` | `lax` | `lax`, `strict`, or `none`. Set `none` only for a cross-site HTTPS SPA/API deployment; production cookies are Secure when `DEBUG=false`. |
 | `MAX_ACTIVE_USERS` | `30` | Signup is open (no invite code). This is the concurrent-active-user cap that actually protects a single box with no autoscaling — everyone past it waits in a FIFO queue, auto-promoted the moment a slot frees. "Active" = made a request in the last `ACTIVE_WINDOW_SECONDS`, not "has a session" (sessions last 30 days). See [auth.md](../02-architecture/auth.md). |
 | `ACTIVE_WINDOW_SECONDS` | `300` | How long since their last request before an idle user's slot frees automatically. Freed immediately on logout regardless of this. |
-| `MAX_QUEUED_INGESTION_JOBS` | `50` | Hard ceiling on ingestion jobs queued or in progress at once — this box's Celery worker runs `--concurrency=1`, so this is what stops an extreme upload burst from growing disk/DB rows unbounded. A fresh upload past the ceiling is rejected with `429`. |
+| `MAX_QUEUED_INGESTION_JOBS` | `50` | Hard ceiling on ingestion jobs queued or in progress. It applies across API processes; production Compose's ingest worker runs with concurrency 2. New uploads past the ceiling are rejected with 429. |
 
 ## MinerU weights
 

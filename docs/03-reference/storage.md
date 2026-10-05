@@ -2,15 +2,11 @@
 
 > **What this is:** what lands on disk, where, and which URL serves it.
 >
-> **Owns:** the storage-root layout and the disk-path ↔ static-URL mapping.
+> **Owns:** the storage-root layout and the disk-path to authenticated API route mapping.
 > **Does not own:** `STORAGE_ROOT` configuration ([configuration.md](configuration.md)).
 >
-> **Status:** current · **Last verified:** file serving 2026-09-10 over HTTP against a throwaway
-> API on the VPS (anonymous → 401, owner → the bytes, `../` and `%2F` traversal → 404,
-> `/static/*` → 404); `covers/` 2026-08-26 (rendered and served against a
-> live paper); the rest 2026-07-25 against
-> [`core/paths.py`](../../backend/app/core/paths.py) and
-> [`main.py`](../../backend/app/main.py)
+> **Status:** current · **Source reconciled:** 2026-10-05 (48cb8c6). File-serving ownership and
+> cover behavior were checked against source; this update did not contact a running service.
 > **Verify with:** `ls -R backend/app/storage`
 >
 > Nothing under the storage root is served directly. Figures, PDFs and research images each go
@@ -34,7 +30,7 @@ subdirectories are created at startup by `ensure_storage_dirs()`.
 │   ├── <doc_id>/<asset_uuid>.png
 │   └── research/<conv_id>/...   # research-agent images
 ├── assets/            # raw PDF copies for download (<doc_id>.pdf)
-├── covers/            # first-page thumbnails (<doc_id>.jpg) — a cache, not user data
+├── covers/            # PDF-page or generated article covers (<doc_id>.jpg) — a derived cache
 └── logs/              # reserved
 ```
 
@@ -61,18 +57,16 @@ properties:
 ### `images/research/<conv_id>/...`
 Images saved by the research agent during iterative research loops.
 
-### `covers/<doc_id>.jpg`
-The paper's first page, ~480px wide, rendered by PyMuPDF on the first
-`GET /papers/{id}/cover` and reused after that.
+### covers/<doc_id>.jpg
+For PDFs, this is a roughly 480px-wide raster of page one, created lazily by
+PyMuPDF. For imported articles, it may instead be a generated cover created
+asynchronously with Cloudflare Workers AI when configured. The task and
+backfill procedure are in the [article thumbnail runbook](../runbooks/article-thumbnails.md).
 
-⚠ **Derived, not user data.** Every file here regenerates from the PDF in
-`assets/`, so deleting the directory costs one render per paper and nothing
-else. It is the one directory safe to `rm -rf` to reclaim space.
-
-⚠ Never invalidated: keyed by document id alone, because a document's first
-page cannot change: re-extraction and re-chunking rewrite derived text, never
-the source PDF. Deleting the paper deletes its cover.
-
+This is derived cache data, not the source document. PDF page covers can be
+rendered again from assets; generated article covers need the thumbnail task
+and its configured providers to be available again. Removing the cache does
+not remove the source document. Deleting a paper removes its cached cover.
 ### `assets/<doc_id>.pdf`
 A second copy of the upload, keyed by document ID so URLs are
 predictable. Used by:
@@ -102,21 +96,24 @@ notes and browser logs. Before 2026-09-10 the whole root was a public
 
 ## URL conventions
 
-| URL                                       | Maps to                                         |
-| ----------------------------------------- | ----------------------------------------------- |
-| `/static/images/<doc_id>/<asset>.png`     | `<storage_root>/images/<doc_id>/<asset>.png`    |
-| `/static/extracted/<doc_id>/...`          | `<storage_root>/extracted/<doc_id>/...`         |
-| `/static/assets/<doc_id>.pdf`             | `<storage_root>/assets/<doc_id>.pdf`            |
-| `/static/images/research/<conv_id>/<f>`   | `<storage_root>/images/research/<conv_id>/<f>`  |
-| `/api/v1/papers/<doc_id>/raw`             | streams `assets/<doc_id>.pdf` or `documents/<filename>` (fallback) |
+The API serves private files through authenticated routes that check ownership:
 
-In dev, Vite proxies `/api` and `/static` to `:8000`.
+| Resource | Route | Notes |
+| --- | --- | --- |
+| Chunk-linked figure, table, or equation crop | /api/v1/papers/<doc_id>/assets/<file_path> | The path must match a chunk_assets row for the owned document. |
+| Original PDF | /api/v1/papers/<doc_id>/raw | Serves the owned PDF from assets, with a documents fallback. |
+| Cover image | /api/v1/papers/<doc_id>/cover | Returns the generated article cache when present; otherwise renders a source PDF page. |
+| Research-agent image | /api/v1/media/research/<conversation_id>/<filename> | The conversation must belong to the caller; the filename is a bare name. |
+
+There is no public StaticFiles mount for storage. Vite retains a legacy /static
+proxy rule in development, but current stored files use the authenticated API
+routes above.
 
 ## What gets deleted, and when
 
 | Action                          | Cleans                                                                 |
 | ------------------------------- | ---------------------------------------------------------------------- |
-| `DELETE /papers/{id}`           | DB cascade (chunks, embeddings, assets, summaries, jobs, descriptions); disk: `documents/<filename>`, `assets/<doc_id>`, `extracted/<doc_id>/`, `images/<doc_id>/` (best effort). |
+| `DELETE /papers/{id}`           | DB cascade (chunks, embeddings, assets, summaries, jobs, descriptions); disk: `documents/<filename>`, `assets/<doc_id>`, `extracted/<doc_id>/`, `images/<doc_id>/`, and `covers/<doc_id>.jpg` (best effort). |
 | Restart                         | Nothing; everything is idempotent.                                     |
 | Pipeline failure mid-ingestion  | Job + document marked `failed`. Disk artifacts not cleaned automatically. |
 

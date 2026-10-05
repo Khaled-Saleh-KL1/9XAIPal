@@ -16,6 +16,8 @@ Contains the real Celery `@celery_app.task` definitions:
   deleting the existing vector table. `scripts/reembed_library.py` queues this
   for every embedded document with chunks.
 - `generate_section_summaries`: high-quality hierarchical section + paper-level summarization (runs after embeddings; can take many minutes; quality-first personal feature)
+- process_article_ingestion: imports a URL on the light queue and dispatches article-thumbnail generation as best effort after a successful article import.
+- generate_article_thumbnail: optional Cloudflare Workers AI image generation; with no configured account it returns disabled and does not fail article ingestion.
 
 These are what the API actually calls via `.delay()`.
 
@@ -38,7 +40,7 @@ The original design used FastAPI BackgroundTasks + an in-memory asyncio.Queue + 
 `celery_worker` consumes only `ingest` (`process_ingestion` and
 `reconstruct_reading_order`). `celery_worker_light` uses the same worker image,
 environment and storage, and consumes the light/default queue named `celery`
-(article imports, embeddings, section summaries and figure descriptions). The
+(article imports, embeddings, section summaries, figure descriptions and optional article thumbnails). The
 original `celery` name is retained so queued messages survive deployment.
 Both Compose files assign `WORKER_ROLE=ingest` / `WORKER_ROLE=light`.
 A heavy task delivered to light uses Celery `Task.replace` on `ingest` before

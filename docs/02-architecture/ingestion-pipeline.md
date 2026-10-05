@@ -11,10 +11,8 @@
 > [ai-backend.md](ai-backend.md): which model embeds and summarizes ·
 > [operations.md](../01-orientation/operations.md): repairing a stuck ingestion.
 >
-> **Status:** current · **Last verified:** 2026-07-25 against
-> [`extraction/pipeline_sync.py`](../../backend/app/extraction/pipeline_sync.py) and
-> [`workers/tasks.py`](../../backend/app/workers/tasks.py) (`main`, 9b75500)
-> **Verify with:** `pytest tests/test_ingestion_pipeline.py -v`
+> **Status:** current · **Source reconciled:** 2026-10-05 (48cb8c6), against the current extraction
+> and worker code. This documentation update did not contact a running service.> **Verify with:** `pytest tests/test_ingestion_pipeline.py -v`
 
 This is the path a PDF takes from "the user dragged it onto the library" to "I can read it and
 ask grounded questions about it."

@@ -15,10 +15,8 @@
 > [runtime-topology.md](../01-orientation/runtime-topology.md): ports and processes ·
 > [database-schema.md](../03-reference/database-schema.md): tables and columns.
 >
-> **Status:** current · **Reflects code as of:** §1 and §6b 2026-08-26 against
-> [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py) and
-> [`chat/study_agent.py`](../../backend/app/chat/study_agent.py); everything else
-> 2026-07-25 (`main`, 9b75500)
+> **Status:** current · Reconciled with code: 2026-10-05 (48cb8c6). This update did not
+> contact a running service.
 
 ---
 
@@ -44,21 +42,18 @@ Three halves:
 4. **The desk** is the surface for reading papers *without opening them*: studies on the left, the
    chat in the middle, sticky notes on the right.
 
-**Why local-first:** privacy (papers and chats never leave the machine), latency (LLM and vector
-search colocated with the data), cost (no per-token billing). The price is the cold-start latency
-of a local model and the throughput of one machine.
+**Why local-first:** the default stack can keep inference, storage, and retrieval on the user's
+machine. The deployment can also use configured cloud models and external services; those choices
+affect what request data leaves the machine and may add provider costs.
 
-⚠ That claim has two deliberate holes. The EXTERNAL chat route reaches the public internet, and
-so does the paper agent's `WEB` tool, both opt-in per question, one chosen by the router and one
-by the model. Everything else, extraction, embedding, retrieval, reading, is local.
-
-⚠ **Web search cascades through five providers: tavily, linkup, exa, serpapi, then
-duckduckgo** (see app/search/web.py) — the last needs no key and is always eligible, so this
-route never goes fully dark just because every paid key is unset or every paid provider is down.
-Only the query string leaves, for whichever one answers a given call — never paper text, chunks,
-or chat history. See
-[configuration.md § Web search](../03-reference/configuration.md#web-search).
-
+External data flows are feature- and configuration-dependent. Cloud model requests carry the
+prompt and selected context for that call; vision requests may also include an image. Web search
+sends the query to the active provider, not the paper text or chat history. Article imports can
+send the requested URL to configured scraping services. Bibliography lookup can send citation
+text to Semantic Scholar. When Arabic document OCR is enabled, rendered page images may be sent to
+its configured OCR provider. Optional article-thumbnail generation sends article text to the
+configured prompt-writing model, then sends its image prompt to Cloudflare Workers AI. See the
+configuration reference, the Arabic OCR runbook, and the thumbnail runbook.
 ---
 
 ## 2. The whole system
@@ -78,7 +73,7 @@ or chat history. See
 │   list + upload                        ▼                  ▼              │
 │                                   one chunk at a time   routed answer    │
 └───────────────────────────┬───────────────────────────────────────────────┘
-                            │ HTTP  /api/v1/*  ·  /static/*
+                            │ HTTP  /api/v1/*
                             ▼
 ┌───────────────────────────────────────────────────────────────────────────┐
 │ FastAPI :8000                                                             │
@@ -98,18 +93,18 @@ or chat history. See
 │         │                        ├ external_context                       │
 │         │                        └ research_agent                         │
 │         ▼                                                                 │
-│   workers/tasks.py  ──.delay()──►  Redis  ──►  Celery worker             │
+│   workers/tasks.py  ──.delay()──►  Redis  ──►  Celery workers            │
 └───────┬──────────────────────────────────────────────┬────────────────────┘
         │                                              │
         ▼                                              ▼
 ┌────────────────────┐              ┌──────────────────────────────────────┐
-│ Postgres + pgvector│              │ Celery worker                        │
-│  documents         │              │  ├ MinerU CLI      (PDF → md + imgs) │
-│  chunks            │◄─────────────┤  ├ glyph repair                       │
-│  chunk_embeddings  │   psycopg2   │  ├ embeddings        ┐                │
-│  chunk_assets      │    (sync)    │  ├ section summaries ├ full profile   │
-│  section_summaries │              │  └ VLM figure descr. ┘  / books only  │
-│  figure_descriptions              └──────────────────────────────────────┘
+│ Postgres + pgvector│              │ Celery workers                       │
+│  documents         │              │  ingest: MinerU, extraction, repair   │
+│  chunks            │◄─────────────┤  light: imports, embeddings, summaries │
+│  chunk_embeddings  │   psycopg2   │         thumbnails, figure tasks       │
+│  chunk_assets      │    (sync)    └──────────────────────────────────────┘
+│  section_summaries │
+│  figure_descriptions
 │  paper_notes       │
 │  conversation_turns│              ┌──────────────────────────────────────┐
 │  ask_traces        │              │ Ollama :11434  OR  cloud LLM API     │
@@ -127,7 +122,7 @@ flowchart TD
         RV -->|paper| AR[ArticleReader<br/>+ margin notes]
         RV -->|book| BR[BookReadingView] --> CP[ChatPane]
     end
-    FE -->|"/api/v1 · /static"| EP[api/v1/endpoints]
+    FE -->|"/api/v1"| EP[api/v1/endpoints]
 
     subgraph BE["FastAPI :8000"]
         EP --> SVC[services]
@@ -140,10 +135,13 @@ flowchart TD
 
     PA --> REPO
     REPO --> PG[(Postgres + pgvector)]
-    Q --> WK[Celery worker]
-    WK --> MU[MinerU CLI]
-    WK --> PG
-    WK --> AI([Ollama or cloud LLM])
+    Q --> WI["Celery ingest worker · ingest"]
+    Q --> WL["Celery light worker · celery"]
+    WI --> MU[MinerU CLI]
+    WI --> PG
+    WL --> PG
+    WI --> AI([Ollama or cloud LLM])
+    WL --> AI
     PA --> AI
     ORCH --> AI
     RT -->|EXTERNAL only| WEB([web search])
@@ -151,7 +149,7 @@ flowchart TD
     classDef owned stroke:#3b82f6,stroke-width:2px
     classDef store stroke:#10b981,stroke-width:2px
     classDef ext stroke:#f59e0b,stroke-dasharray:4 3
-    class EP,SVC,REPO,PA,ORCH,RT,WK,MU owned
+    class EP,SVC,REPO,PA,ORCH,RT,WI,WL,MU owned
     class PG,Q store
     class AI,WEB ext
 ```
@@ -290,19 +288,29 @@ chosen per question:
 
 ---
 
-## 7. What never happens
+## 7. Network and data boundaries
 
-1. **No document leaves the machine.** Paper text, chunks, and chat history are never sent to a
-   web search provider. Only the query string goes out, and only on EXTERNAL or the paper agent's
-   `WEB` tool. ⚠ Choosing a `:cloud` model in the note picker does send the paper to Ollama's
-   infrastructure, which is what the local/cloud split in the picker exists to make visible.
-   ⚠ With `WEB_SEARCH_PROVIDER=auto` (the default) the query reaches whichever of the five cascade
-   providers actually answers — `api.tavily.com`, `api.linkup.so`, `api.exa.ai`,
-   `serpapi.com`, or a direct DuckDuckGo scrape (no hosted API).
-2. **No route except EXTERNAL and the `WEB` tool touches the network** (beyond the LLM host, which
-   may be local).
-3. **Vector search never changes reading order**: see rule 1.
-4. **A failed chat never marks a document failed.** Ingestion and chat are unrelated subsystems.
-5. **A missing AI backend never crashes startup.** It degrades to 503 on chat only.
-6. **`DELETE /papers/{id}` never deletes chat history.** `conversation_turns.document_id` is
-   `ON DELETE SET NULL`, deliberately, so conversations survive paper deletion.
+1. Web search providers receive the search query. The five-provider cascade is
+   Tavily → Linkup → Exa → SerpApi → DuckDuckGo; only the query is passed to search
+   (backend/app/search/web.py).
+2. A configured cloud model can receive the prompt and selected context for its request. With
+   automatic model selection, Ollama is tried first and configured cloud providers can follow
+   when it is unavailable or fails; a cloud override sends that request to the selected provider.
+   A vision request may also include the selected image (backend/app/llm/resolver.py and
+   backend/app/llm/multimodal.py).
+3. Article import can call configured managed fetch providers before the direct fetch. Those
+   providers receive the requested URL; the article extraction cascade is in
+   backend/app/services/article_extraction.py.
+4. Arabic OCR defaults off. When enabled, its OCR path can send rendered document pages to the
+   configured OCR services; see the Arabic OCR runbook.
+5. Article thumbnail generation is optional. It sends article-derived text to the configured
+   prompt-writing model and the resulting image prompt to Cloudflare Workers AI; see the article
+   thumbnail feature page.
+6. Bibliography resolution can send citation text to Semantic Scholar when that lookup is
+   configured; see backend/app/search/semantic_scholar_client.py.
+7. Extraction, local inference, storage, and database retrieval stay on the configured backend.
+   Network traffic for optional services depends on their configuration and use.
+
+The following are local invariants: vector similarity never changes reading order; a failed chat
+never marks a document failed; and deleting a paper does not delete its chat history because
+conversation_turns.document_id uses ON DELETE SET NULL.

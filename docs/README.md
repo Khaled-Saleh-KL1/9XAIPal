@@ -3,8 +3,8 @@
 > **What this is:** the dispatcher for every doc in this repo. Find your task in the table, start
 > at the named doc, verify with the named command. This page routes; it never explains.
 >
-> **Status:** current · **Reflects code as of:** 2026-08-27 (`502272b`) for the auth routing row
-> below; 2026-08-18 (`8fb153b`) for everything else
+> **Status:** current · **Reconciled with code:** 2026-10-05 (`48cb8c6`). No running service was
+> contacted for this documentation update.
 > **Rule:** when a doc and the code disagree, **the code is authoritative**, and the doc is a
 > defect to be fixed in the same unit of work.
 
@@ -18,7 +18,7 @@
 | Know what listens on which port | [01-orientation/runtime-topology.md](01-orientation/runtime-topology.md) | `docker compose ps` |
 | Diagnose something broken | [01-orientation/operations.md](01-orientation/operations.md) | `ask_traces` / `ingestion_jobs` queries in that doc |
 | Understand the system end-to-end | [02-architecture/overview.md](02-architecture/overview.md) | n/a |
-| Study every feature the app has, one by one — what, where, how, why | [05-features/README.md](05-features/README.md) (108 entries in nine areas) | the files each entry names |
+| Study every feature the app has, one by one — what, where, how, why | [05-features/README.md](05-features/README.md) (117 entries in thirteen areas) | the files each entry names |
 | Trace a PDF from upload to readable | [02-architecture/ingestion-pipeline.md](02-architecture/ingestion-pipeline.md) | `tests/test_ingestion_pipeline.py` |
 | Understand how a question gets answered | [02-architecture/chat-and-ask.md](02-architecture/chat-and-ask.md) | `NOTE[...]` / `ASK[stepN]` log lines |
 | Know which model serves which call | [02-architecture/ai-backend.md](02-architecture/ai-backend.md) | `tests/test_provider_resolver.py` |
@@ -27,8 +27,10 @@
 | Look up an endpoint | [03-reference/api.md](03-reference/api.md) | `localhost:8000/docs` |
 | Look up a table or column | [03-reference/database-schema.md](03-reference/database-schema.md) | `backend/app/database/schema.sql` |
 | Set an environment variable | [03-reference/configuration.md](03-reference/configuration.md) | `backend/app/core/config.py` |
-| Find a file on disk / a static URL | [03-reference/storage.md](03-reference/storage.md) | `ls backend/app/storage` |
+| Find a stored file / its authenticated API route | [03-reference/storage.md](03-reference/storage.md) | `ls backend/app/storage` |
 | Change the schema | [03-reference/migrations.md](03-reference/migrations.md) | restart the API; watch migration logs |
+| Operate article thumbnail generation | [runbooks/article-thumbnails.md](runbooks/article-thumbnails.md) | `backend/app/workers/tasks.py` |
+| Re-embed existing documents safely | [runbooks/reembed-library.md](runbooks/reembed-library.md) | `backend/scripts/reembed_library.py` |
 | Test a release | [04-testing/test-plan.md](04-testing/test-plan.md) | `cd backend && POSTGRES_DB=9xaipal_test pytest -v` |
 | Know what's broken or missing by design | [roadmap.md](roadmap.md) | n/a |
 | Check whether an idea was already tried and rejected | [decisions.md](decisions.md) | n/a |
@@ -59,7 +61,7 @@ strings, not for synonyms.
 | **LOCAL** | Current chunk + neighbours + inline images. |
 | **GLOBAL** | pgvector similarity search across one document. |
 | **OVERVIEW** | Pre-computed hierarchical summaries (`section_summaries`), no vector search. |
-| **EXTERNAL** | Live web search, cascading through tavily → linkup → exa → serpapi → duckduckgo. With the paper agent's `WEB` tool, the only path that reaches the public internet, and only the query string does. |
+| **EXTERNAL** | Live web search, cascading through tavily → linkup → exa → serpapi → duckduckgo. Search sends the query; configured cloud-model, scraping, OCR, citation-resolution, or image-generation calls can also send their required inputs externally. See [configuration](03-reference/configuration.md). |
 | **turn** | One message in a conversation. Row in `conversation_turns`. |
 | **sub-thread** | A tangent branched off a turn via `parent_turn_id`. Deliberately paper-free. |
 | **compaction** | A `role='compaction'` turn holding a dense summary of earlier turns, so long chats don't overflow the context window. |
@@ -110,6 +112,26 @@ docs/
 │   └── migrations.md
 ├── 04-testing/
 │   └── test-plan.md
+├── 05-features/                feature catalogue (13 areas, 117 entries)
+│   ├── README.md
+│   ├── 01-library-and-import.md
+│   ├── 02-extraction-pipeline.md
+│   ├── 03-paper-reader.md
+│   ├── 04-book-reader.md
+│   ├── 05-asking.md
+│   ├── 06-desk.md
+│   ├── 07-accounts-and-safety.md
+│   ├── 08-models-and-configuration.md
+│   ├── 09-operations.md
+│   ├── 10-landing-and-motion.md
+│   ├── 11-reasoning-ui.md
+│   ├── 12-add-paper-drop-zone.md
+│   └── 13-article-thumbnails.md
+├── runbooks/                   operational procedures
+│   ├── arabic-document-ocr.md
+│   ├── article-thumbnails.md
+│   ├── pipeline-tracing.md
+│   └── reembed-library.md
 ├── plans/                     plans, findings, future work        (tracked)
 ├── tasks/                     handoff tasks cut from plans        (gitignored)
 └── archive/                   completed plans & tasks by date     (tracked)

@@ -10,7 +10,7 @@
 > **Does not own:** install ([setup.md](setup.md)), service inventory
 > ([runtime-topology.md](runtime-topology.md)).
 >
-> **Status:** current · **Last verified:** 2026-07-25
+> **Status:** current · **Reconciled with source:** 2026-10-05; see [runtime topology](runtime-topology.md) and [deployment queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split).
 
 ---
 
@@ -66,11 +66,12 @@ ORDER BY last DESC;
 | --- | --- | --- | --- | --- |
 | Postgres unreachable | `/health` → `database:"unavailable"` | Requests 5xx; lifespan does **not** crash | Errors on every action | Start Postgres, the API recovers on the next request. In compose, `restart:` + autoheal do it |
 | No AI backend at all | 503 `NO_LLM_CONFIGURED` | Chat fails; papers still serve | *"No AI backend is configured. Put your API key or your Ollama connection in backend/.env…"* | Start Ollama or paste one cloud key |
-| Ollama down, cloud key present | resolver probe | `auto` reroutes to the first cloud key | Nothing, after up to 30 s (probe cache) | None; restart Ollama to shift back |
+| Ollama is unavailable or a chat request fails | Provider cascade | Chat tries the next configured target; streaming can fall back only before its first token | Usually no visible error if another target succeeds | Check the selected model and provider logs; see [AI backend](../02-architecture/ai-backend.md) |
 | Ollama model not pulled | First call hangs | Model downloads mid-request | Very slow first answer | `ollama pull <CHAT_MODEL>` ahead of time |
 | Embedding model switched | Startup comparison | Pinned ⇒ wipe + re-embed. `auto` ⇒ warn only | Long startup, or degraded search | Pin `EMBEDDING_PROVIDER` and restart |
 | Redis down | Upload marks doc `failed` | Descriptive `error_message` | *"Start Redis (e.g. via docker compose…)"* | Start Redis + worker |
-| No Celery worker running | Nothing, no error at all | Job sits in Redis unconsumed | ⚠ Overlay spins at `queued` forever | Start the worker |
+| No worker consumes the task queue | Queue depth and job status | Ingest jobs wait on ingest; imports, embeddings, summaries, and thumbnails wait on celery | The matching task remains queued | Start celery_worker for ingest or celery_worker_light for celery; see [runtime topology](runtime-topology.md) |
+| Article thumbnail unavailable or disabled | Thumbnail task result/log | Article remains complete; cover endpoint uses its available PDF-page fallback or returns 204 when no cover can be made | Generated article cover is absent | Check the [article thumbnail runbook](../runbooks/article-thumbnails.md) and Cloudflare account/model configuration |
 | Worker OOM on a large book | exit 137, container restarts | Uploads pause, then resume from Redis | Brief stall | Lower `MINERU_PAGE_BATCH_SIZE` or raise `WORKER_MEM_LIMIT` |
 | Container hung but running | Healthcheck `unhealthy` | autoheal restarts it | Brief stall | Automatic |
 | Worker crashes mid-ingestion | Doc stuck in `extracting`/`chunking`/`embedding` | Job never completes | Overlay spins | `POST /papers/{id}/reextract` |
@@ -139,12 +140,14 @@ chunking.
 
 Always try `rechunk` before `reextract`: MinerU is by far the expensive half.
 
-### Scale workers
+### Scale worker concurrency
 
-```bash
-celery -A app.core.celery_app worker --loglevel=info --concurrency=4 -n w1@%h
-celery -A app.core.celery_app worker --loglevel=info --concurrency=4 -n w2@%h
-```
+Compose keeps extraction on the ingest queue and short background work on the light/default queue.
+In production Compose, the ingest worker runs two jobs concurrently; the light worker defaults to
+two, with a 2 GB memory limit. Adjust the corresponding Compose settings for the workload and
+recreate the API and both workers together. Keep the worker role and queue paired so startup
+recovery stays scoped to the queue that worker consumes. See
+[production queue details](../../backend/DEPLOYMENT-PRODUCTION.md#celery-queue-split).
 
 ---
 
