@@ -1,7 +1,8 @@
 """Cloudflare image response adapters and account/model failover."""
 
+import asyncio
 import base64
-from contextlib import contextmanager
+import gzip
 from types import SimpleNamespace
 
 import httpx
@@ -47,16 +48,13 @@ def _response(status=200, *, json_body=None, content=b"", content_type="applicat
     )
 
 
-def _mock_stream(monkeypatch, handler):
-    @contextmanager
-    def stream(_method, url, **kwargs):
-        response = handler(url, **kwargs)
-        try:
-            yield response
-        finally:
-            response.close()
+def _mock_request_response(monkeypatch, handler):
+    from app.services import cloudflare_images
 
-    monkeypatch.setattr(httpx, "stream", stream)
+    def request(url, *, deadline, **kwargs):
+        return handler(url, **kwargs)
+
+    monkeypatch.setattr(cloudflare_images, "_request_response", request)
 
 
 def test_settings_parse_accounts_and_optional_model_order():
@@ -93,7 +91,7 @@ def test_decodes_json_base64_image(monkeypatch):
     from app.services import cloudflare_images
 
     payload = b"generated-image"
-    _mock_stream(
+    _mock_request_response(
         monkeypatch,
         lambda *_args, **_kwargs: _response(
             json_body={"result": {"image": base64.b64encode(payload).decode()}}
@@ -107,12 +105,33 @@ def test_accepts_raw_image_bytes(monkeypatch):
     from app.services import cloudflare_images
 
     payload = b"\x89PNG\r\nimage"
-    _mock_stream(
+    _mock_request_response(
         monkeypatch,
         lambda *_args, **_kwargs: _response(content=payload, content_type="image/png"),
     )
 
     assert cloudflare_images.generate_image("a quiet city", config=_settings()) == payload
+
+
+def test_decodes_gzip_encoded_image_only_once(monkeypatch):
+    from app.services import cloudflare_images
+
+    payload = b"generated-image"
+    def response_handler(request):
+        return httpx.Response(
+            200,
+            content=gzip.compress(payload),
+            headers={"content-type": "image/png", "content-encoding": "gzip"},
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        cloudflare_images,
+        "_async_transport",
+        lambda: httpx.MockTransport(response_handler),
+    )
+
+    assert cloudflare_images.generate_image("prompt", config=_settings()) == payload
 
 
 def test_streaming_response_above_8_mib_is_aborted(monkeypatch):
@@ -121,17 +140,17 @@ def test_streaming_response_above_8_mib_is_aborted(monkeypatch):
     chunk_size = 64 * 1024
     chunk_count = (8 * 1024 * 1024) // chunk_size + 4
 
-    class TrackedStream(httpx.SyncByteStream):
+    class TrackedStream(httpx.AsyncByteStream):
         def __init__(self):
             self.chunks_read = 0
             self.closed = False
 
-        def __iter__(self):
+        async def __aiter__(self):
             for _ in range(chunk_count):
                 self.chunks_read += 1
                 yield b"x" * chunk_size
 
-        def close(self):
+        async def aclose(self):
             self.closed = True
 
     body = TrackedStream()
@@ -142,16 +161,13 @@ def test_streaming_response_above_8_mib_is_aborted(monkeypatch):
         request=httpx.Request("POST", "https://api.cloudflare.com/test"),
     )
 
-    @contextmanager
-    def stream(*_args, **_kwargs):
+    async def read_response():
         try:
-            yield response
+            return await cloudflare_images._read_bounded_response(response)
         finally:
-            response.close()
+            await response.aclose()
 
-    monkeypatch.setattr(cloudflare_images.httpx, "stream", stream)
-
-    result = cloudflare_images.generate_image("prompt", config=_settings())
+    result = asyncio.run(read_response())
 
     assert result is None
     assert body.closed
@@ -181,7 +197,7 @@ def test_flux_2_request_uses_multipart_form_data(monkeypatch):
         captured.update(url=url, **kwargs)
         return _response(content=b"image", content_type="image/png")
 
-    _mock_stream(monkeypatch, post)
+    _mock_request_response(monkeypatch, post)
 
     result = cloudflare_images.generate_image(
         "a quiet city", config=_settings(models="@cf/black-forest-labs/flux-2-klein-4b")
@@ -206,7 +222,7 @@ def test_quota_on_one_account_restarts_at_first_model_on_next(monkeypatch):
             return _response(429, json_body={"errors": [{"message": "daily limit"}]})
         return _response(content=b"image", content_type="image/jpeg")
 
-    _mock_stream(monkeypatch, post)
+    _mock_request_response(monkeypatch, post)
 
     result = cloudflare_images.generate_image(
         "prompt", config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b")
@@ -232,7 +248,7 @@ def test_model_404_tries_next_model_on_same_account(monkeypatch):
         attempted.append(url.rsplit("/", 1)[-1])
         return _response(404) if len(attempted) == 1 else _response(content=b"image", content_type="image/jpeg")
 
-    _mock_stream(monkeypatch, post)
+    _mock_request_response(monkeypatch, post)
 
     assert cloudflare_images.generate_image("prompt", config=_settings()) == b"image"
     assert attempted == ["model-one", "model-two"]
@@ -249,7 +265,7 @@ def test_auth_failure_skips_remaining_models_for_that_account(monkeypatch):
             return _response(401)
         return _response(content=b"image", content_type="image/jpeg")
 
-    _mock_stream(monkeypatch, post)
+    _mock_request_response(monkeypatch, post)
 
     assert cloudflare_images.generate_image(
         "prompt", config=_settings(f"{_ACCOUNT_A}:secret-a,{_ACCOUNT_B}:secret-b")
@@ -260,7 +276,7 @@ def test_auth_failure_skips_remaining_models_for_that_account(monkeypatch):
 def test_all_quota_exhausted_accounts_raise_quota_exception(monkeypatch):
     from app.services import cloudflare_images
 
-    _mock_stream(monkeypatch, lambda *_args, **_kwargs: _response(429))
+    _mock_request_response(monkeypatch, lambda *_args, **_kwargs: _response(429))
 
     with pytest.raises(cloudflare_images.QuotaExhaustedError):
         cloudflare_images.generate_image(
@@ -280,7 +296,7 @@ def test_model_failure_before_quota_still_retries_accounts_next_day(monkeypatch)
             return _response(404)
         return _response(429)
 
-    _mock_stream(monkeypatch, post)
+    _mock_request_response(monkeypatch, post)
 
     with pytest.raises(cloudflare_images.QuotaExhaustedError):
         cloudflare_images.generate_image(
@@ -303,7 +319,7 @@ def test_open_account_is_skipped_when_another_account_is_healthy(monkeypatch):
         attempted.append(url)
         return _response(content=b"image", content_type="image/png")
 
-    _mock_stream(monkeypatch, response)
+    _mock_request_response(monkeypatch, response)
 
     result = cloudflare_images.generate_image(
         "prompt",
@@ -328,7 +344,7 @@ def test_all_open_account_breakers_skip_requests_and_raise_for_later_retry(monke
         attempted.append(url)
         return _response(503)
 
-    _mock_stream(monkeypatch, response)
+    _mock_request_response(monkeypatch, response)
 
     with pytest.raises(cloudflare_images.QuotaExhaustedError):
         cloudflare_images.generate_image(
@@ -355,7 +371,7 @@ def test_model_requests_share_one_total_deadline(monkeypatch):
         attempted_timeouts.append(kwargs["timeout"])
         return _response(503)
 
-    _mock_stream(monkeypatch, response)
+    _mock_request_response(monkeypatch, response)
 
     result = cloudflare_images.generate_image(
         "prompt",
@@ -366,13 +382,80 @@ def test_model_requests_share_one_total_deadline(monkeypatch):
     assert attempted_timeouts == [60.0, 1.0]
 
 
+def test_total_deadline_failures_open_the_account_breaker(monkeypatch):
+    from app.core import circuit_breaker
+    from app.services import cloudflare_images
+
+    now = {"value": 0.0}
+    monkeypatch.setattr(
+        cloudflare_images,
+        "time",
+        SimpleNamespace(monotonic=lambda: now["value"]),
+        raising=False,
+    )
+
+    def timeout_each_request(_url, **kwargs):
+        now["value"] += kwargs["timeout"]
+        return _response(503)
+
+    _mock_request_response(monkeypatch, timeout_each_request)
+    config = _settings(models=",".join(f"model-{i}" for i in range(8)))
+
+    for _ in range(circuit_breaker.FAILURE_THRESHOLD):
+        assert cloudflare_images.generate_image("prompt", config=config) is None
+
+    assert circuit_breaker.is_open("cloudflare#0")
+
+
+def test_active_stream_is_cancelled_at_the_total_deadline(monkeypatch):
+    from app.services import cloudflare_images
+
+    class HangingStream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.closed = False
+
+        async def __aiter__(self):
+            await asyncio.Event().wait()
+            yield b"unreachable"
+
+        async def aclose(self):
+            self.closed = True
+
+    body = HangingStream()
+
+    def response_handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "image/png"},
+            stream=body,
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        cloudflare_images,
+        "_async_transport",
+        lambda: httpx.MockTransport(response_handler),
+        raising=False,
+    )
+
+    result = cloudflare_images._request_response(
+        "https://api.cloudflare.com/test",
+        deadline=cloudflare_images.time.monotonic() + 0.02,
+        timeout=1.0,
+        headers={"Authorization": "Bearer test-only"},
+    )
+
+    assert result is None
+    assert body.closed
+
+
 def test_no_configured_accounts_is_a_quiet_noop(monkeypatch, caplog):
     from app.services import cloudflare_images
 
     def unexpected_request(*args, **kwargs):
         pytest.fail("an unconfigured image client must not make a request")
 
-    monkeypatch.setattr(cloudflare_images.httpx, "stream", unexpected_request)
+    monkeypatch.setattr(cloudflare_images, "_request_response", unexpected_request)
 
     assert cloudflare_images.generate_image("prompt", config=_settings("", "")) is None
     assert not caplog.records
@@ -381,7 +464,7 @@ def test_no_configured_accounts_is_a_quiet_noop(monkeypatch, caplog):
 def test_tokens_are_never_written_to_log_records(monkeypatch, caplog):
     from app.services import cloudflare_images
 
-    _mock_stream(monkeypatch, lambda *_args, **_kwargs: _response(401))
+    _mock_request_response(monkeypatch, lambda *_args, **_kwargs: _response(401))
 
     cloudflare_images.generate_image(
         "prompt", config=_settings(f"{_ACCOUNT_A}:do-not-log-this-token", "model-one")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import re
@@ -73,7 +74,7 @@ def _json_body(response: httpx.Response) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _read_bounded_response(
+async def _read_bounded_response(
     response: httpx.Response,
     *,
     deadline: float | None = None,
@@ -81,7 +82,7 @@ def _read_bounded_response(
     """Buffer at most 8 MiB from a streamed response, then close the stream."""
     chunks: list[bytes] = []
     total_bytes = 0
-    for chunk in response.iter_bytes(chunk_size=_RESPONSE_CHUNK_BYTES):
+    async for chunk in response.aiter_bytes(chunk_size=_RESPONSE_CHUNK_BYTES):
         if deadline is not None and time.monotonic() >= deadline:
             return None
         if total_bytes + len(chunk) > _MAX_RESPONSE_BYTES:
@@ -89,12 +90,56 @@ def _read_bounded_response(
         chunks.append(chunk)
         total_bytes += len(chunk)
 
+    # iter_bytes()/aiter_bytes() transparently decode Content-Encoding. The
+    # reconstructed response therefore needs headers that describe its new,
+    # decoded body rather than the wire representation.
+    headers = {
+        name: value
+        for name, value in response.headers.items()
+        if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+    }
     return httpx.Response(
         status_code=response.status_code,
-        headers=response.headers,
+        headers=headers,
         content=b"".join(chunks),
         request=response.request,
     )
+
+
+def _async_transport() -> httpx.AsyncBaseTransport | None:
+    """Transport seam for tests; production uses HTTPX's standard transport."""
+    return None
+
+
+async def _request_response_async(
+    url: str,
+    *,
+    deadline: float,
+    **kwargs: Any,
+) -> httpx.Response | None:
+    remaining_seconds = deadline - time.monotonic()
+    if remaining_seconds <= 0:
+        return None
+    timeout = kwargs.pop("timeout", min(_TIMEOUT_SECONDS, remaining_seconds))
+
+    # asyncio.timeout imposes one absolute deadline around connect, headers,
+    # and body reads. HTTPX's read timeout alone is per socket read and can be
+    # extended indefinitely by a peer that keeps sending small chunks.
+    try:
+        async with asyncio.timeout(remaining_seconds):
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                transport=_async_transport(),
+            ) as client:
+                async with client.stream("POST", url, **kwargs) as response:
+                    return await _read_bounded_response(response, deadline=deadline)
+    except TimeoutError:
+        return None
+
+
+def _request_response(url: str, *, deadline: float, **kwargs: Any) -> httpx.Response | None:
+    """Run one bounded async HTTP exchange from this synchronous worker API."""
+    return asyncio.run(_request_response_async(url, deadline=deadline, **kwargs))
 
 
 def _error_text(body: dict[str, Any] | None, response: httpx.Response) -> str:
@@ -145,8 +190,8 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
     """Return generated image bytes, or ``None`` when generation failed.
 
     Requests are made only when at least one valid account is configured.
-    Tests replace :func:`httpx.stream`; this client never has an implicit
-    local model or a second provider fallback.
+    This client never has an implicit local model or a second provider
+    fallback.
     """
     config = config or settings
     accounts = config.cloudflare_ai_accounts
@@ -176,11 +221,14 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
         for model in models:
             remaining_seconds = attempt_deadline - time.monotonic()
             if remaining_seconds <= 0:
+                if account_failed:
+                    circuit_breaker.record_failure(breaker_name)
                 logger.warning("Cloudflare image generation reached its total attempt deadline")
                 return None
 
             url = f"{_BASE_URL}/{account_id}/ai/run/{model}"
             json_payload, multipart_fields = _request_fields(model, prompt)
+            account_attempted = False
             try:
                 kwargs: dict[str, Any] = {
                     "headers": {"Authorization": f"Bearer {token}"},
@@ -190,11 +238,8 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
                     kwargs["files"] = multipart_fields
                 else:
                     kwargs["json"] = json_payload
-                with httpx.stream("POST", url, **kwargs) as streamed_response:
-                    response = _read_bounded_response(
-                        streamed_response,
-                        deadline=attempt_deadline,
-                    )
+                account_attempted = True
+                response = _request_response(url, deadline=attempt_deadline, **kwargs)
             except httpx.RequestError:
                 account_failed = True
                 continue
@@ -203,6 +248,8 @@ def generate_image(prompt: str, *, config: Settings | None = None) -> bytes | No
                 continue
 
             if time.monotonic() >= attempt_deadline:
+                if account_attempted:
+                    circuit_breaker.record_failure(breaker_name)
                 logger.warning("Cloudflare image generation reached its total attempt deadline")
                 return None
 

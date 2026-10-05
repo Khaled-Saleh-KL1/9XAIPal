@@ -3,6 +3,7 @@
 import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import threading
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -284,6 +285,94 @@ def test_in_flight_duplicate_exits_without_paid_generation(monkeypatch, tmp_path
     assert result["status"] == "in_progress"
 
 
+def test_redelivered_task_retries_after_a_stale_thumbnail_lease(monkeypatch, tmp_path):
+    from celery.exceptions import Retry
+
+    tasks = _harness(monkeypatch, tmp_path)
+    document_id = uuid4()
+    lock_key = tasks._article_thumbnail_lock_key(document_id)
+    generated = []
+
+    class MemoryRedis:
+        def __init__(self):
+            self.values = {lock_key: "owner-that-crashed"}
+
+        def set(self, key, value, *, nx, ex):
+            if nx and key in self.values:
+                return None
+            self.values[key] = value
+            return True
+
+        def eval(self, script, key_count, key, owner_token, *args):
+            assert key_count == 1
+            if "DEL" in script and self.values.get(key) == owner_token:
+                del self.values[key]
+                return 1
+            return 0
+
+    client = MemoryRedis()
+    monkeypatch.setattr(tasks, "_article_thumbnail_lock_client", lambda: client)
+    def claim(candidate_id):
+        token = uuid4().hex
+        return token if client.set(
+            tasks._article_thumbnail_lock_key(candidate_id),
+            token,
+            nx=True,
+            ex=tasks._ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS,
+        ) else None
+
+    def release(candidate_id, token):
+        return client.eval(
+            tasks._ARTICLE_THUMBNAIL_LOCK_RELEASE_LUA,
+            1,
+            tasks._article_thumbnail_lock_key(candidate_id),
+            token,
+        )
+
+    monkeypatch.setattr(tasks, "_claim_article_thumbnail", claim)
+    monkeypatch.setattr(tasks, "_release_article_thumbnail", release)
+    monkeypatch.setattr(tasks, "chat_sync", lambda *_args, **_kwargs: {"content": "A reef"})
+    monkeypatch.setattr(
+        tasks.cloudflare_images,
+        "generate_image",
+        lambda _prompt: generated.append(True) or _PNG,
+    )
+
+    retry_calls = []
+
+    def retry(**kwargs):
+        retry_calls.append(kwargs)
+        raise Retry()
+
+    monkeypatch.setattr(tasks.generate_article_thumbnail, "retry", retry)
+    tasks.generate_article_thumbnail.push_request(
+        retries=0,
+        delivery_info={"redelivered": True},
+    )
+    try:
+        with pytest.raises(Retry):
+            tasks.generate_article_thumbnail.run(str(document_id))
+    finally:
+        tasks.generate_article_thumbnail.pop_request()
+
+    assert retry_calls[0]["countdown"] == tasks._ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS + 1
+    assert generated == []
+
+    # Simulate the expired Redis lease when the delayed redelivery arrives.
+    client.values.pop(lock_key)
+    tasks.generate_article_thumbnail.push_request(
+        retries=1,
+        delivery_info={"redelivered": True},
+    )
+    try:
+        result = tasks.generate_article_thumbnail.run(str(document_id))
+    finally:
+        tasks.generate_article_thumbnail.pop_request()
+
+    assert result["status"] == "complete"
+    assert generated == [True]
+
+
 def test_thumbnail_lock_is_released_when_generation_finishes(monkeypatch, tmp_path):
     tasks = _harness(monkeypatch, tmp_path)
     monkeypatch.setattr(tasks, "chat_sync", lambda *_args, **_kwargs: {"content": "A reef"})
@@ -293,6 +382,87 @@ def test_thumbnail_lock_is_released_when_generation_finishes(monkeypatch, tmp_pa
 
     assert result["status"] == "unavailable"
     assert tasks._article_thumbnail_test_lock_releases == ["test-lock"]
+
+
+def test_thumbnail_lock_renews_while_prompt_model_is_running(monkeypatch, tmp_path):
+    tasks = _harness(monkeypatch, tmp_path)
+    document_id = uuid4()
+    lock_key = tasks._article_thumbnail_lock_key(document_id)
+    renewed = threading.Event()
+
+    class MemoryRedis:
+        def __init__(self):
+            self.values = {}
+
+        def set(self, key, value, *, nx, ex):
+            if nx and key in self.values:
+                return None
+            self.values[key] = value
+            return True
+
+        def eval(self, script, key_count, key, owner_token, *args):
+            assert key_count == 1
+            if "EXPIRE" in script:
+                if self.values.get(key) != owner_token:
+                    return 0
+                renewed.set()
+                return 1
+            if "DEL" in script and self.values.get(key) == owner_token:
+                del self.values[key]
+                return 1
+            return 0
+
+    client = MemoryRedis()
+    monkeypatch.setattr(tasks, "_article_thumbnail_lock_client", lambda: client)
+    monkeypatch.setattr(tasks, "_ARTICLE_THUMBNAIL_LOCK_RENEW_INTERVAL_SECONDS", 0.01)
+
+    def claim(candidate_id):
+        token = uuid4().hex
+        return token if client.set(
+            tasks._article_thumbnail_lock_key(candidate_id),
+            token,
+            nx=True,
+            ex=tasks._ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS,
+        ) else None
+
+    def release(candidate_id, token):
+        return client.eval(
+            tasks._ARTICLE_THUMBNAIL_LOCK_RELEASE_LUA,
+            1,
+            tasks._article_thumbnail_lock_key(candidate_id),
+            token,
+        )
+
+    monkeypatch.setattr(tasks, "_claim_article_thumbnail", claim)
+    monkeypatch.setattr(tasks, "_release_article_thumbnail", release)
+    prompt_started = threading.Event()
+    finish_prompt = threading.Event()
+
+    def chat(*_args, **_kwargs):
+        prompt_started.set()
+        assert finish_prompt.wait(2)
+        return {"content": "A reef"}
+
+    monkeypatch.setattr(tasks, "chat_sync", chat)
+    monkeypatch.setattr(tasks.cloudflare_images, "generate_image", lambda _prompt: _PNG)
+    result = {}
+    worker = threading.Thread(
+        target=lambda: result.setdefault(
+            "value", tasks.generate_article_thumbnail.run(str(document_id))
+        )
+    )
+    worker.start()
+    try:
+        assert prompt_started.wait(1)
+        assert renewed.wait(1)
+        assert tasks._claim_article_thumbnail(document_id) is None
+    finally:
+        finish_prompt.set()
+        worker.join(2)
+
+    assert not worker.is_alive()
+    assert result["value"]["status"] == "complete"
+    assert lock_key not in client.values
 
 
 def test_cover_is_rechecked_after_lock_claim(monkeypatch, tmp_path):

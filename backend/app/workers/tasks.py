@@ -9,12 +9,13 @@ from __future__ import annotations
 import math
 import os
 import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from uuid import UUID, uuid4
 
 import redis as redis_sync
-from celery.exceptions import MaxRetriesExceededError
+from celery.exceptions import MaxRetriesExceededError, Retry
 from sqlalchemy import text
 
 from app.core.celery_app import celery_app
@@ -65,9 +66,16 @@ _THUMBNAIL_WIDTH = 480
 _THUMBNAIL_HEIGHT = 621  # Matches the library card's 1 / 1.294 portrait aspect ratio.
 _THUMBNAIL_BACKGROUND = (250, 246, 237)
 _ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS = 10 * 60
+_ARTICLE_THUMBNAIL_LOCK_RENEW_INTERVAL_SECONDS = 60
 _ARTICLE_THUMBNAIL_LOCK_RELEASE_LUA = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+_ARTICLE_THUMBNAIL_LOCK_RENEW_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('EXPIRE', KEYS[1], ARGV[2])
 end
 return 0
 """
@@ -85,6 +93,8 @@ def _article_thumbnail_lock_client():
         _article_thumbnail_redis = redis_sync.from_url(
             settings.redis_url,
             decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
         )
     return _article_thumbnail_redis
 
@@ -109,6 +119,61 @@ def _release_article_thumbnail(document_id: UUID, owner_token: str) -> None:
         _article_thumbnail_lock_key(document_id),
         owner_token,
     )
+
+
+class _ArticleThumbnailLeaseHeartbeat:
+    """Renew a thumbnail generation lease while synchronous model calls run."""
+
+    def __init__(self, document_id: UUID, owner_token: str):
+        self.document_id = document_id
+        self.owner_token = owner_token
+        self._stop = threading.Event()
+        self._lost = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"article-thumbnail-lease-{document_id}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _run(self) -> None:
+        lock_key = _article_thumbnail_lock_key(self.document_id)
+        while not self._stop.wait(_ARTICLE_THUMBNAIL_LOCK_RENEW_INTERVAL_SECONDS):
+            try:
+                renewed = _article_thumbnail_lock_client().eval(
+                    _ARTICLE_THUMBNAIL_LOCK_RENEW_LUA,
+                    1,
+                    lock_key,
+                    self.owner_token,
+                    _ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "article thumbnail lock renewal failed document=%s error=%s",
+                    self.document_id,
+                    type(exc).__name__,
+                )
+                self._lost.set()
+                return
+            if not renewed:
+                logger.warning("article thumbnail lock ownership lost document=%s", self.document_id)
+                self._lost.set()
+                return
+
+    def assert_owned(self) -> None:
+        if self._lost.is_set():
+            raise RuntimeError("article thumbnail lock ownership was lost")
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=6)
+
+
+def _article_thumbnail_delivery_was_redelivered(task) -> bool:
+    delivery_info = getattr(task.request, "delivery_info", None) or {}
+    return bool(delivery_info.get("redelivered"))
 
 
 def _article_thumbnail_prompt(article_text: str) -> str:
@@ -468,15 +533,28 @@ def generate_article_thumbnail(self, document_id: str) -> dict:
 
         lock_token = _claim_article_thumbnail(doc_uuid)
         if lock_token is None:
+            if (
+                _article_thumbnail_delivery_was_redelivered(self)
+                and self.request.retries < 1
+            ):
+                # Worker-loss redelivery may arrive before the crashed task's
+                # lease expires. Retry after its maximum TTL instead of ACKing
+                # the only queued copy while the stale lease is still present.
+                raise self.retry(countdown=_ARTICLE_THUMBNAIL_LOCK_TTL_SECONDS + 1)
             return {"document_id": document_id, "status": "in_progress"}
 
+        lease = _ArticleThumbnailLeaseHeartbeat(doc_uuid, lock_token)
+        lease.start()
         try:
+            lease.assert_owned()
             destination = cover_service.cover_path(doc_uuid)
             if destination.is_file() and destination.stat().st_size > 0:
                 return {"document_id": document_id, "status": "exists"}
 
             prompt = _article_thumbnail_prompt(article_text)
+            lease.assert_owned()
             image = cloudflare_images.generate_image(prompt)
+            lease.assert_owned()
             if not image:
                 return {"document_id": document_id, "status": "unavailable"}
 
@@ -500,6 +578,7 @@ def generate_article_thumbnail(self, document_id: str) -> dict:
                 _write_article_thumbnail(doc_uuid, image)
                 return {"document_id": document_id, "status": "complete"}
         finally:
+            lease.stop()
             try:
                 _release_article_thumbnail(doc_uuid, lock_token)
             except Exception as exc:
@@ -513,6 +592,8 @@ def generate_article_thumbnail(self, document_id: str) -> dict:
             logger.warning("article thumbnail quota retries exhausted document=%s", document_id)
             return {"document_id": document_id, "status": "quota_exhausted"}
         raise self.retry(exc=exc, countdown=_seconds_until_next_utc_0010())
+    except Retry:
+        raise
     except Exception as exc:
         logger.warning(
             "article thumbnail generation failed document=%s error=%s",

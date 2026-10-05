@@ -4,7 +4,7 @@
 
 **Goal:** Address all five review findings for article thumbnail generation without contacting external services or production.
 
-**Architecture:** Bound Cloudflare response reads to 8 MiB, filter breaker-open accounts strictly, and apply a 180-second deadline across all account/model attempts. Claim a 10-minute Redis lease before paid prompt/image generation, release it only when its owner token still matches, and reject malformed Cloudflare account IDs before URL construction.
+**Architecture:** Bound Cloudflare response reads to 8 MiB, filter breaker-open accounts strictly, and apply an absolute 180-second deadline across all account/model attempts. Claim and renew a 10-minute Redis lease before paid prompt/image generation, release it only when its owner token still matches, preserve worker-loss redelivery until a stale lease expires, and reject malformed Cloudflare account IDs before URL construction.
 
 **Tech Stack:** Python 3.11+, httpx, redis-py, Celery, pytest, Vitest, Vite.
 
@@ -37,7 +37,7 @@
 
 **Interfaces:**
 - Produces `_MAX_RESPONSE_BYTES = 8 * 1024 * 1024`, `_MAX_JSON_IMAGE_BYTES`, and bounded response reading used by `generate_image`.
-- Uses `httpx.stream` instead of eager `httpx.post`; preserve existing parsed image/error behavior for bodies at or below the cap.
+- Uses `httpx.AsyncClient.stream` instead of eager `httpx.post`; preserve existing parsed image/error behavior for bodies at or below the cap.
 
 - [x] Add a streaming test whose byte stream crosses 8 MiB and assert the reader closes without consuming later chunks and returns no image.
 - [x] Add a direct JSON-image helper test proving an encoded value over `_MAX_JSON_IMAGE_BYTES` returns `None` before `base64.b64decode` runs.
@@ -68,7 +68,7 @@
 
 **Interfaces:**
 - Uses `_TOTAL_ATTEMPT_TIMEOUT_SECONDS = 180.0` and `_TIMEOUT_SECONDS = 60.0`.
-- Before each request, passes `min(_TIMEOUT_SECONDS, remaining_deadline)` as the request timeout; stops when no time remains.
+- Before each request, passes `min(_TIMEOUT_SECONDS, remaining_deadline)` as the HTTP timeout and wraps the complete exchange in an absolute async timeout; stops when no time remains.
 
 - [x] Add a deterministic-clock test where the deadline expires after two attempts; assert request timeouts shrink to the remaining time and no later model is requested.
 - [x] Run it and confirm the current implementation exceeds the total budget.
@@ -85,6 +85,7 @@
 - `_claim_article_thumbnail(document_id: UUID) -> str | None` uses `SET key token NX EX 600`; `None` means another task owns the lease.
 - `_release_article_thumbnail(document_id: UUID, token: str)` compare-deletes with Lua so an expired owner cannot release a replacement lease.
 - Return `status: in_progress` on contention; acquire before `chat_sync` and image generation; release in `finally`.
+- Renew the lease during long prompt/image calls with an owner-token-checked expiry update. For worker-loss redelivery, retry once after the maximum lease TTL before acknowledging contention.
 
 - [x] Add a task test where claim returns `None`; assert it exits as `in_progress` without calling the prompt model or image generator.
 - [x] Add helper tests for `NX`/`EX=600`, successful claim, and compare-delete preserving a different token.
@@ -109,6 +110,13 @@
 
 ## Final verification
 
-- Run the exact focused backend Docker command from the spec (no full backend suite).
-- Run `npx vitest run` and `npm run build` in `frontend/`.
-- Review the diff and commit history; write the report to `/private/tmp/claude-501/-Users-khaled-saleh-kl1-MyStuff-All-Programming-Files-9XAIPal-VPS/0df7da94-8918-4b81-8cdc-75713469848e/scratchpad/codex/report-L6b.md`.
+- [x] Run the exact focused backend Docker command from the spec (no full backend suite).
+- [x] Run `npx vitest run` and `npm run build` in `frontend/`.
+- [x] Review the diff and commit history; write the report to `/private/tmp/claude-501/-Users-khaled-saleh-kl1-MyStuff-All-Programming-Files-9XAIPal-VPS/0df7da94-8918-4b81-8cdc-75713469848e/scratchpad/codex/report-L6b.md`.
+
+## Review follow-up
+
+- [x] Keep already decompressed content from being decoded twice when rebuilding the bounded response.
+- [x] Enforce an absolute deadline during active response reads and count deadline exhaustion toward the account breaker.
+- [x] Renew the thumbnail lease through long model calls and defer worker-loss redelivery until a stale lease can expire.
+- [x] Add regressions first; confirm 5 focused failures before fixes and 5 passes afterward.
