@@ -271,3 +271,23 @@ above: a different provider for a different question ("what paper is this citati
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` | (empty) | Read by `huggingface_hub` for MinerU's ~5 GB first-run weight download. |
+
+## Queue reliability and owner alerts
+
+All values are environment-backed settings. Empty mail addresses or host disable email and leave failures in the database/logs. No email is sent from a failing task; a light-queue task sends plain text with STARTTLS.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MAX_QUEUED_JOBS_PER_USER` | `5` | Per-owner queued/in-progress ingestion ceiling |
+| `MIN_FREE_DISK_GB` | `5` | Minimum available storage GB, supplements disk-percent guard |
+| `STALLED_JOB_MINUTES` | `45` | Heartbeat inactivity threshold, active-task allowance is three times this |
+| `ALERT_EMAIL_TO` | empty | Owner recipient |
+| `ALERT_EMAIL_FROM` | empty | Alert sender |
+| `SMTP_HOST` | empty | SMTP server, empty disables sending |
+| `SMTP_PORT` | `587` | STARTTLS port |
+| `SMTP_USERNAME` | empty | Optional SMTP account |
+| `SMTP_PASSWORD` | empty | Optional SMTP credential, inject outside version control |
+| `ALERT_MAX_EMAILS_PER_DAY` | `20` | Atomic immediate-mail cap; summary is exempt |
+| `ALERT_REPEAT_WINDOW_MINUTES` | `60` | Suppression window per normalized task/error fingerprint |
+
+Existing `MAX_QUEUED_INGESTION_JOBS=50`, `MAX_UPLOAD_SIZE_MB=500`, `INGESTION_DISK_REFUSE_PERCENT=90`, `STORAGE_ROOT`, `REDIS_URL` and optional `CELERY_BROKER_URL` remain authoritative. Compose passes queue settings to API/workers and mail settings to workers. Both compose files keep the embedded-beat light worker at exactly one replica. [Operator runbook](../runbooks/queue-reliability.md).

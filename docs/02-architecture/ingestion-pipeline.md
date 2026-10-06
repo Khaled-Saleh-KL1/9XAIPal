@@ -378,3 +378,11 @@ never runs would tick green having done nothing: see
 - Disk cleanup (best effort): `documents/<filename>`, `assets/<id>.pdf`,
   `extracted/<id>/`, `images/<id>/`.
 - Conversation turns survive with `document_id` set to null.
+
+## Queue reliability
+
+Admission occurs before multipart parsing and repeats atomically at job insertion, extending the existing PostgreSQL queue advisory lock. Global and owner ceilings, free-GB and disk-percent guards, and broker probes bound accepted work. PDFs stream with a byte limit and SHA-256 in one pass. Owner-scoped unique content/normalized-URL indexes and transaction advisory locks select one document/job winner; failed reuploads advance the existing job's execution generation. Optional idempotency keys use a durable ledger plus a 24-hour Redis cache. Legacy hashes are backfilled only by an explicit operator script.
+
+Terminal Celery failures and returned failed outcomes enter `failed_jobs`; intermediate retries do not. Page/batch progress and observed-work heartbeats distinguish long books from workers that stopped responding. A conservative active/reserved inspection gate and a broker-pending successor check precede stalled state changes; queued jobs are excluded and lease renewal never substitutes for work progress. The light queue handles STARTTLS email behind atomic Redis repeat/cap gates and a daily Asia/Amman summary. Embedded beat requires exactly one light-worker replica. Existing late acknowledgments, prefetch=1, connection-pinned article locks, and PDF execution claims remain in place. Crash redelivery either replays a durable outcome or redoes the existing wipe-and-rewrite chunk transaction; chunk embeddings use their existing batch upserts. OCR routing, chunk quality and embedding semantics are unchanged.
+
+See [queue reliability operations](../runbooks/queue-reliability.md) for CLI commands, configuration, backfill and checks.
