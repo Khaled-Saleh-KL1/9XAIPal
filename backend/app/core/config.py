@@ -646,7 +646,7 @@ class Settings(BaseSettings):
     # lasts 30 days, so that can never be the presence signal. A slot frees
     # automatically this many seconds after someone goes idle, or immediately
     # on logout.
-    max_active_users: int = 30
+    max_active_users: int = 500
     active_window_seconds: int = 300  # 5 minutes
 
     # Celery / Redis

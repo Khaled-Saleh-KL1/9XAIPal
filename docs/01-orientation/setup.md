@@ -212,7 +212,7 @@ Ctrl+C: **without** `-v`, so data volumes and uploaded papers survive.
 The API requires a logged-in session (see [auth.md](../02-architecture/auth.md)) the same way in
 LAN mode as anywhere else: nothing disables `get_current_user` for it. Signup is open — anyone who
 can reach the API can create an account, on the LAN same as anywhere else — so on a LAN you don't
-fully control, that's effectively "anyone on the LAN can sign up". `MAX_ACTIVE_USERS` (default 30)
+fully control, that's effectively "anyone on the LAN can sign up". `MAX_ACTIVE_USERS` (default 500)
 is what actually bounds concurrent usage; it isn't an access-control gate.
 Files are no exception: figures, PDFs and research images are served under `/api/v1` behind the
 same session and an ownership check (see [storage.md](../03-reference/storage.md#serving-files)).
