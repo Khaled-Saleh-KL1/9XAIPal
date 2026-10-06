@@ -32,8 +32,9 @@ is `[ollama, …every cloud key present]`, else it walks the configured cloud ke
 default target uses its own configured role model. A configured `LLM_PROVIDER` pin uses only that
 provider. A request-time model choice is routed to its owner: names in
 `resolver.MODEL_PROVIDER_PINS` use their pinned provider, provider-specific configured defaults
-use that provider, and other catalog tags use Ollama alone. This prevents a model tag from being
-sent to an unrelated provider. Local Ollama uses its native API (tag resolution, `keep_alive`);
+use that provider, and `LLM_PROVIDER=custom` routes its configured `CHAT_MODEL` to the custom
+endpoint. Other catalog tags use Ollama alone. This prevents a model tag from being sent to an
+unrelated provider. Local Ollama uses its native API (tag resolution, `keep_alive`);
 every cloud provider speaks the OpenAI chat-completions protocol.
 
 **Why the cascade.** Ollama passing its cheap reachability probe never guaranteed the completion
@@ -86,7 +87,9 @@ model available, while HTTP 402, 401, 403, and 404 mark it unavailable with a pr
 reason. The catalog does not probe models. Unknown cache state or Redis failure means available,
 so `/models` stays responsive and a real request decides. The selected model is persisted on the
 note and inherited by follow-ups. If it fails before streamed output, the default route may answer
-with a visible notice; the answer metadata names the model that actually responded.
+with a visible notice; both reader pickers then reload `/models`, disable the failed model, and
+select an available model if the current choice is no longer available. The answer metadata names
+the model that actually responded.
 
 **Why it does not break the no-hardcoding rule.** The user selects a catalog entry and its model ID
 remains the request value; the picker label is presentation only. `MODEL_PROVIDER_PINS` is the

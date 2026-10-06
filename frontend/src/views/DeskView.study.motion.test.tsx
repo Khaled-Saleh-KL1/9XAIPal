@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   listStudies: vi.fn(),
   listPapers: vi.fn(),
   listModels: vi.fn(),
+  askStudyStream: vi.fn(),
   getStudy: vi.fn(),
   getStudyChat: vi.fn(),
   listStickies: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock('../api', () => ({
   listStudies: mocks.listStudies,
   listPapers: mocks.listPapers,
   listModels: mocks.listModels,
+  askStudyStream: mocks.askStudyStream,
   getStudy: mocks.getStudy,
   getStudyChat: mocks.getStudyChat,
   listStickies: mocks.listStickies,
@@ -51,7 +53,26 @@ vi.mock('../components/UserMenu', () => ({ UserMenuInline: () => null }));
 vi.mock('./NoteWall', () => ({ NoteWall: () => null }));
 vi.mock('./PaperPicker', () => ({ PaperPicker: () => null }));
 vi.mock('./StickyBoard', () => ({ StickyBoard: () => null }));
-vi.mock('./StudyChat', () => ({ StudyChat: () => null }));
+vi.mock('./StudyChat', async () => {
+  const React = await import('react');
+  const { ModelPicker } = await import('../components/ModelPicker');
+  return {
+    StudyChat: (props: Record<string, any>) => React.createElement(
+      'section',
+      null,
+      React.createElement(ModelPicker, {
+        catalog: props.catalog,
+        model: props.model,
+        onChange: props.onModelChange,
+        title: 'Which model answers here',
+      }),
+      React.createElement('button', {
+        type: 'button',
+        onClick: () => void props.onAsk('test question'),
+      }, 'Ask test question'),
+    ),
+  };
+});
 
 import { DeskView } from './DeskView';
 
@@ -68,10 +89,12 @@ describe('DeskView study rail motion', () => {
     mocks.listStudies.mockResolvedValue(studies);
     mocks.listPapers.mockResolvedValue([]);
     mocks.listModels.mockResolvedValue({ models: [] });
+    mocks.askStudyStream.mockReset();
     mocks.getStudy.mockImplementation(async (id: string) => ({ study: studies.find((s) => s.id === id)!, papers: [] }));
     mocks.getStudyChat.mockResolvedValue({ conversation_id: null, turns: [] });
     mocks.listStickies.mockResolvedValue([]);
     mocks.listStudyConversations.mockResolvedValue([]);
+    localStorage.removeItem('pal:model');
   });
 
   it('tilts study rows, presses with a spring, and moves the active indicator between studies', async () => {
@@ -99,5 +122,46 @@ describe('DeskView study rail motion', () => {
     await waitFor(() => expect(mocks.studyRows.get('study-b')?.className).toContain('is-on'));
     expect(screen.getByTestId('active-study-indicator').parentElement).toBe(screen.getByRole('button', { name: /Beta study/ }));
     expect(alpha).toBeInTheDocument();
+  });
+
+  it('refreshes model availability and resets the selection after a fallback notice', async () => {
+    const initiallyAvailable = {
+      default: 'gemma4:31b',
+      models: [
+        { name: 'gemma4:31b', is_cloud: false, size_bytes: 20, available: true, unavailable_reason: null },
+        { name: 'glm-5.3-flash', is_cloud: true, size_bytes: 40, available: true, unavailable_reason: null },
+      ],
+    };
+    const afterFailure = {
+      default: 'gemma4:31b',
+      models: [
+        { name: 'gemma4:31b', is_cloud: false, size_bytes: 20, available: true, unavailable_reason: null },
+        { name: 'glm-5.3-flash', is_cloud: true, size_bytes: 40, available: false, unavailable_reason: 'needs a paid Ollama plan' },
+      ],
+    };
+    localStorage.setItem('pal:model', 'glm-5.3-flash');
+    mocks.listModels
+      .mockResolvedValueOnce(initiallyAvailable)
+      .mockResolvedValueOnce(afterFailure);
+    mocks.askStudyStream.mockImplementation(async (_scope, _question, handlers) => {
+      handlers.onNotice?.("GLM 5.3 Flash isn't available on the current plan, so Gemma 4 31B answered instead.");
+      return { turn_id: 'turn-1', answer: 'answer', model: 'gemma4:31b', cited: [], agent_steps: [] };
+    });
+
+    render(
+      <MotionRoot>
+        <DeskView page="study" initialScope="study-a" onPageChange={() => {}} onBack={() => {}} onOpenPaper={() => {}} />
+      </MotionRoot>,
+    );
+
+    const select = await screen.findByRole('combobox', { name: 'Which model answers here' });
+    await waitFor(() => expect(select).toHaveValue('glm-5.3-flash'));
+    fireEvent.click(screen.getByRole('button', { name: 'Ask test question' }));
+
+    await waitFor(() => expect(mocks.listModels).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(select).toHaveValue('gemma4:31b'));
+    expect(screen.getByRole('option', {
+      name: 'GLM 5.3 Flash (needs a paid Ollama plan)',
+    })).toBeDisabled();
   });
 });

@@ -42,7 +42,7 @@ import { PageMapProvider, useBuiltPageMap } from '../lib/pageMap';
 import { useReferences } from '../lib/references';
 import { RevealModeToggle } from '../components/RevealModeToggle';
 import { Toast } from '../components/Toast';
-import { resolveAvailableModel } from '../components/ModelPicker';
+import { reloadModelCatalog } from '../components/ModelPicker';
 import {
   initialRevealCursor,
   loadRevealCursor,
@@ -281,6 +281,13 @@ export function ArticleReader({
   const [model, setModel] = useState<string>(
     () => { try { return localStorage.getItem('pal:model') || ''; } catch { return ''; } },
   );
+  const refreshModelCatalog = useCallback(async () => {
+    try {
+      await reloadModelCatalog(listModels, setCatalog, setModel);
+    } catch {
+      // Keep the last-known catalog if the refresh is temporarily unavailable.
+    }
+  }, []);
   const chooseModel = useCallback((name: string) => {
     setModel(name);
     try { localStorage.setItem('pal:model', name); } catch { /* storage blocked */ }
@@ -404,17 +411,7 @@ export function ArticleReader({
     [paperId],
   );
 
-  useEffect(() => {
-    let alive = true;
-    listModels()
-      .then((c) => {
-        if (!alive) return;
-        setCatalog(c);
-        setModel((current) => resolveAvailableModel(c, current));
-      })
-      .catch(() => { /* picker just stays hidden; the default model still answers */ });
-    return () => { alive = false; };
-  }, []);
+  useEffect(() => { void refreshModelCatalog(); }, [refreshModelCatalog]);
 
   useEffect(() => () => clearAnchors(), []);
 
@@ -1440,7 +1437,10 @@ export function ArticleReader({
           {
             onCreated: (noteId) => patch((p) => ({ ...p, noteId })),
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
-            onNotice: (message) => patch((p) => ({ ...p, notice: message })),
+            onNotice: (message) => {
+              patch((p) => ({ ...p, notice: message }));
+              void refreshModelCatalog();
+            },
             // ⚠ Upsert by id, never append. Every call arrives twice:
             // `running` when the agent announces it, `done` when it returns,
             // and appending would show each fetch as two rows, the first one
@@ -1486,7 +1486,7 @@ export function ArticleReader({
         patch((p) => ({ ...p, error: (e as Error).message || 'Could not answer that.' }));
       }
     },
-    [paperId],
+    [paperId, refreshModelCatalog],
   );
 
   /**

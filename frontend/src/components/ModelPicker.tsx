@@ -23,6 +23,16 @@ export function resolveAvailableModel(catalog: ModelCatalog, current: string): s
   return catalog.models.find((model) => model.available !== false)?.name ?? '';
 }
 
+export async function reloadModelCatalog(
+  loadCatalog: () => Promise<ModelCatalog>,
+  setCatalog: (catalog: ModelCatalog) => void,
+  setModel: (model: string | ((current: string) => string)) => void,
+): Promise<void> {
+  const next = await loadCatalog();
+  setCatalog(next);
+  setModel((current) => resolveAvailableModel(next, current));
+}
+
 export function ModelPicker({
   catalog,
   model,

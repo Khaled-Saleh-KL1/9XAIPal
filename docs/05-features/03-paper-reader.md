@@ -562,7 +562,9 @@ Muse appears as “Muse Glimmer 30B (NVIDIA)” while retaining its provider mod
 six hours. Unknown state and Redis failure are treated as available; the catalog does not probe.
 When a selected model fails before a streamed answer begins, the default route can answer instead.
 The reader displays a notice before fallback tokens, and the terminal metadata records the model
-that actually answered. The note and its follow-ups retain the selected model.
+that actually answered. After the notice, the reader and Desk refresh `/models`; if the selected
+model is now unavailable, the picker selects an available option. The note and its follow-ups retain
+the selected model used for that request.
 
 **Why.** A quick factual note and a deep derivation deserve different models; making it per note
 avoids a global setting the reader forgets to switch back.

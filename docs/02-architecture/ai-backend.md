@@ -66,7 +66,8 @@ configured cloud providers. A configured `LLM_PROVIDER` uses only that provider.
 
 A request-time picker model follows different routing. `resolver.targets_for(model)` resolves
 `MODEL_PROVIDER_PINS` first, then configured provider defaults, then treats other catalog names as
-Ollama tags. It returns only that owner’s target or key-rotation targets; the picked name is never
+Ollama tags. With `LLM_PROVIDER=custom`, the configured `CHAT_MODEL` is owned by the custom
+endpoint. It returns only that owner's target or key-rotation targets; the picked name is never
 sent to another provider under its own name. In the reader stream, if that model fails before any
 answer output, `stream_chat()` can try the no-override default route. The successful fallback is
 buffered until it has answered, then a `notice` event is emitted before its tokens. Its `done.model`
@@ -186,7 +187,9 @@ catalog displays the provider-specific reason for a cached failure. Missing cach
 values, Redis timeouts, and Redis errors default to available. The shared frontend picker shows
 unavailable entries disabled after Local and Cloud choices. `requested_model` is persisted on the
 note and reused by follow-ups so the selection remains attributable; if a streamed request falls
-back before output, a notice appears and terminal metadata names the actual answering model.
+back before output, both reader pickers reload `/models` after the notice and choose an available
+model if the current selection has become unavailable. The notice appears before fallback tokens,
+and terminal metadata names the actual answering model.
 
 **The classifier row is the performance lever.** Router and guardrail are cheap classification
 problems that a 1–3B model answers instantly. Left empty they inherit `CHAT_MODEL`, putting two
