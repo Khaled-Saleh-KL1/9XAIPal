@@ -31,6 +31,18 @@ def _strip_line_comments(sql: str) -> str:
 
 
 async def apply_migrations() -> None:
+    """Serialize startup DDL across API and both workers on a pinned connection."""
+    async with engine.connect() as guard:
+        await guard.execute(text("SELECT pg_advisory_lock(hashtext('9xaipal:schema_migrations'))"))
+        await guard.commit()
+        try:
+            await _apply_migrations_locked()
+        finally:
+            await guard.execute(text("SELECT pg_advisory_unlock(hashtext('9xaipal:schema_migrations'))"))
+            await guard.commit()
+
+
+async def _apply_migrations_locked() -> None:
     """Apply schema.sql idempotently.
 
     We execute each statement in its *own* small transaction so that a failure

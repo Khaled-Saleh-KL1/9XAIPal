@@ -599,6 +599,17 @@ class Settings(BaseSettings):
     # bound; a fresh upload past the ceiling is rejected with a clear error
     # instead of silently queuing forever.
     max_queued_ingestion_jobs: int = 50
+    max_queued_jobs_per_user: int = 5
+    min_free_disk_gb: float = 5
+    stalled_job_minutes: int = 45
+    alert_email_to: str = ""
+    alert_email_from: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    alert_max_emails_per_day: int = 20
+    alert_repeat_window_minutes: int = 60
 
     # Refuse to accept or start an ingestion once the disk under storage_root
     # is this full — see app.services.ingestion.check_disk_headroom. The
