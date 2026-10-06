@@ -453,8 +453,8 @@ def _provider_for_explicit_model(model: str) -> str:
         ):
             return candidate
     explicit = _explicit_llm_provider()
-    if explicit and explicit not in ("ollama", "custom"):
-        configured = getattr(settings, f"{explicit}_chat_model", "") or ""
+    if explicit and explicit != "ollama":
+        configured = getattr(settings, f"{explicit}_chat_model", "") or settings.chat_model
         if model == configured:
             return explicit
     return "ollama"
