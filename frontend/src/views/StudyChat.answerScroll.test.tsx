@@ -1,7 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudyPaper, StudyTurn } from '../api';
 import { MotionRoot } from '../motion';
+
+const citationMocks = vi.hoisted(() => ({ getChunk: vi.fn() }));
+
+vi.mock('../api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api')>(),
+  getChunk: citationMocks.getChunk,
+}));
 
 vi.mock('motion/react', async (importOriginal) => ({
   ...await importOriginal<typeof import('motion/react')>(),
@@ -75,6 +82,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+beforeEach(() => {
+  citationMocks.getChunk.mockResolvedValue({ content_markdown: 'Quoted passage.' });
+});
+
 describe('StudyChat answer scrolling', () => {
   it('leaves a short answer without the scroll treatment', async () => {
     render(chat('A short answer.'));
@@ -105,6 +116,33 @@ describe('StudyChat answer scrolling', () => {
     const collapse = screen.getByRole('button', { name: 'Collapse' });
     expect(collapse).toHaveAttribute('aria-expanded', 'true');
     expect(scroll).not.toHaveClass('is-scrollable');
+  });
+
+  it('keeps long-answer citation controls outside the scroll region and linked to their mention', async () => {
+    render(chat('A claim [[P1:41]].'));
+
+    const scroll = setAnswerHeight(1000);
+    await waitFor(() => expect(scroll).toHaveClass('is-scrollable'));
+
+    const chip = screen.getByRole('button', { name: 'P1:41' });
+    expect(scroll).not.toContainElement(chip);
+
+    const marker = scroll.querySelector<HTMLElement>('[data-answer-citation-marker="P1:41"]');
+    expect(marker).toHaveTextContent('P1:41');
+    Object.defineProperty(scroll, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ top: 100 }),
+    });
+    Object.defineProperty(marker, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ top: 500 }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Show P1:41 in answer' }));
+    expect(scroll.scrollTop).toBe(388);
+
+    fireEvent.click(chip);
+    expect(await screen.findByText('Quoted passage.')).toBeInTheDocument();
+    expect(scroll).not.toContainElement(screen.getByText('Quoted passage.').closest('.cite-peek'));
   });
 
   it('keeps an Arabic answer in right-to-left direction', () => {

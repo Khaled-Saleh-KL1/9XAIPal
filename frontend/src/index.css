@@ -3615,6 +3615,44 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   outline-offset: 2px;
 }
 .answer-controls { display: flex; margin-top: 2px; }
+.answer-citations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  margin-top: 7px;
+}
+.answer-citations-label {
+  color: var(--muted);
+  font-size: 10px;
+}
+.answer-citation-item { display: inline-flex; align-items: center; gap: 3px; }
+.answer-citation-locate {
+  padding: 1px 3px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.answer-citation-locate:hover { color: var(--accent); }
+.answer-citation-locate:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cite-inline-marker {
+  display: inline-block;
+  vertical-align: baseline;
+  margin-inline: 2px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent-soft), transparent 45%);
+  color: var(--accent);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
 .note-answer { --answer-fade-surface: var(--bg-2); }
 @media (max-width: 640px) {
   .answer-scroll.is-scrollable { max-height: 55vh; }

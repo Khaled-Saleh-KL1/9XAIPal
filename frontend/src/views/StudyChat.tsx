@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react';
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type AnchorHTMLAttributes } from 'react';
 import { m, useReducedMotion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import { MARKDOWN_REMARK, MARKDOWN_REHYPE, MARKDOWN_COMPONENTS } from '../lib/markdown';
@@ -8,7 +8,7 @@ import { Reasoning } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
 import { ModelPicker } from '../components/ModelPicker';
-import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
+import type { AgentStep, ConversationSummary, ModelCatalog, StudyCitation, StudyPaper, StudyTurn } from '../api';
 import { textDirection } from '../lib/documentDirection';
 import { playful, Pressable, reducedMotionFade } from '../motion';
 import { StreamingCaret } from './StreamingCaret';
@@ -52,12 +52,39 @@ export interface PendingTurn {
 const CITE_BLOB = /\[\[([Pp0-9,;:\s[\]]+?)\]\]/g;
 const ONE_REF = /P?(\d+)\s*[:.]\s*(\d+)/gi;
 
-function withCitationLinks(text: string): string {
-  return text.replace(CITE_BLOB, (whole, inner: string) => {
+interface AnswerCitationLocation {
+  markerId: string;
+  paperNumber: number;
+  sequenceId: number;
+  cite: StudyCitation | null;
+}
+
+function withCitationLinks(text: string, papers: StudyPaper[], prefix: string) {
+  const citations: AnswerCitationLocation[] = [];
+  let occurrence = 0;
+  const markdown = text.replace(CITE_BLOB, (whole, inner: string) => {
     const refs = [...inner.matchAll(ONE_REF)];
     if (!refs.length) return whole;
-    return refs.map(([, p, s]) => `[P${p}:${s}](#cite-${p}-${s})`).join(' ');
+    return refs.map(([, p, s]) => {
+      const paperNumber = Number(p);
+      const sequenceId = Number(s);
+      const markerId = `${prefix}-citation-${occurrence++}`;
+      const paper = papers[paperNumber - 1];
+      citations.push({
+        markerId,
+        paperNumber,
+        sequenceId,
+        cite: paper ? {
+          paper: paperNumber,
+          document_id: paper.id,
+          label: paper.title,
+          sequence_id: sequenceId,
+        } : null,
+      });
+      return `[P${p}:${s}](#${markerId})`;
+    }).join(' ');
   });
+  return { markdown, citations };
 }
 
 /** Renders an answer, with its citation links swapped for expandable chips. */
@@ -76,47 +103,103 @@ function Answer({
   // current values in refs so ReactMarkdown's component map can stay stable
   // while a streamed answer grows; otherwise React remounts CitationRef and
   // discards its open state and fetched passage on every token.
-  const papersRef = useRef(papers);
-  papersRef.current = papers;
   const onOpenPaperRef = useRef(onOpenPaper);
   onOpenPaperRef.current = onOpenPaper;
+  const answerRootRef = useRef<HTMLDivElement>(null);
+  const [longAnswer, setLongAnswer] = useState(false);
+  const longAnswerRef = useRef(longAnswer);
+  longAnswerRef.current = longAnswer;
+  const answerPrefix = `answer-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
+  const parsedAnswer = useMemo(
+    () => withCitationLinks(text, papers, answerPrefix),
+    [answerPrefix, papers, text],
+  );
+  const citationsByMarkerRef = useRef(new Map<string, AnswerCitationLocation>());
+  citationsByMarkerRef.current = new Map(parsedAnswer.citations.map((citation) => [citation.markerId, citation]));
+  const onScrollableChange = useCallback((scrollable: boolean) => {
+    longAnswerRef.current = scrollable;
+    setLongAnswer((current) => current === scrollable ? current : scrollable);
+  }, []);
+  const locateCitation = useCallback((markerId: string) => {
+    const root = answerRootRef.current;
+    const scroll = root?.querySelector<HTMLElement>('[data-answer-scroll]');
+    const marker = root?.querySelector<HTMLElement>(`#${markerId}`);
+    if (!scroll || !marker) return;
+    const scrollTop = scroll.getBoundingClientRect().top;
+    const markerTop = marker.getBoundingClientRect().top;
+    scroll.scrollTop = Math.max(0, scroll.scrollTop + markerTop - scrollTop - 12);
+  }, []);
   const components = useMemo(() => ({
     // Shared first: images and diagrams. The citation anchor below is the
     // desk's own and must win, so it is spread after.
     ...MARKDOWN_COMPONENTS,
     a({ href, children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement>) {
-      const m = /^#cite-(\d+)-(\d+)$/.exec(href || '');
-      if (!m) return <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
-      const currentPapers = papersRef.current;
-      const paper = currentPapers[Number(m[1]) - 1];
+      const citationMatch = /^#(answer-[A-Za-z0-9_-]+-citation-\d+)$/.exec(href || '');
+      if (!citationMatch) return <a href={href} target="_blank" rel="noreferrer noopener" {...rest}>{children}</a>;
+      const markerId = citationMatch[1];
+      const citation = citationsByMarkerRef.current.get(markerId);
       // A citation into a paper the study no longer holds cannot be
       // opened. Plain struck-through text is honest; a dead button is not.
-      if (!paper) return <span className="cite-dead">P{m[1]}:{m[2]}</span>;
+      if (!citation?.cite) return <span className="cite-dead">{children}</span>;
+      if (longAnswerRef.current) {
+        return (
+          <span
+            id={markerId}
+            className="cite-inline-marker"
+            data-answer-citation-marker={`P${citation.paperNumber}:${citation.sequenceId}`}
+          >
+            {children}
+          </span>
+        );
+      }
       return (
         <CitationRef
-          key={`${paper.id}:${m[2]}`}
-          cite={{
-            paper: Number(m[1]),
-            document_id: paper.id,
-            label: paper.title,
-            sequence_id: Number(m[2]),
-          }}
+          key={`${citation.cite.document_id}:${citation.sequenceId}:${markerId}`}
+          cite={citation.cite}
           onOpenPaper={onOpenPaperRef.current}
         />
       );
     },
   }), []);
 
+  const locateButton = (citation: AnswerCitationLocation) => citation.cite && (
+    <button
+      type="button"
+      className="answer-citation-locate"
+      aria-label={`Show P${citation.paperNumber}:${citation.sequenceId} in answer`}
+      onClick={() => locateCitation(citation.markerId)}
+    >
+      In answer
+    </button>
+  );
+
   return (
-    <AnswerViewport streaming={streaming} dir={textDirection(text) ?? 'auto'}>
-      <ReactMarkdown
-        remarkPlugins={MARKDOWN_REMARK}
-        rehypePlugins={MARKDOWN_REHYPE}
-        components={components}
+    <div className="study-answer-with-citations" ref={answerRootRef}>
+      <AnswerViewport
+        streaming={streaming}
+        dir={textDirection(text) ?? 'auto'}
+        onScrollableChange={onScrollableChange}
       >
-        {withCitationLinks(text)}
-      </ReactMarkdown>
-    </AnswerViewport>
+        <ReactMarkdown
+          remarkPlugins={MARKDOWN_REMARK}
+          rehypePlugins={MARKDOWN_REHYPE}
+          components={components}
+        >
+          {parsedAnswer.markdown}
+        </ReactMarkdown>
+      </AnswerViewport>
+      {longAnswer && parsedAnswer.citations.some((citation) => citation.cite) && (
+        <div className="answer-citations" role="group" aria-label="Citations in this answer">
+          <span className="answer-citations-label">Citations</span>
+          {parsedAnswer.citations.map((citation) => citation.cite && (
+            <span className="answer-citation-item" key={`${citation.cite.document_id}:${citation.sequenceId}:${citation.markerId}`}>
+              <CitationRef cite={citation.cite} onOpenPaper={onOpenPaper} />
+              {locateButton(citation)}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

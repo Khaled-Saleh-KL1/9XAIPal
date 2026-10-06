@@ -13,10 +13,12 @@ export function AnswerViewport({
   children,
   streaming = false,
   dir = 'auto',
+  onScrollableChange,
 }: {
   children: ReactNode;
   streaming?: boolean;
   dir?: 'ltr' | 'rtl' | 'auto';
+  onScrollableChange?: (scrollable: boolean) => void;
 }) {
   const viewportId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -25,6 +27,8 @@ export function AnswerViewport({
   const scrollableRef = useRef(false);
   const expandedRef = useRef(false);
   const streamingRef = useRef(streaming);
+  const onScrollableChangeRef = useRef(onScrollableChange);
+  const hasMeasuredOverflowRef = useRef(false);
   const [scrollable, setScrollable] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
@@ -32,14 +36,18 @@ export function AnswerViewport({
   const [hasMoreBelow, setHasMoreBelow] = useState(false);
 
   streamingRef.current = streaming;
+  onScrollableChangeRef.current = onScrollableChange;
   scrollableRef.current = scrollable;
   expandedRef.current = expanded;
 
   const measureOverflow = useCallback(() => {
     const content = contentRef.current;
     const nextScrollable = !!content && content.scrollHeight > answerHeightLimit() + 1;
+    const changed = !hasMeasuredOverflowRef.current || scrollableRef.current !== nextScrollable;
+    hasMeasuredOverflowRef.current = true;
     scrollableRef.current = nextScrollable;
     setScrollable((current) => current === nextScrollable ? current : nextScrollable);
+    if (changed) onScrollableChangeRef.current?.(nextScrollable);
     return nextScrollable;
   }, []);
 
