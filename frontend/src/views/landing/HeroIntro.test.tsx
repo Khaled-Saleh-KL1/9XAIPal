@@ -1,5 +1,4 @@
 import { act, render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MotionRoot } from '../../motion';
 
@@ -35,7 +34,6 @@ describe('HeroIntro', () => {
     vi.useFakeTimers();
     renderIntro();
     expect(phase()).toBe('storm');
-    expect(screen.queryByRole('button', { name: /replay/i })).toBeNull();
 
     act(() => { vi.advanceTimersByTime(INTRO_TIMINGS.storm); });
     expect(phase()).toBe('rescue');
@@ -45,7 +43,8 @@ describe('HeroIntro', () => {
     expect(phase()).toBe('idle');
 
     expect(window.sessionStorage.getItem(INTRO_PLAYED_KEY)).toBe('1');
-    expect(screen.getByRole('button', { name: /replay/i })).toBeInTheDocument();
+    // Nothing appears when the film ends: a late control shifted the centred scene.
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('skips straight to the calm final frame on a second visit in the same tab', () => {
@@ -54,18 +53,10 @@ describe('HeroIntro', () => {
     expect(phase()).toBe('idle');
   });
 
-  it('replays the whole film on request', async () => {
-    window.sessionStorage.setItem(INTRO_PLAYED_KEY, '1');
-    renderIntro();
-    await userEvent.click(screen.getByRole('button', { name: /replay/i }));
-    expect(phase()).toBe('storm');
-  });
-
-  it('shows only the calm final frame, with no replay, under reduced motion', () => {
+  it('shows only the calm final frame under reduced motion', () => {
     motionState.reducedMotion = true;
     renderIntro();
     expect(phase()).toBe('idle');
-    expect(screen.queryByRole('button', { name: /replay/i })).toBeNull();
   });
 
   it('still plays when session storage is unavailable', () => {
