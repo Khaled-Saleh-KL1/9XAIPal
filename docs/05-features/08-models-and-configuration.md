@@ -82,10 +82,15 @@ with a short reason.
 cloud-hosted when `OLLAMA_BASE_URL` points to a remote endpoint (local Ollama addresses remain
 local; cloud suffixes and zero-size tags are cloud signals too). It includes provider-pinned models
 when their provider is configured; `meta/muse-glimmer-30b` is pinned to NVIDIA and shown as
-“Muse Glimmer 30B (NVIDIA)”. Real chat outcomes are cached in Redis for six hours: success marks a
-model available, while HTTP 402, 401, 403, and 404 mark it unavailable with a provider-specific
-reason. The catalog does not probe models. Unknown cache state or Redis failure means available,
-so `/models` stays responsive and a real request decides. The selected model is persisted on the
+“Muse Glimmer 30B (NVIDIA)”. Real chat outcomes and scheduled probes are cached in Redis for six
+hours: HTTP 200 marks a model available, while HTTP 402, 401, 403, and 404 mark it unavailable
+with a provider-specific reason. The light Celery worker probes catalog models every three hours
+by default and once about a minute after startup. Ollama receives a minimal “Say OK” chat request;
+NVIDIA receives a short OpenAI-compatible request through the shared per-key rate limiter. Timeouts
+and 5xx responses leave the cache unchanged. The `/models` request itself reads the cache without
+probing providers. `ENABLE_MODEL_AVAILABILITY_REFRESH=false` disables the scheduled and startup
+runs; `MODEL_AVAILABILITY_REFRESH_HOURS` sets the cadence (default `3`). Unknown cache state or
+Redis failure means available, so `/models` stays responsive. The selected model is persisted on the
 note and inherited by follow-ups. If it fails before streamed output, the default route may answer
 with a visible notice; both reader pickers then reload `/models`, disable the failed model, and
 select an available model if the current choice is no longer available. The answer metadata names

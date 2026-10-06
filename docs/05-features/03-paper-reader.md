@@ -558,9 +558,11 @@ Muse appears as “Muse Glimmer 30B (NVIDIA)” while retaining its provider mod
 `StudyChat.tsx`, `GET /models`, `paper_notes.model`,
 [ai-backend.md § 3b](../02-architecture/ai-backend.md).
 
-**How it works.** The catalog reports availability learned from real model calls and caches it for
-six hours. Unknown state and Redis failure are treated as available; the catalog does not probe.
-When a selected model fails before a streamed answer begins, the default route can answer instead.
+**How it works.** Real model calls and a scheduled refresh feed the six-hour availability cache.
+The light Celery worker refreshes catalog models every three hours by default and about a minute
+after startup. `/models` reads the cache without probing providers. Unknown state and Redis failure
+are treated as available. When a selected model fails before a streamed answer begins, the default
+route can answer instead.
 The reader displays a notice before fallback tokens, and the terminal metadata records the model
 that actually answered. After the notice, the reader and Desk refresh `/models`; if the selected
 model is now unavailable, the picker selects an available option. The note and its follow-ups retain

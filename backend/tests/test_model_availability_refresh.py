@@ -20,7 +20,8 @@ NVIDIA_KEY_B = "m4-test-nvidia-key-b"
 
 
 @pytest.fixture
-def real_redis():
+def real_redis(monkeypatch):
+    monkeypatch.setattr(settings, "nvidia_api_key", "")
     client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
     client.ping()
     for pattern in (
@@ -73,6 +74,7 @@ def test_refresh_records_402_with_the_existing_unavailable_reason(
     async def handler(request):
         requests.append(request)
         if request.url.path == "/api/tags":
+            assert request.headers["Authorization"] == f"Bearer {OLLAMA_KEY}"
             return httpx.Response(200, json=_tags(model))
         body = json.loads(request.content)
         assert request.url.path == "/api/chat"
@@ -98,6 +100,12 @@ def test_refresh_records_402_with_the_existing_unavailable_reason(
     assert len(requests) == 2
     assert "available=0 unavailable=1 skipped=0" in caplog.text
     assert OLLAMA_KEY not in caplog.text
+    summaries = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("Model availability refresh:")
+    ]
+    assert summaries == ["Model availability refresh: available=0 unavailable=1 skipped=0"]
 
 
 def test_refresh_records_http_200_as_available(monkeypatch, real_redis):
@@ -225,6 +233,32 @@ def test_unconfigured_nvidia_pin_is_not_probed_or_counted(monkeypatch, real_redi
     assert result == {"available": 0, "unavailable": 0, "skipped": 0}
     assert [request.url.path for request in requests] == ["/api/tags"]
     assert _cache_value(real_redis, "nvidia", "meta/muse-glimmer-30b") is None
+
+
+def test_ollama_tags_failure_does_not_prevent_configured_provider_pin_probe(
+    monkeypatch, real_redis, caplog
+):
+    model = "meta/muse-glimmer-30b"
+    monkeypatch.setattr(settings, "ollama_base_url", "http://ollama.test")
+    monkeypatch.setattr(settings, "ollama_api_key", "")
+    monkeypatch.setattr(settings, "nvidia_api_key", NVIDIA_KEY_A)
+    monkeypatch.setattr(resolver, "_nvidia_rotation", count(0))
+    caplog.set_level(logging.INFO, logger="app.workers.reliability")
+
+    async def handler(request):
+        if request.url.path == "/api/tags":
+            return httpx.Response(503)
+        assert request.url.path == "/v1/chat/completions"
+        assert request.headers["Authorization"] == f"Bearer {NVIDIA_KEY_A}"
+        return httpx.Response(200)
+
+    _install_mock_http(monkeypatch, handler)
+
+    result = reliability.refresh_model_availability.run()
+
+    assert result == {"available": 1, "unavailable": 0, "skipped": 0}
+    assert _cache_value(real_redis, "nvidia", model) == {"available": True}
+    assert NVIDIA_KEY_A not in caplog.text
 
 
 def test_refresh_never_runs_more_than_three_model_requests_concurrently(
