@@ -22,6 +22,7 @@ from sqlalchemy import text
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.workers.execution_claims import HeavyTask, guarded_heavy
+from app.workers.progress_heartbeat import responsive_task
 from app.core.logging import get_logger
 from app.core.paths import documents_dir
 from app.api.errors import InsufficientStorage
@@ -404,6 +405,7 @@ def _queue_search_vector_if_embedding_skipped(session, document_id: UUID) -> Non
     reject_on_worker_lost=True,
 )
 @guarded_heavy("ingestion")
+@responsive_task
 def process_ingestion(self, document_id: str, job_id: str, filename: str, *, execution_generation: int = 0) -> dict:
     """Run MinerU extraction → structural chunking → asset linking pipeline synchronously."""
     logger.info(f"[celery] process_ingestion start document={document_id} job={job_id}")
@@ -456,8 +458,9 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str, *, exe
     acks_late=True,
     reject_on_worker_lost=True,
 )
+@responsive_task
 def process_article_ingestion(
-    self, document_id: str, job_id: str, url: str, kind: str | None = None,
+    self, document_id: str, job_id: str, url: str, kind: str | None = None, *, execution_generation: int = 0,
 ) -> dict:
     """Fetch a web article and run the same chunking/embedding pipeline a PDF
     gets, via run_article_pipeline_sync. A separate task (not a branch inside
@@ -480,7 +483,7 @@ def process_article_ingestion(
 
     def handoff(doc, job, filename):
         from celery.exceptions import Ignore, Reject
-        signature = process_ingestion.s(str(doc), str(job), filename).set(queue="ingest")
+        signature = process_ingestion.s(str(doc), str(job), filename, execution_generation=execution_generation).set(queue="ingest")
         try:
             raise self.replace(signature)
         except Ignore:
@@ -497,6 +500,7 @@ def process_article_ingestion(
                 url=url,
                 kind=kind,
                 pdf_handoff=handoff,
+                execution_generation=execution_generation,
             )
             _queue_search_vector_if_embedding_skipped(session, doc_uuid)
             _queue_article_thumbnail(doc_uuid)
@@ -675,6 +679,7 @@ def embed_document_search_vector(self, document_id: str) -> dict:
     default_retry_delay=10,
     acks_late=True,
 )
+@responsive_task
 def embed_document(self, document_id: str, force: bool = False) -> dict:
     """Generate embeddings for a document, optionally regenerating every chunk."""
     logger.info(f"[celery] embed_document start document={document_id} force={force}")
@@ -753,6 +758,7 @@ def embed_document(self, document_id: str, force: bool = False) -> dict:
     default_retry_delay=30,
     acks_late=True,
 )
+@responsive_task
 def generate_section_summaries(
     self, document_id: str, force: bool = False
 ) -> dict:
@@ -919,3 +925,6 @@ def reconstruct_reading_order(self, document_id: str) -> dict:
 
     logger.info(f"[celery] reconstruct_reading_order done for {document_id}")
     return {"document_id": document_id, **result}
+
+# Install terminal-failure receivers for every task above.
+import app.workers.reliability  # noqa: E402,F401

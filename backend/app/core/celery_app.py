@@ -9,6 +9,7 @@ import json
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from kombu import Queue
 
 from app.core.config import settings
@@ -18,7 +19,7 @@ celery_app = Celery(
     "9xaipal",
     broker=settings.effective_celery_broker_url,
     backend=settings.effective_celery_result_backend,
-    include=["app.workers.tasks"],
+    include=["app.workers.tasks", "app.workers.reliability"],
 )
 
 celery_app.conf.update(
@@ -38,7 +39,11 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    timezone="UTC",
+    timezone="Asia/Amman",
+    beat_schedule={
+        "q1-stalled-jobs": {"task":"9xaipal.sweep_stalled_jobs", "schedule":300.0, "options":{"queue":"celery"}},
+        "q1-daily-summary": {"task":"9xaipal.daily_failure_summary", "schedule":crontab(hour=8, minute=0), "options":{"queue":"celery"}},
+    },
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,

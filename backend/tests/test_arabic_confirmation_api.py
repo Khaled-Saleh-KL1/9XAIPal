@@ -258,7 +258,7 @@ async def test_queue_full_rolls_back_printed_confirmation(client, db_session, mo
     from app.services import ingestion
 
     _enable_arabic_ocr(monkeypatch)
-    async def _full(_session):
+    async def _full(_session, **_kwargs):
         raise TooManyQueuedJobs(10, 10)
 
     monkeypatch.setattr(ingestion, "check_queue_capacity", _full)

@@ -81,6 +81,12 @@ class ExecutionClaim:
                 if seen:
                     self._ignore("finished delivery")
             if self.kind == "ingestion":
+                eligible = self.connection.execute(text("""SELECT j.id FROM ingestion_jobs j
+                    JOIN documents d ON d.id=j.document_id WHERE j.id=:id AND (d.status!='complete' OR j.execution_state='finalizing')
+                    AND j.id=(SELECT id FROM ingestion_jobs WHERE document_id=d.id ORDER BY created_at DESC,id DESC LIMIT 1)"""), {"id":self.row_id}).first()
+                self.connection.commit()
+                if not eligible:
+                    self._ignore("document complete or job no longer current")
                 current = self.connection.execute(text("SELECT execution_generation FROM ingestion_jobs WHERE id=:id"), {"id": self.row_id}).scalar()
                 seen = self.connection.execute(text("SELECT 1 FROM ingestion_executions WHERE job_id=:id AND generation=:generation AND task_id=:delivery"), {"id": self.row_id, "generation": self.generation, "delivery": self.delivery_id}).first()
                 self.connection.commit()
@@ -275,7 +281,7 @@ def guarded_heavy(kind):
             forward_heavy_task(task)
             sync_engine.dispose()
             row_id = UUID(args[0] if args else kwargs["job_id"]) if kind == "ingestion" else UUID(document_id)
-            generation = kwargs.pop("execution_generation", 0) if kind == "ingestion" else 0
+            generation = kwargs.get("execution_generation", 0) if kind == "ingestion" else 0
             claim = ExecutionClaim(kind, row_id, task.request.id or str(uuid4()), generation)
             if task.request.called_directly:
                 with claim:

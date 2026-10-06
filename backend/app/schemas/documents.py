@@ -105,6 +105,7 @@ class ImportArticleRequest(BaseModel):
 
 
 class DocumentUploadResponse(BaseModel):
+    duplicate: bool = False
     id: UUID
     filename: str
     status: str

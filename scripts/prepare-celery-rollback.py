@@ -32,13 +32,13 @@ def queue_schema(source):
     tree = ast.parse(source)
     function = next(n for n in tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_ensure_recent_columns')
     values = next(n.value for n in ast.walk(function) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'critical_alters' for t in n.targets))
-    return [node.value for node in values.elts if isinstance(node, ast.Constant) and isinstance(node.value, str) and any(name in node.value for name in ('execution_', 'claim_', 'ingestion_executions', 'reading_order_executions'))]
+    return [node.value for node in values.elts if isinstance(node, ast.Constant) and isinstance(node.value, str) and any(name in node.value for name in ('execution_', 'claim_', 'ingestion_executions', 'reading_order_executions', 'progress_updated_at'))]
 
 
 def prepare(source, target):
     source, target = Path(source), Path(target)
     workers = target / 'backend/app/workers'
-    for name in ('execution_claims.py', 'owned_subprocess.py', 'redis_reservations.py', 'forwarding.py', 'rollback_compatibility.py'):
+    for name in ('execution_claims.py', 'owned_subprocess.py', 'redis_reservations.py', 'forwarding.py', 'rollback_compatibility.py', 'progress_heartbeat.py'):
         shutil.copyfile(source / 'backend/app/workers' / name, workers / name)
 
     # A deploy can fail before the new API ever applies migrations. Carry
@@ -69,10 +69,15 @@ def prepare(source, target):
         # Queue-aware revisions already have separate worker roles. Retain
         # those roles and install current guards/handoff without double wrapping.
         current_tasks = (source / 'backend/app/workers/tasks.py').read_text()
+        if 'def _queue_search_vector_if_embedding_skipped(' not in old_tasks:
+            # Preserve the restored revision's optional search sidecars.
+            current_tasks = current_tasks.replace('            _queue_search_vector_if_embedding_skipped(session, doc_uuid)\n', '')
         for name in ('process_ingestion', 'reconstruct_reading_order', 'process_article_ingestion'):
             old_tasks = replace_function(old_tasks, current_tasks, name, decorators=True)
         if 'from app.workers.execution_claims import HeavyTask, guarded_heavy' not in old_tasks:
             old_tasks = old_tasks.replace('from app.core.celery_app import celery_app', 'from app.core.celery_app import celery_app\nfrom app.workers.execution_claims import HeavyTask, guarded_heavy', 1)
+        if 'from app.workers.progress_heartbeat import responsive_task' not in old_tasks:
+            old_tasks = old_tasks.replace('from app.core.celery_app import celery_app', 'from app.core.celery_app import celery_app\nfrom app.workers.progress_heartbeat import responsive_task', 1)
         pipeline = target / 'backend/app/extraction/pipeline_sync.py'
         old = pipeline.read_text()
         current = (source / 'backend/app/extraction/pipeline_sync.py').read_text()
@@ -131,7 +136,15 @@ def prepare(source, target):
     tasks.write_text(old_tasks)
 
     services = target / 'backend/app/services/ingestion.py'
-    services.write_text(replace_function(services.read_text(), (source / 'backend/app/services/ingestion.py').read_text(), 'requeue_failed_job'))
+    old_services = services.read_text()
+    current_services = (source / 'backend/app/services/ingestion.py').read_text()
+    _, reserve = function_source(old_services, '_reserve_queue_capacity')
+    if 'user_id' not in reserve.split('->')[0]:
+        current_services = current_services.replace("await _reserve_queue_capacity(session, user_id=owner['user_id'])", 'await _reserve_queue_capacity(session)')
+    old_services = replace_function(old_services, current_services, 'requeue_failed_job')
+    if 'import hashlib' not in old_services:
+        old_services = old_services.replace('import shutil', 'import shutil\nimport hashlib', 1)
+    services.write_text(old_services)
     endpoint = target / 'backend/app/api/v1/endpoints/documents.py'
     old = endpoint.read_text()
     original = 'str(paper_id), str(queued_job["id"]), document["filename"]\n'

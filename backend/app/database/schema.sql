@@ -838,3 +838,59 @@ CREATE TABLE IF NOT EXISTS ingestion_executions (
     task_id TEXT NOT NULL,
     PRIMARY KEY (job_id, generation, task_id)
 );
+
+-- Queue reliability: nullable columns do not backfill historical documents.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_sha256 TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS normalized_source_url TEXT;
+ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMPTZ;
+ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS celery_task_id TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_content_identity ON documents(user_id,content_sha256) WHERE content_sha256 IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_url_identity ON documents(user_id,normalized_source_url) WHERE normalized_source_url IS NOT NULL;
+CREATE TABLE IF NOT EXISTS failed_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_name TEXT NOT NULL,
+    celery_task_id TEXT NOT NULL,
+    document_id UUID REFERENCES documents(id) ON DELETE SET NULL,
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    job_id UUID REFERENCES ingestion_jobs(id) ON DELETE SET NULL,
+    logical_key TEXT NOT NULL UNIQUE,
+    category TEXT NOT NULL CHECK (category IN ('user_input','system','stalled')),
+    error_type TEXT NOT NULL,
+    error_message TEXT NOT NULL CHECK (octet_length(error_message)<=2048),
+    traceback TEXT NOT NULL DEFAULT '' CHECK (octet_length(traceback)<=8192),
+    fingerprint TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    first_failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','retried','resolved')),
+    notified_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_failed_jobs_open ON failed_jobs(last_failed_at) WHERE status='open';
+
+CREATE TABLE IF NOT EXISTS upload_idempotency (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id,key)
+);
+
+-- Only aggregated failure identity, never exception payloads or task arguments.
+CREATE TABLE IF NOT EXISTS failure_events (
+    id BIGSERIAL PRIMARY KEY,
+    failed_job_id UUID NOT NULL REFERENCES failed_jobs(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    category TEXT NOT NULL,
+    failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_failure_events_time ON failure_events(failed_at);
+
+-- Expiring pre-body admission, serialized by the ingestion queue lock.
+CREATE TABLE IF NOT EXISTS upload_reservations (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    new_job BOOLEAN NOT NULL,
+    reserved_bytes BIGINT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);

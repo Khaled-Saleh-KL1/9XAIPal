@@ -139,7 +139,7 @@ def update_job_status_sync(
     # progress_fraction only means something within the CURRENT status (e.g.
     # pages extracted / total while status='extracting') — clear it on every
     # transition so a stale fraction from the previous stage never leaks in.
-    sets = ["status = :status", "progress_fraction = NULL"]
+    sets = ["status = :status", "progress_fraction = NULL", "progress_updated_at = clock_timestamp()"]
     params = {"id": job_id, "status": status}
 
     if status in ("extracting", "chunking", "embedding") and error_message is None:
@@ -169,7 +169,7 @@ def update_job_progress_sync(session: Session, job_id: UUID, fraction: float) ->
     extraction page-batch) without disturbing anything else.
     """
     session.execute(
-        text("UPDATE ingestion_jobs SET progress_fraction = :f WHERE id = :id"),
+        text("UPDATE ingestion_jobs SET progress_fraction = :f, progress_updated_at = clock_timestamp() WHERE id = :id"),
         {"id": job_id, "f": max(0.0, min(1.0, fraction))},
     )
 
@@ -1166,6 +1166,13 @@ def _serialized_url_import(function):
 
             event.listen(connection, "before_execute", check)
             with Session(bind=connection) as owned_session:
+                job_id = kwargs.get('job_id')
+                eligible = owned_session.execute(text("""SELECT j.id FROM ingestion_jobs j
+                    JOIN documents d ON d.id=j.document_id WHERE j.id=:job AND d.status!='complete' AND j.execution_generation=:generation
+                    AND j.id=(SELECT id FROM ingestion_jobs WHERE document_id=d.id ORDER BY created_at DESC,id DESC LIMIT 1)"""), {'job':job_id,'generation':kwargs.get('execution_generation',0)}).first()
+                owned_session.commit()
+                if not eligible:
+                    return False
                 owned_session.info["article_owner_check"] = lambda: owned_session.execute(text("SELECT 1"))
                 return function(owned_session, document_id=document_id, **kwargs)
         finally:
@@ -1217,6 +1224,7 @@ def run_article_pipeline_sync(
     url: str,
     kind: Optional[str] = None,
     pdf_handoff: Optional[Callable] = None,
+    execution_generation: int = 0,
 ) -> bool:
     """Fetch and extract a web article, then hand off to the same
     chunk/asset/dispatch tail the PDF pipeline uses (_finish_ingestion).

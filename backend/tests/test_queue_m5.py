@@ -1,4 +1,5 @@
 """Round-five article ownership/storage regressions on local test services."""
+import json
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -126,7 +127,11 @@ app.worker_main(['worker','--pool=solo','-Q','celery','--without-gossip','--with
         assert int(client.get(prefix+'fetches')) == 2
         assert db_session_sync.execute(text('SELECT status FROM ingestion_jobs WHERE id=:id'), {'id': job}).scalar_one() == 'failed'
         assert db_session_sync.execute(text('SELECT status FROM documents WHERE id=:id'), {'id': doc}).scalar_one() == 'failed'
-        assert client.llen(prefix+'celery') == 0
+        # Only the article task must be gone. A failure may also queue the owner's
+        # alert (9xaipal.send_failure_alert) on this queue; whether the worker has
+        # consumed it yet is timing, not the behaviour under test.
+        leftover = [json.loads(m).get('headers', {}).get('task') for m in client.lrange(prefix+'celery', 0, -1)]
+        assert [t for t in leftover if t != '9xaipal.send_failure_alert'] == []
     finally:
         print('article broker state', {name: client.llen(prefix+name) for name in ('celery','states','errors')}, client.hgetall(prefix+'unacked'), list(client.scan_iter(prefix+'*')))
         worker.terminate()

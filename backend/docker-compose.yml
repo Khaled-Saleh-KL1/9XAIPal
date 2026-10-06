@@ -167,6 +167,16 @@ services:
       ARABIC_HANDWRITTEN_CONFIDENCE_MIN: ${ARABIC_HANDWRITTEN_CONFIDENCE_MIN:-0.97}
       ARABIC_CLASSIFIER_BATCH_PAGES: ${ARABIC_CLASSIFIER_BATCH_PAGES:-2}
       STORAGE_ROOT: /data/storage
+      MAX_QUEUED_JOBS_PER_USER: ${MAX_QUEUED_JOBS_PER_USER:-5}
+      STALLED_JOB_MINUTES: ${STALLED_JOB_MINUTES:-45}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      ALERT_MAX_EMAILS_PER_DAY: ${ALERT_MAX_EMAILS_PER_DAY:-20}
+      ALERT_REPEAT_WINDOW_MINUTES: ${ALERT_REPEAT_WINDOW_MINUTES:-60}
     volumes:
       - ./app/storage:/data/storage
       - ./app:/app/app:ro
@@ -201,14 +211,16 @@ services:
 
   # Shares the ingest worker's image, environment, storage and network.
   # "celery" is the light/default queue, retained to drain the old backlog.
+  # Embedded beat: keep exactly one light-worker replica to avoid duplicate schedules.
   celery_worker_light:
     <<: *ingest-worker
     container_name: 9xaipal-celery-worker-light
     environment:
       <<: *worker-environment
       WORKER_ROLE: light
-    command: sh -c 'exec celery -A app.core.celery_app worker --loglevel=info -Q celery --hostname=celery@%h --concurrency=${LIGHT_WORKER_CONCURRENCY:-2}'
+    command: sh -c 'exec celery -A app.core.celery_app worker --loglevel=info -Q celery --hostname=celery@%h --concurrency=${LIGHT_WORKER_CONCURRENCY:-2} -B --schedule /tmp/celerybeat-schedule'
     deploy:
+      replicas: 1
       resources:
         limits:
           memory: ${LIGHT_WORKER_MEM_LIMIT:-2G}
@@ -330,6 +342,16 @@ services:
       ARABIC_HANDWRITTEN_CONFIDENCE_MIN: ${ARABIC_HANDWRITTEN_CONFIDENCE_MIN:-0.97}
       ARABIC_CLASSIFIER_BATCH_PAGES: ${ARABIC_CLASSIFIER_BATCH_PAGES:-2}
       STORAGE_ROOT: /data/storage
+      MAX_QUEUED_JOBS_PER_USER: ${MAX_QUEUED_JOBS_PER_USER:-5}
+      STALLED_JOB_MINUTES: ${STALLED_JOB_MINUTES:-45}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      ALERT_MAX_EMAILS_PER_DAY: ${ALERT_MAX_EMAILS_PER_DAY:-20}
+      ALERT_REPEAT_WINDOW_MINUTES: ${ALERT_REPEAT_WINDOW_MINUTES:-60}
       ALLOW_PYMUPDF_FALLBACK: ${ALLOW_PYMUPDF_FALLBACK:-false}
       DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
       DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-15}

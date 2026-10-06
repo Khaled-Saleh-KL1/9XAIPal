@@ -24,6 +24,9 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware, limit_per_minute=settings.rate_limit_per_minute)
 
+from app.core.upload_guard import UploadGuardMiddleware
+app.add_middleware(UploadGuardMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -32,7 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
     # The export client reads this header to preserve the server-provided
     # filename when the frontend is hosted on a different origin.
-    expose_headers=["Content-Disposition", "Content-Length"],
+    expose_headers=["Content-Disposition", "Content-Length", "Retry-After"],
 )
 
 # Outermost: one root span per mutating API request (no-op unless TRACE_ENABLED).

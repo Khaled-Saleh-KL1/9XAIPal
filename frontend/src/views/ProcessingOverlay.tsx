@@ -1,6 +1,7 @@
+import { UploadNotice, type BackpressureCode } from './UploadNotice';
 import type { UploadingFile, StepState } from '../types';
 import { IconDoc, IconCheck } from '../components/Icons';
-import { useEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 import { m, useReducedMotion } from 'motion/react';
 import { stageProgress } from '../lib/progress';
 import type { ArabicWritingStyle } from '../api';
@@ -123,7 +124,9 @@ interface Props {
   queuePosition?: number | null;
   errorMessage?: string | null;
   /** Set with `status === 'queue_full'`: how full the server's queue is. */
-  queueFull?: { queued: number; limit: number } | null;
+  queueFull?: { queued: number; limit: number; code?: BackpressureCode; retryAfter?: number } | null;
+  duplicate?: boolean;
+  onOpenDuplicate?: () => void;
   extractor?: string | null;   // "mineru" | "pymupdf_fallback" | "trafilatura" | null while pending
   errorCode?: string | null;
   actionRequired?: string | null;
@@ -142,10 +145,6 @@ interface Props {
   onRetry?: () => void;
 }
 
-/** Seconds between automatic resubmissions on the queue-full screen. The
- * worker finishes a paper in a minute or two and a book in many, so a slot
- * rarely frees faster than this; the reader can always press Try again. */
-const QUEUE_FULL_RETRY_SECONDS = 45;
 const HANDWRITTEN_UNAVAILABLE_MESSAGE = 'Handwritten Arabic extraction is not currently available because it requires Gemini Pro with a billing-enabled account. No text was extracted, and your original file has been kept.';
 
 function extractionSub(extractor: string | null | undefined): string {
@@ -172,6 +171,8 @@ export function ProcessingOverlay({
   queuePosition,
   errorMessage,
   queueFull,
+  duplicate,
+  onOpenDuplicate,
   extractor,
   errorCode,
   actionRequired,
@@ -193,21 +194,6 @@ export function ProcessingOverlay({
   const needsWritingStyleConfirmation =
     actionRequired === 'confirm_arabic_writing_style' && allowedActions.length > 0;
 
-  // Automatic retry while the queue is full: a countdown the reader can see,
-  // reset on every fresh 429 (the `queueFull` object identity changes when
-  // App records a new one), cleared the moment the status moves on.
-  const [retryIn, setRetryIn] = useState(QUEUE_FULL_RETRY_SECONDS);
-  useEffect(() => {
-    if (!declined || !onRetry) return;
-    setRetryIn(QUEUE_FULL_RETRY_SECONDS);
-    const tick = setInterval(() => {
-      setRetryIn((n) => {
-        if (n <= 1) { onRetry(); return QUEUE_FULL_RETRY_SECONDS; }
-        return n - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tick);
-  }, [declined, queueFull, onRetry]);
   // `kind` is optimistic for a URL import: a link pasted through "Book" or
   // "Research paper" is assumed to be the PDF it looks like, because most are.
   // `extractor` is the first hard evidence of what the backend actually ran,
@@ -254,7 +240,7 @@ export function ProcessingOverlay({
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-[12px] font-mono uppercase tracking-wider" style={{ color: 'var(--muted)' }}>
-                {complete ? 'Indexed · ready' : handwrittenUnavailable ? 'Handwritten Arabic unavailable' : failed ? 'Failed' : declined ? 'HTTP 429 · queue full' : 'Processing'}
+                {complete ? 'Indexed · ready' : handwrittenUnavailable ? 'Handwritten Arabic unavailable' : failed ? 'Failed' : declined ? 'Waiting to upload' : 'Processing'}
               </div>
               <div className="mt-1 font-serif text-[20px] tracking-tight truncate" style={{ color: 'var(--fg)' }}>
                 {file.name}
@@ -356,39 +342,8 @@ export function ProcessingOverlay({
           </div>
         )}
 
-        {/* queue full: a decline, not a failure — say what happened, what was
-            kept (nothing), and what happens next, with a retry in hand */}
-        {declined && (
-          <div
-            className="mx-7 mb-5 px-4 py-3 rounded-md text-[12.5px] leading-relaxed"
-            style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--fg)' }}
-          >
-            <div className="font-medium">The processing queue is full right now.</div>
-            <div className="mt-1" style={{ color: 'var(--muted)' }}>
-              {queueFull && queueFull.limit > 0
-                ? `${queueFull.queued} of ${queueFull.limit} slots are taken by documents still being extracted. `
-                : ''}
-              {effectiveKind === 'article' ? 'Nothing was imported' : 'Your file was not uploaded'} and nothing is
-              left behind. It usually clears in a few minutes as the worker finishes what it has.
-            </div>
-            <div className="mt-2 flex items-center gap-3">
-              {onRetry && (
-                <button
-                  onClick={onRetry}
-                  className="text-[12px] px-3 py-1.5 rounded-md"
-                  style={{ background: 'var(--accent)', color: 'var(--accent-fg)', border: '1px solid var(--border)' }}
-                >
-                  Try again now
-                </button>
-              )}
-              {onRetry && (
-                <span className="text-[11px] font-mono tabular-nums" style={{ color: 'var(--muted)' }}>
-                  retrying automatically in {retryIn}s
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+        {declined && <UploadNotice code={queueFull?.code ?? 'queue_full'} retryAfter={queueFull?.retryAfter ?? 120} onRetry={onRetry} />}
+        {duplicate && <UploadNotice duplicate onOpen={onOpenDuplicate} />}
 
         {/* extractor badge: tells the user whether MinerU or the fallback ran */}
         {(() => {

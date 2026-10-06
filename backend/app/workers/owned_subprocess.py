@@ -32,6 +32,8 @@ class OwnedPopen(_popen):
             args = [sys.executable, str(Path(__file__).resolve()), str(os.getpid()), str(owner[0]), json.dumps(command)]
             kwargs["start_new_session"] = True
         super().__init__(args, *positional, **kwargs)
+        from app.workers.progress_heartbeat import register_subprocess
+        register_subprocess(self)
         if self.supervised:
             owner[1].append(self)
 

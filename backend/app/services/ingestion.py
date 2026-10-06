@@ -1,13 +1,14 @@
 """Ingestion service: transactional document + chunk persistence."""
 
 import shutil
+import hashlib
 from uuid import UUID
 from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.errors import InsufficientStorage, JobAlreadyActive, TooManyQueuedJobs
+from app.api.errors import InsufficientStorage, JobAlreadyActive, TooManyQueuedJobs, UploadAdmissionError
 from app.core.config import settings
 from app.database.repositories import documents as doc_repo
 from app.database.repositories import chunks as chunk_repo
@@ -17,7 +18,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def check_disk_headroom() -> None:
+def check_disk_headroom(reserved_bytes: int = 0) -> None:
     """Raise InsufficientStorage if the disk under storage_root is at or past
     settings.ingestion_disk_refuse_percent.
 
@@ -30,11 +31,11 @@ def check_disk_headroom() -> None:
     """
     usage = shutil.disk_usage(settings.storage_root)
     used_percent = round(usage.used * 100 / usage.total)
-    if used_percent >= settings.ingestion_disk_refuse_percent:
+    if used_percent >= settings.ingestion_disk_refuse_percent or usage.used + reserved_bytes >= usage.total * settings.ingestion_disk_refuse_percent / 100:
         raise InsufficientStorage(used_percent, settings.ingestion_disk_refuse_percent)
 
 
-async def check_queue_capacity(session: AsyncSession) -> None:
+async def check_queue_capacity(session: AsyncSession, user_id=None) -> None:
     """Raise TooManyQueuedJobs if the ingestion queue is at its ceiling.
 
     Celery runs this box's extraction pipeline at --concurrency=1 (see
@@ -54,11 +55,27 @@ async def check_queue_capacity(session: AsyncSession) -> None:
         """)
     )
     count = result.scalar_one()
+    reservation = session.info.get('upload_reservation')
+    reserved = await session.scalar(text("""SELECT count(*) FROM upload_reservations
+        WHERE expires_at>clock_timestamp() AND new_job
+        AND id IS DISTINCT FROM CAST(:token AS uuid)"""), {'token':reservation})
+    count += reserved
     if count >= settings.max_queued_ingestion_jobs:
         raise TooManyQueuedJobs(count, settings.max_queued_ingestion_jobs)
+    if user_id is not None:
+        user_count = await session.scalar(text("""SELECT COUNT(*) FROM ingestion_jobs j
+            JOIN documents d ON d.id=j.document_id WHERE d.user_id=:user
+            AND j.status NOT IN ('complete','failed')"""), {"user":user_id})
+        user_count += await session.scalar(text("""SELECT count(*) FROM upload_reservations
+            WHERE expires_at>clock_timestamp() AND new_job AND user_id=:user
+            AND id IS DISTINCT FROM CAST(:token AS uuid)"""), {'user':user_id,'token':reservation})
+        if user_count >= settings.max_queued_jobs_per_user:
+            from app.services.upload_admission import retry_after
+            raise UploadAdmissionError('user_queue_full',429,retry_after(user_count))
 
 
-async def _reserve_queue_capacity(session: AsyncSession) -> None:
+
+async def _reserve_queue_capacity(session: AsyncSession, user_id=None) -> None:
     """Serialize the count-and-insert invariant for one transaction.
 
     PostgreSQL advisory transaction locks need no schema row and are released
@@ -67,7 +84,19 @@ async def _reserve_queue_capacity(session: AsyncSession) -> None:
     count and then enqueue beyond the configured ceiling.
     """
     await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('9xaipal:ingestion_queue'))"))
-    await check_queue_capacity(session)
+    reservation = session.info.get('upload_reservation')
+    if reservation:
+        row = (await session.execute(text('SELECT new_job FROM upload_reservations WHERE id=:id AND expires_at>clock_timestamp() FOR UPDATE'), {'id':reservation})).first()
+        if not row:
+            raise UploadAdmissionError('service_unavailable',503,120)
+        if not row[0]:
+            # This reservation permits identity verification only.
+            session.info.pop('upload_reservation', None)
+            await check_queue_capacity(session, user_id=user_id)
+            raise UploadAdmissionError('queue_full',429,120)
+    await check_queue_capacity(session, user_id=user_id)
+    if reservation:
+        await session.execute(text('DELETE FROM upload_reservations WHERE id=:id'), {'id':reservation})
 
 
 async def create_ingestion_job(session: AsyncSession, document_id: UUID) -> dict:
@@ -76,7 +105,8 @@ async def create_ingestion_job(session: AsyncSession, document_id: UUID) -> dict
     Callers must commit this session only after this function returns. The
     advisory lock stays held until then, covering both the count and insert.
     """
-    await _reserve_queue_capacity(session)
+    user_id = await session.scalar(text('SELECT user_id FROM documents WHERE id=:id'), {'id':document_id})
+    await _reserve_queue_capacity(session, user_id=user_id)
     # Same lock: two re-extract clicks cannot both see "no active job".
     active = (
         await session.execute(
@@ -92,8 +122,8 @@ async def create_ingestion_job(session: AsyncSession, document_id: UUID) -> dict
         raise JobAlreadyActive(str(document_id), active)
     result = await session.execute(
         text("""
-            INSERT INTO ingestion_jobs (document_id, status)
-            VALUES (:document_id, 'queued')
+            INSERT INTO ingestion_jobs (document_id, status, progress_updated_at)
+            VALUES (:document_id, 'queued', clock_timestamp())
             RETURNING id, document_id, status, created_at
         """),
         {"document_id": document_id},
@@ -110,7 +140,7 @@ async def update_job_status(
     error_code: Optional[str] = None,
 ) -> None:
     """Update ingestion job status."""
-    sets = ["status = :status"]
+    sets = ["status = :status", "progress_updated_at = clock_timestamp()"]
     params: dict = {"id": job_id, "status": status}
 
     if status in ("extracting", "chunking", "embedding") and error_message is None:
@@ -134,17 +164,26 @@ async def update_job_status(
 
 async def requeue_failed_job(session: AsyncSession, job_id: UUID) -> dict:
     """Requeue one failed job, reusing its document and clearing stale errors."""
-    await _reserve_queue_capacity(session)
+    owner = (await session.execute(text('SELECT d.user_id,d.id AS document_id FROM documents d JOIN ingestion_jobs j ON j.document_id=d.id WHERE j.id=:id'), {'id':job_id})).mappings().first()
+    if not owner:
+        raise ValueError('ingestion job no longer exists')
+    # A sweeper never kills a live task. Refuse a manual retry until both
+    # PDF execution and article ownership locks have actually been released.
+    for identity in (f'ingestion:{job_id}', f'article:{owner["document_id"]}'):
+        key=int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8],'big',signed=True)
+        locked=await session.scalar(text('SELECT pg_try_advisory_xact_lock(:key)'), {'key':key})
+        if not locked:
+            raise JobAlreadyActive(str(owner['document_id']),'running')
+    await _reserve_queue_capacity(session, user_id=owner['user_id'])
     result = await session.execute(text("""
         UPDATE ingestion_jobs
-        SET status='queued', error_code=NULL, error_message=NULL,
+        SET status='queued', progress_updated_at=clock_timestamp(), error_code=NULL, error_message=NULL,
             started_at=NULL, completed_at=NULL, progress_fraction=NULL,
             created_at=NOW(), execution_generation=execution_generation+1,
             execution_state='pending', execution_task_id=NULL,
             execution_result=NULL, execution_error=NULL,
             claim_token=NULL, claim_expires_at=NULL
         WHERE id=:id AND status='failed'
-          AND (execution_state IS NULL OR execution_state IN ('failed','pending'))
         RETURNING id, document_id, status, created_at, execution_generation
     """), {"id": job_id})
     row = result.mappings().first()

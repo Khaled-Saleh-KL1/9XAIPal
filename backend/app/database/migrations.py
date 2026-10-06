@@ -31,6 +31,18 @@ def _strip_line_comments(sql: str) -> str:
 
 
 async def apply_migrations() -> None:
+    """Serialize startup DDL across API and both workers on a pinned connection."""
+    async with engine.connect() as guard:
+        await guard.execute(text("SELECT pg_advisory_lock(hashtext('9xaipal:schema_migrations'))"))
+        await guard.commit()
+        try:
+            await _apply_migrations_locked()
+        finally:
+            await guard.execute(text("SELECT pg_advisory_unlock(hashtext('9xaipal:schema_migrations'))"))
+            await guard.commit()
+
+
+async def _apply_migrations_locked() -> None:
     """Apply schema.sql idempotently.
 
     We execute each statement in its *own* small transaction so that a failure
@@ -68,6 +80,7 @@ async def _ensure_recent_columns() -> None:
     partially failed due to the fragile split-on-; runner.
     """
     critical_alters = [
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMPTZ",
         """CREATE TABLE IF NOT EXISTS reading_order_executions (
             document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             task_id TEXT NOT NULL,
@@ -113,6 +126,13 @@ async def _ensure_recent_columns() -> None:
         "ALTER TABLE studies ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
         "ALTER TABLE sticky_notes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
         "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
+        """CREATE TABLE IF NOT EXISTS upload_reservations (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            new_job BOOLEAN NOT NULL,
+            reserved_bytes BIGINT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL
+        )""",
         "CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_studies_user_id ON studies(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_sticky_notes_user_id ON sticky_notes(user_id)",

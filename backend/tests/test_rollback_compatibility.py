@@ -231,3 +231,45 @@ async def test_overlay_schema_is_available_after_pre_migration_failure(tmp_path)
         finally:
             # This transaction drops only its unique test schema.
             await connection.execute(text(f'DROP SCHEMA {schema} CASCADE'))
+
+
+async def test_pre_split_overlay_can_launch_subprocess_before_workers_start(tmp_path):
+    target = tmp_path/'old'
+    extract_pre_split_tree(target)
+    subprocess.run([sys.executable, str(ROOT/'scripts/prepare-celery-rollback.py'), str(ROOT), str(target)], check=True, **python_subprocess_options())
+    result = subprocess.run([sys.executable, '-c', "from app.workers.owned_subprocess import OwnedPopen; import subprocess, sys; subprocess.Popen=OwnedPopen; subprocess.run([sys.executable, '-c', 'pass'],check=True)"], **python_subprocess_options(backend_dir=target/'backend'), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('revision', ['pre-split', '0aacd51', '52c6c08'])
+def test_restored_api_can_requeue_failed_generation(tmp_path, db_session_sync, revision):
+    target = tmp_path/'old'
+    if revision == 'pre-split':
+        extract_pre_split_tree(target)
+    else:
+        archives = os.environ.get('M4_SPLIT_ARCHIVE_DIR')
+        if not archives:
+            pytest.skip('Supply M4_SPLIT_ARCHIVE_DIR for archived split rollback tests')
+        with tarfile.open(Path(archives)/f'{revision}.tar') as archive:
+            archive.extractall(target, filter='data')
+    subprocess.run([sys.executable, str(ROOT/'scripts/prepare-celery-rollback.py'), str(ROOT), str(target)], check=True, **python_subprocess_options())
+    doc, job = uuid4(), uuid4()
+    _insert_document_and_job(db_session_sync, doc, job)
+    db_session_sync.execute(text("UPDATE ingestion_jobs SET status='failed' WHERE id=:id"), {'id':job})
+    db_session_sync.commit()
+    script = tmp_path/'retry.py'
+    script.write_text('''import asyncio, sys
+from uuid import UUID
+from app.core.config import settings
+from app.database.connection import async_session_factory
+from app.services.ingestion import requeue_failed_job
+settings.ingestion_disk_refuse_percent=101
+async def main():
+    async with async_session_factory() as db:
+        job=await requeue_failed_job(db,UUID(sys.argv[1]))
+        assert job['execution_generation']==1
+        await db.commit()
+asyncio.run(main())
+''')
+    result = subprocess.run([sys.executable,str(script),str(job)], **python_subprocess_options(backend_dir=target/'backend'), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
