@@ -497,7 +497,7 @@ services:
       # signup/login or upload requests, and by the time a task runs, the
       # job's already past the queue-capacity check that would have rejected
       # it.
-      MAX_ACTIVE_USERS: ${MAX_ACTIVE_USERS:-30}
+      MAX_ACTIVE_USERS: ${MAX_ACTIVE_USERS:-500}
       ACTIVE_WINDOW_SECONDS: ${ACTIVE_WINDOW_SECONDS:-300}
       MAX_QUEUED_INGESTION_JOBS: ${MAX_QUEUED_INGESTION_JOBS:-50}
     volumes:

@@ -262,7 +262,7 @@ above: a different provider for a different question ("what paper is this citati
 | `SESSION_COOKIE_NAME` | `9xaipal_session` | Name of the httponly session cookie. |
 | `SESSION_TTL_SECONDS` | `2592000` (30 days) | Sliding session expiry, refreshed on every authenticated request, so an active user is never logged out mid-session. |
 | `SESSION_COOKIE_SAMESITE` | `lax` | `lax`, `strict`, or `none`. Set `none` only for a cross-site HTTPS SPA/API deployment; production cookies are Secure when `DEBUG=false`. |
-| `MAX_ACTIVE_USERS` | `30` | Signup is open (no invite code). This is the concurrent-active-user cap that actually protects a single box with no autoscaling — everyone past it waits in a FIFO queue, auto-promoted the moment a slot frees. "Active" = made a request in the last `ACTIVE_WINDOW_SECONDS`, not "has a session" (sessions last 30 days). See [auth.md](../02-architecture/auth.md). |
+| `MAX_ACTIVE_USERS` | `500` | Signup is open (no invite code). This is the concurrent-active-user cap that actually protects a single box with no autoscaling — everyone past it waits in a FIFO queue, auto-promoted the moment a slot frees. "Active" = made a request in the last `ACTIVE_WINDOW_SECONDS`, not "has a session" (sessions last 30 days). See [auth.md](../02-architecture/auth.md). |
 | `ACTIVE_WINDOW_SECONDS` | `300` | How long since their last request before an idle user's slot frees automatically. Freed immediately on logout regardless of this. |
 | `MAX_QUEUED_INGESTION_JOBS` | `50` | Hard ceiling on ingestion jobs queued or in progress. It applies across API processes; production Compose's ingest worker runs with concurrency 2. New uploads past the ceiling are rejected with 429. |
 

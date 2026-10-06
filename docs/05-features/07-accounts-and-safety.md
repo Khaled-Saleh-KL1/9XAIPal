@@ -95,7 +95,7 @@ readers. (Feature limits on logged-in users are a different matter — see featu
 
 ## 89. Concurrent-user cap and the waiting room
 
-**What it does.** At most `MAX_ACTIVE_USERS` (30) people use the site at once; the 31st sees a
+**What it does.** At most `MAX_ACTIVE_USERS` (500) people use the site at once; the 501st sees a
 waiting-room screen with their position and is let in automatically when a slot frees.
 
 **Where.** [`core/capacity.py`](../../backend/app/core/capacity.py) (`touch_and_check_admission`,
@@ -109,7 +109,7 @@ logged in. `active_users` is a Redis sorted set scored by last-seen; every authe
 refreshes it. Admission is **sticky**: a newcomer can never bump someone already in; a slot frees
 by idling past the window or by logging out. Everything — expiry sweep, the sticky check, the
 count, the FIFO queue with per-user heartbeats, promotion of the head — runs in **one Redis Lua
-script**, so two workers cannot both admit a 31st user, and a queue head that stopped polling is
+script**, so two workers cannot both admit a 501st user, and a queue head that stopped polling is
 dropped rather than blocking the line ([006](../issues/006-capacity-admission-is-neither-atomic-nor-fifo.md)).
 Enforced, not decorated: `get_current_user` raises for every protected route, so a queued user's
 requests are actually rejected. The waiting-room view polls `/me` every few seconds and the app

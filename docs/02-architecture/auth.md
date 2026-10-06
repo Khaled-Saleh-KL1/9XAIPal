@@ -262,7 +262,7 @@ flowchart TD
 
 **"Active" is a 5-minute sliding window (`ACTIVE_WINDOW_SECONDS`, default 300), not "has a valid
 session"** (sessions last 30 days — using that as the admission signal would mean the cap fills
-up permanently after the 30th person ever logs in, and never frees again). `active_users` is a
+up permanently after the 500th person ever logs in, and never frees again). `active_users` is a
 Redis sorted set, member = `user_id`, score = last-seen unix timestamp; every authenticated
 request through `get_current_user` refreshes the score, the same "touch on activity" idiom
 `core/auth.py`'s session TTL already uses (§2).
