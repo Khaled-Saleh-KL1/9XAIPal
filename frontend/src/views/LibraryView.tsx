@@ -388,8 +388,8 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
       if (done) {
         flash(
           clean
-            ? `"${p.title}" is done — filed under ${clean}.`
-            : `"${p.title}" is done — it is in Done Reading now.`,
+            ? `"${p.title}" is done, filed under ${clean}.`
+            : `"${p.title}" is done. It is in Done Reading now.`,
         );
       }
     } catch (e) {
@@ -491,7 +491,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
       // accepted" — and a web page is imported by URL, not by dropping it.
       const names = rejected.map((f) => f.name).slice(0, 3).join(', ');
       setNotice(
-        `${names || 'That'} is not a PDF — only PDF files can be dropped here. ` +
+        `${names || 'That'} is not a PDF. Only PDF files can be dropped here. ` +
           'For a web page, choose "Add paper" and paste its address.',
       );
       return;
@@ -499,7 +499,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
     const messages: string[] = [];
     if (rejected.length > 0) {
       const names = rejected.map((file) => file.name).join(', ');
-      messages.push(`${names} ${rejected.length === 1 ? 'is not a PDF' : 'are not PDFs'} — only PDF files can be dropped here.`);
+      messages.push(`${names} ${rejected.length === 1 ? 'is not a PDF' : 'are not PDFs'}. Only PDF files can be dropped here.`);
     }
     if (extraPdfs > 0) messages.push(`Only one file at a time: using ${pdf.name}.`);
     const notice = messages.length > 0 ? messages.join(' ') : null;
@@ -541,7 +541,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
           <div className="lib-drop-overlay-frame">
             <IconUpload className="w-6 h-6" />
             <div className="font-serif text-[22px] tracking-tight">Drop to add to your library</div>
-            <div className="text-[12.5px]" style={{ color: 'var(--muted)' }}>PDF · book or research paper — you choose next</div>
+            <div className="text-[12.5px]" style={{ color: 'var(--muted)' }}>PDF · book or research paper. You choose next</div>
           </div>
         </div>
       )}
@@ -952,7 +952,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
             <p className="text-center text-[13px] py-16" style={{ color: 'var(--muted)' }}>
               {kindFilters.size > 0
                 ? 'Nothing of that kind on the reading shelf.'
-                : 'Everything here is done — it is all in Done Reading.'}
+                : 'Everything here is done. It is all in Done Reading.'}
             </p>
           )}
           {!loading && !loadError && filtered.length === 0 && folderCards.length === 0 && !searching && area === 'done' && (
@@ -960,7 +960,7 @@ export function LibraryView({ onOpenPaper, onUpload, onOpenRawFiles, onOpenDesk,
               {doneFolder !== null
                 ? 'This folder is empty.'
                 : donePapers.length === 0
-                ? 'Nothing finished yet. When you are done with a paper, hover it and press ✓ — it moves here, out of the way but never gone.'
+                ? 'Nothing finished yet. When you are done with a paper, hover it and press ✓. It moves here, out of the way but never gone.'
                 : 'Nothing of that kind in Done Reading.'}
             </p>
           )}
@@ -1029,7 +1029,7 @@ function CardActions({
           intensity="calm"
           className="is-done"
           onClick={(e) => { e.stopPropagation(); onShelve(e.currentTarget); }}
-          title="Done reading — move it to Done Reading"
+          title="Done reading: move it to Done Reading"
           aria-label="Mark as done reading"
         >
           <IconCheck className="w-3.5 h-3.5" />
@@ -1389,8 +1389,8 @@ function ShelfPanel({
         <p className="confirm-body">
           <span className="shelf-panel-paper">{paper?.title}</span>
           {moving
-            ? ' — where should it go?'
-            : ' — it leaves the reading shelf but stays in your library, your notes and the Desk. Where should it go?'}
+            ? '. Where should it go?'
+            : '. It leaves the reading shelf but stays in your library, your notes and the Desk. Where should it go?'}
         </p>
 
         <div className="shelf-options">

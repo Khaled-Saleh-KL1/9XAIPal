@@ -34,9 +34,9 @@ describe('ProcessingOverlay extraction route copy', () => {
     ['mineru', 'MinerU is parsing layout, math, and figures'],
     ['gemini_arabic_flash', 'Arabic OCR (Gemini Flash) is reading the pages'],
     ['gemini_arabic_pro', 'Arabic OCR (Gemini Pro) is reading the handwriting'],
-    [null, 'Reading layout, text, math, and figures — the pipeline is chosen automatically'],
-    ['pymupdf_fallback', 'Reading layout, text, math, and figures — the pipeline is chosen automatically'],
-    ['gemma4_arabic_fallback', 'Reading layout, text, math, and figures — the pipeline is chosen automatically'],
+    [null, 'Reading layout, text, math, and figures. The pipeline is chosen automatically'],
+    ['pymupdf_fallback', 'Reading layout, text, math, and figures. The pipeline is chosen automatically'],
+    ['gemma4_arabic_fallback', 'Reading layout, text, math, and figures. The pipeline is chosen automatically'],
   ])('describes the known extractor %s without claiming another route', (extractor, text) => {
     renderOverlay(
       <ProcessingOverlay file={file} status="extracting" extractor={extractor} onClose={noop} onCancel={noop} />,
@@ -51,12 +51,12 @@ describe('ProcessingOverlay extraction route copy', () => {
     const { rerender } = renderOverlay(
       <ProcessingOverlay file={file} status="extracting" onClose={noop} onCancel={noop} />,
     );
-    expect(screen.getByText('Reading layout, text, math, and figures — the pipeline is chosen automatically')).toBeInTheDocument();
+    expect(screen.getByText('Reading layout, text, math, and figures. The pipeline is chosen automatically')).toBeInTheDocument();
     rerender(
       <MotionRoot><ProcessingOverlay file={file} status="extracting" extractor="gemini_arabic_pro" onClose={noop} onCancel={noop} /></MotionRoot>,
     );
     expect(screen.getByText('Arabic OCR (Gemini Pro) is reading the handwriting')).toBeInTheDocument();
-    expect(screen.queryByText('Reading layout, text, math, and figures — the pipeline is chosen automatically')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reading layout, text, math, and figures. The pipeline is chosen automatically')).not.toBeInTheDocument();
   });
 
   it('removes the active step label immediately when processing completes', () => {
