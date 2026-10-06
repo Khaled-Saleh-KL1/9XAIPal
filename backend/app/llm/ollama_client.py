@@ -55,6 +55,11 @@ async def _resolve_model_tag(client: httpx.AsyncClient, requested: str) -> str:
         )
         resp.raise_for_status()
         installed = [m.get("name", "") for m in resp.json().get("models", [])]
+    except httpx.HTTPStatusError as e:
+        raise ModelUnavailable(
+            f"{requested} (Ollama HTTP {e.response.status_code})",
+            status_code=e.response.status_code,
+        )
     except Exception as e:
         raise ModelUnavailable(f"{requested} (Ollama unreachable: {e})")
 
@@ -120,7 +125,10 @@ async def chat(
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
             logger.error(f"Ollama chat HTTP {e.response.status_code}: {body}")
-            raise ModelUnavailable(f"{resolved_model} ({e.response.status_code}: {body})")
+            raise ModelUnavailable(
+                f"{resolved_model} ({e.response.status_code}: {body})",
+                status_code=e.response.status_code,
+            )
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved_model} (network error: {e})")
         data = response.json()
@@ -174,7 +182,10 @@ async def stream_chat(
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", "replace")[:500]
                     logger.error(f"Ollama stream HTTP {response.status_code}: {body}")
-                    raise ModelUnavailable(f"{resolved_model} ({response.status_code}: {body})")
+                    raise ModelUnavailable(
+                        f"{resolved_model} ({response.status_code}: {body})",
+                        status_code=response.status_code,
+                    )
                 async for line in response.aiter_lines():
                     if not line.strip():
                         continue
@@ -229,7 +240,10 @@ async def generate(
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
             logger.error(f"Ollama generate HTTP {e.response.status_code}: {body}")
-            raise ModelUnavailable(f"{model} ({e.response.status_code}: {body})")
+            raise ModelUnavailable(
+                f"{model} ({e.response.status_code}: {body})",
+                status_code=e.response.status_code,
+            )
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{model} (network error: {e})")
         data = response.json()
@@ -327,7 +341,10 @@ def chat_sync(
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
             logger.error(f"[sync] Ollama chat HTTP {e.response.status_code}: {body}")
-            raise ModelUnavailable(f"{resolved_model} ({e.response.status_code}: {body})")
+            raise ModelUnavailable(
+                f"{resolved_model} ({e.response.status_code}: {body})",
+                status_code=e.response.status_code,
+            )
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved_model} (network error: {e})")
         data = response.json()
@@ -343,4 +360,3 @@ def chat_sync(
 def hash_prompt(prompt_text: str) -> str:
     """Stable short hash for a prompt template (used for invalidation)."""
     return hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:16]
-

@@ -2279,6 +2279,17 @@ body {
 }
 .model-picker select:hover,
 .model-picker select:focus { border-color: var(--accent); }
+.model-picker select option:disabled { color: var(--faint); }
+.model-fallback-notice {
+  margin: 8px 0;
+  padding: 7px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 3px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
 
 /* Which model produced an answer. Quiet by default: it is reference
    information, only wanted when comparing two cards. */

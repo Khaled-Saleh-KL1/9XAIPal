@@ -106,13 +106,13 @@ async def test_pinned_model_skips_straight_to_nvidia_async(monkeypatch):
     assert [t.provider for t in targets] == ["nvidia"]
 
 
-def test_unpinned_model_falls_through_to_the_normal_cascade(monkeypatch):
+def test_unpinned_explicit_model_stays_on_ollama(monkeypatch):
     monkeypatch.setattr(settings, "ollama_api_key", "")
     monkeypatch.setattr(settings, "nvidia_api_key", "n1")
 
     targets = resolver.targets_for_sync("some-other-model", ollama_up=True)
 
-    assert [t.provider for t in targets] == ["ollama", "nvidia"]
+    assert [t.provider for t in targets] == ["ollama"]
 
 
 def test_no_model_argument_uses_the_normal_cascade(monkeypatch):

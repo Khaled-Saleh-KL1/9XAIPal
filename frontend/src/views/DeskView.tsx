@@ -7,6 +7,7 @@ import { UserMenuInline } from '../components/UserMenu';
 import { NoteWall } from './NoteWall';
 import { PaperPicker } from './PaperPicker';
 import { ShelfGroups } from '../components/ShelfGroups';
+import { reloadModelCatalog } from '../components/ModelPicker';
 import { StickyBoard } from './StickyBoard';
 import { StudyChat, type PendingTurn } from './StudyChat';
 import { createPacer } from '../lib/pacer';
@@ -115,6 +116,13 @@ export function DeskView({
   const [model, setModel] = useState<string>(
     () => { try { return localStorage.getItem('pal:model') || ''; } catch { return ''; } },
   );
+  const refreshModelCatalog = useCallback(async () => {
+    try {
+      await reloadModelCatalog(listModels, setCatalog, setModel);
+    } catch {
+      // Keep the last-known catalog if the refresh is temporarily unavailable.
+    }
+  }, []);
 
   /**
    * Whether the chat's note strip is folded away.
@@ -180,16 +188,7 @@ export function DeskView({
 
   useEffect(() => { void refreshStudies(); }, [refreshStudies]);
   useEffect(() => { listPapers().then(setLibrary).catch(() => {}); }, []);
-  useEffect(() => {
-    listModels()
-      .then((c) => {
-        setCatalog(c);
-        // Re-validate the remembered model: one can vanish from Ollama between
-        // sessions, and a stale name silently fails at generation time.
-        setModel((m) => (c.models.some((x) => x.name === m) ? m : c.default));
-      })
-      .catch(() => {});
-  }, []);
+  useEffect(() => { void refreshModelCatalog(); }, [refreshModelCatalog]);
 
   // Scope switch: the chat, its papers, and its notes all follow.
   useEffect(() => {
@@ -257,6 +256,7 @@ export function DeskView({
         status: null,
         steps: [],
         error: null,
+        notice: null,
         verifying: false,
       };
       setPending(draft);
@@ -279,6 +279,10 @@ export function DeskView({
             // turn; remember it so the next question continues it.
             onCreated: (id) => { cid = id; if (scopeRef.current === scope) setConversationId(id); },
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
+            onNotice: (message) => {
+              patch((p) => ({ ...p, notice: message }));
+              void refreshModelCatalog();
+            },
             // ⚠ Upsert by id, and clear the status: every call arrives twice,
             // running then done, and once a fetch is on screen the trail IS the
             // activity indicator.
@@ -326,7 +330,7 @@ export function DeskView({
         }
       }
     },
-    [scope, model, conversationId, refreshChatNotes, refreshWall],
+    [scope, model, conversationId, refreshChatNotes, refreshWall, refreshModelCatalog],
   );
 
   /** Open one of the scope's past conversations. */

@@ -789,7 +789,7 @@ async def answer_study_question(
     """Answer one question from a group of papers, streaming.
 
     Yields the same event shapes the paper agent does — ``status``, ``step``,
-    ``token``, ``done`` — so one client component renders both.
+    ``notice``, ``token``, ``done`` — so one client component renders both.
 
     ``papers`` must arrive in citation order (``study_papers.position``); P1 is
     ``papers[0]`` and nothing downstream re-sorts them.
@@ -901,7 +901,9 @@ async def answer_study_question(
             catch_notes=True, catch_remember=True,
             tool_probe=True,
         ):
-            if event["type"] == "token":
+            if event["type"] == "notice":
+                yield event
+            elif event["type"] == "token":
                 streamed_text = True
                 yield event
             else:
@@ -1015,7 +1017,9 @@ async def answer_study_question(
     async for event in stream_answer(
         messages, model=model, temperature=0.3, catch_notes=True, catch_remember=True
     ):
-        if event["type"] == "token":
+        if event["type"] == "notice":
+            yield event
+        elif event["type"] == "token":
             yield event
         else:
             answer = event.get("answer") or ""

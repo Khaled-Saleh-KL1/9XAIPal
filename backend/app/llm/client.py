@@ -42,6 +42,7 @@ from app.api.errors import ModelUnavailable
 from app.core import circuit_breaker, tracing
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.llm import availability
 from app.llm import ollama_client, resolver
 from app.llm.resolver import LLMTarget
 
@@ -237,7 +238,10 @@ async def _chat_once(
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
-            raise ModelUnavailable(f"{resolved} ({e.response.status_code}: {body})")
+            raise ModelUnavailable(
+                f"{resolved} ({e.response.status_code}: {body})",
+                status_code=e.response.status_code,
+            )
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved} (network error: {e})")
         data = response.json()
@@ -284,10 +288,14 @@ async def chat(
             )
         except ModelUnavailable as e:
             logger.warning(f"{target.provider} chat failed, falling through: {e}")
+            await availability.record_model_result(
+                target.provider, resolved, available=False, status_code=e.status_code
+            )
             circuit_breaker.record_failure(target.breaker_id)
             last_error = e
             continue
         circuit_breaker.record_success(target.breaker_id)
+        await availability.record_model_result(target.provider, resolved, available=True)
         return result
     raise last_error or ModelUnavailable("no LLM provider configured")
 
@@ -332,7 +340,10 @@ async def _stream_once(
             async with client.stream("POST", url, json=payload, headers=_headers(target)) as response:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", "replace")[:500]
-                    raise ModelUnavailable(f"{resolved} ({response.status_code}: {body})")
+                    raise ModelUnavailable(
+                        f"{resolved} ({response.status_code}: {body})",
+                        status_code=response.status_code,
+                    )
                 async for line in response.aiter_lines():
                     line = line.strip()
                     if not line.startswith("data:"):
@@ -353,7 +364,7 @@ async def _stream_once(
                     token = delta.get("content") or ""
                     if token:
                         content_parts.append(token)
-                        yield {"type": "token", "text": token}
+                        yield {"type": "token", "text": token, "model": final_model}
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved} (network error: {e})")
 
@@ -381,6 +392,7 @@ async def stream_chat(
 
     Yields ``{"type": "token", "text": ...}`` per token, then a final
     ``{"type": "done", "content", "model", "prompt_tokens", "completion_tokens"}``.
+    An explicit-model failure may add a ``notice`` before default-model output.
 
     By default, falls through to the next cascade target only when a failure
     happens before any token reaches the caller. A filtering caller may pass
@@ -390,8 +402,21 @@ async def stream_chat(
     Once visible output has gone out, a later failure raises instead of
     silently restarting on a different provider.
     """
-    targets = await resolver.targets_for(model)
+    explicit = bool(model)
+    resolution_error: Optional[ModelUnavailable] = None
+    try:
+        targets = await resolver.targets_for(model)
+    except ModelUnavailable as e:
+        if not explicit:
+            raise
+        targets = []
+        resolution_error = e
+
     last_error: Optional[ModelUnavailable] = None
+    fallback_allowed = True
+    if resolution_error is not None:
+        last_error = resolution_error
+
     for target in targets:
         resolved = model or target.model_for_role(role)
         yielded_any = False
@@ -403,10 +428,15 @@ async def stream_chat(
                 yielded_any = True
                 yield event
             circuit_breaker.record_success(target.breaker_id)
+            await availability.record_model_result(target.provider, resolved, available=True)
             return
         except ModelUnavailable as e:
+            await availability.record_model_result(
+                target.provider, resolved, available=False, status_code=e.status_code
+            )
             circuit_breaker.record_failure(target.breaker_id)
             may_fallback = can_fallback() if can_fallback is not None else not yielded_any
+            fallback_allowed = may_fallback
             if not may_fallback:
                 raise
             logger.warning(
@@ -415,7 +445,80 @@ async def stream_chat(
             last_error = e
             if yielded_any and can_fallback is not None:
                 yield {"type": "_retry"}
+
+    if explicit and fallback_allowed:
+        # An explicitly selected model has already been sent only to its owner.
+        # Retry the normal configured defaults with each target's own role
+        # model, never the picked string. Buffer these events until a default
+        # completes so a failed fallback attempt cannot leave a false notice or
+        # partial answer visible.
+        try:
+            fallback_targets = await resolver.targets_for(None)
+        except ModelUnavailable:
+            fallback_targets = []
+        selected_model_error = last_error
+
+        for target in fallback_targets:
+            resolved = target.model_for_role(role)
+            if resolved == model:
+                continue
+            buffered: list[dict] = []
+            try:
+                async for event in _stream_once(
+                    target, messages, resolved=resolved, temperature=temperature,
+                    num_predict=num_predict, keep_alive=keep_alive,
+                ):
+                    buffered.append(event)
+            except ModelUnavailable as e:
+                await availability.record_model_result(
+                    target.provider, resolved, available=False, status_code=e.status_code
+                )
+                circuit_breaker.record_failure(target.breaker_id)
+                logger.warning(
+                    f"{target.provider} default stream failed before output, falling through: {e}"
+                )
+                last_error = e
+                continue
+
+            circuit_breaker.record_success(target.breaker_id)
+            await availability.record_model_result(target.provider, resolved, available=True)
+            done = next((event for event in reversed(buffered) if event.get("type") == "done"), {})
+            answered_by = done.get("model") or resolved
+            yield {
+                "type": "notice",
+                "message": _fallback_notice(model, answered_by, selected_model_error),
+            }
+            for event in buffered:
+                yield event
+            return
+
     raise last_error or ModelUnavailable("no LLM provider configured")
+
+
+_NOTICE_MODEL_NAMES = {
+    "glm-5.3-flash": "GLM 5.3 Flash",
+    "gemma4:31b": "Gemma 4 31B",
+    "meta/muse-glimmer-30b": "Muse Glimmer 30B",
+}
+
+
+def _notice_model_name(model: str) -> str:
+    known = _NOTICE_MODEL_NAMES.get((model or "").casefold())
+    if known:
+        return known
+    return (model or "the selected model").replace(":", " ").replace("-", " ").title()
+
+
+def _fallback_notice(
+    requested_model: str,
+    answered_by: str,
+    error: Optional[ModelUnavailable],
+) -> str:
+    requested = _notice_model_name(requested_model)
+    actual = _notice_model_name(answered_by)
+    if error and error.status_code == 402:
+        return f"{requested} isn't available on the current plan, so {actual} answered instead."
+    return f"{requested} couldn't answer, so {actual} answered instead."
 
 
 async def is_available() -> bool:
@@ -476,7 +579,10 @@ def _chat_sync_once(
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
-            raise ModelUnavailable(f"{resolved} ({e.response.status_code}: {body})")
+            raise ModelUnavailable(
+                f"{resolved} ({e.response.status_code}: {body})",
+                status_code=e.response.status_code,
+            )
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved} (network error: {e})")
         data = response.json()
@@ -519,9 +625,13 @@ def chat_sync(
             )
         except ModelUnavailable as e:
             logger.warning(f"[sync] {target.provider} chat failed, falling through: {e}")
+            availability.record_model_result_sync(
+                target.provider, resolved, available=False, status_code=e.status_code
+            )
             circuit_breaker.record_failure(target.breaker_id)
             last_error = e
             continue
         circuit_breaker.record_success(target.breaker_id)
+        availability.record_model_result_sync(target.provider, resolved, available=True)
         return result
     raise last_error or ModelUnavailable("no LLM provider configured")

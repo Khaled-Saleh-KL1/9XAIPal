@@ -3,12 +3,12 @@
 > Part of the [feature catalogue](README.md). Companions:
 > [ai-backend.md](../02-architecture/ai-backend.md), [configuration.md](../03-reference/configuration.md).
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-10-06 (`fix/model-picker`).
 
 The rule that shapes this whole area: **no call site names a model.** Callers say what *kind* of
 call they make — a `role` of `chat`, `classifier`, `vlm`, `embedding` — and the resolver maps the
-role to a model for whichever provider is active. The one exception is the reader's own per-note
-choice (feature 97), which is a request-time value, not a hardcoded one.
+role to a model for whichever provider is active. The reader's request-time choice for a note or
+Desk study question (feature 97) overrides that role mapping for the selected answer.
 
 ---
 
@@ -26,20 +26,24 @@ nothing else**.
 
 **How it works.** Two model namespaces: the Ollama one (`CHAT_MODEL`, `VLM_MODEL`,
 `CLASSIFIER_MODEL`, `EMBEDDING_MODEL`) and the cloud one (`OPENAI_CHAT_MODEL`,
-`ANTHROPIC_CHAT_MODEL`, …). Because they are separate, your Ollama tags stay where they are and
-are simply not used when a cloud key is active. Under `auto`, every call is a **cascade**: probe
-Ollama's `/api/tags` (3 s timeout, cached 30 s); if reachable the cascade is `[ollama, …every
-cloud key present]`, else the cloud keys in order; each target is tried with the *same* messages
-until one succeeds. A pinned provider means exactly that backend, no fallback. Local Ollama uses
-its native API (tag resolution, `keep_alive`); every cloud provider speaks the OpenAI
-chat-completions protocol, so one HTTP implementation covers all of them.
+`ANTHROPIC_CHAT_MODEL`, …). Calls with no picker override use the default provider route. Under
+`auto`, it probes Ollama's `/api/tags` (3 s timeout, cached 30 s); if reachable the default cascade
+is `[ollama, …every cloud key present]`, else it walks the configured cloud keys in order. Each
+default target uses its own configured role model. A configured `LLM_PROVIDER` pin uses only that
+provider. A request-time model choice is routed to its owner: names in
+`resolver.MODEL_PROVIDER_PINS` use their pinned provider, provider-specific configured defaults
+use that provider, and `LLM_PROVIDER=custom` routes its configured `CHAT_MODEL` to the custom
+endpoint. Other catalog tags use Ollama alone. This prevents a model tag from being sent to an
+unrelated provider. Local Ollama uses its native API (tag resolution, `keep_alive`);
+every cloud provider speaks the OpenAI chat-completions protocol.
 
 **Why the cascade.** Ollama passing its cheap reachability probe never guaranteed the completion
-would succeed — the wrong tag, an OOM, a crash mid-generation used to be fatal with a cloud key
-sitting right there in `.env`. ⚠ Streaming's fallback covers only pre-first-token failures: once a
-token has reached the reader, silently restarting on another provider would be worse than a clean
-error. ⚠ Ollama cloud tags (`gemma4:31b-cloud`) are served through `localhost:11434` but proxied to
-`ollama.com`, so traces cannot distinguish a cloud-served answer from a local one.
+would succeed — the wrong tag, an OOM, or a crash mid-generation could fail a request. For a
+streamed picker request, an owner-provider failure before answer output can retry the configured
+default route, with a visible notice before fallback answer tokens. The terminal answer metadata
+identifies the model that actually answered. Once answer text has reached the reader, the stream
+does not restart on another model. Ollama cloud tags can be served through a local daemon and
+proxied remotely, so provider traces alone may not distinguish hosted inference from local weights.
 
 ---
 
@@ -66,20 +70,30 @@ DeepSeek has no vision, so with it active figures cannot be described.
 
 ## 97. `/models` list and per-request override
 
-**What it does.** The composer's model picker lists what is available; the choice rides on the
-note (and its follow-ups), or on a desk question.
+**What it does.** The shared picker lists local and cloud models for article notes and desk study
+questions. Available models appear first. Models known to be unavailable remain visible, disabled,
+with a short reason.
 
-**Where.** [`llm/catalog.py`](../../backend/app/llm/catalog.py), `GET /models`,
-`paper_notes.requested_model`, `llm_client.chat(model=…)`.
+**Where.** [`llm/catalog.py`](../../backend/app/llm/catalog.py), [`llm/availability.py`](../../backend/app/llm/availability.py),
+`GET /models`, [`ModelPicker.tsx`](../../frontend/src/components/ModelPicker.tsx),
+`paper_notes.requested_model`, `llm_client.stream_chat(model=…)`.
 
-**How it works.** The catalog reads Ollama's `/api/tags` and splits **local** (real weights on
-disk, non-zero `size`) from **cloud** (name ending in `cloud`, `size: 0`); embedding models are
-filtered out (they share the tag list but cannot chat). When Ollama is unreachable the catalog
-degrades to the single configured cloud model. The requested model is persisted on the note so
-the answer stays attributable; a follow-up reuses its parent's model and cannot be overridden.
+**How it works.** The catalog reads Ollama's `/api/tags`, filters embedding models, and marks tags
+cloud-hosted when `OLLAMA_BASE_URL` points to a remote endpoint (local Ollama addresses remain
+local; cloud suffixes and zero-size tags are cloud signals too). It includes provider-pinned models
+when their provider is configured; `meta/muse-glimmer-30b` is pinned to NVIDIA and shown as
+“Muse Glimmer 30B (NVIDIA)”. Real chat outcomes are cached in Redis for six hours: success marks a
+model available, while HTTP 402, 401, 403, and 404 mark it unavailable with a provider-specific
+reason. The catalog does not probe models. Unknown cache state or Redis failure means available,
+so `/models` stays responsive and a real request decides. The selected model is persisted on the
+note and inherited by follow-ups. If it fails before streamed output, the default route may answer
+with a visible notice; both reader pickers then reload `/models`, disable the failed model, and
+select an available model if the current choice is no longer available. The answer metadata names
+the model that actually responded.
 
-**Why it does not break the no-hardcoding rule.** The name comes from the user at request time —
-nothing in the code names it.
+**Why it does not break the no-hardcoding rule.** The user selects a catalog entry and its model ID
+remains the request value; the picker label is presentation only. `MODEL_PROVIDER_PINS` is the
+explicit provider-ownership mapping, not a default model setting.
 
 ---
 

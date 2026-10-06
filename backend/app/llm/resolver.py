@@ -66,16 +66,9 @@ PROVIDER_BASE_URLS = {
 CLOUD_PROVIDER_ORDER = ["openai", "anthropic", "xai", "deepseek", "nvidia"]
 EMBEDDING_CLOUD_ORDER = ["openai"]
 
-# A model name that only one provider can possibly serve, so trying it
-# against the rest of the cascade first is pure waste — and worse than
-# waste: llm_cascade's per-target retry sends the SAME model string to
-# every target in turn (see chat()'s `resolved = model or ...`), so an
-# Ollama-reachable-but-wrong-model attempt records a real circuit-breaker
-# failure for Ollama over a mismatch that has nothing to do with whether
-# Ollama is actually up — and does the same to openai/anthropic/xai/
-# deepseek in turn before ever reaching the one that works. targets_for()
-# below checks this FIRST and, on a hit, skips straight to that provider's
-# own targets, bypassing the probe and the rest of the cascade entirely.
+# A model name pinned to a provider skips the rest of the provider cascade.
+# Explicit picker models that are not cloud-pinned are Ollama catalog models;
+# they must not be sent to other APIs with the same model string.
 MODEL_PROVIDER_PINS: dict[str, str] = {
     "meta/muse-glimmer-30b": "nvidia",
 }
@@ -443,25 +436,52 @@ def _pinned_model_targets(provider: str) -> list[LLMTarget]:
     return [t for t in targets if t.breaker_id in live]
 
 
+def _provider_for_explicit_model(model: str) -> str:
+    """Resolve an explicit model name to its configured owner.
+
+    Provider-specific cloud defaults are recognized when their provider is
+    configured, which keeps a cloud-only catalog usable. Every other explicit
+    catalog value came from Ollama's tag list and stays on Ollama.
+    """
+    provider = MODEL_PROVIDER_PINS.get(model)
+    if provider:
+        return provider
+    for candidate in CLOUD_PROVIDER_ORDER:
+        if (
+            model == (getattr(settings, f"{candidate}_chat_model", "") or "")
+            and cloud_api_key(candidate)
+        ):
+            return candidate
+    explicit = _explicit_llm_provider()
+    if explicit and explicit != "ollama":
+        configured = getattr(settings, f"{explicit}_chat_model", "") or settings.chat_model
+        if model == configured:
+            return explicit
+    return "ollama"
+
+
 def targets_for_sync(model: Optional[str], ollama_up: Optional[bool] = None) -> list[LLMTarget]:
-    """Like llm_cascade_sync, but checks MODEL_PROVIDER_PINS first.
+    """Return only the owner of an explicit model; otherwise use the default cascade.
 
     A pinned model name (e.g. meta/muse-glimmer-30b → nvidia) skips straight
-    to its provider's own targets — no Ollama probe, no trying every other
-    cloud provider first, no polluting their circuit breakers with a request
-    for a model they were never going to be able to serve anyway.
+    to its provider's own targets. Other picker models are routed only to
+    Ollama, without a reachability probe that could send the same tag to an
+    unrelated provider after the probe fails.
     """
-    provider = MODEL_PROVIDER_PINS.get(model or "")
-    if provider:
+    if model:
+        provider = _provider_for_explicit_model(model)
+        if provider == "ollama":
+            targets = _ollama_targets()
+            live = set(circuit_breaker.filter_open([t.breaker_id for t in targets]))
+            return [t for t in targets if t.breaker_id in live]
         return _pinned_model_targets(provider)
     return llm_cascade_sync(ollama_up=ollama_up)
 
 
 async def targets_for(model: Optional[str], ollama_up: Optional[bool] = None) -> list[LLMTarget]:
     """Async variant of targets_for_sync."""
-    provider = MODEL_PROVIDER_PINS.get(model or "")
-    if provider:
-        return _pinned_model_targets(provider)
+    if model:
+        return targets_for_sync(model, ollama_up=ollama_up)
     return await llm_cascade(ollama_up=ollama_up)
 
 

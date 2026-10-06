@@ -7,6 +7,7 @@ import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import { Reasoning } from './AgentTrail';
 import { EvidencePanel } from './EvidencePanel';
 import { CitationRef } from './CitationRef';
+import { ModelPicker } from '../components/ModelPicker';
 import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTurn } from '../api';
 import { textDirection } from '../lib/documentDirection';
 import { playful, Pressable, reducedMotionFade } from '../motion';
@@ -28,6 +29,7 @@ export interface PendingTurn {
   status: string | null;
   steps: AgentStep[];
   error: string | null;
+  notice?: string | null;
   /** The answer is complete; the evidence check is running (see api.ts). */
   verifying: boolean;
 }
@@ -110,38 +112,6 @@ function Answer({
     >
       {withCitationLinks(text)}
     </ReactMarkdown>
-  );
-}
-
-function ModelPicker({
-  catalog,
-  model,
-  onChange,
-}: {
-  catalog: ModelCatalog | null;
-  model: string;
-  onChange: (name: string) => void;
-}) {
-  if (!catalog || catalog.models.length === 0) return null;
-  return (
-    <label className="model-picker" title="Which model answers here">
-      <select value={model} onChange={(e) => onChange(e.target.value)}>
-        {catalog.models.some((m) => !m.is_cloud) && (
-          <optgroup label="Local">
-            {catalog.models.filter((m) => !m.is_cloud).map((m) => (
-              <option key={m.name} value={m.name}>{m.name}</option>
-            ))}
-          </optgroup>
-        )}
-        {catalog.models.some((m) => m.is_cloud) && (
-          <optgroup label="Cloud">
-            {catalog.models.filter((m) => m.is_cloud).map((m) => (
-              <option key={m.name} value={m.name}>{m.name}</option>
-            ))}
-          </optgroup>
-        )}
-      </select>
-    </label>
   );
 }
 
@@ -359,6 +329,9 @@ export function StudyChat({
                 live={!pending.error}
                 writing={Boolean(pending.answer)}
               />
+              {pending.notice && (
+                <div className="model-fallback-notice" role="status">{pending.notice}</div>
+              )}
               {pending.error ? (
                 <>
                   <div className="note-error">{pending.error}</div>
@@ -399,7 +372,12 @@ export function StudyChat({
           }}
         />
         <div className="chat-composer-row">
-          <ModelPicker catalog={catalog} model={model} onChange={onModelChange} />
+          <ModelPicker
+            catalog={catalog}
+            model={model}
+            onChange={onModelChange}
+            title="Which model answers here"
+          />
           <Pressable
             type="button"
             className="chat-send"

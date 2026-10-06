@@ -780,6 +780,8 @@ export interface ModelInfo {
   /** Run on Ollama's infrastructure rather than from local weights. */
   is_cloud: boolean;
   size_bytes: number;
+  available: boolean;
+  unavailable_reason: string | null;
 }
 
 export interface ModelCatalog {
@@ -892,6 +894,8 @@ export interface NoteStreamHandlers {
   onCreated: (noteId: string) => void;
   /** The phase the agent is in ("Reading the passage…", "Writing the answer…"). */
   onStatus: (message: string) => void;
+  /** The selected model failed; the notice names the default that answered. */
+  onNotice?: (message: string) => void;
   /** One tool call, announced then completed. Upsert by `step.id`. */
   onStep: (step: AgentStep) => void;
   /** Answer text, token by token. */
@@ -984,6 +988,9 @@ export async function askNoteStream(
         break;
       case 'status':
         handlers.onStatus(String(ev.message ?? ''));
+        break;
+      case 'notice':
+        handlers.onNotice?.(String(ev.message ?? ''));
         break;
       case 'step':
         handlers.onStep(ev as unknown as AgentStep);
@@ -1740,6 +1747,8 @@ export interface StudyStreamHandlers {
    *  id when the ask started a fresh conversation). */
   onCreated?: (conversationId: string) => void;
   onStatus: (message: string) => void;
+  /** The selected model failed; the notice names the default that answered. */
+  onNotice?: (message: string) => void;
   onStep: (step: AgentStep) => void;
   onToken: (text: string) => void;
   /** Clear a streamed draft when an agent switches to a tool round. */
@@ -1808,6 +1817,9 @@ export async function askStudyStream(
         break;
       case 'status':
         handlers.onStatus(String(ev.message ?? ''));
+        break;
+      case 'notice':
+        handlers.onNotice?.(String(ev.message ?? ''));
         break;
       case 'step':
         handlers.onStep(ev as unknown as AgentStep);

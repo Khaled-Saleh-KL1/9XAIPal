@@ -3,7 +3,7 @@
 > Part of the [feature catalogue](README.md). Companion architecture doc:
 > [frontend.md](../02-architecture/frontend.md) (§ArticleReader onward).
 >
-> **Reflects code as of:** 2026-09-12 (`main`, c099d90).
+> **Reflects code as of:** 2026-10-06 (`fix/model-picker`).
 
 [`ReadingView.tsx`](../../frontend/src/views/ReadingView.tsx) fetches the document's metadata and
 mounts [`ArticleReader.tsx`](../../frontend/src/views/ArticleReader.tsx) for `paper` and `article`
@@ -144,8 +144,9 @@ owns the request so the resulting note can be placed and streamed into. The serv
 **less crowded margin** for the new note (`_choose_margin`: count anchor-scope notes within a
 window of sequence ids on each side; cards stack downward when they collide, so putting every note
 on one side pushes later ones far from their paragraph). The stream carries `created` → `status`
-→ `step` (tool calls) → `token` → `done` → `grounding`. Tokens go through the **pacer**
-(feature 40) before display.
+→ `step` (tool calls) → `notice` (when a selected model falls back) → `token` → `done` →
+`grounding`. A fallback notice arrives before its answer tokens, and `done.model` identifies the
+model that actually answered. Tokens go through the **pacer** (feature 40) before display.
 
 **Why.** ⚠ A selection inside a *table* does not produce a text anchor — it is promoted to the
 whole table (feature 38): "8.4 12.1 91.2 7B" is unanswerable in a way that looks answerable.
@@ -549,11 +550,21 @@ study is its purpose, not a leak to plug.
 
 ## 53. Per-note model picker
 
-**What it does.** The composer offers the models `/models` lists; the choice rides on the note
-(and its follow-ups inherit it).
+**What it does.** Article notes and Desk study chat use the same model picker. Available Local and
+Cloud options come first; known-unavailable models appear disabled at the bottom with their reason.
+Muse appears as “Muse Glimmer 30B (NVIDIA)” while retaining its provider model ID.
 
-**Where.** `AskComposer.tsx` (`model-picker`), `GET /models`, `paper_notes.model`,
+**Where.** [`ModelPicker.tsx`](../../frontend/src/components/ModelPicker.tsx), `AskComposer.tsx`,
+`StudyChat.tsx`, `GET /models`, `paper_notes.model`,
 [ai-backend.md § 3b](../02-architecture/ai-backend.md).
+
+**How it works.** The catalog reports availability learned from real model calls and caches it for
+six hours. Unknown state and Redis failure are treated as available; the catalog does not probe.
+When a selected model fails before a streamed answer begins, the default route can answer instead.
+The reader displays a notice before fallback tokens, and the terminal metadata records the model
+that actually answered. After the notice, the reader and Desk refresh `/models`; if the selected
+model is now unavailable, the picker selects an available option. The note and its follow-ups retain
+the selected model used for that request.
 
 **Why.** A quick factual note and a deep derivation deserve different models; making it per note
 avoids a global setting the reader forgets to switch back.

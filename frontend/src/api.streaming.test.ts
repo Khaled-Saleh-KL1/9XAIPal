@@ -62,4 +62,40 @@ describe('agent answer stream replacement events', () => {
     expect(onToken.mock.calls).toEqual([['discarded preamble'], ['final answer']]);
     expect(onReplace).toHaveBeenCalledOnce();
   });
+
+  it('forwards fallback notices to note and study consumers', async () => {
+    const message = "GLM 5.3 Flash isn't available on the current plan, so Gemma 4 31B answered instead.";
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(sseResponse([
+        { type: 'notice', message },
+        {
+          type: 'done', note_id: 'note-1', answer: 'answer', model: 'gemma4:31b',
+          retrieval_mode: 'agent', cited_sequence_ids: [], agent_steps: [],
+        },
+      ]))
+      .mockResolvedValueOnce(sseResponse([
+        { type: 'notice', message },
+        { type: 'done', turn_id: 'turn-1', answer: 'answer', model: 'gemma4:31b', cited: [], agent_steps: [] },
+      ])));
+
+    const onNoteNotice = vi.fn();
+    await askNoteStream(
+      'paper-1',
+      'question',
+      { kind: 'text', sequence_id: 1 },
+      null,
+      {
+        onCreated: vi.fn(), onStatus: vi.fn(), onStep: vi.fn(), onToken: vi.fn(),
+        onNotice: onNoteNotice,
+      },
+    );
+
+    const onStudyNotice = vi.fn();
+    await askStudyStream('library', 'question', {
+      onStatus: vi.fn(), onStep: vi.fn(), onToken: vi.fn(), onNotice: onStudyNotice,
+    });
+
+    expect(onNoteNotice).toHaveBeenCalledWith(message);
+    expect(onStudyNotice).toHaveBeenCalledWith(message);
+  });
 });

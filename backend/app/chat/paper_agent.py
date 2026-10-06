@@ -846,6 +846,7 @@ async def answer_paper_question(
       {"type": "status",  "message": str}   the phase the agent is in
       {"type": "step",    ...}              one tool call, twice: running → done
       {"type": "token",   "text": str}      answer text as it generates
+      {"type": "notice",  "message": str}   selected-model fallback notice
       {"type": "done",    "answer", "model", "retrieval_mode", "cited", "steps"}
 
     ``anchor`` is {kind, sequence_id, quote, image_path}; ``kind`` may be
@@ -1014,7 +1015,9 @@ async def answer_paper_question(
             messages, temperature=0.3, model=model, catch_remember=True,
             tool_probe=True,
         ):
-            if event["type"] == "token":
+            if event["type"] == "notice":
+                yield event
+            elif event["type"] == "token":
                 streamed_text = True
                 yield event
             else:
@@ -1126,7 +1129,9 @@ async def _stream_answer(
     async for event in stream_answer(
         messages, model=model, temperature=0.3, catch_remember=True
     ):
-        if event["type"] == "token":
+        if event["type"] == "notice":
+            yield event
+        elif event["type"] == "token":
             yield event
         else:
             answer = event.get("answer") or ""
