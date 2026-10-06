@@ -17,6 +17,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.database.connection import sync_session
@@ -25,7 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 def scrub(value: object, limit: int = 8192) -> str:
+    # SQLAlchemy diagnostics can include bound chunk text and entire failing
+    # rows. Omit SQL/parameters, including when Celery serialized the error.
+    if isinstance(value, SQLAlchemyError):
+        value = f'{type(value).__name__}: database operation failed; query diagnostics omitted.'
     value = str(value)
+    if '[SQL:' in value or '[parameters:' in value or 'Failing row contains' in value:
+        value = 'Database operation failed; query diagnostics omitted.'
     # Redact configured credentials too, including values in free-form errors.
     for field in type(settings).model_fields:
         if any(word in field.lower() for word in ('password', 'secret', 'api_key', 'token')):
@@ -44,6 +51,8 @@ def scrub(value: object, limit: int = 8192) -> str:
 
 def classify_failure(exc: BaseException, *, task_name=None) -> tuple[str, str]:
     """Prefer typed HTTP status (including causes), then specific input defects."""
+    if isinstance(exc, (SQLAlchemyError, MemoryError)):
+        return 'system', 'Processing is temporarily unavailable. Please try again later.'
     # Provider/configuration errors retain HTTP causes but are our fault.
     if any(name in cls.__name__.lower() for cls in type(exc).__mro__ for name in ('modelunavailable', 'classifierunavailable')):
         return 'system', getattr(exc,'public_message','Processing is temporarily unavailable. Please try again later.')
@@ -81,7 +90,7 @@ def classify_failure(exc: BaseException, *, task_name=None) -> tuple[str, str]:
     return 'system', 'Processing failed. Your document is preserved; please try again later.'
 
 
-def fingerprint(task_name: str, error_type: str, message: str) -> str:
+def fingerprint(task_name: str, error_type: str, message: object) -> str:
     normalized = scrub(message)
     normalized = re.sub(r'\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b', '<id>', normalized)
     normalized = re.sub(r'(?:/[\w.~-]+)+', '<path>', normalized)
@@ -136,7 +145,7 @@ def record_failure(task_name, task_id, exc, *, document_id=None, job_id=None,
                 category, public = classify_failure(exc, task_name=task_name)
                 params.update(category=category, error_type=type(exc).__name__,
                               message=scrub(public if category == 'user_input' else exc, 2048))
-        params['fingerprint'] = fingerprint(task_name, params['error_type'], str(exc))
+        params['fingerprint'] = fingerprint(task_name, params['error_type'], exc)
         row = session.execute(text('''
             INSERT INTO failed_jobs(task_name,celery_task_id,document_id,user_id,job_id,
                 category,error_type,error_message,traceback,fingerprint,logical_key)
