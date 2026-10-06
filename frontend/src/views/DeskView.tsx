@@ -7,6 +7,7 @@ import { UserMenuInline } from '../components/UserMenu';
 import { NoteWall } from './NoteWall';
 import { PaperPicker } from './PaperPicker';
 import { ShelfGroups } from '../components/ShelfGroups';
+import { resolveAvailableModel } from '../components/ModelPicker';
 import { StickyBoard } from './StickyBoard';
 import { StudyChat, type PendingTurn } from './StudyChat';
 import { createPacer } from '../lib/pacer';
@@ -186,7 +187,7 @@ export function DeskView({
         setCatalog(c);
         // Re-validate the remembered model: one can vanish from Ollama between
         // sessions, and a stale name silently fails at generation time.
-        setModel((m) => (c.models.some((x) => x.name === m) ? m : c.default));
+        setModel((m) => resolveAvailableModel(c, m));
       })
       .catch(() => {});
   }, []);
@@ -257,6 +258,7 @@ export function DeskView({
         status: null,
         steps: [],
         error: null,
+        notice: null,
         verifying: false,
       };
       setPending(draft);
@@ -279,6 +281,7 @@ export function DeskView({
             // turn; remember it so the next question continues it.
             onCreated: (id) => { cid = id; if (scopeRef.current === scope) setConversationId(id); },
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
+            onNotice: (message) => patch((p) => ({ ...p, notice: message })),
             // ⚠ Upsert by id, and clear the status: every call arrives twice,
             // running then done, and once a fetch is on screen the trail IS the
             // activity indicator.

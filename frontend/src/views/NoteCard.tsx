@@ -42,6 +42,7 @@ export interface PendingNote {
   question: string;
   answer: string;
   status: string | null;
+  notice?: string | null;
   /** Tool calls so far, upserted by id as `running` then `done` events land. */
   steps: AgentStep[];
   error: string | null;
@@ -242,6 +243,9 @@ export function PendingNoteCard({
           {/* Keep the reasoning rows with the streaming answer and let the live
               status shift to writing after its first token. */}
           <Reasoning steps={note.steps} live writing={Boolean(note.answer)} onJump={onJump} />
+          {note.notice && (
+            <div className="model-fallback-notice" role="status">{note.notice}</div>
+          )}
           {note.answer ? (
             // Still streaming: withhold a half-written LaTeX span so the reader
             // doesn't watch raw markup type itself out and then snap into a symbol.

@@ -30,7 +30,7 @@ vi.mock('motion/react', async (importOriginal) => {
 
 import { PendingNoteCard, type PendingNote } from './NoteCard';
 
-const note = (answer: string): PendingNote => ({
+const note = (answer: string, notice: string | null = null): PendingNote => ({
   clientId: 'pending-note-1',
   noteId: null,
   anchorSequenceId: 4,
@@ -40,6 +40,7 @@ const note = (answer: string): PendingNote => ({
   question: 'Why does this matter?',
   answer,
   status: null,
+  notice,
   steps: [],
   error: null,
   verifying: false,
@@ -78,5 +79,16 @@ describe('PendingNoteCard streaming motion', () => {
     expect(mocks.mountId).toBe(firstMount);
     expect(mocks.props?.initial).toEqual({ opacity: 0 });
     expect(screen.getByTestId('chat-stream-caret')).toBeInTheDocument();
+  });
+
+  it('shows a fallback notice with the pending answer', () => {
+    const message = "GLM 5.3 Flash isn't available on the current plan, so Gemma 4 31B answered instead.";
+    render(
+      <MotionRoot>
+        <PendingNoteCard note={note('Answer in progress', message)} onRetry={vi.fn()} onDismiss={vi.fn()} />
+      </MotionRoot>,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent(message);
   });
 });

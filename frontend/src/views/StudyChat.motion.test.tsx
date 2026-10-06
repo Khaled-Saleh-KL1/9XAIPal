@@ -45,13 +45,14 @@ const turn = (id: string, role: StudyTurn['role'], content: string): StudyTurn =
   created_at: null,
 });
 
-const pending = (answer: string, verifying = false): PendingTurn => ({
+const pending = (answer: string, verifying = false, notice?: string): PendingTurn => ({
   clientId: 'pending-1',
   question: 'New question',
   answer,
   status: null,
   steps: [],
   error: null,
+  notice,
   verifying,
 });
 
@@ -110,5 +111,12 @@ describe('StudyChat message motion', () => {
     expect(mocks.rows.get('new-user')?.props.initial).toBe(false);
     expect(mocks.rows.get('new-answer')?.props.initial).toBe(false);
     expect(screen.queryByTestId('chat-stream-caret')).not.toBeInTheDocument();
+  });
+
+  it('shows a fallback notice alongside a pending study answer', () => {
+    const message = "GLM 5.3 Flash isn't available on the current plan, so Gemma 4 31B answered instead.";
+    render(chat([], pending('Answer in progress', false, message)));
+
+    expect(screen.getByRole('status')).toHaveTextContent(message);
   });
 });

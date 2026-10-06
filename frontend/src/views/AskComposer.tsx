@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CardEyebrow } from './NoteChrome';
+import { ModelPicker } from '../components/ModelPicker';
 import { useAutoGrowTextarea } from '../lib/useAutoGrowTextarea';
 import type { ModelCatalog } from '../api';
 
@@ -103,26 +104,12 @@ export function AskComposer({
         }}
       />
       {catalog && catalog.models.length > 0 && (
-        <label className="model-picker" title="Which model answers this note">
-          <select value={model} onChange={(e) => onModelChange(e.target.value)}>
-            {/* Grouped so the local/cloud distinction is visible at a glance:
-                a cloud model sends the paper off this machine. */}
-            {catalog.models.some((m) => !m.is_cloud) && (
-              <optgroup label="Local">
-                {catalog.models.filter((m) => !m.is_cloud).map((m) => (
-                  <option key={m.name} value={m.name}>{m.name}</option>
-                ))}
-              </optgroup>
-            )}
-            {catalog.models.some((m) => m.is_cloud) && (
-              <optgroup label="Cloud">
-                {catalog.models.filter((m) => m.is_cloud).map((m) => (
-                  <option key={m.name} value={m.name}>{m.name}</option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-        </label>
+        <ModelPicker
+          catalog={catalog}
+          model={model}
+          onChange={onModelChange}
+          title="Which model answers this note"
+        />
       )}
 
       <div className="note-actions">

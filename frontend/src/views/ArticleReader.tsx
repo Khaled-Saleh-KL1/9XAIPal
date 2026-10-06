@@ -42,6 +42,7 @@ import { PageMapProvider, useBuiltPageMap } from '../lib/pageMap';
 import { useReferences } from '../lib/references';
 import { RevealModeToggle } from '../components/RevealModeToggle';
 import { Toast } from '../components/Toast';
+import { resolveAvailableModel } from '../components/ModelPicker';
 import {
   initialRevealCursor,
   loadRevealCursor,
@@ -409,9 +410,7 @@ export function ArticleReader({
       .then((c) => {
         if (!alive) return;
         setCatalog(c);
-        setModel((current) =>
-          current && c.models.some((m) => m.name === current) ? current : c.default,
-        );
+        setModel((current) => resolveAvailableModel(c, current));
       })
       .catch(() => { /* picker just stays hidden; the default model still answers */ });
     return () => { alive = false; };
@@ -1441,6 +1440,7 @@ export function ArticleReader({
           {
             onCreated: (noteId) => patch((p) => ({ ...p, noteId })),
             onStatus: (message) => patch((p) => ({ ...p, status: message })),
+            onNotice: (message) => patch((p) => ({ ...p, notice: message })),
             // ⚠ Upsert by id, never append. Every call arrives twice:
             // `running` when the agent announces it, `done` when it returns,
             // and appending would show each fetch as two rows, the first one
@@ -1837,7 +1837,7 @@ export function ArticleReader({
               note={p}
               onJump={jumpTo}
               onRetry={() => {
-                const retry = { ...p, error: null, answer: '', status: null, steps: [], verifying: false };
+                const retry = { ...p, error: null, answer: '', status: null, notice: null, steps: [], verifying: false };
                 void runNote(retry, {
                   kind: p.anchorKind as 'text' | 'figure' | 'equation' | 'table' | 'block',
                   sequence_id: p.anchorSequenceId,
