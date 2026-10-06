@@ -818,7 +818,9 @@ figures in LOCAL and GLOBAL responses.
   wears: the eyebrow (grip, tone dot, one word, `¶N`), the drag hook, the collapse clamp. Cards are
   told apart by **shape and colour, not by a border tint**, so a margin card is read peripherally.
 - [`views/AskComposer.tsx`](../../frontend/src/views/AskComposer.tsx): the composer that opens on
-  an anchor. Owns the model picker; never touches the network.
+  an anchor. Uses the shared model picker and never touches the network.
+- [`components/ModelPicker.tsx`](../../frontend/src/components/ModelPicker.tsx): shared picker for
+  article notes and Desk study chat; groups available models first and disables unavailable rows.
 - [`views/DeskView.tsx`](../../frontend/src/views/DeskView.tsx): the desk page.
 - [`views/AgentTrail.tsx`](../../frontend/src/views/AgentTrail.tsx): the tool calls behind an
   answer, live and after the fact. Shared by margin notes and the desk.
