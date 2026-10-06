@@ -28,7 +28,6 @@ export const HERO = {
   secondaryCta: 'View the code',
   introDescription:
     'A drawn reader is buried under a storm of papers until the 9XAIPal mark sweeps them onto a shelf and hands over the one page they need.',
-  introReplay: 'Replay',
   caption: 'Made for reading across languages',
   artCaption: 'From a pile of papers to the one page you need.',
 } as const;

@@ -8,7 +8,8 @@ import { calm, gentle, playful } from '../../motion/springs';
  * The landing hero's opening film: a drawn reader buried under a storm of
  * papers, until the 9 mark sweeps them onto a shelf and hands over the one
  * page they need. It plays once per visit, then settles into a quiet "paper
- * galaxy" idle loop.
+ * galaxy" idle loop. There is deliberately no replay control: anything that
+ * appears when the film ends shifts the centred scene and reads as a jolt.
  *
  * ⚠ The scene is decoration with a text alternative (the wrapper's
  * aria-label). The headline beside it is visible from the first frame, so
@@ -180,7 +181,6 @@ export function HeroIntro() {
   const ref = useRef<HTMLDivElement>(null);
   const visible = usePauseWhenHidden(ref);
   const [phase, setPhase] = useState<IntroPhase>(() => (reducedMotion || readPlayed() ? 'idle' : 'storm'));
-  const [run, setRun] = useState(0);
 
   // Reduced motion can resolve after the first render: jump to the calm frame.
   useEffect(() => {
@@ -196,12 +196,7 @@ export function HeroIntro() {
       setPhase(upcoming);
     }, INTRO_TIMINGS[phase]);
     return () => window.clearTimeout(timer);
-  }, [phase, reducedMotion, run]);
-
-  const replay = () => {
-    setRun((n) => n + 1);
-    setPhase('storm');
-  };
+  }, [phase, reducedMotion]);
 
   const sorted = phase === 'rescue' || phase === 'relief' || phase === 'idle';
   const relieved = phase === 'relief' || phase === 'idle';
@@ -317,13 +312,13 @@ export function HeroIntro() {
               ? { x: p.shelf.x, y: p.shelf.y, rotate: 0, scale: 0.42 }
               : { x: [p.start.x, p.swirl.x, p.pile.x], y: [p.start.y, p.swirl.y, p.pile.y], rotate: [p.start.rotate, p.swirl.rotate, p.pile.rotate], scale: 1 };
             const transition = sorted
-              ? reducedMotion || phase === 'idle'
+              ? reducedMotion
                 ? { duration: 0 }
                 : { ...playful, delay: 0.35 + i * 0.07 }
               : { duration: 1.5 + (i % 4) * 0.12, delay: i * 0.11, ease: 'easeOut' as const, times: [0, 0.55, 1] };
             return (
               <m.g
-                key={`${run}-${i}`}
+                key={i}
                 initial={reducedMotion || phase === 'idle' ? false : { x: p.start.x, y: p.start.y, rotate: p.start.rotate }}
                 animate={target}
                 transition={transition}
@@ -418,11 +413,6 @@ export function HeroIntro() {
         </g>
       </svg>
 
-      {!reducedMotion && phase === 'idle' && (
-        <button type="button" className="hero-intro-replay" onClick={replay}>
-          <span aria-hidden="true">↻</span> {HERO.introReplay}
-        </button>
-      )}
     </div>
   );
 }

@@ -96,7 +96,6 @@
 .landing-hero-caption span { color: var(--landing-accent); font-size: 15px; }
 
 .hero-art { position: relative; min-width: 0; min-height: 490px; display: flex; flex-direction: column; justify-content: center; }
-.hero-art::before { position: absolute; top: 5%; left: 8%; width: 80%; aspect-ratio: 1; border: 1px solid color-mix(in oklch, var(--accent) 13%, transparent); border-radius: 50%; content: ''; }
 .hero-art::after { position: absolute; right: 3%; bottom: 7%; width: 45%; height: 27%; border-radius: 50%; background: color-mix(in oklch, var(--accent-soft) 58%, transparent); filter: blur(36px); content: ''; }
 .hero-intro { position: relative; z-index: 1; width: 100%; display: flex; flex-direction: column; align-items: center; }
 .hero-intro-scene { width: 100%; max-width: 600px; height: auto; overflow: hidden; }
@@ -120,8 +119,6 @@
 .intro-sparkle { fill: var(--accent); }
 .intro-fleck { fill: color-mix(in oklch, var(--fg) 30%, transparent); }
 .intro-fleck.is-accent { fill: color-mix(in oklch, var(--accent) 70%, transparent); }
-.hero-intro-replay { margin-top: -6px; padding: 4px 10px; border: 0; border-radius: 999px; background: transparent; color: var(--landing-muted); font-size: 11px; cursor: pointer; }
-.hero-intro-replay:hover, .hero-intro-replay:focus-visible { color: var(--accent); background: color-mix(in oklch, var(--accent-soft) 60%, transparent); }
 .hero-art-caption { position: relative; z-index: 2; display: flex; align-items: center; gap: 9px; align-self: center; margin: 2px 0 0; color: var(--landing-muted); font-size: 10px; letter-spacing: 0.015em; }
 .caption-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
