@@ -24,7 +24,7 @@
 ## Review Focus
 
 - Ollama tags unavailable or malformed: Ollama probes are skipped while configured provider pins can still be probed; pin with tests in Task 2.
-- NVIDIA provider has no usable key: the pinned model is skipped without making an HTTP request or logging a key; test in Task 2.
+- NVIDIA provider is unconfigured: its pin stays absent as in the catalog, with no HTTP request or cache write; test in Task 2.
 - HTTP 500, other non-definitive status, and timeout: cache is left unchanged; test in Task 2.
 - Concurrent model list grows: no more than three model requests are in flight; test in Task 2.
 - Light worker starts while the refresh is disabled or on the ingest role: no startup run is queued; test in Task 1.
