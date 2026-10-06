@@ -1,14 +1,28 @@
 """Celery terminal-failure receivers and light-queue maintenance tasks."""
 import logging
+import os
 import traceback as traceback_module
 from uuid import UUID
 
-from celery.signals import task_failure, task_postrun
+from celery.signals import task_failure, task_postrun, worker_ready
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
 from app.services import failures
 
 logger = logging.getLogger(__name__)
+
+
+@worker_ready.connect
+def schedule_model_availability_refresh_on_worker_ready(sender=None, **_kwargs):
+    if (
+        not settings.enable_model_availability_refresh
+        or os.environ.get("WORKER_ROLE") != "light"
+    ):
+        return
+    celery_app.send_task(
+        "9xaipal.refresh_model_availability", countdown=60, queue="celery"
+    )
 
 
 def _ids(args, kwargs):
