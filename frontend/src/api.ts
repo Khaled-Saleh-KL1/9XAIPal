@@ -1,3 +1,4 @@
+import type { BackpressureCode } from './views/UploadNotice';
 /**
  * API client for 9XAIPal backend.
  *
@@ -290,7 +291,7 @@ export type DocKind = 'book' | 'paper';
  */
 export class QueueFullError extends Error {
   readonly status = 429;
-  constructor(readonly queued: number, readonly limit: number, message: string) {
+  constructor(readonly queued: number, readonly limit: number, message: string, readonly code: BackpressureCode = 'queue_full', readonly retryAfter: number = 120) {
     super(message);
     this.name = 'QueueFullError';
   }
@@ -298,27 +299,34 @@ export class QueueFullError extends Error {
 
 async function throwForUploadResponse(res: Response, fallback: string): Promise<never> {
   let detail = fallback;
-  let body: { detail?: string; code?: string; queued?: number; limit?: number } | null = null;
+  let body: { detail?: string; message?: string; code?: string; queued?: number; limit?: number } | null = null;
   try {
     body = await res.json();
     if (body?.detail) detail = body.detail;
   } catch {
     // body not JSON or no detail; keep status-only message
   }
-  if (res.status === 429 && body?.code === 'QUEUE_FULL') {
-    throw new QueueFullError(Number(body.queued) || 0, Number(body.limit) || 0, detail);
+  const code = body?.code === 'QUEUE_FULL' ? 'queue_full' : body?.code;
+  if (code && ['queue_full','user_queue_full','storage_full','service_unavailable'].includes(code)) {
+    const wait = Math.max(30, Math.min(600, Number(res.headers.get('Retry-After')) || 120));
+    throw new QueueFullError(Number(body?.queued) || 0, Number(body?.limit) || 0, body?.message || detail, code as BackpressureCode, wait);
   }
-  throw new Error(detail);
+  throw new Error(res.status === 413 ? 'This file is too large. Please choose a smaller PDF.' : 'The document could not be uploaded. Please try again.');
 }
 
-export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<{ id: string; status: string }> {
+const uploadKeys = new WeakMap<File, string>();
+
+export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<{ id: string; status: string; duplicate?: boolean }> {
   if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
+  let key = uploadKeys.get(file);
+  if (!key) { key = crypto.randomUUID(); uploadKeys.set(file, key); }
   const form = new FormData();
   form.append('file', file);
   form.append('kind', kind);
   const res = await fetch(`${BASE}/papers/upload`, {
     method: 'POST',
     body: form,
+    headers: { 'Idempotency-Key': key },
   });
   if (!res.ok) await throwForUploadResponse(res, `Upload failed: ${res.status}`);
   return res.json();
@@ -334,7 +342,7 @@ export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<
 export async function importArticleUrl(
   url: string,
   kind?: 'book' | 'paper' | null,
-): Promise<{ id: string; status: string }> {
+): Promise<{ id: string; status: string; duplicate?: boolean }> {
   if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
   const res = await fetch(`${BASE}/papers/import-url`, {
     method: 'POST',

@@ -144,7 +144,8 @@ export function App() {
   // ceiling (429 QUEUE_FULL). Nothing was stored, and the file (or URL) is
   // still in hand, so the overlay offers a retry instead of a failure —
   // `retryRef` is what "Try again" resubmits, with the same kind.
-  const [uploadQueueFull, setUploadQueueFull] = useState<{ queued: number; limit: number } | null>(null);
+  const [uploadQueueFull, setUploadQueueFull] = useState<{ queued: number; limit: number; code?: import('./views/UploadNotice').BackpressureCode; retryAfter?: number } | null>(null);
+  const [uploadDuplicate, setUploadDuplicate] = useState(false);
   const retryRef = useRef<{ file: File; kind: DocKind } | { url: string; kind: 'book' | 'paper' | null } | null>(null);
   const [uploadExtractor, setUploadExtractor] = useState<string | null>(null);
   // Real progress within uploadStatus (e.g. pages extracted / total while
@@ -300,6 +301,7 @@ export function App() {
     setUploadActionRequired(null);
     setUploadAllowedActions(NO_WRITING_STYLE_ACTIONS);
     setUploadQueueFull(null);
+    setUploadDuplicate(false);
     setUploadExtractor(null);
     setUploadKind(kind);
     retryRef.current = { file, kind };
@@ -308,19 +310,20 @@ export function App() {
     try {
       const result = await uploadPaper(file, kind);
       const paperId = result.id;
-      uploadIdRef.current = paperId;
+      uploadIdRef.current = result.duplicate ? null : paperId;
+      setUploadDuplicate(Boolean(result.duplicate));
       setActivePaperId(paperId);
       requestLibraryRefresh();
       pollUploadProgress(paperId);
     } catch (err) {
       if (err instanceof QueueFullError) {
-        setUploadQueueFull({ queued: err.queued, limit: err.limit });
+        setUploadQueueFull({ queued: err.queued, limit: err.limit, code: err.code, retryAfter: err.retryAfter });
         setUploadStatus('queue_full');
         return;
       }
       console.error('Upload failed:', err);
       setUploadStatus('failed');
-      setUploadError((err as Error).message || 'Upload request failed');
+      setUploadError('The file could not be uploaded. Please try again.');
     }
   }, [pollUploadProgress, requestLibraryRefresh]);
 
@@ -348,25 +351,27 @@ export function App() {
     // overlay narrates while it's in flight.
     setUploadKind(kind ?? 'article');
     setUploadQueueFull(null);
+    setUploadDuplicate(false);
     retryRef.current = { url, kind };
     setRoute('processing');
 
     try {
       const result = await importArticleUrl(url, kind);
       const paperId = result.id;
-      uploadIdRef.current = paperId;
+      uploadIdRef.current = result.duplicate ? null : paperId;
+      setUploadDuplicate(Boolean(result.duplicate));
       setActivePaperId(paperId);
       requestLibraryRefresh();
       pollUploadProgress(paperId);
     } catch (err) {
       if (err instanceof QueueFullError) {
-        setUploadQueueFull({ queued: err.queued, limit: err.limit });
+        setUploadQueueFull({ queued: err.queued, limit: err.limit, code: err.code, retryAfter: err.retryAfter });
         setUploadStatus('queue_full');
         return;
       }
       console.error('Import failed:', err);
       setUploadStatus('failed');
-      setUploadError((err as Error).message || 'Import request failed');
+      setUploadError('The article could not be imported. Please try again.');
     }
   }, [pollUploadProgress, requestLibraryRefresh]);
 
@@ -457,6 +462,7 @@ export function App() {
     setUploadActionRequired(null);
     setUploadAllowedActions(NO_WRITING_STYLE_ACTIONS);
     setUploadQueueFull(null);
+    setUploadDuplicate(false);
     requestLibraryRefresh();
     refreshPapers();
     setRoute('library');
@@ -810,6 +816,12 @@ export function App() {
           confirmationPending={confirmingArabicStyle}
           onConfirmWritingStyle={confirmWritingStyle}
           queueFull={uploadQueueFull}
+          duplicate={uploadDuplicate}
+          onOpenDuplicate={activePaperId ? () => {
+            const id = activePaperId;
+            onProcessingClose();
+            void openPaperById(id);
+          } : undefined}
           extractor={uploadExtractor}
           kind={uploadKind}
           onClose={onProcessingClose}

@@ -6,6 +6,20 @@ from fastapi.responses import JSONResponse
 from app.extraction.mineru_client import MinerUError
 
 
+
+UPLOAD_ADMISSION_MESSAGES = {
+    "queue_full": "The server is busy processing other uploads right now. Please try again shortly. Your file was not uploaded.",
+    "user_queue_full": "Your earlier uploads are still processing. Please wait before adding another document.",
+    "storage_full": "The server needs more storage space before accepting uploads. Please try again later.",
+    "service_unavailable": "Uploads are temporarily unavailable. Please try again shortly.",
+}
+
+
+class UploadAdmissionError(Exception):
+    def __init__(self, code, status_code=429, retry_after=120):
+        self.code, self.status_code, self.retry_after = code, status_code, retry_after
+
+
 class DocumentNotFound(Exception):
     def __init__(self, document_id: str):
         self.document_id = document_id
@@ -74,6 +88,12 @@ class NotAdmitted(Exception):
 def register_exception_handlers(app: FastAPI) -> None:
     """Register all domain exception handlers."""
 
+    @app.exception_handler(UploadAdmissionError)
+    async def upload_admission_handler(request: Request, exc: UploadAdmissionError):
+        return JSONResponse(status_code=exc.status_code,
+                            headers={"Retry-After": str(exc.retry_after)},
+                            content={"code": exc.code, "message": UPLOAD_ADMISSION_MESSAGES[exc.code]})
+
     @app.exception_handler(DocumentNotFound)
     async def document_not_found_handler(request: Request, exc: DocumentNotFound):
         return JSONResponse(
@@ -115,27 +135,14 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(InsufficientStorage)
     async def insufficient_storage_handler(request: Request, exc: InsufficientStorage):
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": "The server is almost out of disk space — new papers can't be processed until it's freed.",
-                "code": "DISK_FULL",
-                "used_percent": exc.used_percent,
-                "limit_percent": exc.limit_percent,
-            },
-        )
+        return await upload_admission_handler(request, UploadAdmissionError("storage_full",503,600))
 
     @app.exception_handler(TooManyQueuedJobs)
     async def too_many_queued_jobs_handler(request: Request, exc: TooManyQueuedJobs):
-        return JSONResponse(
-            status_code=429,
-            content={
-                "detail": "Too many papers waiting to process right now — try again in a few minutes.",
-                "code": "QUEUE_FULL",
-                "queued": exc.current,
-                "limit": exc.limit,
-            },
-        )
+        from app.services.upload_admission import retry_after
+        return JSONResponse(status_code=429, headers={"Retry-After":str(retry_after(exc.current))},
+                            content={"code":"queue_full", "message":UPLOAD_ADMISSION_MESSAGES["queue_full"],
+                                     "queued":exc.current,"limit":exc.limit})
 
     @app.exception_handler(NotAdmitted)
     async def not_admitted_handler(request: Request, exc: NotAdmitted):
