@@ -94,3 +94,6 @@ backend/output
 
 # Built SPA copied to the VM and served by nginx (build artifact, not source)
 backend/frontend-dist/
+
+# Local-only root pyproject.toml (not part of the app; backend/pyproject.toml stays tracked)
+/pyproject.toml
