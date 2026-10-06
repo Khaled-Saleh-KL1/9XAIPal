@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api.errors import ModelUnavailable
+from app.core.config import settings
 from app.core import circuit_breaker
 from app.llm import client, ollama_client, resolver
 from app.llm.resolver import LLMTarget
@@ -163,6 +164,45 @@ async def test_chat_ollama_failure_falls_through_to_cloud(monkeypatch):
 
     result = await client.chat([{"role": "user", "content": "hi"}])
     assert result["content"] == "cloud saved the day"
+
+
+async def test_explicit_ollama_pick_never_reaches_cloud_after_failure(monkeypatch):
+    monkeypatch.setattr(resolver, "ollama_reachable", AsyncMock(return_value=False))
+    monkeypatch.setattr(settings, "ollama_api_key", "ollama-test")
+    monkeypatch.setattr(settings, "openai_api_key", "openai-test")
+    monkeypatch.setattr(settings, "nvidia_api_key", "nvidia-test")
+    calls = []
+    availability_writes = []
+
+    async def record(provider, model, *, available, status_code=None):
+        availability_writes.append((provider, model, available, status_code))
+
+    async def fail(target, _messages, **_kwargs):
+        calls.append((target.provider, _kwargs["resolved"]))
+        raise ModelUnavailable("glm-5.3-flash (402: plan required)", status_code=402)
+
+    monkeypatch.setattr(client, "_chat_once", fail)
+    monkeypatch.setattr(client.availability, "record_model_result", record)
+
+    with pytest.raises(ModelUnavailable):
+        await client.chat([{"role": "user", "content": "hi"}], model="glm-5.3-flash")
+
+    assert calls == [("ollama", "glm-5.3-flash")]
+    assert availability_writes == [("ollama", "glm-5.3-flash", False, 402)]
+
+
+async def test_chat_records_a_successful_model_as_available(monkeypatch):
+    monkeypatch.setattr(resolver, "targets_for", AsyncMock(return_value=[_target("nvidia")]))
+    record = AsyncMock()
+    monkeypatch.setattr(client.availability, "record_model_result", record)
+    monkeypatch.setattr(
+        client, "_chat_once",
+        AsyncMock(return_value={"content": "ok", "model": "meta/muse-glimmer-30b"}),
+    )
+
+    await client.chat([{"role": "user", "content": "hi"}], model="meta/muse-glimmer-30b")
+
+    record.assert_awaited_once_with("nvidia", "meta/muse-glimmer-30b", available=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

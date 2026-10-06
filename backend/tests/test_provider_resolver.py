@@ -160,6 +160,29 @@ def test_cascade_with_pin_and_no_key_raises_immediately(monkeypatch):
         resolver.llm_cascade_sync()
 
 
+def test_explicit_ollama_model_stays_on_ollama_even_when_probe_is_down(monkeypatch):
+    """A selected catalog tag belongs to Ollama even when another cloud
+    provider is configured and the cheap reachability probe says down."""
+    monkeypatch.setattr(settings, "ollama_api_key", "ollama-a,ollama-b")
+    monkeypatch.setattr(settings, "openai_api_key", "openai-test")
+    monkeypatch.setattr(settings, "nvidia_api_key", "nvidia-a,nvidia-b")
+
+    targets = resolver.targets_for_sync("glm-5.3-flash", ollama_up=False)
+
+    assert [target.provider for target in targets] == ["ollama", "ollama"]
+    assert [target.key_index for target in targets] == [0, 1]
+
+
+def test_explicit_muse_model_uses_only_rotated_nvidia_keys(monkeypatch):
+    monkeypatch.setattr(settings, "ollama_api_key", "ollama-test")
+    monkeypatch.setattr(settings, "nvidia_api_key", "nvidia-a,nvidia-b,nvidia-c")
+
+    targets = resolver.targets_for_sync("meta/muse-glimmer-30b", ollama_up=True)
+
+    assert [target.provider for target in targets] == ["nvidia"] * 3
+    assert sorted(target.key_index for target in targets) == [0, 1, 2]
+
+
 @pytest.mark.asyncio
 async def test_async_cascade_matches_sync(monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "sk-oa-test")

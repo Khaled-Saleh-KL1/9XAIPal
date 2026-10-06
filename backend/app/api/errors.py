@@ -17,8 +17,9 @@ class ChunkNotFound(Exception):
 
 
 class ModelUnavailable(Exception):
-    def __init__(self, model: str):
+    def __init__(self, model: str, status_code: int | None = None):
         self.model = model
+        self.status_code = status_code
 
 
 class NoLLMConfigured(ModelUnavailable):
@@ -153,4 +154,3 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=500,
             content={"detail": f"Extraction failed: {exc}", "code": "EXTRACTION_FAILED"},
         )
-

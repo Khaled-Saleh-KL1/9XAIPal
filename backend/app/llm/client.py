@@ -42,6 +42,7 @@ from app.api.errors import ModelUnavailable
 from app.core import circuit_breaker, tracing
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.llm import availability
 from app.llm import ollama_client, resolver
 from app.llm.resolver import LLMTarget
 
@@ -237,7 +238,10 @@ async def _chat_once(
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
-            raise ModelUnavailable(f"{resolved} ({e.response.status_code}: {body})")
+            raise ModelUnavailable(
+                f"{resolved} ({e.response.status_code}: {body})",
+                status_code=e.response.status_code,
+            )
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved} (network error: {e})")
         data = response.json()
@@ -284,10 +288,14 @@ async def chat(
             )
         except ModelUnavailable as e:
             logger.warning(f"{target.provider} chat failed, falling through: {e}")
+            await availability.record_model_result(
+                target.provider, resolved, available=False, status_code=e.status_code
+            )
             circuit_breaker.record_failure(target.breaker_id)
             last_error = e
             continue
         circuit_breaker.record_success(target.breaker_id)
+        await availability.record_model_result(target.provider, resolved, available=True)
         return result
     raise last_error or ModelUnavailable("no LLM provider configured")
 
@@ -332,7 +340,10 @@ async def _stream_once(
             async with client.stream("POST", url, json=payload, headers=_headers(target)) as response:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", "replace")[:500]
-                    raise ModelUnavailable(f"{resolved} ({response.status_code}: {body})")
+                    raise ModelUnavailable(
+                        f"{resolved} ({response.status_code}: {body})",
+                        status_code=response.status_code,
+                    )
                 async for line in response.aiter_lines():
                     line = line.strip()
                     if not line.startswith("data:"):
@@ -403,8 +414,12 @@ async def stream_chat(
                 yielded_any = True
                 yield event
             circuit_breaker.record_success(target.breaker_id)
+            await availability.record_model_result(target.provider, resolved, available=True)
             return
         except ModelUnavailable as e:
+            await availability.record_model_result(
+                target.provider, resolved, available=False, status_code=e.status_code
+            )
             circuit_breaker.record_failure(target.breaker_id)
             may_fallback = can_fallback() if can_fallback is not None else not yielded_any
             if not may_fallback:
@@ -476,7 +491,10 @@ def _chat_sync_once(
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500]
-            raise ModelUnavailable(f"{resolved} ({e.response.status_code}: {body})")
+            raise ModelUnavailable(
+                f"{resolved} ({e.response.status_code}: {body})",
+                status_code=e.response.status_code,
+            )
         except httpx.RequestError as e:
             raise ModelUnavailable(f"{resolved} (network error: {e})")
         data = response.json()
@@ -519,9 +537,13 @@ def chat_sync(
             )
         except ModelUnavailable as e:
             logger.warning(f"[sync] {target.provider} chat failed, falling through: {e}")
+            availability.record_model_result_sync(
+                target.provider, resolved, available=False, status_code=e.status_code
+            )
             circuit_breaker.record_failure(target.breaker_id)
             last_error = e
             continue
         circuit_breaker.record_success(target.breaker_id)
+        availability.record_model_result_sync(target.provider, resolved, available=True)
         return result
     raise last_error or ModelUnavailable("no LLM provider configured")
