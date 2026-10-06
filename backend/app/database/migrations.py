@@ -80,6 +80,7 @@ async def _ensure_recent_columns() -> None:
     partially failed due to the fragile split-on-; runner.
     """
     critical_alters = [
+        "ALTER TABLE ingestion_jobs ADD COLUMN IF NOT EXISTS progress_updated_at TIMESTAMPTZ",
         """CREATE TABLE IF NOT EXISTS reading_order_executions (
             document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             task_id TEXT NOT NULL,
@@ -125,6 +126,13 @@ async def _ensure_recent_columns() -> None:
         "ALTER TABLE studies ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
         "ALTER TABLE sticky_notes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
         "ALTER TABLE conversation_turns ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE",
+        """CREATE TABLE IF NOT EXISTS upload_reservations (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            new_job BOOLEAN NOT NULL,
+            reserved_bytes BIGINT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL
+        )""",
         "CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_studies_user_id ON studies(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_sticky_notes_user_id ON sticky_notes(user_id)",

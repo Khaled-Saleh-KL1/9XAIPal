@@ -1,5 +1,6 @@
 """Admission and content identity shared by PDF and article uploads."""
 import json
+import logging
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
@@ -9,6 +10,9 @@ from app.api.errors import UploadAdmissionError, InsufficientStorage
 from app.core.config import settings
 from app.services.ingestion import check_queue_capacity, create_ingestion_job, requeue_failed_job
 from app.services import documents as doc_service
+
+
+logger = logging.getLogger(__name__)
 
 
 def retry_after(depth: int) -> int:
@@ -45,6 +49,78 @@ async def check_upload_admission(session, user_id):
         await check_queue_capacity(session, user_id=user_id)
     except InsufficientStorage:
         raise UploadAdmissionError('storage_full', 503, 600) from None
+
+
+async def reserve_upload(session, user_id, *, is_url=False, idem_key=None):
+    """Reserve body storage and optionally a job using the job-creation lock.
+
+    At capacity, at most one global request may verify an existing owner's
+    identity. It may return duplicates but cannot create or retry a job.
+    """
+    from uuid import uuid4
+    from app.api.errors import TooManyQueuedJobs
+    from app.services.ingestion import check_disk_headroom
+    await check_broker()
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('9xaipal:ingestion_queue'))"))
+    await session.execute(text('DELETE FROM upload_reservations WHERE expires_at<=clock_timestamp()'))
+    new_job = True
+    try:
+        await check_queue_capacity(session, user_id=user_id)
+    except (TooManyQueuedJobs, UploadAdmissionError) as exc:
+        if isinstance(exc, UploadAdmissionError) and exc.code not in ('queue_full','user_queue_full'):
+            raise
+        column = 'normalized_source_url' if is_url else 'content_sha256'
+        known = await session.scalar(text(f"SELECT EXISTS(SELECT 1 FROM documents WHERE user_id=:user AND {column} IS NOT NULL AND status!='failed')"), {'user':user_id})
+        if idem_key and not known:
+            known = await session.scalar(text("""SELECT EXISTS(SELECT 1 FROM upload_idempotency
+                WHERE user_id=:user AND key=:key AND created_at>now()-interval '24 hours')"""), {'user':user_id,'key':idem_key})
+        busy = await session.scalar(text('SELECT EXISTS(SELECT 1 FROM upload_reservations WHERE NOT new_job)'))
+        if not known or busy:
+            raise
+        new_job = False
+    # Multipart spool, original and raw copy all count against the same 90%
+    # rule. No separate free-GB threshold. Reserve conservatively at the cap.
+    byte_budget = 65536 if is_url else 3 * settings.max_upload_size_mb * 1024**2 + 65536
+    outstanding = await session.scalar(text('SELECT coalesce(sum(reserved_bytes),0) FROM upload_reservations'))
+    check_disk_headroom(outstanding + byte_budget)
+    token = uuid4()
+    await session.execute(text("""INSERT INTO upload_reservations(id,user_id,new_job,reserved_bytes,expires_at)
+        VALUES (:id,:user,:new,:bytes,clock_timestamp()+interval '10 minutes')"""),
+        {'id':token,'user':user_id,'new':new_job,'bytes':byte_budget})
+    await session.commit()
+    return token
+
+
+async def release_upload(token):
+    from app.database.connection import async_session_factory
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text('DELETE FROM upload_reservations WHERE id=:id'), {'id':token})
+            await session.commit()
+    except Exception as exc:
+        # Process/DB loss is covered by expiry; don't replace an API response.
+        logger.warning('Upload reservation cleanup deferred: %s', type(exc).__name__)
+
+
+async def renew_upload(token):
+    from app.database.connection import async_session_factory
+    async with async_session_factory() as session:
+        updated = await session.scalar(text("""UPDATE upload_reservations
+            SET expires_at=clock_timestamp()+interval '10 minutes'
+            WHERE id=:id AND expires_at>clock_timestamp() RETURNING id"""), {'id':token})
+        await session.commit()
+        return updated is not None
+
+
+async def verify_upload(token):
+    if token is None:
+        return
+    try:
+        valid = await renew_upload(token)
+    except Exception:
+        raise UploadAdmissionError('service_unavailable',503,120) from None
+    if not valid:
+        raise UploadAdmissionError('service_unavailable',503,120)
 
 
 def normalize_url(url):

@@ -600,7 +600,6 @@ class Settings(BaseSettings):
     # instead of silently queuing forever.
     max_queued_ingestion_jobs: int = 50
     max_queued_jobs_per_user: int = 5
-    min_free_disk_gb: float = 5
     stalled_job_minutes: int = 45
     alert_email_to: str = ""
     alert_email_from: str = ""

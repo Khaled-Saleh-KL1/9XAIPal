@@ -25,11 +25,15 @@ async def client(db_session, monkeypatch):
     except RuntimeError:
         redis_module._client = None
     monkeypatch.setattr(settings, "ingestion_disk_refuse_percent", 101)
-    monkeypatch.setattr(settings, "min_free_disk_gb", 0)
     user = uuid4()
     await db_session.execute(text("INSERT INTO users(id,email,password_hash) VALUES (:id,'q1@example.test','test-only')"), {'id':user})
     await db_session.commit()
+    async def authenticated(request, db):
+        return app.dependency_overrides[get_current_user]()
+    monkeypatch.setattr('app.api.deps.get_current_user', authenticated)
     app = FastAPI()
+    from app.core.upload_guard import UploadGuardMiddleware
+    app.add_middleware(UploadGuardMiddleware)
     app.include_router(documents.router, prefix='/api/v1/documents')
     register_exception_handlers(app)
     app.dependency_overrides[get_current_user] = lambda: {'id':user}
@@ -51,7 +55,7 @@ async def upload(client, content=PDF, key=None):
 async def test_backpressure(client, monkeypatch, condition, code, status):
     if condition == 'global': monkeypatch.setattr(settings, 'max_queued_ingestion_jobs', 0)
     if condition == 'user': monkeypatch.setattr(settings, 'max_queued_jobs_per_user', 0)
-    if condition == 'disk': monkeypatch.setattr(settings, 'min_free_disk_gb', 10**9)
+    if condition == 'disk': monkeypatch.setattr(settings, 'ingestion_disk_refuse_percent', 0)
     if condition == 'broker': monkeypatch.setattr(settings, 'celery_broker_url', 'redis://localhost:55445/0')
     for path in ['/upload','/import-url']:
         response = await upload(client) if path == '/upload' else await client.post('/api/v1/documents'+path, json={'url':'https://example.test/article'})
@@ -211,3 +215,121 @@ async def test_failed_same_key_reenqueues(client,db_session):
     assert again.json()['id']==doc
     assert again.json()['status']=='processing'
     assert documents.process_ingestion.delay.call_count==2
+
+
+async def test_last_queue_slot_is_reserved_before_either_body(client, monkeypatch):
+    monkeypatch.setattr(settings, 'max_queued_ingestion_jobs', 1)
+    started, release = asyncio.Event(), asyncio.Event()
+    original = documents._stream_pdf_upload
+    bodies = []
+    async def stream(*args, **kwargs):
+        bodies.append(True)
+        started.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(documents, '_stream_pdf_upload', stream)
+    first = asyncio.create_task(upload(client))
+    await asyncio.wait_for(started.wait(), 5)
+    body_reads = []
+    async def second_body():
+        body_reads.append(True)
+        yield b'--boundary\r\nContent-Disposition: form-data; name="file"; filename="a.pdf"\r\nContent-Type: application/pdf\r\n\r\n'+PDF+b'other\r\n--boundary--\r\n'
+    second = asyncio.create_task(client.post('/api/v1/documents/upload', content=second_body(), headers={'Content-Type':'multipart/form-data; boundary=boundary'}))
+    await asyncio.sleep(.15)
+    release.set()
+    responses = await asyncio.gather(first, second)
+    assert len(bodies) == 1
+    assert body_reads == []
+    assert sorted(r.status_code for r in responses) == [201, 429]
+
+
+@pytest.mark.parametrize('limit', ['max_queued_ingestion_jobs', 'max_queued_jobs_per_user'])
+@pytest.mark.parametrize('keyed', [False, True])
+async def test_duplicate_and_key_mismatch_at_capacity(client, monkeypatch, limit, keyed):
+    key = str(uuid4()) if keyed else None
+    first = await upload(client, key=key)
+    monkeypatch.setattr(settings, limit, 1)
+    replay = await upload(client, key=key)
+    assert replay.status_code == 200
+    assert replay.json()['id'] == first.json()['id']
+    assert replay.json()['duplicate'] is True
+    mismatch = await upload(client, PDF+b'new', key=key)
+    assert mismatch.status_code == (422 if keyed else 429)
+
+
+async def test_url_duplicate_at_capacity(client, monkeypatch):
+    first = await client.post('/api/v1/documents/import-url', json={'url':'https://example.test/a'})
+    monkeypatch.setattr(settings, 'max_queued_ingestion_jobs', 1)
+    replay = await client.post('/api/v1/documents/import-url', json={'url':'https://example.test/a'})
+    assert replay.status_code == 200
+    assert replay.json()['id'] == first.json()['id']
+
+
+async def test_failed_duplicate_restores_missing_original(client, db_session):
+    from app.core.paths import documents_dir
+    first = await upload(client)
+    doc_id = first.json()['id']
+    filename = first.json()['filename']
+    original = documents_dir()/filename
+    original.unlink()
+    await db_session.execute(text("UPDATE documents SET status='failed' WHERE id=:id"), {'id':doc_id})
+    await db_session.execute(text("UPDATE ingestion_jobs SET status='failed' WHERE document_id=:id"), {'id':doc_id})
+    await db_session.commit()
+    replay = await upload(client)
+    assert replay.status_code == 200
+    assert replay.json()['id'] == doc_id
+    assert original.read_bytes() == PDF
+
+
+async def test_reservation_disk_budget_stays_within_existing_percent(client, monkeypatch, db_session):
+    from collections import namedtuple
+    from app.services.upload_admission import reserve_upload, release_upload
+    from app.api.errors import InsufficientStorage
+    usage = namedtuple('usage', 'total used free')(100*1024**3, 88*1024**3, 12*1024**3)
+    monkeypatch.setattr('app.services.ingestion.shutil.disk_usage', lambda _:usage)
+    monkeypatch.setattr(settings, 'ingestion_disk_refuse_percent', 90)
+    first = await reserve_upload(db_session, client.user)
+    try:
+        async with async_session_factory() as other:
+            with pytest.raises(InsufficientStorage):
+                await reserve_upload(other, client.user)
+    finally:
+        await release_upload(first)
+
+
+async def test_expired_reservation_reclaimed_and_failures_release(client, monkeypatch, db_session):
+    from app.services.upload_admission import reserve_upload
+    monkeypatch.setattr(settings, 'max_queued_ingestion_jobs', 1)
+    token = await reserve_upload(db_session, client.user)
+    await db_session.execute(text("UPDATE upload_reservations SET expires_at=now()-interval '1 second' WHERE id=:id"), {'id':token})
+    await db_session.commit()
+    invalid = await upload(client, b'not a PDF')
+    assert invalid.status_code == 415
+    assert await db_session.scalar(text('SELECT count(*) FROM upload_reservations')) == 0
+    valid = await upload(client)
+    assert valid.status_code == 201
+    assert await db_session.scalar(text('SELECT count(*) FROM upload_reservations')) == 0
+
+
+async def test_full_queue_duplicate_verification_is_bounded(client, monkeypatch, db_session):
+    first = await upload(client)
+    monkeypatch.setattr(settings, 'max_queued_ingestion_jobs', 1)
+    started, release = asyncio.Event(), asyncio.Event()
+    original = documents._stream_pdf_upload
+    async def stream(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(documents, '_stream_pdf_upload', stream)
+    replay = asyncio.create_task(upload(client))
+    await asyncio.wait_for(started.wait(), 5)
+    try:
+        other = await upload(client)
+        assert other.status_code == 429
+        assert await db_session.scalar(text('SELECT count(*) FROM upload_reservations')) == 1
+    finally:
+        release.set()
+        result = await replay
+    assert result.status_code == 200
+    assert result.json()['id'] == first.json()['id']
+    assert await db_session.scalar(text('SELECT count(*) FROM upload_reservations')) == 0

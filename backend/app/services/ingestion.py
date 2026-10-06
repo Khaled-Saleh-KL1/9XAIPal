@@ -18,7 +18,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def check_disk_headroom() -> None:
+def check_disk_headroom(reserved_bytes: int = 0) -> None:
     """Raise InsufficientStorage if the disk under storage_root is at or past
     settings.ingestion_disk_refuse_percent.
 
@@ -31,7 +31,7 @@ def check_disk_headroom() -> None:
     """
     usage = shutil.disk_usage(settings.storage_root)
     used_percent = round(usage.used * 100 / usage.total)
-    if used_percent >= settings.ingestion_disk_refuse_percent or usage.free < settings.min_free_disk_gb * 1024**3:
+    if used_percent >= settings.ingestion_disk_refuse_percent or usage.used + reserved_bytes >= usage.total * settings.ingestion_disk_refuse_percent / 100:
         raise InsufficientStorage(used_percent, settings.ingestion_disk_refuse_percent)
 
 
@@ -55,12 +55,20 @@ async def check_queue_capacity(session: AsyncSession, user_id=None) -> None:
         """)
     )
     count = result.scalar_one()
+    reservation = session.info.get('upload_reservation')
+    reserved = await session.scalar(text("""SELECT count(*) FROM upload_reservations
+        WHERE expires_at>clock_timestamp() AND new_job
+        AND id IS DISTINCT FROM CAST(:token AS uuid)"""), {'token':reservation})
+    count += reserved
     if count >= settings.max_queued_ingestion_jobs:
         raise TooManyQueuedJobs(count, settings.max_queued_ingestion_jobs)
     if user_id is not None:
         user_count = await session.scalar(text("""SELECT COUNT(*) FROM ingestion_jobs j
             JOIN documents d ON d.id=j.document_id WHERE d.user_id=:user
             AND j.status NOT IN ('complete','failed')"""), {"user":user_id})
+        user_count += await session.scalar(text("""SELECT count(*) FROM upload_reservations
+            WHERE expires_at>clock_timestamp() AND new_job AND user_id=:user
+            AND id IS DISTINCT FROM CAST(:token AS uuid)"""), {'user':user_id,'token':reservation})
         if user_count >= settings.max_queued_jobs_per_user:
             from app.services.upload_admission import retry_after
             raise UploadAdmissionError('user_queue_full',429,retry_after(user_count))
@@ -76,7 +84,19 @@ async def _reserve_queue_capacity(session: AsyncSession, user_id=None) -> None:
     count and then enqueue beyond the configured ceiling.
     """
     await session.execute(text("SELECT pg_advisory_xact_lock(hashtext('9xaipal:ingestion_queue'))"))
+    reservation = session.info.get('upload_reservation')
+    if reservation:
+        row = (await session.execute(text('SELECT new_job FROM upload_reservations WHERE id=:id AND expires_at>clock_timestamp() FOR UPDATE'), {'id':reservation})).first()
+        if not row:
+            raise UploadAdmissionError('service_unavailable',503,120)
+        if not row[0]:
+            # This reservation permits identity verification only.
+            session.info.pop('upload_reservation', None)
+            await check_queue_capacity(session, user_id=user_id)
+            raise UploadAdmissionError('queue_full',429,120)
     await check_queue_capacity(session, user_id=user_id)
+    if reservation:
+        await session.execute(text('DELETE FROM upload_reservations WHERE id=:id'), {'id':reservation})
 
 
 async def create_ingestion_job(session: AsyncSession, document_id: UUID) -> dict:

@@ -168,3 +168,12 @@ def test_run_pipeline_does_nothing_for_a_paper_deleted_while_queued(db_session_s
     with patch.object(pipeline_sync, "extract_pdf_sync") as extract:
         pipeline_sync.run_pipeline_sync(db_session_sync, document_id=doc_id, job_id=job_id, pdf_path=tmp_path / "a.pdf")
     extract.assert_not_called()
+
+
+@pytest.mark.parametrize('total, used', [(10*1024**3, 8*1024**3), (100*1024**3, 89*1024**3)])
+def test_disk_admission_uses_existing_percent_rule_on_small_disks(monkeypatch, total, used):
+    from collections import namedtuple
+    usage = namedtuple('usage', 'total used free')(total, used, total-used)
+    monkeypatch.setattr('app.services.ingestion.shutil.disk_usage', lambda _:usage)
+    monkeypatch.setattr(settings, 'ingestion_disk_refuse_percent', 90)
+    check_disk_headroom()

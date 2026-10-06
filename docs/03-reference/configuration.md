@@ -279,7 +279,6 @@ All values are environment-backed settings. Empty mail addresses or host disable
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MAX_QUEUED_JOBS_PER_USER` | `5` | Per-owner queued/in-progress ingestion ceiling |
-| `MIN_FREE_DISK_GB` | `5` | Minimum available storage GB, supplements disk-percent guard |
 | `STALLED_JOB_MINUTES` | `45` | Heartbeat inactivity threshold, active-task allowance is three times this |
 | `ALERT_EMAIL_TO` | empty | Owner recipient |
 | `ALERT_EMAIL_FROM` | empty | Alert sender |
@@ -290,4 +289,4 @@ All values are environment-backed settings. Empty mail addresses or host disable
 | `ALERT_MAX_EMAILS_PER_DAY` | `20` | Atomic immediate-mail cap; summary is exempt |
 | `ALERT_REPEAT_WINDOW_MINUTES` | `60` | Suppression window per normalized task/error fingerprint |
 
-Existing `MAX_QUEUED_INGESTION_JOBS=50`, `MAX_UPLOAD_SIZE_MB=500`, `INGESTION_DISK_REFUSE_PERCENT=90`, `STORAGE_ROOT`, `REDIS_URL` and optional `CELERY_BROKER_URL` remain authoritative. Compose passes queue settings to API/workers and mail settings to workers. Both compose files keep the embedded-beat light worker at exactly one replica. [Operator runbook](../runbooks/queue-reliability.md).
+Existing `MAX_QUEUED_INGESTION_JOBS=50`, `MAX_UPLOAD_SIZE_MB=500`, `INGESTION_DISK_REFUSE_PERCENT=90`, `STORAGE_ROOT`, `REDIS_URL` and optional `CELERY_BROKER_URL` remain authoritative. Disk admission projects all expiring upload byte reservations against `INGESTION_DISK_REFUSE_PERCENT`, covering multipart spooling plus original/raw copies. There is no separate `MIN_FREE_DISK_GB` setting. SMTP retries use pending delivery leases; only successful immediate emails spend the daily cap or start repeat suppression. Compose passes queue settings to API/workers and mail settings to workers. Both compose files keep the embedded-beat light worker at exactly one replica. [Operator runbook](../runbooks/queue-reliability.md).

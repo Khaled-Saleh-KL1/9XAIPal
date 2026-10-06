@@ -1,6 +1,6 @@
 """Exception handlers mapping domain errors to HTTP responses."""
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.extraction.mineru_client import MinerUError
@@ -15,9 +15,10 @@ UPLOAD_ADMISSION_MESSAGES = {
 }
 
 
-class UploadAdmissionError(Exception):
+class UploadAdmissionError(HTTPException):
     def __init__(self, code, status_code=429, retry_after=120):
-        self.code, self.status_code, self.retry_after = code, status_code, retry_after
+        super().__init__(status_code, UPLOAD_ADMISSION_MESSAGES[code], headers={'Retry-After':str(retry_after)})
+        self.code, self.retry_after = code, retry_after
 
 
 class DocumentNotFound(Exception):

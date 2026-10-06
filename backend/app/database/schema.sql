@@ -885,3 +885,12 @@ CREATE TABLE IF NOT EXISTS failure_events (
     failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_failure_events_time ON failure_events(failed_at);
+
+-- Expiring pre-body admission, serialized by the ingestion queue lock.
+CREATE TABLE IF NOT EXISTS upload_reservations (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    new_job BOOLEAN NOT NULL,
+    reserved_bytes BIGINT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL
+);

@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import aiofiles
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response, Header
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response, Header, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
@@ -30,7 +30,7 @@ from app.schemas.documents import (
     SetDoneRequest,
     ArabicWritingStyleConfirmation,
 )
-from app.services.upload_admission import check_upload_admission, accept_identity, cache_idempotency, normalize_url
+from app.services.upload_admission import accept_identity, cache_idempotency, normalize_url, reserve_upload, release_upload, verify_upload
 from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services import library_search
@@ -70,7 +70,7 @@ def _article_cover_version(document: dict) -> int | None:
     return None
 
 
-async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int, hasher=None) -> int:
+async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int, hasher=None, reservation_token=None) -> int:
     """Write an upload with a hard byte limit and without materializing it.
 
     ``UploadFile`` may already have spooled part of the multipart body to
@@ -81,7 +81,12 @@ async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int, hash
     header = bytearray()
     try:
         async with aiofiles.open(destination, "wb") as output:
-            while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+            while True:
+                await verify_upload(reservation_token)
+                chunk = await file.read(_UPLOAD_CHUNK_BYTES)
+                await verify_upload(reservation_token)
+                if not chunk:
+                    break
                 total += len(chunk)
                 if total > max_bytes:
                     raise HTTPException(
@@ -132,7 +137,7 @@ async def _dispatch_upload(db, doc, job, *, url=None, kind=None):
         await db.rollback()
         await run_in_threadpool(record_failure,
             '9xaipal.process_article_ingestion' if url is not None else '9xaipal.process_ingestion',
-            f"dispatch:{job['id']}", exc, document_id=doc['id'], job_id=job['id'])
+            f"dispatch:{job['id']}", exc, document_id=doc['id'], job_id=job['id'], execution_generation=generation)
         from app.api.errors import UploadAdmissionError
         raise UploadAdmissionError('service_unavailable',503,120) from None
 
@@ -142,15 +147,24 @@ def _upload_response(doc, duplicate):
         duplicate=duplicate, message='This file is already in your library' if duplicate else 'Document uploaded and queued for processing')
 
 
+async def _endpoint_reservation(request, db, user_id, *, is_url=False, idem_key=None):
+    token = getattr(request.state, 'upload_reservation', None)
+    if token is None:
+        # Also protect direct router consumers without the main ASGI stack.
+        token = await reserve_upload(db, user_id, is_url=is_url, idem_key=idem_key)
+    db.info['upload_reservation'] = token
+    return token
+
+
 @router.post('/upload', response_model=DocumentUploadResponse, status_code=201)
 async def upload_paper(
-    response: Response,
+    response: Response, request: Request,
     file: UploadFile = File(...), kind: str = Form('paper'),
     idempotency_key: str | None = Header(None, alias='Idempotency-Key'),
     db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings),
     current_user: dict = Depends(get_current_user),
 ):
-    await check_upload_admission(db, current_user['id'])
+    token = await _endpoint_reservation(request, db, current_user['id'], idem_key=idempotency_key)
     ensure_storage_dirs()
     filename = f'{uuid4().hex}.pdf'
     dest = documents_dir() / filename
@@ -158,7 +172,7 @@ async def upload_paper(
     raw_path = None
     accepted = False
     try:
-        size = await _stream_pdf_upload(file,dest,settings.max_upload_size_mb * 1024 * 1024,hasher=hasher)
+        size = await _stream_pdf_upload(file,dest,settings.max_upload_size_mb * 1024 * 1024,hasher=hasher, reservation_token=token)
         sha = hasher.hexdigest()
         doc, job, duplicate = await accept_identity(db,user_id=current_user['id'],identity=sha,
             idem_key=idempotency_key,filename=filename,original_filename=file.filename or 'unknown.pdf',
@@ -167,6 +181,16 @@ async def upload_paper(
             raw_path = assets_dir() / f"{doc['id']}.pdf"
             await run_in_threadpool(shutil.copyfile,dest,raw_path)
         else:
+            if job is not None:
+                # A failed retry owns the document lock and passed the live
+                # execution fence. Restore its exact original if it was lost.
+                original = documents_dir() / doc['filename']
+                if not original.exists():
+                    os.replace(dest, original)
+                archived = assets_dir() / f"{doc['id']}.pdf"
+                if not archived.exists():
+                    raw_path = archived
+                    await run_in_threadpool(shutil.copyfile, original, archived)
             dest.unlink(missing_ok=True)
         await db.commit()
         accepted = True
@@ -181,19 +205,21 @@ async def upload_paper(
             if raw_path:
                 raw_path.unlink(missing_ok=True)
         raise
+    finally:
+        await release_upload(token)
 
 
 @router.post('/import-url', response_model=DocumentUploadResponse, status_code=201)
 async def import_article(
-    payload: ImportArticleRequest, response: Response,
+    payload: ImportArticleRequest, response: Response, request: Request,
     idempotency_key: str | None = Header(None, alias='Idempotency-Key'),
     db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user),
 ):
-    await check_upload_admission(db,current_user['id'])
-    url = normalize_url(payload.url)
-    if payload.kind in ('book','paper'):
-        url = normalize_url(canonical_pdf_url(url))
+    token = await _endpoint_reservation(request, db, current_user['id'], is_url=True, idem_key=idempotency_key)
     try:
+        url = normalize_url(payload.url)
+        if payload.kind in ('book','paper'):
+            url = normalize_url(canonical_pdf_url(url))
         doc,job,duplicate = await accept_identity(db,user_id=current_user['id'],identity=url,is_url=True,
             idem_key=idempotency_key,filename=f'{uuid4().hex}.html',original_filename=url,
             doc_kind='article',source_url=url)
@@ -205,6 +231,8 @@ async def import_article(
     except Exception:
         await db.rollback()
         raise
+    finally:
+        await release_upload(token)
 
 
 def _raw_html_headers() -> dict:
