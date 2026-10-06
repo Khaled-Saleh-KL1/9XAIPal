@@ -12,6 +12,7 @@ import type { AgentStep, ConversationSummary, ModelCatalog, StudyPaper, StudyTur
 import { textDirection } from '../lib/documentDirection';
 import { playful, Pressable, reducedMotionFade } from '../motion';
 import { StreamingCaret } from './StreamingCaret';
+import { AnswerViewport } from '../components/AnswerViewport';
 
 /**
  * The desk's chat.
@@ -64,10 +65,12 @@ function Answer({
   text,
   papers,
   onOpenPaper,
+  streaming = false,
 }: {
   text: string;
   papers: StudyPaper[];
   onOpenPaper?: (documentId: string, sequenceId: number) => void;
+  streaming?: boolean;
 }) {
   // The study owner currently passes an inline `onOpenPaper` callback. Keep
   // current values in refs so ReactMarkdown's component map can stay stable
@@ -105,13 +108,15 @@ function Answer({
   }), []);
 
   return (
-    <ReactMarkdown
-      remarkPlugins={MARKDOWN_REMARK}
-      rehypePlugins={MARKDOWN_REHYPE}
-      components={components}
-    >
-      {withCitationLinks(text)}
-    </ReactMarkdown>
+    <AnswerViewport streaming={streaming} dir={textDirection(text) ?? 'auto'}>
+      <ReactMarkdown
+        remarkPlugins={MARKDOWN_REMARK}
+        rehypePlugins={MARKDOWN_REHYPE}
+        components={components}
+      >
+        {withCitationLinks(text)}
+      </ReactMarkdown>
+    </AnswerViewport>
   );
 }
 
@@ -343,11 +348,14 @@ export function StudyChat({
                     text={maskIncompleteMath(pending.answer)}
                     papers={papers}
                     onOpenPaper={onOpenPaper}
+                    streaming={!pending.verifying}
                   />
                   {!pending.verifying && <StreamingCaret />}
-                  <EvidencePanel report={null} verifying={pending.verifying} />
                 </div>
               ) : null}
+              {pending.answer && !pending.error && (
+                <EvidencePanel report={null} verifying={pending.verifying} />
+              )}
             </m.div>
           </>
         )}

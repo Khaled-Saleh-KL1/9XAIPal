@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MotionRoot } from '../motion';
 
@@ -95,6 +95,11 @@ describe('ChatPane message motion', () => {
 
     expect(await screen.findByText('New question')).toBeInTheDocument();
     expect(await screen.findByText('Draft answer')).toBeInTheDocument();
+    const streamingBody = screen.getByText('Draft answer').closest('.md-body');
+    expect(streamingBody).not.toBeNull();
+    const answerViewport = within(streamingBody as HTMLElement).getByTestId('answer-viewport');
+    expect(answerViewport).toHaveTextContent('Draft answer');
+    expect(answerViewport).not.toContainElement(within(streamingBody as HTMLElement).getByTestId('chat-stream-caret'));
     const userRow = [...mocks.motionRows.values()].find(({ props }) =>
       props['data-message-role'] === 'user' && props['data-message-key']?.startsWith('local-'),
     );
