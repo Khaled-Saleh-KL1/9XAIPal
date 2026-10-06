@@ -22,6 +22,29 @@ celery_app = Celery(
     include=["app.workers.tasks", "app.workers.reliability"],
 )
 
+
+def _build_beat_schedule() -> dict:
+    schedule = {
+        "q1-stalled-jobs": {
+            "task": "9xaipal.sweep_stalled_jobs",
+            "schedule": 300.0,
+            "options": {"queue": "celery"},
+        },
+        "q1-daily-summary": {
+            "task": "9xaipal.daily_failure_summary",
+            "schedule": crontab(hour=8, minute=0),
+            "options": {"queue": "celery"},
+        },
+    }
+    if settings.enable_model_availability_refresh:
+        schedule["model-availability-refresh"] = {
+            "task": "9xaipal.refresh_model_availability",
+            "schedule": settings.model_availability_refresh_hours * 60 * 60,
+            "options": {"queue": "celery"},
+        }
+    return schedule
+
+
 celery_app.conf.update(
     # Retain Celery's original default queue so deploy-time backlog is drained.
     task_default_queue="celery",
@@ -40,10 +63,7 @@ celery_app.conf.update(
     result_serializer="json",
     accept_content=["json"],
     timezone="Asia/Amman",
-    beat_schedule={
-        "q1-stalled-jobs": {"task":"9xaipal.sweep_stalled_jobs", "schedule":300.0, "options":{"queue":"celery"}},
-        "q1-daily-summary": {"task":"9xaipal.daily_failure_summary", "schedule":crontab(hour=8, minute=0), "options":{"queue":"celery"}},
-    },
+    beat_schedule=_build_beat_schedule(),
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,

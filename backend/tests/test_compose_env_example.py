@@ -116,3 +116,18 @@ def test_cloudflare_image_settings_reach_api_and_both_celery_workers():
         for service_name in ("api", "celery_worker", "celery_worker_light"):
             environment = services[service_name]["environment"]
             assert {key: environment.get(key) for key in expected} == expected
+
+
+def test_model_availability_refresh_defaults_reach_the_light_worker():
+    expected = {
+        "ENABLE_MODEL_AVAILABILITY_REFRESH": "${ENABLE_MODEL_AVAILABILITY_REFRESH:-true}",
+        "MODEL_AVAILABILITY_REFRESH_HOURS": "${MODEL_AVAILABILITY_REFRESH_HOURS:-3}",
+    }
+
+    assert {key: _active_environment_values().get(key) for key in expected} == {
+        "ENABLE_MODEL_AVAILABILITY_REFRESH": "true",
+        "MODEL_AVAILABILITY_REFRESH_HOURS": "3",
+    }
+    for name in COMPOSE_FILES:
+        light = _load_compose(name)["services"]["celery_worker_light"]
+        assert {key: light["environment"].get(key) for key in expected} == expected

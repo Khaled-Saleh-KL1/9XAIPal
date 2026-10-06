@@ -1,14 +1,51 @@
 """Celery terminal-failure receivers and light-queue maintenance tasks."""
+import asyncio
 import logging
+import math
+import os
 import traceback as traceback_module
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from celery.signals import task_failure, task_postrun
+import httpx
+import redis
+from celery.signals import task_failure, task_postrun, worker_ready
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
+from app.llm import availability, catalog, resolver
 from app.services import failures
 
 logger = logging.getLogger(__name__)
+
+MODEL_PROBE_TIMEOUT_SECONDS = 45.0
+_MODEL_TAGS_TIMEOUT_SECONDS = 6.0
+_MODEL_PROBE_CONCURRENCY = 3
+_AVAILABILITY_REFRESH_LOCK_KEY = "llm:model-availability-refresh:lock"
+_AVAILABILITY_REFRESH_LOCK_INITIAL_TTL_SECONDS = 120
+_RENEW_REFRESH_LOCK_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('EXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+"""
+_RELEASE_REFRESH_LOCK_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
+
+@worker_ready.connect
+def schedule_model_availability_refresh_on_worker_ready(sender=None, **_kwargs):
+    if (
+        not settings.enable_model_availability_refresh
+        or os.environ.get("WORKER_ROLE") != "light"
+    ):
+        return
+    celery_app.send_task(
+        "9xaipal.refresh_model_availability", countdown=60, queue="celery"
+    )
 
 
 def _ids(args, kwargs):
@@ -69,6 +106,199 @@ def send_failure_alert(self, row_id):
 @celery_app.task(name='9xaipal.daily_failure_summary', queue='celery', bind=True, max_retries=0)
 def daily_failure_summary(self):
     failures.daily_summary()
+
+
+async def _model_availability_probe_targets() -> list[tuple[str, str]]:
+    """Build the catalog's provider/model pairs from Ollama tags and pins."""
+    provider_by_name: dict[str, str] = {}
+    try:
+        async with httpx.AsyncClient(timeout=_MODEL_TAGS_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                f"{settings.ollama_base_url.rstrip('/')}/api/tags",
+                headers=resolver._ollama_headers(),
+            )
+        if response.status_code == 200:
+            payload = response.json()
+            entries = payload.get("models", []) if isinstance(payload, dict) else []
+            if isinstance(entries, list):
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = (entry.get("name") or "").strip()
+                    if name and not catalog._is_embedding(name):
+                        provider_by_name[name] = "ollama"
+    except Exception:
+        # A failed catalog read is transient; it must not make models unavailable.
+        pass
+
+    for model, provider in resolver.MODEL_PROVIDER_PINS.items():
+        if model and provider and resolver.cloud_api_key(provider):
+            provider_by_name[model] = provider
+
+    return [(provider, model) for model, provider in provider_by_name.items()]
+
+
+async def _probe_model_availability(
+    provider: str,
+    model: str,
+    semaphore: asyncio.Semaphore,
+) -> str:
+    """Probe one model, recording only a success or a definitive provider error."""
+    async with semaphore:
+        try:
+            async with asyncio.timeout(MODEL_PROBE_TIMEOUT_SECONDS):
+                if provider == "ollama":
+                    url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
+                    headers = resolver._ollama_headers()
+                    payload = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Say OK"}],
+                        "stream": False,
+                        "options": {"num_predict": 4},
+                    }
+                elif provider == "nvidia":
+                    targets = resolver._nvidia_targets()
+                    if not targets:
+                        return "skipped"
+                    target = targets[0]
+                    # Celery runs this coroutine in a fresh asyncio.run loop
+                    # for each refresh. Use the sync Redis client so its pool
+                    # does not outlive the loop that created it.
+                    await asyncio.to_thread(
+                        resolver.throttle_nvidia_key_sync, target.key_index
+                    )
+                    url = f"{target.base_url.rstrip('/')}/chat/completions"
+                    headers = {"Content-Type": "application/json"}
+                    if target.api_key:
+                        headers["Authorization"] = f"Bearer {target.api_key}"
+                    payload = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Say OK"}],
+                        "stream": False,
+                        "max_tokens": 8,
+                    }
+                else:
+                    return "skipped"
+
+                async with httpx.AsyncClient(
+                    timeout=MODEL_PROBE_TIMEOUT_SECONDS
+                ) as client:
+                    response = await client.post(url, json=payload, headers=headers)
+
+                if response.status_code == 200:
+                    availability.record_model_result_sync(
+                        provider, model, available=True
+                    )
+                    return "available"
+                if response.status_code in (401, 402, 403, 404):
+                    availability.record_model_result_sync(
+                        provider,
+                        model,
+                        available=False,
+                        status_code=response.status_code,
+                    )
+                    return "unavailable"
+                return "skipped"
+        except (asyncio.TimeoutError, httpx.TimeoutException):
+            return "skipped"
+        except Exception:
+            # Network errors and unexpected provider failures do not alter cache state.
+            return "skipped"
+
+
+async def _probe_model_availability_batch(
+    models: list[tuple[str, str]],
+) -> dict[str, int]:
+    counts = {"available": 0, "unavailable": 0, "skipped": 0}
+    semaphore = asyncio.Semaphore(_MODEL_PROBE_CONCURRENCY)
+    results = await asyncio.gather(
+        *(
+            _probe_model_availability(provider, model, semaphore)
+            for provider, model in models
+        ),
+        return_exceptions=True,
+    )
+    for result in results:
+        counts[result if result in counts else "skipped"] += 1
+    return counts
+
+
+def _log_model_availability_refresh(counts: dict[str, int]) -> dict[str, int]:
+    logger.info(
+        "Model availability refresh: available=%d unavailable=%d skipped=%d",
+        counts["available"],
+        counts["unavailable"],
+        counts["skipped"],
+    )
+    return counts
+
+
+@celery_app.task(name="9xaipal.refresh_model_availability", queue="celery")
+def refresh_model_availability():
+    counts = {"available": 0, "unavailable": 0, "skipped": 0}
+    if not settings.enable_model_availability_refresh:
+        counts["skipped"] = 1
+        return _log_model_availability_refresh(counts)
+
+    lock_client = redis.Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=0.5,
+        socket_timeout=1.0,
+    )
+    token = uuid4().hex
+    try:
+        acquired = lock_client.set(
+            _AVAILABILITY_REFRESH_LOCK_KEY,
+            token,
+            nx=True,
+            ex=_AVAILABILITY_REFRESH_LOCK_INITIAL_TTL_SECONDS,
+        )
+    except Exception:
+        lock_client.close()
+        counts["skipped"] = 1
+        return _log_model_availability_refresh(counts)
+
+    if not acquired:
+        lock_client.close()
+        counts["skipped"] = 1
+        return _log_model_availability_refresh(counts)
+
+    models: list[tuple[str, str]] = []
+    try:
+        models = asyncio.run(_model_availability_probe_targets())
+        estimated_batches = max(1, math.ceil(len(models) / _MODEL_PROBE_CONCURRENCY))
+        lease_seconds = max(
+            _AVAILABILITY_REFRESH_LOCK_INITIAL_TTL_SECONDS,
+            int(estimated_batches * (MODEL_PROBE_TIMEOUT_SECONDS + 5) + 60),
+        )
+        owns_lock = lock_client.eval(
+            _RENEW_REFRESH_LOCK_LUA,
+            1,
+            _AVAILABILITY_REFRESH_LOCK_KEY,
+            token,
+            lease_seconds,
+        )
+        if not owns_lock:
+            counts["skipped"] = len(models) or 1
+            return _log_model_availability_refresh(counts)
+
+        counts = asyncio.run(_probe_model_availability_batch(models))
+    except Exception:
+        counts["skipped"] += len(models) or 1
+    finally:
+        try:
+            lock_client.eval(
+                _RELEASE_REFRESH_LOCK_LUA,
+                1,
+                _AVAILABILITY_REFRESH_LOCK_KEY,
+                token,
+            )
+        except Exception:
+            pass
+        lock_client.close()
+
+    return _log_model_availability_refresh(counts)
 
 
 _WORK_TASKS = {

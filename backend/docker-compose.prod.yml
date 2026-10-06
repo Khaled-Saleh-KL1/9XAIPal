@@ -345,6 +345,8 @@ services:
     environment:
       <<: *worker-environment
       WORKER_ROLE: light
+      ENABLE_MODEL_AVAILABILITY_REFRESH: ${ENABLE_MODEL_AVAILABILITY_REFRESH:-true}
+      MODEL_AVAILABILITY_REFRESH_HOURS: ${MODEL_AVAILABILITY_REFRESH_HOURS:-3}
     command: sh -c 'exec celery -A app.core.celery_app worker --loglevel=info -Q celery --hostname=celery@%h --concurrency=${LIGHT_WORKER_CONCURRENCY:-2} -B --schedule /tmp/celerybeat-schedule'
     deploy:
       replicas: 1

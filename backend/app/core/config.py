@@ -660,6 +660,8 @@ class Settings(BaseSettings):
     active_window_seconds: int = 300  # 5 minutes
 
     # Celery / Redis
+    enable_model_availability_refresh: bool = True
+    model_availability_refresh_hours: int = Field(default=3, gt=0)
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None

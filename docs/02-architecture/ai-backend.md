@@ -181,10 +181,13 @@ are cloud, while local addresses and the usual local HTTP `:11434` endpoint rema
 suffixes and zero-size rows are cloud signals too. Provider-pinned models are included when their
 provider is configured.
 
-Availability comes from real chat outcomes, not catalog probes. [`llm/availability.py`](../../backend/app/llm/availability.py)
-caches success and provider HTTP 402, 401, 403, or 404 responses in Redis for six hours. The
-catalog displays the provider-specific reason for a cached failure. Missing cache entries, malformed
-values, Redis timeouts, and Redis errors default to available. The shared frontend picker shows
+Real chat outcomes and the light worker's scheduled refresh feed availability. The refresh probes
+catalog models every three hours by default and once about a minute after the light worker starts;
+[`llm/availability.py`](../../backend/app/llm/availability.py) caches HTTP 200 and provider HTTP
+402, 401, 403, or 404 results in Redis for six hours. Timeouts and 5xx responses leave the cache
+unchanged. `/models` reads the cache without probing providers and displays the provider-specific
+reason for a cached failure. Missing cache entries, malformed values, Redis timeouts, and Redis
+errors default to available. The shared frontend picker shows
 unavailable entries disabled after Local and Cloud choices. `requested_model` is persisted on the
 note and reused by follow-ups so the selection remains attributable; if a streamed request falls
 back before output, both reader pickers reload `/models` after the notice and choose an available
