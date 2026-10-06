@@ -161,7 +161,12 @@ async def _probe_model_availability(
                     if not targets:
                         return "skipped"
                     target = targets[0]
-                    await resolver.throttle_nvidia_key(target.key_index)
+                    # Celery runs this coroutine in a fresh asyncio.run loop
+                    # for each refresh. Use the sync Redis client so its pool
+                    # does not outlive the loop that created it.
+                    await asyncio.to_thread(
+                        resolver.throttle_nvidia_key_sync, target.key_index
+                    )
                     url = f"{target.base_url.rstrip('/')}/chat/completions"
                     headers = {"Content-Type": "application/json"}
                     if target.api_key:

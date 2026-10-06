@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from itertools import count
 
@@ -127,7 +128,7 @@ def test_refresh_records_http_200_as_available(monkeypatch, real_redis):
     assert _cache_value(real_redis, "ollama", model) == {"available": True}
 
 
-@pytest.mark.parametrize("failure", ["server-error", "timeout"])
+@pytest.mark.parametrize("failure", ["server-error", "rate-limit", "timeout"])
 def test_refresh_does_not_record_transient_http_failure_or_timeout(
     monkeypatch, real_redis, failure
 ):
@@ -137,20 +138,32 @@ def test_refresh_does_not_record_transient_http_failure_or_timeout(
     if failure == "timeout":
         monkeypatch.setattr(reliability, "MODEL_PROBE_TIMEOUT_SECONDS", 0.01)
 
+    cached_failure = {
+        "available": False,
+        "unavailable_reason": "model not found",
+    }
+    cached_raw = json.dumps(cached_failure, separators=(",", ":"))
+    cache_key = availability._key("ollama", model)
+    real_redis.set(cache_key, cached_raw, px=45_000)
+    ttl_before = real_redis.pttl(cache_key)
+
     async def handler(request):
         if request.url.path == "/api/tags":
             return httpx.Response(200, json=_tags(model))
         if failure == "timeout":
             await asyncio.sleep(0.05)
             return httpx.Response(200)
-        return httpx.Response(500)
+        return httpx.Response(429 if failure == "rate-limit" else 500)
 
     _install_mock_http(monkeypatch, handler)
 
     result = reliability.refresh_model_availability.run()
 
     assert result == {"available": 0, "unavailable": 0, "skipped": 1}
-    assert _cache_value(real_redis, "ollama", model) is None
+    assert real_redis.get(cache_key) == cached_raw
+    ttl_after = real_redis.pttl(cache_key)
+    assert 0 < ttl_after <= ttl_before
+    assert ttl_before - ttl_after < 1_000
 
 
 def test_refresh_discovers_ollama_chat_models_and_provider_pins(monkeypatch):
@@ -235,8 +248,11 @@ def test_unconfigured_nvidia_pin_is_not_probed_or_counted(monkeypatch, real_redi
     assert _cache_value(real_redis, "nvidia", "meta/muse-glimmer-30b") is None
 
 
+@pytest.mark.parametrize(
+    "tags_failure", ["http-error", "malformed-json", "malformed-payload"]
+)
 def test_ollama_tags_failure_does_not_prevent_configured_provider_pin_probe(
-    monkeypatch, real_redis, caplog
+    monkeypatch, real_redis, caplog, tags_failure
 ):
     model = "meta/muse-glimmer-30b"
     monkeypatch.setattr(settings, "ollama_base_url", "http://ollama.test")
@@ -247,7 +263,11 @@ def test_ollama_tags_failure_does_not_prevent_configured_provider_pin_probe(
 
     async def handler(request):
         if request.url.path == "/api/tags":
-            return httpx.Response(503)
+            if tags_failure == "http-error":
+                return httpx.Response(503)
+            if tags_failure == "malformed-json":
+                return httpx.Response(200, content=b"not-json")
+            return httpx.Response(200, json={"models": {"name": "not-a-list"}})
         assert request.url.path == "/v1/chat/completions"
         assert request.headers["Authorization"] == f"Bearer {NVIDIA_KEY_A}"
         return httpx.Response(200)
@@ -259,6 +279,39 @@ def test_ollama_tags_failure_does_not_prevent_configured_provider_pin_probe(
     assert result == {"available": 1, "unavailable": 0, "skipped": 0}
     assert _cache_value(real_redis, "nvidia", model) == {"available": True}
     assert NVIDIA_KEY_A not in caplog.text
+
+
+def test_repeated_refresh_honors_the_shared_nvidia_rate_limit(
+    monkeypatch, real_redis, caplog
+):
+    model = "meta/muse-glimmer-30b"
+    rate_limit_key = "ratelimit:next_free:nvidia#0"
+    monkeypatch.setattr(settings, "ollama_base_url", "http://ollama.test")
+    monkeypatch.setattr(settings, "ollama_api_key", "")
+    monkeypatch.setattr(settings, "nvidia_api_key", NVIDIA_KEY_A)
+    monkeypatch.setattr(resolver, "_nvidia_rotation", count(0))
+    caplog.set_level(logging.WARNING, logger="app.core.rate_limit")
+
+    async def handler(request):
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json=_tags())
+        assert request.url.path == "/v1/chat/completions"
+        return httpx.Response(200, json={"choices": []})
+
+    _install_mock_http(monkeypatch, handler)
+
+    first_result = reliability.refresh_model_availability.run()
+    first_reservation = float(real_redis.get(rate_limit_key))
+    second_started = time.monotonic()
+    second_result = reliability.refresh_model_availability.run()
+    second_elapsed = time.monotonic() - second_started
+    second_reservation = float(real_redis.get(rate_limit_key))
+
+    assert first_result == {"available": 1, "unavailable": 0, "skipped": 0}
+    assert second_result == first_result
+    assert second_elapsed >= 1.3
+    assert second_reservation > first_reservation + 1.4
+    assert "Redis unavailable" not in caplog.text
 
 
 def test_refresh_never_runs_more_than_three_model_requests_concurrently(

@@ -4,7 +4,7 @@
 
 **Goal:** Refresh cached per-model availability every three hours and once shortly after the light Celery worker starts, without changing routing or picker behavior.
 
-**Architecture:** Add two validated settings and a conditional beat entry. A light-worker startup signal queues one refresh after 60 seconds. A synchronous Celery task obtains a Redis `SET NX EX` lease, discovers chat models from Ollama tags and configured provider pins, probes at most three models concurrently with a 45-second per-model deadline, and writes only definitive results through `record_model_result_sync`. NVIDIA probes use resolver key rotation and its shared rate limiter.
+**Architecture:** Add two validated settings and a conditional beat entry. A light-worker startup signal queues one refresh after 60 seconds. A synchronous Celery task obtains a Redis `SET NX EX` lease, discovers chat models from Ollama tags and configured provider pins, probes at most three models concurrently with a 45-second per-model deadline, and writes only definitive results through `record_model_result_sync`. NVIDIA probes use resolver key rotation and its shared synchronous rate limiter from a worker thread, so the Redis connection pool does not outlive the task's event loop.
 
 **Tech Stack:** Python 3.11+, Pydantic Settings, Celery, Redis, httpx, pytest, Docker Compose.
 
@@ -49,10 +49,10 @@
 - Produces `_build_beat_schedule()` in `app.core.celery_app`; it retains existing entries and conditionally registers task `9xaipal.refresh_model_availability` on queue `celery` at the configured hours converted to seconds.
 - Produces a worker-ready handler in `app.workers.reliability` that queues the refresh with `countdown=60` only when the feature is enabled and `WORKER_ROLE=light`.
 
-- [ ] Write tests for the configured interval, disabled schedule, light-role startup countdown, non-light role, and disabled startup.
-- [ ] Run those tests and verify they fail because the requested configuration and schedule do not exist yet.
-- [ ] Add the settings, schedule factory, worker-ready handler, env defaults, and light-worker Compose settings.
-- [ ] Run the focused tests and verify the conditional schedule, startup dispatch, and Compose defaults pass.
+- [x] Write tests for the configured interval, disabled schedule, light-role startup countdown, non-light role, and disabled startup.
+- [x] Run those tests and verify they fail because the requested configuration and schedule do not exist yet.
+- [x] Add the settings, schedule factory, worker-ready handler, env defaults, and light-worker Compose settings.
+- [x] Run the focused tests and verify the conditional schedule, startup dispatch, and Compose defaults pass.
 
 ### Task 2: Locked concurrent provider probes
 
@@ -63,13 +63,13 @@
 **Interfaces:**
 - Produces Celery task `9xaipal.refresh_model_availability` on queue `celery`.
 - Discovers non-embedding Ollama tags from `/api/tags` using `resolver._ollama_headers()` and configured `resolver.MODEL_PROVIDER_PINS` using the resolver's NVIDIA key rotation.
-- Uses a Redis lease acquired with `SET NX EX`, at most three concurrent HTTP requests, 45 seconds maximum per model, `resolver.throttle_nvidia_key`, and `availability.record_model_result_sync`.
+- Uses a Redis lease acquired with `SET NX EX`, at most three concurrent HTTP requests, 45 seconds maximum per model, `resolver.throttle_nvidia_key_sync` via `asyncio.to_thread`, and `availability.record_model_result_sync`.
 - Returns and logs only available, unavailable, and skipped counts; never logs credential values.
 
-- [ ] Add real-Redis tests with mocked HTTP for HTTP 402 plus reason, HTTP 200, HTTP 500 and timeout with no cache update, overlap lock, model-source filtering, provider headers/payloads, and concurrency at most three.
-- [ ] Run the new tests to verify they fail because the task does not exist yet.
-- [ ] Implement discovery, per-provider probe requests, lock acquisition/renewal/release, result recording, startup dispatch target, and one summary log line.
-- [ ] Run the new tests and verify their real Redis observations and mocked request assertions pass.
+- [x] Add real-Redis tests with mocked HTTP for HTTP 402 plus reason, HTTP 200, HTTP 500 and timeout with no cache update, overlap lock, model-source filtering, provider headers/payloads, and concurrency at most three.
+- [x] Run the new tests to verify they fail because the task does not exist yet.
+- [x] Implement discovery, per-provider probe requests, lock acquisition/renewal/release, result recording, startup dispatch target, and one summary log line.
+- [x] Run the new tests and verify their real Redis observations and mocked request assertions pass.
 
 ### Task 3: Model availability documentation and complete verification
 
@@ -77,8 +77,8 @@
 - Modify: `docs/05-features/08-models-and-configuration.md`
 - Test: all `backend/tests/` files matching `availability|catalog|reliability|celery|beat|compose|env_example`, plus `backend/tests/test_model_availability_refresh.py`.
 
-- [ ] Update the `/models` documentation to explain that real chat outcomes and scheduled probes refresh the six-hour cache, including the three-hour cadence and transient-error handling.
-- [ ] Start only the prescribed disposable Postgres and Redis containers if their names and ports are free.
-- [ ] Run the matching backend tests natively using the documented macOS lockfile workaround if needed; set `INGESTION_DISK_REFUSE_PERCENT=101` for tests only if the disk guard blocks unrelated tests.
-- [ ] Remove both task containers after tests.
-- [ ] Review the complete diff, commit the implementation with the required co-author trailer, and write report-M4.md with file/line references and test tails.
+- [x] Update the `/models` documentation to explain that real chat outcomes and scheduled probes refresh the six-hour cache, including the three-hour cadence and transient-error handling.
+- [x] Start only the prescribed disposable Postgres and Redis containers if their names and ports are free.
+- [x] Run the matching backend tests natively using the documented macOS lockfile workaround if needed; set `INGESTION_DISK_REFUSE_PERCENT=101` for tests only if the disk guard blocks unrelated tests.
+- [x] Remove both task containers after tests.
+- [x] Review the complete diff, commit the implementation with the required co-author trailer, and write report-M4.md with file/line references and test tails.
