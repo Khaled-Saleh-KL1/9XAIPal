@@ -449,7 +449,7 @@ export function BookNotes({ paperId, currentSeq, currentQuote, onJump }: Props) 
           title="New note"
           subtitle={currentQuote ? `at “${firstLine(currentQuote, 70)}”` : 'at the start of the book'}
           initial=""
-          placeholder="Write it down — it minimises to an icon you can put anywhere."
+          placeholder="Write it down. It minimises to an icon you can put anywhere."
           onSave={(body) => void createNote(body)}
           onClose={() => setComposing(false)}
           style={{ left: 12, top: ADD_BTN_HEIGHT + 16 }}

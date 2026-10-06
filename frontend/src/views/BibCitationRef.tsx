@@ -222,7 +222,7 @@ function BibRefRow({
             // simultaneous readers are served in order. Say so, with the
             // place in line, rather than leaving a spinner that looks stuck.
             <span className="bib-ref-status bib-ref-queued">
-              In the queue — {row.queue.position === 1 ? 'next up' : `#${row.queue.position}`}, the link will open shortly…
+              In the queue: {row.queue.position === 1 ? 'next up' : `#${row.queue.position}`}, the link will open shortly…
             </span>
           ) : (
             <span className="bib-ref-status">Looking it up…</span>
@@ -245,7 +245,7 @@ function BibRefRow({
         {entry.resolve_status === 'resolved' && (
           <span className="bib-ref-resolved">
             → {entry.resolved_title}
-            {entry.resolved_authors ? ` — ${entry.resolved_authors}` : ''}
+            {entry.resolved_authors ? ` · ${entry.resolved_authors}` : ''}
             {entry.resolved_year ? ` (${entry.resolved_year})` : ''}
             {entry.resolved_pdf_url && (
               <a
@@ -284,7 +284,7 @@ function BibRefRow({
                 {row.progress?.status === 'complete'
                   ? 'Added.'
                   : row.progress?.status === 'failed'
-                    ? 'Failed to process — check the library for details.'
+                    ? 'Failed to process. Check the library for details.'
                     : `${row.progress?.job_status || row.addResult.status}…`}
                 {row.progress?.status === 'complete' && onOpenPaper && (
                   <button type="button" className="bib-ref-open" onClick={() => onOpenPaper(row.addResult!.id)}>Open →</button>

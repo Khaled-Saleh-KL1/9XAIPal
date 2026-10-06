@@ -49,7 +49,7 @@ const EXTRACT_STEPS: StepDef[] = [
   {
     id: 1,
     title: 'Extracting structure',
-    sub: 'Reading layout, text, math, and figures — the pipeline is chosen automatically',
+    sub: 'Reading layout, text, math, and figures. The pipeline is chosen automatically',
     matches: ['queued', 'extracting'],
   },
   {
@@ -369,7 +369,7 @@ export function ProcessingOverlay({
                 ? `${queueFull.queued} of ${queueFull.limit} slots are taken by documents still being extracted. `
                 : ''}
               {effectiveKind === 'article' ? 'Nothing was imported' : 'Your file was not uploaded'} and nothing is
-              left behind — it usually clears in a few minutes as the worker finishes what it has.
+              left behind. It usually clears in a few minutes as the worker finishes what it has.
             </div>
             <div className="mt-2 flex items-center gap-3">
               {onRetry && (
@@ -438,7 +438,7 @@ export function ProcessingOverlay({
               : failed
               ? (errorMessage || 'pipeline failed').slice(0, 120)
               : declined
-              ? 'declined by the server, nothing stored — leaving stops the automatic retry'
+              ? 'declined by the server, nothing stored. Leaving stops the automatic retry'
               : 'safe to leave, processing continues in the background'}
           </span>
           <button

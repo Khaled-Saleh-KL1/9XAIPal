@@ -66,7 +66,7 @@ export function EvidenceList({
     return (
       <div className="evidence-unavailable">
         The evidence check could not run{report.reason ? ` (${report.reason})` : ''}. The answer
-        above is unverified — treat its citations as the model’s own claims.
+        above is unverified. Treat its citations as the model’s own claims.
       </div>
     );
   }
@@ -88,7 +88,7 @@ export function EvidenceList({
               {claim.verdict !== 'supported' && (
                 <div className="evidence-verdict">
                   {mark.label}
-                  {claim.note ? ` — ${claim.note}` : ''}
+                  {claim.note ? `: ${claim.note}` : ''}
                 </div>
               )}
               {(claim.quote || ev) && (
@@ -116,7 +116,7 @@ export function EvidenceList({
       </ol>
       <div className="evidence-foot">
         Checked by the model{report.model ? ` (${report.model})` : ''} against the passages it cited
-        and read. It flags; it does not rewrite — the answer above is exactly what was generated.
+        and read. It flags; it does not rewrite. The answer above is exactly what was generated.
       </div>
     </>
   );

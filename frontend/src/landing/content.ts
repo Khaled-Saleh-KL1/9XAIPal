@@ -26,22 +26,14 @@ export const HERO = {
     'Upload papers, books and articles in English or Arabic. Read them beautifully, ask questions, and get answers with citations to the exact page.',
   primaryCta: 'Try the free beta',
   secondaryCta: 'View the code',
-  arabicSample: 'اقرأ بعمق، واسأل مكتبتك',
-  paperOneTitle: 'Lecture notes',
-  paperOneMeta: 'Neural networks · p. 14',
-  paperTwoTitle: 'Research paper',
-  paperTwoMeta: 'Arabic OCR · results',
-  paperThreeTitle: 'Research notes',
-  paperThreeMeta: 'Compare · page 23',
-  pageNumber: '14',
-  pageLabel: 'PAGE',
-  artDescription: 'Layered English and Arabic pages from a research library',
+  introDescription:
+    'A drawn reader is buried under a storm of papers until the 9XAIPal mark sweeps them onto a shelf and hands over the one page they need.',
+  introReplay: 'Replay',
   caption: 'Made for reading across languages',
-  artCaption: 'Pages stay close. Answers show their source.',
+  artCaption: 'From a pile of papers to the one page you need.',
 } as const;
 
 export const SCENE_COPY = {
-  heroNote: 'Read. Ask. Remember.',
   pileKicker: 'A busy desk, made readable',
   pileDocs: ['Lab worksheet.pdf', 'Research notes · week 3', 'A reading list.pdf', 'Conference paper.pdf'],
   pileMedia: ['PDF', 'NOTES', 'SCAN', 'PDF', 'PDF', 'BOOK', 'PDF'],

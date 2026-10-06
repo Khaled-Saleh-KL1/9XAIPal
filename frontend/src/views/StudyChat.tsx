@@ -451,7 +451,7 @@ function ConversationSwitch({
         className="chat-convs-toggle"
         onClick={() => { setOpen(false); onNew(); }}
         disabled={!canStartNew && conversationId === null}
-        title="Start a new chat in this scope — the current one stays in the list"
+        title="Start a new chat in this scope. The current one stays in the list"
       >
         + New chat
       </button>

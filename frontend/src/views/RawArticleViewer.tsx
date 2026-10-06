@@ -76,7 +76,7 @@ export function RawArticleViewer({ paper, onBack, onReadStructured, anchors }: P
           style={{ color: 'var(--fg)' }}
           title={paper.original_filename}
         >
-          {displayTitle(paper)} — raw snapshot
+          {displayTitle(paper)} · raw snapshot
         </span>
 
         <div className="ml-auto min-w-0 flex items-center gap-2">
