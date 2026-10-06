@@ -1,13 +1,14 @@
 """Paper endpoints: upload, list, detail, progress, delete."""
 
 import os
+import hashlib
 import shutil
 import traceback
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import aiofiles
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Response, Header
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import text
@@ -29,6 +30,7 @@ from app.schemas.documents import (
     SetDoneRequest,
     ArabicWritingStyleConfirmation,
 )
+from app.services.upload_admission import check_upload_admission, accept_identity, cache_idempotency, normalize_url
 from app.services import covers as cover_service
 from app.services import documents as doc_service
 from app.services import library_search
@@ -68,7 +70,7 @@ def _article_cover_version(document: dict) -> int | None:
     return None
 
 
-async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int) -> int:
+async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int, hasher=None) -> int:
     """Write an upload with a hard byte limit and without materializing it.
 
     ``UploadFile`` may already have spooled part of the multipart body to
@@ -91,6 +93,8 @@ async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int) -> i
                     )
                 if len(header) < 1024:
                     header.extend(chunk[: 1024 - len(header)])
+                if hasher is not None:
+                    hasher.update(chunk)
                 await output.write(chunk)
 
         if b"%PDF-" not in header:
@@ -109,219 +113,96 @@ async def _stream_pdf_upload(file: UploadFile, destination, max_bytes: int) -> i
         await file.close()
 
 
-@router.post("/upload", response_model=DocumentUploadResponse, status_code=201)
+async def _dispatch_upload(db, doc, job, *, url=None, kind=None):
+    if job is None:
+        return
+    try:
+        if url is not None:
+            result = process_article_ingestion.delay(str(doc['id']), str(job['id']), url, kind, execution_generation=job.get('execution_generation',0))
+        else:
+            result = process_ingestion.delay(str(doc['id']), str(job['id']), doc['filename'], execution_generation=job.get('execution_generation',0))
+        task_id = getattr(result, 'id', None)
+        if isinstance(task_id, str):
+            await db.execute(text('UPDATE ingestion_jobs SET celery_task_id=:task WHERE id=:id'), {'task':task_id,'id':job['id']})
+            await db.commit()
+    except Exception as exc:
+        from app.services.failures import record_failure
+        await db.rollback()
+        await run_in_threadpool(record_failure,
+            '9xaipal.process_article_ingestion' if url is not None else '9xaipal.process_ingestion',
+            f"dispatch:{job['id']}", exc, document_id=doc['id'], job_id=job['id'])
+        from app.api.errors import UploadAdmissionError
+        raise UploadAdmissionError('service_unavailable',503,120) from None
+
+
+def _upload_response(doc, duplicate):
+    return DocumentUploadResponse(id=doc['id'],filename=doc['filename'],status=doc['status'],
+        duplicate=duplicate, message='This file is already in your library' if duplicate else 'Document uploaded and queued for processing')
+
+
+@router.post('/upload', response_model=DocumentUploadResponse, status_code=201)
 async def upload_paper(
-    file: UploadFile = File(...),
-    kind: str = Form("paper"),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+    response: Response,
+    file: UploadFile = File(...), kind: str = Form('paper'),
+    idempotency_key: str | None = Header(None, alias='Idempotency-Key'),
+    db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings),
     current_user: dict = Depends(get_current_user),
 ):
-    """Upload a PDF and dispatch ingestion to Celery worker.
-
-    ``kind`` is ``"book"`` (chapter-by-chapter reading) or ``"paper"`` (linear).
-    """
-    # A cheap, non-atomic look at the queue BEFORE the body is streamed to
-    # disk. The authoritative check is the advisory-locked reservation inside
-    # create_ingestion_job below (docs/issues/007) — this one only exists so
-    # a reader does not push a 300 MB book up the wire to be told "queue
-    # full" and have it deleted. It can race (two uploads both see 49 of 50),
-    # and that is fine: the loser is caught by the real check after the
-    # write, exactly as before this pre-check existed.
-    await check_queue_capacity(db)
-
-    doc_kind = kind if kind in ("book", "paper") else "paper"
-    max_bytes = settings.max_upload_size_mb * 1024 * 1024
-
-    ext = ".pdf"
-    filename = f"{uuid4().hex}{ext}"
+    await check_upload_admission(db, current_user['id'])
+    ensure_storage_dirs()
+    filename = f'{uuid4().hex}.pdf'
     dest = documents_dir() / filename
-
-    # Defensive: ensure the storage directories exist right before we write.
-    # (lifespan does this, but this protects against CWD differences, docker vs local runs, etc.)
+    hasher = hashlib.sha256()
+    raw_path = None
+    accepted = False
     try:
-        ensure_storage_dirs()
+        size = await _stream_pdf_upload(file,dest,settings.max_upload_size_mb * 1024 * 1024,hasher=hasher)
+        sha = hasher.hexdigest()
+        doc, job, duplicate = await accept_identity(db,user_id=current_user['id'],identity=sha,
+            idem_key=idempotency_key,filename=filename,original_filename=file.filename or 'unknown.pdf',
+            file_size_bytes=size,doc_kind=kind if kind in ('book','paper') else 'paper')
+        if not duplicate:
+            raw_path = assets_dir() / f"{doc['id']}.pdf"
+            await run_in_threadpool(shutil.copyfile,dest,raw_path)
+        else:
+            dest.unlink(missing_ok=True)
+        await db.commit()
+        accepted = True
+        await cache_idempotency(current_user['id'],idempotency_key,sha,doc['id'])
+        await _dispatch_upload(db,doc,job)
+        response.status_code = 200 if duplicate else 201
+        return _upload_response(doc,duplicate)
     except Exception:
-        logger.exception("ensure_storage_dirs failed")
-
-    display_name = file.filename or "unknown.pdf"
-    raw_path: Path | None = None
-
-    try:
-        file_size = await _stream_pdf_upload(file, dest, max_bytes)
-
-        original_name = display_name
-
-        doc = await doc_service.create_document(
-            db,
-            user_id=current_user["id"],
-            filename=filename,
-            original_filename=original_name,
-            file_size_bytes=file_size,
-            doc_kind=doc_kind,
-        )
-        # Save raw copy to assets/<doc_id>.pdf (served by the authenticated /raw endpoint).
-        raw_path = assets_dir() / f"{doc['id']}.pdf"
-        await run_in_threadpool(shutil.copyfile, dest, raw_path)
-
-        job = await create_ingestion_job(db, doc["id"])
-        await db.commit()
-
-        # Dispatch to Celery...
-        dispatch_ok = True
-        try:
-            process_ingestion.delay(str(doc["id"]), str(job["id"]), filename)  # type: ignore[attr-defined]
-        except Exception as dispatch_exc:
-            logger.exception(f"Failed to dispatch process_ingestion for {doc['id']}")
-            dispatch_ok = False
-            try:
-                await update_doc_status_repo(
-                    db,
-                    doc["id"],
-                    "failed",
-                    error_message=(
-                        "Failed to queue ingestion task (Celery broker / Redis unreachable). "
-                        "Start Redis (e.g. via docker compose or redis-server) and the Celery worker "
-                        f"(`celery -A app.core.celery_app worker`). Original error: {dispatch_exc}"
-                    ),
-                )
-                await update_job_status_svc(
-                    db,
-                    job["id"],
-                    "failed",
-                    error_message=f"Dispatch failed: {dispatch_exc}",
-                )
-                await db.commit()
-            except Exception as mark_exc:
-                logger.error(f"Failed to record dispatch failure for doc {doc['id']}: {mark_exc}")
-
-        return DocumentUploadResponse(
-            id=doc["id"],
-            filename=filename,
-            status="processing" if dispatch_ok else "failed",
-            message=(
-                "Document uploaded and queued for processing"
-                if dispatch_ok
-                else "Document recorded but background ingestion could not be queued (Redis/Celery). See error details."
-            ),
-        )
-
-    except HTTPException:
-        raise
-    except TooManyQueuedJobs:
         await db.rollback()
-        dest.unlink(missing_ok=True)
-        if raw_path:
-            raw_path.unlink(missing_ok=True)
+        if not accepted:
+            dest.unlink(missing_ok=True)
+            if raw_path:
+                raw_path.unlink(missing_ok=True)
         raise
-    except Exception as exc:
-        # Safety net for DB/write errors early in upload. The full traceback is
-        # logged server-side only — returning it to the client would leak
-        # filesystem paths, connection details, and internal code structure.
-        logger.error(f"Upload pipeline failed for {display_name}:\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Upload failed: {type(exc).__name__}. Check the server logs for the full traceback.",
-        ) from exc
 
 
-@router.post("/import-url", response_model=DocumentUploadResponse, status_code=201)
+@router.post('/import-url', response_model=DocumentUploadResponse, status_code=201)
 async def import_article(
-    payload: ImportArticleRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    payload: ImportArticleRequest, response: Response,
+    idempotency_key: str | None = Header(None, alias='Idempotency-Key'),
+    db: AsyncSession = Depends(get_db), current_user: dict = Depends(get_current_user),
 ):
-    """Import a web article by URL and read it exactly like a paper.
-
-    Created here as doc_kind='article' regardless of ``payload.kind`` — what
-    the link actually is isn't known until the ingestion task fetches it.
-    ``kind`` ("book"/"paper", set when the link was pasted through that
-    picker rather than the generic "Article by URL" one) travels along as a
-    hint: if the fetch finds a PDF, run_article_pipeline_sync adopts it with
-    that doc_kind instead of 'article'; if it isn't a PDF, the hint is
-    dropped and the row stays a normal article — there's no PDF-based
-    pipeline to honor it with. The real page title and extractor label are
-    likewise unknown until the fetch actually runs, so this creates the row
-    with the URL itself as a placeholder original_filename; the ingestion
-    task overwrites it once it has the real one (the same "known only
-    mid-pipeline" pattern /upload uses for `extractor`).
-
-    No file is written to disk here at all — unlike /upload, everything
-    happens inside the dispatched Celery task (see
-    extraction/pipeline_sync.py's run_article_pipeline_sync and
-    services/article_extraction.py for the actual fetch, SSRF guard, and
-    hard timeouts).
-    """
-    url = payload.url.strip()
-    if not url:
-        raise HTTPException(status_code=422, detail="A URL is required.")
-    if payload.kind in ("book", "paper"):
-        # A link pasted as a book or a research paper is meant to be the
-        # file, and what people paste is the landing page: arxiv.org/abs/…,
-        # openreview.net/forum?id=…, aclanthology.org/… — fetched as-is those
-        # are HTML and would become an article snapshot of a landing page
-        # (verified live 2026-09-12: an arXiv abs link pasted as "Research
-        # paper" came back doc_kind='article'). Known hosts have a
-        # deterministic PDF URL; anything else is left exactly as pasted.
-        url = canonical_pdf_url(url)
-
+    await check_upload_admission(db,current_user['id'])
+    url = normalize_url(payload.url)
+    if payload.kind in ('book','paper'):
+        url = normalize_url(canonical_pdf_url(url))
     try:
-        doc = await doc_service.create_document(
-            db,
-            user_id=current_user["id"],
-            filename=f"{uuid4().hex}.html",
-            original_filename=url,
-            doc_kind="article",
-            source_url=url,
-        )
-        job = await create_ingestion_job(db, doc["id"])
+        doc,job,duplicate = await accept_identity(db,user_id=current_user['id'],identity=url,is_url=True,
+            idem_key=idempotency_key,filename=f'{uuid4().hex}.html',original_filename=url,
+            doc_kind='article',source_url=url)
         await db.commit()
-
-        dispatch_ok = True
-        try:
-            process_article_ingestion.delay(str(doc["id"]), str(job["id"]), url, payload.kind)  # type: ignore[attr-defined]
-        except Exception as dispatch_exc:
-            logger.exception(f"Failed to dispatch process_article_ingestion for {doc['id']}")
-            dispatch_ok = False
-            try:
-                await update_doc_status_repo(
-                    db,
-                    doc["id"],
-                    "failed",
-                    error_message=(
-                        "Failed to queue ingestion task (Celery broker / Redis unreachable). "
-                        f"Original error: {dispatch_exc}"
-                    ),
-                )
-                await update_job_status_svc(
-                    db, job["id"], "failed", error_message=f"Dispatch failed: {dispatch_exc}",
-                )
-                await db.commit()
-            except Exception as mark_exc:
-                logger.error(f"Failed to record dispatch failure for doc {doc['id']}: {mark_exc}")
-
-        return DocumentUploadResponse(
-            id=doc["id"],
-            filename=doc["filename"],
-            status="processing" if dispatch_ok else "failed",
-            message=(
-                "Article queued for import"
-                if dispatch_ok
-                else "Document recorded but background ingestion could not be queued (Redis/Celery). See error details."
-            ),
-        )
-
-    except HTTPException:
-        raise
-    except TooManyQueuedJobs:
+        await cache_idempotency(current_user['id'],idempotency_key,url,doc['id'])
+        await _dispatch_upload(db,doc,job,url=url,kind=payload.kind)
+        response.status_code = 200 if duplicate else 201
+        return _upload_response(doc,duplicate)
+    except Exception:
         await db.rollback()
         raise
-    except Exception as exc:
-        logger.error(f"Article import failed for {url}:\n{traceback.format_exc()}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Import failed: {type(exc).__name__}. Check the server logs for the full traceback.",
-        ) from exc
 
 
 def _raw_html_headers() -> dict:
