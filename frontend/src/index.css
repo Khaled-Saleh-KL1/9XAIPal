@@ -3537,6 +3537,130 @@ button.evidence-jump:hover { border-color: var(--accent); color: var(--accent); 
   vertical-align: -0.12em;
 }
 
+/* Long answers scroll within their own markdown body. The wrapper stays
+   unbounded for short answers, so adding it does not change their layout. */
+.answer-viewport {
+  min-width: 0;
+  --answer-fade-surface: var(--bg);
+}
+.answer-scroll-frame { position: relative; min-width: 0; }
+.answer-scroll { min-width: 0; }
+.answer-scroll.is-scrollable {
+  max-height: min(60vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.answer-scroll.is-scrollable::-webkit-scrollbar { width: 6px; height: 6px; }
+.answer-scroll.is-scrollable::-webkit-scrollbar-track { background: transparent; }
+.answer-scroll.is-scrollable::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--border-strong);
+  background-clip: padding-box;
+}
+.answer-scroll.is-scrollable::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+.answer-scroll.is-expanded { max-height: none; overflow: visible; }
+.answer-scroll-content { min-width: 0; }
+.answer-scroll-frame.is-clipped.has-top-fade::before,
+.answer-scroll-frame.is-clipped.has-bottom-fade::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  z-index: 1;
+  height: 20px;
+  pointer-events: none;
+}
+.answer-scroll-frame.is-clipped.has-top-fade::before {
+  top: 0;
+  background: linear-gradient(to bottom, var(--answer-fade-surface), transparent);
+}
+.answer-scroll-frame.is-clipped.has-bottom-fade::after {
+  bottom: 0;
+  height: 30px;
+  background: linear-gradient(to bottom, transparent, color-mix(in oklab, var(--answer-fade-surface) 92%, transparent));
+  box-shadow: 0 -5px 10px -9px var(--scroll-cue);
+}
+.answer-jump {
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  z-index: 2;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  box-shadow: 0 2px 8px color-mix(in oklab, var(--fg) 12%, transparent);
+  font-size: 10.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+.answer-jump:hover { color: var(--accent); border-color: var(--accent); }
+.answer-expand {
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.answer-expand:hover { color: var(--accent); }
+.answer-expand:focus-visible,
+.answer-jump:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.answer-controls { display: flex; margin-top: 2px; }
+.answer-citations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  margin-top: 7px;
+}
+.answer-citations-label {
+  color: var(--muted);
+  font-size: 10px;
+}
+.answer-citation-item { display: inline-flex; align-items: center; gap: 3px; }
+.answer-citation-locate {
+  padding: 1px 3px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.answer-citation-locate:hover { color: var(--accent); }
+.answer-citation-locate:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.cite-inline-marker {
+  display: inline-block;
+  vertical-align: baseline;
+  margin-inline: 2px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent-soft), transparent 45%);
+  color: var(--accent);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.note-answer { --answer-fade-surface: var(--bg-2); }
+@media (max-width: 640px) {
+  .answer-scroll.is-scrollable { max-height: 55vh; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .answer-scroll { scroll-behavior: auto; }
+}
+
 /* ── Citations that open where they sit ──────────────────────────────────
    The reason the desk can claim to serve reading without opening papers: a
    claim is checkable at the point it is made. */

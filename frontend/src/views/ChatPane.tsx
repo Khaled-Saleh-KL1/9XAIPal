@@ -14,6 +14,7 @@ import { EvidencePanel } from './EvidencePanel';
 import { textDirection } from '../lib/documentDirection';
 import { Pressable, playful, reducedMotionFade } from '../motion';
 import { StreamingCaret } from './StreamingCaret';
+import { AnswerViewport } from '../components/AnswerViewport';
 
 // The shared set already supplies the image and diagram renderers; chat only
 // overrides the anchor, which it wants without the shared component's extra
@@ -978,9 +979,11 @@ const MessageBubble = memo(function MessageBubble({
         )}
       </div>
       <div className="md-body text-[13.5px] leading-[1.6]" style={{ color: 'var(--fg)' }}>
-        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MD_COMPONENTS}>
-          {normalizeMath(stripTrailingSourcesNone(m.text))}
-        </ReactMarkdown>
+        <AnswerViewport streaming={streaming} dir={textDirection(m.text) ?? 'auto'}>
+          <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MD_COMPONENTS}>
+            {normalizeMath(stripTrailingSourcesNone(m.text))}
+          </ReactMarkdown>
+        </AnswerViewport>
         {streaming && <StreamingCaret />}
       </div>
 

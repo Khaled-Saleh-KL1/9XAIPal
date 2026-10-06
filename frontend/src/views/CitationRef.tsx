@@ -98,6 +98,7 @@ export function CitationRef({
         <m.span
           key="cite-peek"
           className="cite-peek"
+          data-answer-overflow-exclude
           initial={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9, y: 4 }}
           animate={reducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
           exit={reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 2, pointerEvents: 'none' }}

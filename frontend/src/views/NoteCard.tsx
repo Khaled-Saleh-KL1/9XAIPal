@@ -18,6 +18,7 @@ import type { AgentStep, PaperNote } from '../api';
 import { textDirection } from '../lib/documentDirection';
 import { playful, reducedMotionFade } from '../motion';
 import { StreamingCaret } from './StreamingCaret';
+import { AnswerViewport } from '../components/AnswerViewport';
 
 /**
  * A margin note: one question, its answer, and any follow-ups, rendered as a
@@ -85,17 +86,19 @@ function ModelTag({ name }: { name: string | null }) {
   return <span className="note-model" title={`Answered by ${name}`}>{name}</span>;
 }
 
-function Answer({ text }: { text: string }) {
+function Answer({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return (
     <div className="note-answer">
-      <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MARKDOWN_COMPONENTS}>
-        {text}
-      </ReactMarkdown>
+      <AnswerViewport streaming={streaming} dir={textDirection(text) ?? 'auto'}>
+        <ReactMarkdown remarkPlugins={MARKDOWN_REMARK} rehypePlugins={MARKDOWN_REHYPE} components={MARKDOWN_COMPONENTS}>
+          {text}
+        </ReactMarkdown>
+      </AnswerViewport>
     </div>
   );
 }
 
-function PendingAnswer({ text }: { text: string }) {
+function PendingAnswer({ text, streaming = true }: { text: string; streaming?: boolean }) {
   const reducedMotion = useReducedMotion();
 
   return (
@@ -105,7 +108,7 @@ function PendingAnswer({ text }: { text: string }) {
       animate={{ opacity: 1 }}
       transition={reducedMotion ? reducedMotionFade : playful}
     >
-      <Answer text={text} />
+      <Answer text={text} streaming={streaming} />
       <StreamingCaret />
     </m.div>
   );
@@ -250,7 +253,10 @@ export function PendingNoteCard({
             // Still streaming: withhold a half-written LaTeX span so the reader
             // doesn't watch raw markup type itself out and then snap into a symbol.
             <>
-              <PendingAnswer text={withCitationLinks(maskIncompleteMath(note.answer))} />
+              <PendingAnswer
+                text={withCitationLinks(maskIncompleteMath(note.answer))}
+                streaming={!note.verifying}
+              />
               <EvidencePanel report={null} verifying={note.verifying} />
             </>
           ) : null}
