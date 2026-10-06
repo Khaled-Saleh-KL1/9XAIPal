@@ -117,7 +117,9 @@ def test_old_failed_return_does_not_overwrite_retry_generation(db_session_sync,m
     reliability.failed_outcome(sender=sender,task_id='old-return',args=[str(doc),str(job),'a.pdf'],kwargs={'execution_generation':0},retval={'status':'failed'},state='SUCCESS')
     assert db_session_sync.scalar(text('SELECT status FROM documents WHERE id=:id'),{'id':doc})=='processing'
     assert db_session_sync.scalar(text('SELECT status FROM ingestion_jobs WHERE id=:id'),{'id':job})=='queued'
-    assert db_session_sync.scalar(text('SELECT count(*) FROM failed_jobs'))==1
+    assert db_session_sync.scalar(text('SELECT count(*) FROM failed_jobs'))==0
+    assert db_session_sync.scalar(text('SELECT count(*) FROM failure_events'))==0
+    failures.queue_alert.assert_not_called()
 
 
 async def test_dlq_retry_reuses_job_and_resolve(db_session,monkeypatch):
@@ -128,7 +130,6 @@ async def test_dlq_retry_reuses_job_and_resolve(db_session,monkeypatch):
     from app.database.connection import sync_session_factory
     from app.services.ingestion import create_ingestion_job
     monkeypatch.setattr(settings,'ingestion_disk_refuse_percent',101)
-    monkeypatch.setattr(settings,'min_free_disk_gb',0)
     owner,doc=uuid4(),uuid4()
     await db_session.execute(text("INSERT INTO users(id,email,password_hash) VALUES (:id,'retry@example.test','test')"),{'id':owner})
     await db_session.execute(text("INSERT INTO documents(id,user_id,filename,original_filename,status) VALUES (:id,:owner,'a.pdf','a.pdf','processing')"),{'id':doc,'owner':owner})
@@ -154,7 +155,6 @@ async def test_dlq_fast_refailure_stays_open(db_session,monkeypatch,task_name):
     from app.workers import tasks
     from app.services.ingestion import create_ingestion_job
     monkeypatch.setattr(settings,'ingestion_disk_refuse_percent',101)
-    monkeypatch.setattr(settings,'min_free_disk_gb',0)
     owner,doc=uuid4(),uuid4()
     await db_session.execute(text("INSERT INTO users(id,email,password_hash) VALUES (:id,'fast-retry@example.test','test')"),{'id':owner})
     await db_session.execute(text("INSERT INTO documents(id,user_id,filename,original_filename,status) VALUES (:id,:owner,'a.pdf','a.pdf','processing')"),{'id':doc,'owner':owner})
@@ -200,16 +200,26 @@ def test_non_http_credentials_scrubbed():
     assert 'test-user:' not in value
 
 
-def test_alert_cap_remains_until_morning_summary(monkeypatch):
+def test_alert_cap_remains_until_morning_summary(db_session_sync,monkeypatch):
     from datetime import datetime
     class Morning(datetime):
         @classmethod
         def now(cls, zone):
             return cls(2026,10,6,4,tzinfo=zone)
     monkeypatch.setattr(failures,'datetime',Morning)
-    client=Mock()
-    failures.admit_alert(client,'fingerprint')
-    assert client.eval.call_args.args[3]=='q1:alert:cap:2026-10-05'
+    client=failures.alert_client()
+    client.flushdb()
+    monkeypatch.setattr(settings,'smtp_host','smtp.example.test')
+    monkeypatch.setattr(settings,'alert_email_to','owner@example.test')
+    monkeypatch.setattr(settings,'alert_email_from','alerts@example.test')
+    monkeypatch.setattr('smtplib.SMTP',MagicMock())
+    monkeypatch.setattr(failures,'queue_alert',Mock())
+    row=failures.record_failure('9xaipal.cap',str(uuid4()),RuntimeError('provider outage'))
+    failures.send_row_alert(row['id'])
+    assert client.get('q1:alert:cap:2026-10-05')=='1'
+    assert client.get('q1:alert:cap:2026-10-06') is None
+    client.flushdb()
+    client.close()
 
 
 def test_provider_4xx_is_system():

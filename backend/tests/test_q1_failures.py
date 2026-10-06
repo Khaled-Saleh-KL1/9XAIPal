@@ -85,22 +85,33 @@ def test_exhausted_retry_signal(db_session_sync, monkeypatch):
     assert db_session_sync.execute(text('SELECT attempts FROM failed_jobs')).scalar() == 1
 
 
-def test_alert_gate_real_redis(monkeypatch):
-    from app.services.failures import admit_alert
-    client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+def test_alert_gate_real_redis(db_session_sync, monkeypatch):
+    from app.services import failures
+    client = failures.alert_client()
     client.flushdb()
     monkeypatch.setattr(settings, 'alert_max_emails_per_day', 2)
-    assert admit_alert(client, 'one')
-    assert not admit_alert(client, 'one')
-    assert admit_alert(client, 'two')
-    assert not admit_alert(client, 'three')
+    monkeypatch.setattr(settings, 'smtp_host', 'smtp.example.test')
+    monkeypatch.setattr(settings, 'alert_email_to', 'owner@example.test')
+    monkeypatch.setattr(settings, 'alert_email_from', 'alerts@example.test')
+    monkeypatch.setattr('smtplib.SMTP', MagicMock())
+    monkeypatch.setattr(failures, 'queue_alert', Mock())
+    rows = [failures.record_failure('9xaipal.gate', str(uuid4()), RuntimeError(message))
+            for message in ('alpha outage','alpha outage','beta outage','gamma outage')]
+    for row in rows:
+        failures.send_row_alert(row['id'])
+    assert db_session_sync.scalar(text('SELECT count(*) FROM failed_jobs WHERE notified_at IS NOT NULL')) == 2
+    assert sum(int(client.get(k) or 0) for k in client.scan_iter('q1:alert:cap:*')) == 2
     client.flushdb()
+    rows = [failures.record_failure('9xaipal.gate_concurrent', str(uuid4()), RuntimeError('simultaneous outage')) for _ in range(2)]
     barrier = Barrier(2)
-    def call(_):
+    def call(row):
         barrier.wait()
-        return admit_alert(client, 'simultaneous')
+        failures.send_row_alert(row['id'])
     with ThreadPoolExecutor(2) as pool:
-        assert sum(pool.map(call, range(2))) == 1
+        list(pool.map(call, rows))
+    assert db_session_sync.scalar(text("SELECT count(*) FROM failed_jobs WHERE task_name='9xaipal.gate_concurrent' AND notified_at IS NOT NULL")) == 1
+    client.flushdb()
+    client.close()
 
 
 def test_smtp_starttls_and_disabled(monkeypatch):
@@ -221,3 +232,41 @@ def test_summary_uses_period_events_not_lifetime_attempts(db_session_sync,monkey
     session.commit()
     failures.daily_summary()
     assert "'count': 100" not in send.call_args.args[1]
+
+
+@pytest.mark.parametrize('message', [
+    'No structural chunks extracted from document',
+    'MinerU extraction produced no markdown output',
+])
+def test_actual_empty_extraction_records_input_without_alert(db_session_sync, monkeypatch, message):
+    from app.services import failures
+    from app.extraction.mineru_client import MinerUError
+    monkeypatch.setattr(failures, 'queue_alert', Mock())
+    row = failures.record_failure('9xaipal.process_ingestion', str(uuid4()), MinerUError(message))
+    assert row['category'] == 'user_input'
+    assert 'No readable text' in row['error_message']
+    failures.queue_alert.assert_not_called()
+
+
+def test_smtp_failure_can_retry_without_spending_success_cap(db_session_sync, monkeypatch):
+    from app.services import failures
+    monkeypatch.setattr(failures, 'queue_alert', Mock())
+    monkeypatch.setattr(settings, 'alert_max_emails_per_day', 1)
+    monkeypatch.setattr(settings, 'smtp_host', 'smtp.example.test')
+    monkeypatch.setattr(settings, 'alert_email_to', 'owner@example.test')
+    monkeypatch.setattr(settings, 'alert_email_from', 'alerts@example.test')
+    client = failures.alert_client()
+    client.flushdb()
+    row = failures.record_failure('9xaipal.test_smtp', str(uuid4()), RuntimeError('outage'))
+    smtp = MagicMock()
+    smtp.return_value.__enter__.return_value.send_message.side_effect = [TimeoutError('temporary SMTP outage'), None]
+    monkeypatch.setattr('smtplib.SMTP', smtp)
+    with pytest.raises(TimeoutError):
+        failures.send_row_alert(row['id'])
+    assert sum(int(client.get(k) or 0) for k in client.scan_iter('q1:alert:cap:*')) == 0
+    failures.send_row_alert(row['id'])
+    assert db_session_sync.scalar(text('SELECT notified_at FROM failed_jobs WHERE id=:id'), {'id':row['id']}) is not None
+    assert sum(int(client.get(k) or 0) for k in client.scan_iter('q1:alert:cap:*')) == 1
+    failures.send_row_alert(row['id'])
+    assert smtp.return_value.__enter__.return_value.send_message.call_count == 2
+    client.flushdb()

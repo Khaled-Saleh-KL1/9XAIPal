@@ -25,8 +25,9 @@ async def retry(row_id):
     from app.services.ingestion import create_ingestion_job, requeue_failed_job
     from app.api.v1.endpoints.documents import _dispatch_upload
     async with async_session_factory() as db:
-        # Serialize CLI operators so one DLQ retry reserves exactly one job.
-        row=(await db.execute(text('SELECT * FROM failed_jobs WHERE id=:id FOR UPDATE'),{'id':row_id})).mappings().first()
+        # Locate its owner, then lock document before failure row, matching
+        # terminal failure recording and the sweeper.
+        row=(await db.execute(text('SELECT * FROM failed_jobs WHERE id=:id'),{'id':row_id})).mappings().first()
         if not row:
             raise ValueError('Failure not found')
         if row['status']!='open':
@@ -34,6 +35,9 @@ async def retry(row_id):
         doc=(await db.execute(text('SELECT * FROM documents WHERE id=:id FOR UPDATE'),{'id':row['document_id']})).mappings().first()
         if not doc:
             raise ValueError('The document no longer exists; resolve this failure instead')
+        row=(await db.execute(text('SELECT * FROM failed_jobs WHERE id=:id FOR UPDATE'),{'id':row_id})).mappings().first()
+        if not row or row['status']!='open' or row['document_id']!=doc['id']:
+            raise ValueError('Only an open failure for this document can be retried')
         if row['task_name'] in ('9xaipal.process_ingestion','9xaipal.process_article_ingestion'):
             previous=(await db.execute(text('SELECT id,status FROM ingestion_jobs WHERE document_id=:doc ORDER BY created_at DESC,id DESC LIMIT 1'),{'doc':doc['id']})).mappings().first()
             job=await requeue_failed_job(db,previous['id']) if previous and previous['status']=='failed' else await create_ingestion_job(db,doc['id'])

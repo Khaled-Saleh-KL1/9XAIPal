@@ -57,10 +57,13 @@ def failed_outcome(sender=None, task_id=None, args=None, kwargs=None, retval=Non
             logger.error('Could not persist failed outcome: %s', type(exc).__name__)
 
 
-@celery_app.task(name='9xaipal.send_failure_alert', queue='celery', bind=True, max_retries=0)
+@celery_app.task(name='9xaipal.send_failure_alert', queue='celery', bind=True, max_retries=5)
 def send_failure_alert(self, row_id):
     # SMTP cannot raise into the original failure process.
-    failures.send_row_alert(row_id)
+    try:
+        failures.send_row_alert(row_id)
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=min(300, 30 * 2**self.request.retries))
 
 
 @celery_app.task(name='9xaipal.daily_failure_summary', queue='celery', bind=True, max_retries=0)

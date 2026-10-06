@@ -13,7 +13,7 @@ import smtplib
 import ssl
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
@@ -80,7 +80,7 @@ def classify_failure(exc: BaseException, *, task_name=None) -> tuple[str, str]:
         (('encrypted', 'password protected', 'password-protected'), 'This PDF is encrypted. Upload an unlocked copy.'),
         (('corrupt pdf', 'broken document', 'cannot open broken', 'invalid pdf', 'filedataerror'), 'This PDF could not be read. Try downloading a fresh copy.'),
         (('zero pages', 'no pages', 'page count is 0', 'empty pdf'), 'This PDF has no pages. Upload a document with readable pages.'),
-        (('empty text', 'no readable text', 'no chunks extracted', 'no text extracted'), 'No readable text was found in this document.'),
+        (('empty text', 'no readable text', 'no chunks extracted', 'no text extracted', 'no structural chunks extracted', 'extraction produced no markdown output'), 'No readable text was found in this document.'),
         (('unsupported type', 'unsupported file', 'only pdf', 'no pdf header'), 'This file type is not supported. Upload a PDF.'),
         (('too large', 'size limit', 'maximum allowed size'), 'This file or page is too large. Try a smaller document.'),
     ]
@@ -122,11 +122,17 @@ def record_failure(task_name, task_id, exc, *, document_id=None, job_id=None,
     owns_session = session is None
     with (sync_session() if owns_session else nullcontext(session)) as session:
         # Missing/deleted documents stay nullable. Never overwrite a newer job.
-        doc = session.execute(text('SELECT user_id,status FROM documents WHERE id=:id'), {'id':document_id}).mappings().first() if document_id else None
+        doc = session.execute(text('SELECT user_id,status FROM documents WHERE id=:id FOR UPDATE'), {'id':document_id}).mappings().first() if document_id else None
         params['user'] = doc['user_id'] if doc else None
         if not doc:
             params['doc'] = None
-        current = session.execute(text('SELECT id,execution_generation,error_code FROM ingestion_jobs WHERE document_id=:doc ORDER BY created_at DESC,id DESC LIMIT 1'), {'doc':document_id}).mappings().first() if doc else None
+        current = session.execute(text('SELECT id,execution_generation,error_code FROM ingestion_jobs WHERE document_id=:doc ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE'), {'doc':document_id}).mappings().first() if doc else None
+        if is_ingestion and current and (
+            (job_id is not None and str(current['id']) != str(job_id))
+            or (execution_generation is not None and current['execution_generation'] != execution_generation)
+        ):
+            # Obsolete outcomes are neither failures nor summary events.
+            return None
         if job_id and not session.execute(text('SELECT id FROM ingestion_jobs WHERE id=:id'), {'id':job_id}).first():
             params['job'] = None
         # Celery can replace a zero-argument domain exception with its
@@ -172,32 +178,9 @@ def record_failure(task_name, task_id, exc, *, document_id=None, job_id=None,
     return result
 
 
-_ALERT_LUA = '''
-if redis.call('EXISTS',KEYS[1]) == 1 then
-    redis.call('INCR',KEYS[3]); redis.call('EXPIRE',KEYS[3],172800); return 0
-end
-local count=tonumber(redis.call('GET',KEYS[2]) or '0')
-if count >= tonumber(ARGV[2]) then
-    redis.call('INCR',KEYS[3]); redis.call('EXPIRE',KEYS[3],172800); return 0
-end
-redis.call('SET',KEYS[1],'1','NX','EX',ARGV[1])
-redis.call('INCR',KEYS[2]); redis.call('EXPIRE',KEYS[2],172800)
-return 1
-'''
-
-
 def alert_client():
     import redis
     return redis.Redis.from_url(settings.redis_url, decode_responses=True, socket_timeout=5, socket_connect_timeout=5)
-
-
-def admit_alert(client, fp: str) -> bool:
-    # The cap lasts until the daily 08:00 summary boundary, including the
-    # hours after midnight. A calendar-day key would reopen it too early.
-    day = (datetime.now(ZoneInfo('Asia/Amman')) - timedelta(hours=8)).date().isoformat()
-    return bool(client.eval(_ALERT_LUA, 3, f'q1:alert:repeat:{fp}', f'q1:alert:cap:{day}',
-                            f'q1:alert:suppressed:{fp}', max(1, settings.alert_repeat_window_minutes * 60),
-                            settings.alert_max_emails_per_day))
 
 
 def send_email(subject, body) -> bool:
@@ -219,20 +202,82 @@ def send_email(subject, body) -> bool:
     return True
 
 
+_DELIVERY_LUA = """
+local now=tonumber(redis.call('TIME')[1])
+redis.call('ZREMRANGEBYSCORE',KEYS[4],'-inf',now)
+if redis.call('EXISTS',KEYS[1]) == 1 then
+    redis.call('INCR',KEYS[3]); redis.call('EXPIRE',KEYS[3],172800); return 0
+end
+local pending=redis.call('GET',KEYS[5])
+if pending then
+    if string.sub(pending,1,string.len(ARGV[3])+1) == ARGV[3]..':' then return 2 end
+    redis.call('INCR',KEYS[3]); redis.call('EXPIRE',KEYS[3],172800); return 0
+end
+local count=tonumber(redis.call('GET',KEYS[2]) or '0')
+if count+redis.call('ZCARD',KEYS[4]) >= tonumber(ARGV[2]) then return 2 end
+redis.call('SET',KEYS[5],ARGV[1],'EX',90)
+redis.call('ZADD',KEYS[4],now+90,ARGV[1]); redis.call('EXPIRE',KEYS[4],172800)
+return 1
+"""
+_FINISH_DELIVERY_LUA = """
+local owner=redis.call('GET',KEYS[5])
+if owner and owner ~= ARGV[1] then return 0 end
+redis.call('DEL',KEYS[5]); redis.call('ZREM',KEYS[4],ARGV[1])
+if ARGV[2] == '1' then
+    redis.call('SET',KEYS[1],'1','EX',ARGV[3])
+    redis.call('INCR',KEYS[2]); redis.call('EXPIRE',KEYS[2],172800)
+end
+return 1
+"""
+
+
+class AlertDeliveryBusy(RuntimeError):
+    pass
+
+
 def send_row_alert(row_id):
     with sync_session() as session:
+        # Redis owns repeat/cap policy. Keep an independent transaction fence
+        # across SMTP, whose individual socket timeouts can outlast a lease.
+        # It also lets completion count a successful send after cache expiry.
+        session.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('9xaipal:alert-delivery',0))"))
         row = session.execute(text('SELECT f.*,d.original_filename FROM failed_jobs f LEFT JOIN documents d ON d.id=f.document_id WHERE f.id=:id'), {'id':row_id}).mappings().first()
         if not row or row['category'] == 'user_input' or row['status'] != 'open':
             return
-        client = alert_client()
-        if not admit_alert(client, row['fingerprint']):
+        if row['notified_at'] and row['notified_at'] >= row['last_failed_at']:
             return
-        suppressed = client.get(f"q1:alert:suppressed:{row['fingerprint']}") or 0
-        body = '\n'.join(f'{key}: {row[key]}' for key in ('task_name','last_failed_at','document_id','original_filename','user_id','error_message','traceback','attempts'))
-        body += f"\nSuppressed repeats: {suppressed}\nRetry: python backend/scripts/dlq.py retry {row['id']}\n"
-        if send_email(f"[9XAIPal] {row['category']}: {row['error_type']} in {row['task_name']}", body):
-            session.execute(text('UPDATE failed_jobs SET notified_at=now() WHERE id=:id'), {'id':row_id})
-            session.commit()
+        if not (settings.smtp_host and settings.alert_email_to and settings.alert_email_from):
+            logger.info('Owner email disabled; failure details are in failed_jobs')
+            return
+        client = alert_client()
+        day = (datetime.now(ZoneInfo('Asia/Amman')) - timedelta(hours=8)).date().isoformat()
+        fp = row['fingerprint']
+        keys = [f'q1:alert:repeat:{fp}', f'q1:alert:cap:{day}',
+                f'q1:alert:suppressed:{fp}', f'q1:alert:pending:{day}', f'q1:alert:delivery:{fp}']
+        token = f'{row_id}:{uuid4()}'
+        try:
+            admitted = client.eval(_DELIVERY_LUA, 5, *keys, token, settings.alert_max_emails_per_day, str(row_id))
+            if admitted == 0:
+                return
+            if admitted == 2:
+                # A successful cap is terminal; a pending send can be retried.
+                if int(client.get(keys[1]) or 0) >= settings.alert_max_emails_per_day:
+                    return
+                raise AlertDeliveryBusy('Failure alert delivery is already pending')
+            try:
+                suppressed = client.get(keys[2]) or 0
+                body = '\n'.join(f'{key}: {row[key]}' for key in ('task_name','last_failed_at','document_id','original_filename','user_id','error_message','traceback','attempts'))
+                body += f"\nSuppressed repeats: {suppressed}\nRetry: python backend/scripts/dlq.py retry {row['id']}\n"
+                delivered = send_email(f"[9XAIPal] {row['category']}: {row['error_type']} in {row['task_name']}", body)
+            except Exception:
+                client.eval(_FINISH_DELIVERY_LUA, 5, *keys, token, 0, 1)
+                raise
+            client.eval(_FINISH_DELIVERY_LUA, 5, *keys, token, int(delivered), max(1, settings.alert_repeat_window_minutes*60))
+            if delivered:
+                session.execute(text('UPDATE failed_jobs SET notified_at=now() WHERE id=:id'), {'id':row_id})
+                session.commit()
+        finally:
+            client.close()
 
 
 def daily_summary():
@@ -276,6 +321,12 @@ def sweep_stalled(*, active_ids: set[str], inspection_ok: bool, pending_document
     marked = 0
     for job_id in candidates:
         with sync_session() as session:
+            # Match record_failure/CLI: document before job/failure locks.
+            owner = session.execute(text("""SELECT d.id FROM documents d
+                JOIN ingestion_jobs j ON j.document_id=d.id WHERE j.id=:id
+                FOR UPDATE OF d SKIP LOCKED"""), {'id':job_id}).first()
+            if not owner:
+                continue
             row = session.execute(text(f"""SELECT j.*,d.doc_kind FROM ingestion_jobs j
                 JOIN documents d ON d.id=j.document_id WHERE j.id=:id AND {predicate}
                 FOR UPDATE OF j SKIP LOCKED"""), {'id':job_id,'minutes':settings.stalled_job_minutes}).mappings().first()
