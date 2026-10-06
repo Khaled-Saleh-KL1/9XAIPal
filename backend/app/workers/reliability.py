@@ -45,12 +45,14 @@ def failed_outcome(sender=None, task_id=None, args=None, kwargs=None, retval=Non
         return
     if isinstance(retval, dict) and retval.get('status') == 'failed':
         doc, job = _ids(args, kwargs)
+        job = job or getattr(sender.request,'reliability_job_id',None)
+        generation=(kwargs or {}).get('execution_generation',getattr(sender.request,'reliability_generation',None))
         try:
             from app.database.connection import sync_session
             from sqlalchemy import text
             with sync_session() as session:
                 message = session.execute(text('SELECT error_message FROM documents WHERE id=:id'), {'id':doc}).scalar() if doc else None
-            failures.record_failure(sender.name, task_id, RuntimeError(message or 'Task returned a failed outcome'), document_id=doc, job_id=job)
+            failures.record_failure(sender.name, task_id, RuntimeError(message or 'Task returned a failed outcome'), document_id=doc, job_id=job, execution_generation=generation)
         except Exception as exc:
             logger.error('Could not persist failed outcome: %s', type(exc).__name__)
 

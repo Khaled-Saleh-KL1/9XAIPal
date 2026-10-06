@@ -104,6 +104,22 @@ def test_summary_terminal_failure_marks_inprogress_document(db_session_sync,monk
     assert db_session_sync.scalar(text('SELECT status FROM documents WHERE id=:id'),{'id':doc})=='failed'
 
 
+def test_old_failed_return_does_not_overwrite_retry_generation(db_session_sync,monkeypatch):
+    from types import SimpleNamespace
+    from app.workers import reliability
+    doc,job=uuid4(),uuid4()
+    _insert_document_and_job(db_session_sync,doc,job)
+    db_session_sync.execute(text("UPDATE ingestion_jobs SET execution_generation=1,status='queued' WHERE id=:id"),{'id':job})
+    db_session_sync.execute(text("UPDATE documents SET status='processing' WHERE id=:id"),{'id':doc})
+    db_session_sync.commit()
+    monkeypatch.setattr(failures,'queue_alert',Mock())
+    sender=SimpleNamespace(name='9xaipal.process_ingestion',request=SimpleNamespace(reliability_job_id=job,reliability_generation=0))
+    reliability.failed_outcome(sender=sender,task_id='old-return',args=[str(doc),str(job),'a.pdf'],kwargs={'execution_generation':0},retval={'status':'failed'},state='SUCCESS')
+    assert db_session_sync.scalar(text('SELECT status FROM documents WHERE id=:id'),{'id':doc})=='processing'
+    assert db_session_sync.scalar(text('SELECT status FROM ingestion_jobs WHERE id=:id'),{'id':job})=='queued'
+    assert db_session_sync.scalar(text('SELECT count(*) FROM failed_jobs'))==1
+
+
 async def test_dlq_retry_reuses_job_and_resolve(db_session,monkeypatch):
     import importlib.util
     from pathlib import Path
