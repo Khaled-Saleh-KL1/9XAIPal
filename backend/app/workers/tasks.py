@@ -405,6 +405,7 @@ def _queue_search_vector_if_embedding_skipped(session, document_id: UUID) -> Non
     reject_on_worker_lost=True,
 )
 @guarded_heavy("ingestion")
+@responsive_task
 def process_ingestion(self, document_id: str, job_id: str, filename: str, *, execution_generation: int = 0) -> dict:
     """Run MinerU extraction → structural chunking → asset linking pipeline synchronously."""
     logger.info(f"[celery] process_ingestion start document={document_id} job={job_id}")

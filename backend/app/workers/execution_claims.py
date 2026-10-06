@@ -150,7 +150,7 @@ class ExecutionClaim:
         with self.mutex:
             if self.finished:
                 return True
-            updated = self.connection.execute(text(f"UPDATE {self.table} SET {p}claim_expires_at=clock_timestamp()+make_interval(secs => :lease){", progress_updated_at=clock_timestamp()" if self.kind == "ingestion" else ""} WHERE id=:id AND {p}claim_token=:token AND {p}execution_state IN ('running','finalizing') RETURNING id"), {"lease": self.lease_seconds, "id": self.row_id, "token": self.token}).first()
+            updated = self.connection.execute(text(f"UPDATE {self.table} SET {p}claim_expires_at=clock_timestamp()+make_interval(secs => :lease) WHERE id=:id AND {p}claim_token=:token AND {p}execution_state IN ('running','finalizing') RETURNING id"), {"lease": self.lease_seconds, "id": self.row_id, "token": self.token}).first()
             self.connection.commit()
             if updated is not None:
                 self.last_renewed = time.monotonic()
@@ -281,7 +281,7 @@ def guarded_heavy(kind):
             forward_heavy_task(task)
             sync_engine.dispose()
             row_id = UUID(args[0] if args else kwargs["job_id"]) if kind == "ingestion" else UUID(document_id)
-            generation = kwargs.pop("execution_generation", 0) if kind == "ingestion" else 0
+            generation = kwargs.get("execution_generation", 0) if kind == "ingestion" else 0
             claim = ExecutionClaim(kind, row_id, task.request.id or str(uuid4()), generation)
             if task.request.called_directly:
                 with claim:

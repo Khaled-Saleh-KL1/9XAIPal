@@ -139,7 +139,7 @@ def test_stalled_vs_long(db_session_sync, monkeypatch):
     assert session.execute(text("SELECT category FROM failed_jobs WHERE document_id=:id"), {'id':doc}).scalar() == 'stalled'
 
 
-def test_job_progress_and_claim_renew_bump_heartbeat(db_session_sync):
+def test_job_progress_moves_heartbeat_but_lease_renew_does_not_fake_progress(db_session_sync):
     from app.extraction.pipeline_sync import update_job_progress_sync
     from app.workers.execution_claims import ExecutionClaim
     session = db_session_sync
@@ -154,7 +154,7 @@ def test_job_progress_and_claim_renew_bump_heartbeat(db_session_sync):
     with ExecutionClaim('ingestion',job,'test-heartbeat') as claim:
         assert claim.renew()
         current = session.execute(text('SELECT progress_updated_at FROM ingestion_jobs WHERE id=:id'), {'id':job}).scalar()
-        assert current > old
+        assert current == old
 
 
 def test_stalled_live_task_at_three_thresholds(db_session_sync, monkeypatch):

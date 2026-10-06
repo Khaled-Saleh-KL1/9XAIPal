@@ -78,7 +78,7 @@ async def accept_identity(session, *, user_id, identity, is_url=False, idem_key=
             if replay['identity'] != identity:
                 raise HTTPException(422, 'This upload key was already used for a different file or URL.')
             doc = (await session.execute(text('SELECT * FROM documents WHERE id=:id'), {'id':replay['document_id']})).mappings().first()
-            if doc:
+            if doc and doc['status'] != 'failed':
                 return dict(doc), None, True
     await session.execute(text('SELECT pg_advisory_xact_lock(hashtextextended(:key,0))'), {'key':f'upload:{user_id}:{identity}'})
     column = 'normalized_source_url' if is_url else 'content_sha256'
@@ -88,10 +88,11 @@ async def accept_identity(session, *, user_id, identity, is_url=False, idem_key=
     if doc:
         doc = dict(doc)
         if doc['status'] == 'failed':
-            # Fresh job has a fresh durable generation/claim. Old jobs remain history.
+            # Reuse a failed job with a fresh fenced execution generation.
             previous = (await session.execute(text('SELECT id,status FROM ingestion_jobs WHERE document_id=:doc ORDER BY created_at DESC,id DESC LIMIT 1'), {'doc':doc['id']})).mappings().first()
             job = await requeue_failed_job(session,previous['id']) if previous and previous['status']=='failed' else await create_ingestion_job(session,doc['id'])
             await session.execute(text("UPDATE documents SET status='processing',error_message=NULL,updated_at=now() WHERE id=:id"), {'id':doc['id']})
+            await session.execute(text("UPDATE failed_jobs SET status='retried' WHERE job_id=:job AND status='open'"), {'job':job['id']})
             doc['status'] = 'processing'
     else:
         doc = await doc_service.create_document(session, user_id=user_id, **fields)

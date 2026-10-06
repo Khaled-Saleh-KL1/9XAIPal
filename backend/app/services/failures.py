@@ -6,11 +6,12 @@ request/session data and task argument payloads are never captured.
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 import logging
 import re
 import smtplib
 import ssl
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -34,15 +35,20 @@ def scrub(value: object, limit: int = 8192) -> str:
     value = re.sub(r'(?im)(authorization\s*[:=]\s*)[^\r\n]+', r'\1[redacted]', value)
     value = re.sub(r'(?i)([\w-]*(?:api[_-]?key|password|secret|token|session|cookie)[\w-]*[\s\"\']*[:=][\s\"\']*)[^\s,;\"\'&]+', r'\1[redacted]', value)
     value = re.sub(r'(?i)\b(Bearer|Basic)\s+[^\s,;]+', r'\1 [redacted]', value)
-    value = re.sub(r'(https?://)[^/\s@]+@', r'\1[redacted]@', value)
+    value = re.sub(r'([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s@]+@', r'\1[redacted]@', value)
     value = re.sub(r'(?i)\b(?:sk-[\w-]+|AIza[\w-]+|gh[pousr]_[\w]+)\b', '[redacted]', value)
     # Drop query strings from diagnostics; signed URLs often carry credentials.
     value = re.sub(r'(https?://[^\s?]+)\?[^\s]+', r'\1?[redacted]', value)
     return value.encode('utf-8')[:limit].decode('utf-8', errors='ignore')
 
 
-def classify_failure(exc: BaseException) -> tuple[str, str]:
+def classify_failure(exc: BaseException, *, task_name=None) -> tuple[str, str]:
     """Prefer typed HTTP status (including causes), then specific input defects."""
+    # Provider/configuration errors retain HTTP causes but are our fault.
+    if any(name in cls.__name__.lower() for cls in type(exc).__mro__ for name in ('modelunavailable', 'classifierunavailable')):
+        return 'system', getattr(exc,'public_message','Processing is temporarily unavailable. Please try again later.')
+    if getattr(exc,'error_code',None) in ('arabic_style_confirmation_required','handwritten_arabic_unavailable','arabic_gemini_pro_not_configured'):
+        return 'user_input', exc.public_message
     cause = exc
     seen = set()
     while cause is not None and id(cause) not in seen:
@@ -50,6 +56,12 @@ def classify_failure(exc: BaseException) -> tuple[str, str]:
         response = getattr(cause, 'response', None)
         status = getattr(response, 'status_code', None) or getattr(cause, 'status_code', None)
         if status:
+            if task_name is not None and task_name != '9xaipal.process_article_ingestion':
+                return 'system', 'Processing is temporarily unavailable. Please try again later.'
+            if status == 413:
+                return 'user_input', 'This file or page is too large. Try a smaller document.'
+            if status == 415:
+                return 'user_input', 'This file type is not supported. Upload a PDF.'
             if 400 <= status < 500 and status not in (408, 429):
                 return 'user_input', 'That link could not be opened. Check the address and access permissions.'
             return 'system', 'Processing is temporarily unavailable. Please try again later.'
@@ -87,21 +99,44 @@ def queue_alert(row_id):
 
 
 def record_failure(task_name, task_id, exc, *, document_id=None, job_id=None,
-                   traceback='', category=None):
+                   traceback='', category=None, session=None, notify=True, execution_generation=None):
     error_type = type(exc).__name__
-    classified, public = classify_failure(exc)
+    classified, public = classify_failure(exc, task_name=task_name)
     category = category or classified
-    message = scrub(exc, 2048)
-    key = f'{task_name}:{job_id or task_id}'
+    message = scrub(public if category == 'user_input' else exc, 2048)
+    public = getattr(exc,'public_message',public)
+    is_ingestion = task_name in ('9xaipal.process_ingestion','9xaipal.process_article_ingestion')
+    key = f'{task_name}:{job_id if is_ingestion and job_id else document_id or task_id}'
     params = dict(task=task_name, delivery=task_id, doc=document_id, job=job_id,
                   category=category, error_type=error_type, message=message,
                   trace=scrub(traceback), fingerprint=fingerprint(task_name, error_type, message), key=key)
-    with sync_session() as session:
+    owns_session = session is None
+    with (sync_session() if owns_session else nullcontext(session)) as session:
         # Missing/deleted documents stay nullable. Never overwrite a newer job.
-        doc = session.execute(text('SELECT user_id FROM documents WHERE id=:id'), {'id':document_id}).mappings().first() if document_id else None
+        doc = session.execute(text('SELECT user_id,status FROM documents WHERE id=:id'), {'id':document_id}).mappings().first() if document_id else None
         params['user'] = doc['user_id'] if doc else None
         if not doc:
             params['doc'] = None
+        current = session.execute(text('SELECT id,execution_generation,error_code FROM ingestion_jobs WHERE document_id=:doc ORDER BY created_at DESC,id DESC LIMIT 1'), {'doc':document_id}).mappings().first() if doc else None
+        if job_id and not session.execute(text('SELECT id FROM ingestion_jobs WHERE id=:id'), {'id':job_id}).first():
+            params['job'] = None
+        # Celery can replace a zero-argument domain exception with its
+        # pickleable base. Recover only known typed errors persisted by the
+        # pipeline for this exact delivery generation; never infer from text.
+        from app.extraction import arabic_types
+        if type(exc) is arabic_types.ArabicRoutingError and current and str(current['id']) == str(job_id) and (execution_generation is None or current['execution_generation'] == execution_generation):
+            known = {cls.error_code:cls for cls in (
+                arabic_types.ArabicStyleConfirmationRequired,
+                arabic_types.HandwrittenArabicUnavailable,
+                arabic_types.ArabicGeminiProNotConfigured,
+                arabic_types.ArabicClassifierUnavailableError,
+            )}
+            if current['error_code'] in known:
+                exc = known[current['error_code']]()
+                category, public = classify_failure(exc, task_name=task_name)
+                params.update(category=category, error_type=type(exc).__name__,
+                              message=scrub(public if category == 'user_input' else exc, 2048))
+        params['fingerprint'] = fingerprint(task_name, params['error_type'], str(exc))
         row = session.execute(text('''
             INSERT INTO failed_jobs(task_name,celery_task_id,document_id,user_id,job_id,
                 category,error_type,error_message,traceback,fingerprint,logical_key)
@@ -113,17 +148,17 @@ def record_failure(task_name, task_id, exc, *, document_id=None, job_id=None,
             RETURNING *
         '''), params).mappings().one()
         session.execute(text('INSERT INTO failure_events(failed_job_id,fingerprint,category) VALUES (:id,:fp,:category)'), {'id':row['id'],'fp':row['fingerprint'],'category':category})
-        if doc and (job_id or task_name in ('9xaipal.embed_document',)):
-            current = session.execute(text('SELECT id FROM ingestion_jobs WHERE document_id=:doc ORDER BY created_at DESC,id DESC LIMIT 1'), {'doc':document_id}).scalar()
-            if job_id is None or str(current) == str(job_id):
+        if doc and (is_ingestion or doc['status'] not in ('complete','failed')):
+            if current and (job_id is None or str(current['id']) == str(job_id)) and (execution_generation is None or current['execution_generation']==execution_generation):
                 if category == 'stalled':
                     public = 'Processing stopped responding. Your document is preserved; please try again.'
                 session.execute(text("UPDATE documents SET status='failed',error_message=:message,updated_at=now() WHERE id=:doc"), {'doc':document_id,'message':public})
-                session.execute(text("UPDATE ingestion_jobs SET status='failed',error_message=:message,error_code=:code,completed_at=now() WHERE id=:job"), {'job':current,'message':public,'code':f'{category}_failure'})
-        session.commit()
+                session.execute(text("UPDATE ingestion_jobs SET status='failed',error_message=:message,error_code=:code,completed_at=now() WHERE id=:job"), {'job':current['id'],'message':public,'code':getattr(exc,'error_code',f'{category}_failure')})
+        if owns_session:
+            session.commit()
         result = dict(row)
     # Include input failures in summary counts, but no immediate mail.
-    if category != 'user_input':
+    if notify and category != 'user_input' and task_name not in ('9xaipal.send_failure_alert', '9xaipal.daily_failure_summary'):
         queue_alert(result['id'])
     return result
 
@@ -148,7 +183,9 @@ def alert_client():
 
 
 def admit_alert(client, fp: str) -> bool:
-    day = datetime.now(ZoneInfo('Asia/Amman')).date().isoformat()
+    # The cap lasts until the daily 08:00 summary boundary, including the
+    # hours after midnight. A calendar-day key would reopen it too early.
+    day = (datetime.now(ZoneInfo('Asia/Amman')) - timedelta(hours=8)).date().isoformat()
     return bool(client.eval(_ALERT_LUA, 3, f'q1:alert:repeat:{fp}', f'q1:alert:cap:{day}',
                             f'q1:alert:suppressed:{fp}', max(1, settings.alert_repeat_window_minutes * 60),
                             settings.alert_max_emails_per_day))
@@ -193,7 +230,6 @@ def daily_summary():
     now = datetime.now(ZoneInfo('Asia/Amman'))
     # Window ends at today's 08:00, preventing drift and gaps after late runs.
     end = now.replace(hour=8, minute=0, second=0, microsecond=0)
-    from datetime import timedelta
     if now < end:
         end -= timedelta(days=1)
     start = end - timedelta(days=1)
@@ -216,28 +252,38 @@ def daily_summary():
             raise
 
 
-def sweep_stalled(*, active_ids: set[str], inspection_ok: bool) -> int:
+def sweep_stalled(*, active_ids: set[str], inspection_ok: bool, pending_document_ids=None) -> int:
     if not inspection_ok:
         return 0
-    marked = 0
+    pending_document_ids = pending_document_ids or set()
+    # Queue waiting is not work inactivity. Snapshot only IDs, then recheck
+    # heartbeat/current-job/status under each candidate's own transaction.
+    predicate = """j.status IN ('extracting','chunking','embedding','summarizing')
+        AND d.status NOT IN ('complete','failed')
+        AND j.id=(SELECT id FROM ingestion_jobs WHERE document_id=d.id ORDER BY created_at DESC,id DESC LIMIT 1)
+        AND COALESCE(j.progress_updated_at,j.started_at,j.created_at)<clock_timestamp()-make_interval(mins => :minutes)"""
     with sync_session() as session:
-        rows = session.execute(text('''SELECT j.*,d.status AS doc_status FROM ingestion_jobs j
-            JOIN documents d ON d.id=j.document_id
-            WHERE j.status NOT IN ('complete','failed') AND d.status NOT IN ('complete','failed')
-            AND j.id=(SELECT id FROM ingestion_jobs WHERE document_id=d.id ORDER BY created_at DESC,id DESC LIMIT 1)
-            AND COALESCE(j.progress_updated_at,j.created_at)<clock_timestamp()-make_interval(mins => :minutes)
-            FOR UPDATE OF j SKIP LOCKED'''), {'minutes':settings.stalled_job_minutes}).mappings().all()
-        for row in rows:
-            age = (datetime.now(timezone.utc) - (row['progress_updated_at'] or row['created_at'])).total_seconds()
-            task_id = row['execution_task_id'] or row.get('celery_task_id')
-            if task_id in active_ids and age < settings.stalled_job_minutes * 180:
+        candidates = session.execute(text(f'SELECT j.id FROM ingestion_jobs j JOIN documents d ON d.id=j.document_id WHERE {predicate}'), {'minutes':settings.stalled_job_minutes}).scalars().all()
+    marked = 0
+    for job_id in candidates:
+        with sync_session() as session:
+            row = session.execute(text(f"""SELECT j.*,d.doc_kind FROM ingestion_jobs j
+                JOIN documents d ON d.id=j.document_id WHERE j.id=:id AND {predicate}
+                FOR UPDATE OF j SKIP LOCKED"""), {'id':job_id,'minutes':settings.stalled_job_minutes}).mappings().first()
+            if not row or str(row['document_id']) in pending_document_ids:
                 continue
-            # Commit the guarded state transition before opening the DLQ session.
-            session.execute(text("UPDATE ingestion_jobs SET status='failed',error_message='Processing stopped responding.',error_code='stalled_failure',completed_at=now() WHERE id=:id"), {'id':row['id']})
-            session.execute(text("UPDATE documents SET status='failed',error_message='Processing stopped responding. Your document is preserved; please try again.',updated_at=now() WHERE id=:id"), {'id':row['document_id']})
+            heartbeat = row['progress_updated_at'] or row['started_at'] or row['created_at']
+            age = (datetime.now(timezone.utc)-heartbeat).total_seconds()
+            task_id = row['execution_task_id'] or row['celery_task_id']
+            active = task_id in active_ids or f"document:{row['document_id']}" in active_ids
+            if active and age < settings.stalled_job_minutes*180:
+                continue
+            failure = record_failure('9xaipal.process_article_ingestion' if row['doc_kind']=='article' else '9xaipal.process_ingestion',
+                task_id or f"stalled:{row['id']}",RuntimeError('Processing stopped responding.'),
+                document_id=row['document_id'],job_id=row['id'],category='stalled',
+                session=session,notify=False,execution_generation=row['execution_generation'])
+            # State transition and DLQ/event insertion commit together.
             session.commit()
-            record_failure('9xaipal.process_article_ingestion' if session.execute(text('SELECT doc_kind FROM documents WHERE id=:id'), {'id':row['document_id']}).scalar() == 'article' else '9xaipal.process_ingestion',
-                           task_id or f"stalled:{row['id']}", RuntimeError('Processing stopped responding.'),
-                           document_id=row['document_id'], job_id=row['id'], category='stalled')
-            marked += 1
+        queue_alert(failure['id'])
+        marked += 1
     return marked

@@ -117,10 +117,12 @@ async def _dispatch_upload(db, doc, job, *, url=None, kind=None):
     if job is None:
         return
     try:
+        generation = job.get('execution_generation', 0)
+        delivery_kwargs = {'execution_generation': generation} if generation else {}
         if url is not None:
-            result = process_article_ingestion.delay(str(doc['id']), str(job['id']), url, kind, execution_generation=job.get('execution_generation',0))
+            result = process_article_ingestion.delay(str(doc['id']), str(job['id']), url, kind, **delivery_kwargs)
         else:
-            result = process_ingestion.delay(str(doc['id']), str(job['id']), doc['filename'], execution_generation=job.get('execution_generation',0))
+            result = process_ingestion.delay(str(doc['id']), str(job['id']), doc['filename'], **delivery_kwargs)
         task_id = getattr(result, 'id', None)
         if isinstance(task_id, str):
             await db.execute(text('UPDATE ingestion_jobs SET celery_task_id=:task WHERE id=:id'), {'task':task_id,'id':job['id']})

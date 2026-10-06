@@ -29,8 +29,10 @@ def terminal_failure(sender=None, task_id=None, exception=None, args=None, kwarg
         return
     try:
         doc, job = _ids(args, kwargs)
+        job = job or getattr(sender.request,'reliability_job_id',None)
+        generation=(kwargs or {}).get('execution_generation',getattr(sender.request,'reliability_generation',None))
         failures.record_failure(sender.name, task_id, exception,
-                                document_id=doc, job_id=job,
+                                document_id=doc, job_id=job, execution_generation=generation,
                                 traceback=''.join(traceback_module.format_tb(traceback)) if traceback else '')
     except Exception as exc:
         # Recording and alert publication must never replace the task failure.
@@ -64,16 +66,78 @@ def daily_failure_summary(self):
     failures.daily_summary()
 
 
+_WORK_TASKS = {
+    '9xaipal.process_ingestion','9xaipal.process_article_ingestion',
+    '9xaipal.embed_document','9xaipal.generate_section_summaries',
+}
+
+
+def _work_document(task):
+    if task.get('name') not in _WORK_TASKS:
+        return None
+    args=task.get('args') or []
+    kwargs=task.get('kwargs') or {}
+    candidate=kwargs.get('document_id') or (args[0] if isinstance(args,(list,tuple)) and args else None)
+    try:
+        return str(UUID(str(candidate)))
+    except (TypeError,ValueError):
+        return None
+
+
+def _pending_documents():
+    # inspect().reserved() does not include messages waiting in the broker.
+    # Protect successor embedding/summary messages, even after their parent
+    # ingestion task has completed. Decode identifiers only; never log bodies.
+    import base64
+    import json
+    import redis
+    from app.core.config import settings
+    if not settings.effective_celery_broker_url.startswith(('redis://','rediss://')):
+        return None
+    client=redis.Redis.from_url(settings.effective_celery_broker_url,socket_timeout=5,socket_connect_timeout=5)
+    documents=set()
+    try:
+        for queue in ('ingest','celery'):
+            for priority in ('','\x06\x163','\x06\x166','\x06\x169'):
+                key=queue+priority
+                depth=client.llen(key)
+                if depth>10000:
+                    return None  # An incomplete snapshot cannot prove absence.
+                for raw in client.lrange(key,0,-1):
+                    message=json.loads(raw)
+                    name=message.get('headers',{}).get('task')
+                    if name not in _WORK_TASKS:
+                        continue
+                    body=message['body']
+                    if message.get('properties',{}).get('body_encoding')=='base64':
+                        body=base64.b64decode(body)
+                    args,kwargs,_=json.loads(body)
+                    doc=_work_document({'name':name,'args':args,'kwargs':kwargs})
+                    if doc: documents.add(doc)
+        return documents
+    finally:
+        client.close()
+
+
 @celery_app.task(name='9xaipal.sweep_stalled_jobs', queue='celery')
 def sweep_stalled_jobs():
     try:
-        inspector = celery_app.control.inspect(timeout=5)
-        active, reserved = inspector.active(), inspector.reserved()
-        # No replies is unknown, not proof that a task is gone.
-        ok = bool(active) and bool(reserved) and set(active) == set(reserved)
-        ids = {task['id'] for response in (active or {}, reserved or {}) for tasks in response.values() for task in tasks}
-        return failures.sweep_stalled(active_ids=ids, inspection_ok=ok)
+        inspector=celery_app.control.inspect(timeout=5)
+        active,reserved=inspector.active(),inspector.reserved()
+        ok=bool(active) and bool(reserved) and set(active)==set(reserved)
+        pending=_pending_documents() if ok else None
+        # A message may leave the broker between inspection and its pending
+        # snapshot. Refresh worker reports and preserve either observation.
+        refreshed_active,refreshed_reserved=inspector.active(),inspector.reserved()
+        ok=ok and bool(refreshed_active) and bool(refreshed_reserved) and set(active)==set(refreshed_active)==set(refreshed_reserved)
+        ids=set()
+        for response in (active or {},reserved or {},refreshed_active or {},refreshed_reserved or {}):
+            for tasks in response.values():
+                for task in tasks:
+                    ids.add(task['id'])
+                    doc=_work_document(task)
+                    if doc: ids.add(f'document:{doc}')
+        return failures.sweep_stalled(active_ids=ids,inspection_ok=ok and pending is not None,pending_document_ids=pending)
     except Exception as exc:
-        logger.warning('Stalled-job inspection unavailable: %s', type(exc).__name__)
+        logger.warning('Stalled-job inspection unavailable: %s',type(exc).__name__)
         return 0
-

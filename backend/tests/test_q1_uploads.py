@@ -19,7 +19,11 @@ PDF = b'%PDF-1.7\n'+b'x'*100
 @pytest.fixture
 async def client(db_session, monkeypatch):
     from app.core.redis import close_redis
-    await close_redis()
+    import app.core.redis as redis_module
+    try:
+        await close_redis()
+    except RuntimeError:
+        redis_module._client = None
     monkeypatch.setattr(settings, "ingestion_disk_refuse_percent", 101)
     monkeypatch.setattr(settings, "min_free_disk_gb", 0)
     user = uuid4()
