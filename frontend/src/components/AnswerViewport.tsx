@@ -42,7 +42,18 @@ export function AnswerViewport({
 
   const measureOverflow = useCallback(() => {
     const content = contentRef.current;
-    const nextScrollable = !!content && content.scrollHeight > answerHeightLimit() + 1;
+    const excluded = content
+      ? Array.from(content.querySelectorAll<HTMLElement>('[data-answer-overflow-exclude]'))
+      : [];
+    const previousDisplays = excluded.map((element) => element.style.display);
+    let contentHeight = 0;
+    try {
+      excluded.forEach((element) => { element.style.display = 'none'; });
+      contentHeight = content?.scrollHeight ?? 0;
+    } finally {
+      excluded.forEach((element, index) => { element.style.display = previousDisplays[index]; });
+    }
+    const nextScrollable = !!content && contentHeight > answerHeightLimit() + 1;
     const changed = !hasMeasuredOverflowRef.current || scrollableRef.current !== nextScrollable;
     hasMeasuredOverflowRef.current = true;
     scrollableRef.current = nextScrollable;

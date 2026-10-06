@@ -145,6 +145,36 @@ describe('StudyChat answer scrolling', () => {
     expect(scroll).not.toContainElement(screen.getByText('Quoted passage.').closest('.cite-peek'));
   });
 
+  it('keeps an opened citation preview from making a short answer overflow', async () => {
+    render(chat('A short claim [[P1:41]].'));
+
+    const shell = screen.getByTestId('answer-viewport');
+    const content = shell.querySelector<HTMLElement>('[data-answer-content]');
+    const scroll = shell.querySelector<HTMLElement>('[data-answer-scroll]');
+    if (!content || !scroll) throw new Error('answer viewport is missing its content or scroll region');
+    const measuredHeight = () => {
+      const preview = content.querySelector<HTMLElement>('.cite-peek');
+      return preview && preview.style.display !== 'none' ? 1000 : 120;
+    };
+    Object.defineProperty(content, 'scrollHeight', { configurable: true, get: measuredHeight });
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, get: measuredHeight });
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 300 });
+    fireEvent.resize(window);
+
+    const chip = screen.getByRole('button', { name: 'P1:41' });
+    fireEvent.click(chip);
+    expect(await screen.findByText('Quoted passage.')).toBeInTheDocument();
+
+    fireEvent.resize(window);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'P1:41' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByText('Quoted passage.')).toBeInTheDocument();
+    });
+    expect(scroll).not.toHaveClass('is-scrollable');
+    expect(screen.queryByRole('button', { name: 'Expand' })).not.toBeInTheDocument();
+    expect(citationMocks.getChunk).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps an Arabic answer in right-to-left direction', () => {
     render(chat('توضح النتائج أن النموذج تحسن مع زيادة البيانات.'));
 
