@@ -9,6 +9,7 @@ a token has already reached the caller (see client.py's own docstring for
 why) — several tests here exist specifically to pin that behavior down.
 """
 
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -279,6 +280,138 @@ async def test_stream_raises_when_every_target_fails_before_any_token(monkeypatc
 
     with pytest.raises(ModelUnavailable):
         _ = [e async for e in client.stream_chat([{"role": "user", "content": "hi"}])]
+
+
+async def test_explicit_stream_failure_falls_back_to_default_with_notice(monkeypatch):
+    picked = "glm-5.3-flash"
+    fallback = replace(_target("ollama"), chat_model="gemma4:31b")
+    calls = []
+
+    async def targets_for(model):
+        calls.append(("resolve", model))
+        if model == picked:
+            return [_target("ollama")]
+        return [fallback]
+
+    monkeypatch.setattr(resolver, "targets_for", targets_for)
+    writes = []
+
+    async def record(provider, model, *, available, status_code=None):
+        writes.append((provider, model, available, status_code))
+
+    monkeypatch.setattr(client.availability, "record_model_result", record)
+
+    def fake_stream_once(target, _messages, **kwargs):
+        resolved = kwargs["resolved"]
+        calls.append((target.provider, resolved))
+
+        async def events():
+            if resolved == picked:
+                raise ModelUnavailable("glm plan required", status_code=402)
+            yield {"type": "token", "text": "Gemma answered.", "model": "gemma4:31b"}
+            yield {
+                "type": "done", "content": "Gemma answered.",
+                "model": "gemma4:31b", "prompt_tokens": None,
+                "completion_tokens": None,
+            }
+
+        return events()
+
+    monkeypatch.setattr(client, "_stream_once", fake_stream_once)
+
+    events = [
+        event async for event in client.stream_chat(
+            [{"role": "user", "content": "Explain the result."}], model=picked
+        )
+    ]
+
+    notice = next(event for event in events if event["type"] == "notice")
+    token_index = next(i for i, event in enumerate(events) if event["type"] == "token")
+    assert "GLM 5.3 Flash" in notice["message"]
+    assert "Gemma 4 31B" in notice["message"]
+    assert events.index(notice) < token_index
+    assert events[-1]["type"] == "done"
+    assert events[-1]["model"] == "gemma4:31b"
+    assert calls == [
+        ("resolve", picked), ("ollama", picked),
+        ("resolve", None), ("ollama", "gemma4:31b"),
+    ]
+    assert writes == [
+        ("ollama", picked, False, 402),
+        ("ollama", "gemma4:31b", True, None),
+    ]
+
+
+async def test_explicit_stream_failure_after_token_still_does_not_retry(monkeypatch):
+    picked = "glm-5.3-flash"
+    fallback_called = False
+
+    async def targets_for(model):
+        if model == picked:
+            return [_target("ollama")]
+        nonlocal fallback_called
+        fallback_called = True
+        return [_target("ollama")]
+
+    monkeypatch.setattr(resolver, "targets_for", targets_for)
+
+    def fake_stream_once(_target_value, _messages, **_kwargs):
+        async def events():
+            yield {"type": "token", "text": "Visible partial answer."}
+            raise ModelUnavailable("stream reset", status_code=503)
+
+        return events()
+
+    monkeypatch.setattr(client, "_stream_once", fake_stream_once)
+
+    with pytest.raises(ModelUnavailable):
+        _ = [
+            event async for event in client.stream_chat(
+                [{"role": "user", "content": "Explain the result."}], model=picked
+            )
+        ]
+
+    assert fallback_called is False
+
+
+async def test_explicit_fallback_uses_each_default_providers_own_model(monkeypatch):
+    picked = "glm-5.3-flash"
+    default_ollama = replace(_target("ollama"), chat_model="gemma4:31b")
+    default_cloud = replace(_target("openai"), chat_model="gpt-4o-mini")
+    calls = []
+
+    async def targets_for(model):
+        return [_target("ollama")] if model == picked else [default_ollama, default_cloud]
+
+    monkeypatch.setattr(resolver, "targets_for", targets_for)
+
+    def fake_stream_once(target, _messages, **kwargs):
+        resolved = kwargs["resolved"]
+        calls.append((target.provider, resolved))
+
+        async def events():
+            if resolved == picked:
+                raise ModelUnavailable("plan required", status_code=402)
+            if resolved == "gemma4:31b":
+                raise ModelUnavailable("temporary error", status_code=503)
+            yield {"type": "token", "text": "Cloud default answered."}
+            yield {"type": "done", "content": "Cloud default answered.", "model": resolved}
+
+        return events()
+
+    monkeypatch.setattr(client, "_stream_once", fake_stream_once)
+
+    events = [event async for event in client.stream_chat([], model=picked)]
+
+    assert calls == [
+        ("ollama", picked),
+        ("ollama", "gemma4:31b"),
+        ("openai", "gpt-4o-mini"),
+    ]
+    assert all(resolved != picked for provider, resolved in calls if provider != "ollama")
+    notice = next(event for event in events if event["type"] == "notice")
+    assert "current plan" in notice["message"]
+    assert "Gpt 4O Mini" in notice["message"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -199,3 +199,23 @@ async def test_stream_still_raises_after_visible_text_without_trying_next_provid
     assert "openai" in exc_info.value.model
     assert "".join(visible).startswith("Provider A has shown")
     assert calls == ["openai"]
+
+
+@pytest.mark.asyncio
+async def test_model_fallback_notice_is_forwarded_before_answer_tokens(monkeypatch):
+    async def fake_stream_chat(*_args, **_kwargs):
+        yield {
+            "type": "notice",
+            "message": "GLM 5.3 Flash couldn't answer, so Gemma 4 31B answered instead.",
+        }
+        yield {"type": "token", "text": "A grounded answer."}
+        yield {"type": "done", "content": "A grounded answer.", "model": "gemma4:31b"}
+
+    monkeypatch.setattr(agent_tools.llm_client, "stream_chat", fake_stream_chat)
+
+    events = [event async for event in agent_tools.stream_answer([])]
+
+    assert events[0]["type"] == "notice"
+    assert events[1]["type"] == "token"
+    assert events[-1]["type"] == "_final"
+    assert events[-1]["model"] == "gemma4:31b"

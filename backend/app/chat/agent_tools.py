@@ -673,7 +673,7 @@ async def stream_answer(
 
     Yields ``{"type": "token"}`` events and finally
     ``{"type": "_final", "answer", "model", "notes", "remembers"}`` for the
-    caller to shape.
+    caller to shape. Model fallback ``notice`` events pass through unchanged.
 
     Two different filters, because two different things go wrong:
 
@@ -722,6 +722,9 @@ async def stream_answer(
         messages, temperature=temperature, model=model,
         can_fallback=can_fallback,
     ):
+        if event["type"] == "notice":
+            yield event
+            continue
         if event["type"] == "_retry":
             # The provider failed while all its text was still hidden by this
             # filter. Discard that attempt before consuming the next provider.
