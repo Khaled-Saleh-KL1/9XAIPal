@@ -36,6 +36,7 @@
 | Reasoning UI | [11-reasoning-ui.md](11-reasoning-ui.md) | 115 |
 | Add-paper drop zone | [12-add-paper-drop-zone.md](12-add-paper-drop-zone.md) | 116 |
 | Article thumbnails | [13-article-thumbnails.md](13-article-thumbnails.md) | 117 |
+| Installable app (PWA) | [14-pwa.md](14-pwa.md) | not numbered |
 
 ## All features
 

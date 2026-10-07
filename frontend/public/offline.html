@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Offline | 9XAIPal</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { --bg: #fcfaf6; --fg: #1a1510; --muted: #6b6258; --border: #e4ded4; --accent: #b4532f; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #151210; --fg: #f4f0ea; --muted: #a39a8e; --border: #2e2924; --accent: #e08a5c; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px; background: var(--bg); color: var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 26rem; text-align: center; }
+  .mark { width: 64px; height: 64px; margin: 0 auto 24px; display: grid; place-items: center; border-radius: 16px; background: var(--fg); color: var(--bg); font: 500 35px Georgia, Cambria, "Times New Roman", serif; }
+  h1 { margin: 0 0 12px; font-size: 1.6rem; font-family: Georgia, Cambria, "Times New Roman", serif; font-weight: 500; }
+  p { margin: 0 0 24px; color: var(--muted); line-height: 1.6; }
+  button { min-height: 44px; padding: 0 22px; border: 1px solid var(--accent); border-radius: 999px; background: var(--accent); color: var(--bg); font: 600 14px inherit; font-family: inherit; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="mark" aria-hidden="true">9</div>
+  <h1>You're offline.</h1>
+  <p>9XAIPal needs an internet connection. It will reload when you're back online.</p>
+  <button type="button" id="retry">Try again</button>
+</main>
+<script>
+  window.addEventListener('online', function () { location.reload(); });
+  document.getElementById('retry').addEventListener('click', function () { location.reload(); });
+</script>
+</body>
+</html>

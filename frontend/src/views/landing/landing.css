@@ -447,3 +447,25 @@
   .landing-page, .landing-page * { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
   .hero-art::after, .reader-page-shadow, .desk-lamp-light { filter: none; }
 }
+
+/* Get the app (PWA install) */
+.landing-install { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 17px; }
+.landing-install-button { gap: 8px; }
+.landing-install-subtitle { margin: 0; color: var(--landing-muted); font-size: 11px; }
+.install-panel { text-align: start; }
+.install-title { margin: 0 0 8px; font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: 500; }
+.install-intro { margin: 0 0 18px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.install-steps { margin: 0 0 20px; padding: 0; list-style: none; display: grid; gap: 12px; }
+.install-steps li { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-2); font-size: 14px; line-height: 1.45; }
+.install-step-art { flex: none; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
+.install-step-icon { width: 26px; height: 26px; }
+.install-qr { display: block; width: 200px; height: 200px; margin: 0 auto 8px; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.install-url { margin: 0 0 14px; text-align: center; color: var(--muted); font-size: 12px; }
+.install-notes { margin: 0 0 20px; padding-inline-start: 18px; display: grid; gap: 8px; font-size: 13px; line-height: 1.5; color: var(--fg-2); }
+.install-close { min-height: 44px; width: 100%; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--bg-2); color: var(--fg); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.install-close:hover { border-color: var(--accent); }
+.install-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 620px) {
+  .landing-install { margin-top: 14px; }
+  .landing-install-subtitle { font-size: 10px; }
+}

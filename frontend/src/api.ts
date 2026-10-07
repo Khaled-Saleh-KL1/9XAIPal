@@ -1,4 +1,5 @@
 import type { BackpressureCode } from './views/UploadNotice';
+import { withBusy } from './pwa/busy';
 /**
  * API client for 9XAIPal backend.
  *
@@ -316,7 +317,7 @@ async function throwForUploadResponse(res: Response, fallback: string): Promise<
 
 const uploadKeys = new WeakMap<File, string>();
 
-export async function uploadPaper(file: File, kind: DocKind = 'paper'): Promise<{ id: string; status: string; duplicate?: boolean }> {
+async function uploadPaperImpl(file: File, kind: DocKind = 'paper'): Promise<{ id: string; status: string; duplicate?: boolean }> {
   if (!HAS_BACKEND) throw new Error(NO_BACKEND_MESSAGE);
   let key = uploadKeys.get(file);
   if (!key) { key = crypto.randomUUID(); uploadKeys.set(file, key); }
@@ -576,7 +577,7 @@ export interface ResolveQueueState {
  * shortly" instead of sitting on a spinner for several seconds. Never fires
  * when the line is empty — the common case is indistinguishable from the
  * JSON route. */
-export async function resolveReferenceStream(
+async function resolveReferenceStreamImpl(
   paperId: string,
   number: number,
   onQueued?: (state: ResolveQueueState) => void,
@@ -694,7 +695,7 @@ function filenameFromDisposition(value: string | null, fallback: string): string
  * download. Reading the response here fixes both cases and lets the caller
  * show real download progress when the response has a content length.
  */
-export async function downloadExport(
+async function downloadExportImpl(
   format: ExportFormat,
   documentIds: string[],
   onProgress?: (fraction: number) => void,
@@ -934,7 +935,7 @@ export interface NoteResult {
  * server-side first (so a failed generation still leaves a visible, retryable
  * card), then the answer streams in.
  */
-export async function askNoteStream(
+async function askNoteStreamImpl(
   paperId: string,
   question: string,
   anchor: NoteAnchor,
@@ -1242,7 +1243,7 @@ export interface AskStreamHandlers {
  * (whose `answer` is authoritative, since the backend may rewrite image URLs after
  * streaming completes).
  */
-export async function askPaperStream(
+async function askPaperStreamImpl(
   paperId: string,
   query: string,
   currentSequenceOrder: number | null,
@@ -1779,7 +1780,7 @@ export interface StudyResult {
  * Ask the study a question. Same SSE shapes as `askNoteStream`, so the trail
  * component renders both.
  */
-export async function askStudyStream(
+async function askStudyStreamImpl(
   studyId: string,
   question: string,
   handlers: StudyStreamHandlers,
@@ -2041,3 +2042,11 @@ export async function signup(
 export async function logout(): Promise<void> {
   await fetch(`${BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
 }
+
+// Long-running work registers as busy so a service worker update never reloads mid-task.
+export const uploadPaper: typeof uploadPaperImpl = (...args) => withBusy(uploadPaperImpl(...args));
+export const resolveReferenceStream: typeof resolveReferenceStreamImpl = (...args) => withBusy(resolveReferenceStreamImpl(...args));
+export const askNoteStream: typeof askNoteStreamImpl = (...args) => withBusy(askNoteStreamImpl(...args));
+export const askPaperStream: typeof askPaperStreamImpl = (...args) => withBusy(askPaperStreamImpl(...args));
+export const askStudyStream: typeof askStudyStreamImpl = (...args) => withBusy(askStudyStreamImpl(...args));
+export const downloadExport: typeof downloadExportImpl = (...args) => withBusy(downloadExportImpl(...args));
