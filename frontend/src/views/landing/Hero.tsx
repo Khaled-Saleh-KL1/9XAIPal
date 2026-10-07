@@ -1,6 +1,7 @@
 import { m, useReducedMotion } from 'motion/react';
 import { HERO, LINKS, NAVIGATION } from '../../landing/content';
 import { Pressable } from '../../motion';
+import { InstallApp } from '../../pwa/InstallApp';
 import { HeroIntro } from './HeroIntro';
 
 export function Hero({
@@ -34,6 +35,7 @@ export function Hero({
           )}
           <Pressable as="a" className="landing-secondary-cta" href={LINKS.repo} target="_blank" rel="noopener noreferrer">{HERO.secondaryCta} <span aria-hidden="true">↗</span></Pressable>
         </div>
+        <InstallApp />
       <p className="landing-hero-caption"><span aria-hidden="true">✳</span> {HERO.caption}</p>
       </div>
 

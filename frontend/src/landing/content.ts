@@ -134,3 +134,21 @@ export const AUTHOR = {
 } as const;
 
 export const FOOTER = { copyright: '© 2026 Khaled Saleh', tagline: 'Made with care in Amman.' } as const;
+
+export const INSTALL = {
+  label: 'Get the app',
+  subtitle: 'Install on Android or iPhone. Updates arrive automatically.',
+  close: 'Close',
+  iosTitle: 'Add 9XAIPal to your Home Screen',
+  iosIntro: 'Takes two taps in your browser.',
+  iosStep1: 'Tap the Share icon in the browser toolbar.',
+  iosStep2: 'Choose "Add to Home Screen", then tap Add.',
+  shareIconLabel: 'Share icon',
+  addIconLabel: 'Add to Home Screen',
+  qrTitle: 'Get 9XAIPal on your phone',
+  qrIntro: 'Scan this code with your phone camera to open 9XAIPal there.',
+  qrAlt: 'QR code that opens 9XAIPal at 9xaipal.kl1.site',
+  qrAndroid: 'Android: open the link in Chrome, then tap Install app (or Add to Home screen) in the menu.',
+  qrIphone: 'iPhone: open the link in Safari, tap the Share icon, then choose Add to Home Screen.',
+  qrUrl: 'https://9xaipal.kl1.site/',
+} as const;
