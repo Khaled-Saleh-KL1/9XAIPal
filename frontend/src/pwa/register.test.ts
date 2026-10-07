@@ -5,15 +5,15 @@ function fakes(controller: object | null, state: 'visible' | 'hidden' = 'visible
   const sw: Record<string, () => void> = {};
   const doc: Record<string, () => void> & { visibilityState: string } = { visibilityState: state } as any;
   const reload = vi.fn();
-  const busy = { busy: false, idle: [] as Array<() => void> };
+  const busy = { busy: false };
   setupUpdateReload(
     { controller, addEventListener: (t: string, h: () => void) => { sw[t] = h; } } as any,
     { get visibilityState() { return doc.visibilityState as DocumentVisibilityState; }, addEventListener: (t: string, h: () => void) => { doc[t] = h; } } as any,
     reload,
-    { isBusy: () => busy.busy, subscribeIdle: (cb: () => void) => { busy.idle.push(cb); return () => {}; } },
+    { isBusy: () => busy.busy },
   );
   const setVis = (v: 'visible' | 'hidden') => { doc.visibilityState = v; doc.visibilitychange(); };
-  const setBusy = (b: boolean) => { busy.busy = b; if (!b) busy.idle.forEach((cb) => cb()); };
+  const setBusy = (b: boolean) => { busy.busy = b; };
   return { sw, setVis, reload, setBusy };
 }
 
@@ -46,13 +46,16 @@ describe('setupUpdateReload', () => {
     f.setVis('hidden'); f.setVis('visible');
     expect(f.reload).not.toHaveBeenCalled();
   });
-  it('never reloads while busy; reloads once idle after returning from hidden', () => {
+  it('never reloads while busy, nor the moment work finishes; waits for the next return', () => {
     const f = fakes({});
     f.sw.controllerchange();
     f.setBusy(true);
     f.setVis('hidden'); f.setVis('visible');
     expect(f.reload).not.toHaveBeenCalled();
+    // The answer just finished and the reader is looking at it: do not reload under them.
     f.setBusy(false);
+    expect(f.reload).not.toHaveBeenCalled();
+    f.setVis('hidden'); f.setVis('visible');
     expect(f.reload).toHaveBeenCalledTimes(1);
   });
   it('does not reload on idle if the user never left the page', () => {

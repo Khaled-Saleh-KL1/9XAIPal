@@ -1,19 +1,20 @@
-import { isBusy, subscribeIdle } from './busy';
+import { isBusy } from './busy';
 
 /**
  * Service worker registration plus the "new version" reload.
  *
  * A new worker takes over immediately (skipWaiting + clients.claim). To pick up
- * the new JS we reload once per update, but never under the user's hands: the
- * reload waits until nothing is busy (upload or answer stream, see busy.ts) and
- * the page has gone hidden and become visible again.
+ * the new JS we reload once per update, but never under the user's hands: only
+ * when the page comes back from hidden to visible and nothing is busy (upload or
+ * answer stream, see busy.ts). Work finishing is not a trigger: the reader is
+ * looking at the answer that just arrived, so we wait for their next return.
  */
 
 export function setupUpdateReload(
   container: Pick<ServiceWorkerContainer, 'addEventListener' | 'controller'>,
   doc: Pick<Document, 'addEventListener' | 'visibilityState'>,
   reload: () => void,
-  busy: { isBusy: () => boolean; subscribeIdle: (cb: () => void) => unknown } = { isBusy, subscribeIdle },
+  busy: { isBusy: () => boolean } = { isBusy },
 ): void {
   // First install: the first controllerchange is clients.claim(), nothing is stale.
   // Any later one is a real new deploy, even in a long-lived tab.
@@ -47,7 +48,6 @@ export function setupUpdateReload(
       tryReload();
     }
   });
-  busy.subscribeIdle(tryReload);
 }
 
 export function registerServiceWorker(): void {

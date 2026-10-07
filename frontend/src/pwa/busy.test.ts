@@ -1,21 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
-import { beginBusy, isBusy, subscribeIdle, withBusy } from './busy';
+import { describe, expect, it } from 'vitest';
+import { beginBusy, isBusy, withBusy } from './busy';
 
 describe('busy registry', () => {
-  it('is busy between beginBusy and endBusy and notifies idle once', () => {
-    const idle = vi.fn();
-    const off = subscribeIdle(idle);
+  it('is busy between beginBusy and endBusy', () => {
     const a = beginBusy();
     const b = beginBusy();
     expect(isBusy()).toBe(true);
     a();
     expect(isBusy()).toBe(true);
-    expect(idle).not.toHaveBeenCalled();
     b();
     b(); // ending twice is harmless
     expect(isBusy()).toBe(false);
-    expect(idle).toHaveBeenCalledTimes(1);
-    off();
   });
   it('withBusy releases on success and on failure', async () => {
     await withBusy(Promise.resolve(1));
