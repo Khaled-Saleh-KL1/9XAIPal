@@ -23,7 +23,15 @@ function AddIcon() {
   );
 }
 
-type Mode = 'ios' | 'qr';
+function MenuIcon() {
+  return (
+    <svg className="install-step-icon" viewBox="0 0 24 24" role="img" aria-label={INSTALL.menuIconLabel} fill="currentColor">
+      <circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" />
+    </svg>
+  );
+}
+
+type Mode = 'ios' | 'android' | 'qr';
 
 export function InstallApp() {
   const { canPrompt, installed, promptInstall } = useInstallPrompt();
@@ -43,6 +51,8 @@ export function InstallApp() {
       void promptInstall().catch(() => {});
     } else if (detectPlatform(env) === 'ios') {
       setMode('ios');
+    } else if (detectPlatform(env) === 'android') {
+      setMode('android');
     } else {
       setMode('qr');
     }
@@ -68,6 +78,16 @@ export function InstallApp() {
             <ol className="install-steps">
               <li><span className="install-step-art"><ShareIcon /></span><span><strong>1.</strong> {INSTALL.iosStep1}</span></li>
               <li><span className="install-step-art"><AddIcon /></span><span><strong>2.</strong> {INSTALL.iosStep2}</span></li>
+            </ol>
+          </>
+        )}
+        {shown === 'android' && (
+          <>
+            <h2 id="install-title" className="install-title">{INSTALL.androidTitle}</h2>
+            <p className="install-intro">{INSTALL.androidIntro}</p>
+            <ol className="install-steps">
+              <li><span className="install-step-art"><MenuIcon /></span><span><strong>1.</strong> {INSTALL.androidStep1}</span></li>
+              <li><span className="install-step-art"><AddIcon /></span><span><strong>2.</strong> {INSTALL.androidStep2}</span></li>
             </ol>
           </>
         )}

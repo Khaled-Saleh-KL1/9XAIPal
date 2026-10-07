@@ -16,6 +16,9 @@ describe('manifest.webmanifest', () => {
       start_url: '/?source=pwa',
       scope: '/',
       display: 'standalone',
+      id: '/',
+      lang: 'en',
+      dir: 'auto',
     });
     expect(manifest.description).toBeTruthy();
     expect(manifest.background_color).toMatch(/^#[0-9a-f]{6}$/i);

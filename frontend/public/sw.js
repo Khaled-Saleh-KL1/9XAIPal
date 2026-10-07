@@ -52,7 +52,15 @@ self.addEventListener('fetch', (event) => {
           (hit) =>
             hit ||
             fetch(event.request).then((response) => {
-              if (response.ok) cache.put(event.request, response.clone());
+              // nginx answers a missing /assets file with index.html and 200: never cache that.
+              const type = (response.headers && response.headers.get('content-type')) || '';
+              if (response.ok && response.status === 200 && !/text\/html/i.test(type)) {
+                try {
+                  Promise.resolve(cache.put(event.request, response.clone())).catch(() => {});
+                } catch (e) {
+                  /* caching is best effort */
+                }
+              }
               return response;
             }),
         ),

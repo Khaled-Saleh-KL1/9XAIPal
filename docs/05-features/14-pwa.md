@@ -20,9 +20,11 @@ There is no store and no update button: every web deploy reaches installed apps 
 | Button and modals | `frontend/src/pwa/InstallApp.tsx`, rendered in `views/landing/Hero.tsx`; copy in `landing/content.ts` (`INSTALL`) |
 | Static QR code of `https://9xaipal.kl1.site/` | `frontend/public/qr-9xaipal.svg` (pre-generated with the `qrcode` npm package, not a dependency) |
 
-Button behaviour: Android/Chromium calls the captured `beforeinstallprompt`; iPhone/iPad (Safari, Chrome,
+Button behaviour: Android/Chromium calls the captured `beforeinstallprompt` (without one, e.g. Samsung Internet, Firefox or after a dismissal, an Android guide shows the browser menu steps); iPhone/iPad (Safari, Chrome,
 Firefox, and iPadOS reporting a Mac) opens the Share, Add to Home Screen guide; everything else opens a QR
 modal. The button is hidden when running installed (`display-mode: standalone` or `navigator.standalone`).
+
+On iPhone the installed app has its own storage and sign-in, separate from Safari, so users sign in once inside the installed app.
 
 ## Update model
 
@@ -32,7 +34,7 @@ modal. The button is hidden when running installed (`display-mode: standalone` o
 - `sw.js` gets a new build id on every `vite build`, so its bytes change per deploy and browsers install it.
   It calls `skipWaiting()` and `clients.claim()`; old caches (`9xaipal-*` with another build id) are deleted on activate.
 - When a new worker takes over a page that was already controlled, the page reloads once, but only after the
-  user leaves and returns (page hidden, then visible), never under their hands. `registration.update()` runs
+  user leaves and returns (page hidden, then visible) and nothing is busy, never under their hands. Uploads and answer/note/study streams register in `src/pwa/busy.ts` (wired in `api.ts`); the reload waits until they finish. `registration.update()` runs
   whenever the app returns to the foreground.
 
 ## Never cached or intercepted

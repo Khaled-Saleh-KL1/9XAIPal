@@ -1,6 +1,7 @@
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { INSTALL } from '../landing/content';
 import { InstallApp } from './InstallApp';
 import { resetInstallCapture } from './installPrompt';
 
@@ -72,5 +73,32 @@ describe('InstallApp', () => {
     setNav(DESKTOP);
     render(<InstallApp />);
     expect(screen.getByText('Install on Android or iPhone. Updates arrive automatically.')).toBeInTheDocument();
+  });
+
+  it('Android without a captured prompt shows the Android guide, not the QR code', async () => {
+    setNav(ANDROID, { maxTouchPoints: 5 });
+    render(<InstallApp />);
+    await userEvent.click(screen.getByRole('button', { name: /get the app/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('Open your browser menu');
+    expect(dialog).toHaveTextContent(/Install app/);
+    expect(dialog).toHaveTextContent(/Add to Home screen/);
+    expect(screen.queryByAltText(/QR code/i)).toBeNull();
+  });
+
+  it('Android after the prompt was dismissed falls back to the Android guide', async () => {
+    setNav(ANDROID, { maxTouchPoints: 5 });
+    render(<InstallApp />);
+    const event = fireInstallPrompt('dismissed');
+    await userEvent.click(screen.getByRole('button', { name: /get the app/i }));
+    expect(event.prompt).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole('button', { name: /get the app/i }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Open your browser menu');
+  });
+});
+
+describe('install copy', () => {
+  it('has no em dashes', () => {
+    for (const value of Object.values(INSTALL)) expect(value).not.toContain('\u2014');
   });
 });

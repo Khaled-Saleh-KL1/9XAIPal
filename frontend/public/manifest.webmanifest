@@ -1,4 +1,7 @@
 {
+  "id": "/",
+  "lang": "en",
+  "dir": "auto",
   "name": "9XAIPal",
   "short_name": "9XAIPal",
   "description": "Read papers, books and articles in English or Arabic, ask your library questions, and get answers with citations to the exact page.",

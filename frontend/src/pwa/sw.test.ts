@@ -4,7 +4,7 @@ import source from '../../public/sw.js?raw';
 
 type Handler = (event: any) => void;
 
-function loadWorker(networkFails = false) {
+function loadWorker(networkFails = false, nextResponse?: (req: any) => any, putFails = false) {
   const handlers: Record<string, Handler> = {};
   const store = new Map<string, Map<string, any>>();
   const cacheFor = (name: string) => {
@@ -12,7 +12,7 @@ function loadWorker(networkFails = false) {
     const m = store.get(name)!;
     return {
       match: async (req: any) => m.get(typeof req === 'string' ? new URL(req, 'https://9xaipal.kl1.site').href : req.url),
-      put: async (req: any, res: any) => { m.set(req.url, res); },
+      put: async (req: any, res: any) => { if (putFails) throw new Error('quota'); m.set(req.url, res); },
       add: async (req: any) => { m.set(new URL(req.url ?? req, 'https://9xaipal.kl1.site').href, { ok: true, offline: true }); },
     };
   };
@@ -27,7 +27,7 @@ function loadWorker(networkFails = false) {
   };
   const fetchMock = vi.fn(async (req: any) => {
     if (networkFails) throw new TypeError('offline');
-    return { ok: true, url: req.url, clone() { return this; } };
+    return nextResponse ? nextResponse(req) : { ok: true, status: 200, headers: { get: () => 'text/javascript' }, url: req.url, clone() { return this; } };
   });
   const scope: any = {
     location: { origin: 'https://9xaipal.kl1.site' },
@@ -84,7 +84,9 @@ describe('sw.js', () => {
 
   it('navigations fall back to the precached offline page when the network fails', async () => {
     const w = loadWorker(true);
-    await w.handlers.install({ waitUntil: (p: Promise<any>) => p });
+    let installing: Promise<any> | undefined;
+    w.handlers.install({ waitUntil: (p: Promise<any>) => { installing = p; } });
+    await installing;
     // install precaches inside the build-versioned shell cache
     const names = [...w.store.keys()];
     expect(names.some((n) => n.startsWith('9xaipal-shell-'))).toBe(true);
@@ -117,5 +119,29 @@ describe('sw.js', () => {
     const names = [...w.store.keys()];
     expect(names).not.toContain('9xaipal-assets-old');
     expect(names).toContain('unrelated-cache');
+  });
+
+  const htmlFallback = (req: any) => ({ ok: true, status: 200, headers: { get: () => 'text/html; charset=utf-8' }, url: req.url, clone() { return this; } });
+
+  it('does not cache the index.html fallback nginx returns for a missing /assets file', async () => {
+    const w = loadWorker(false, htmlFallback);
+    const req = { url: `${O}/assets/gone-abc.js` };
+    await w.dispatch(req);
+    await w.dispatch(req);
+    expect(w.fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache non-200 or non-ok asset responses', async () => {
+    const w = loadWorker(false, (req) => ({ ok: true, status: 206, headers: { get: () => 'text/javascript' }, url: req.url, clone() { return this; } }));
+    const req = { url: `${O}/assets/part-abc.js` };
+    await w.dispatch(req);
+    await w.dispatch(req);
+    expect(w.fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('still serves the asset when cache.put fails', async () => {
+    const w = loadWorker(false, undefined, true);
+    const { response } = await w.dispatch({ url: `${O}/assets/index-abc.js` });
+    expect(response.url).toBe(`${O}/assets/index-abc.js`);
   });
 });

@@ -1,36 +1,53 @@
+import { isBusy, subscribeIdle } from './busy';
+
 /**
  * Service worker registration plus the "new version" reload.
  *
  * A new worker takes over immediately (skipWaiting + clients.claim). To pick up
- * the new JS we reload ONCE, but never under the user's hands: the reload is
- * deferred until the page goes hidden and then becomes visible again.
+ * the new JS we reload once per update, but never under the user's hands: the
+ * reload waits until nothing is busy (upload or answer stream, see busy.ts) and
+ * the page has gone hidden and become visible again.
  */
 
 export function setupUpdateReload(
   container: Pick<ServiceWorkerContainer, 'addEventListener' | 'controller'>,
   doc: Pick<Document, 'addEventListener' | 'visibilityState'>,
   reload: () => void,
+  busy: { isBusy: () => boolean; subscribeIdle: (cb: () => void) => unknown } = { isBusy, subscribeIdle },
 ): void {
-  // First install: clients.claim() fires controllerchange, but nothing is stale.
-  const hadController = container.controller != null;
+  // First install: the first controllerchange is clients.claim(), nothing is stale.
+  // Any later one is a real new deploy, even in a long-lived tab.
+  let skipFirst = container.controller == null;
   let pending = false;
   let reloaded = false;
   let wasHidden = doc.visibilityState === 'hidden';
+  let returned = false; // the user left and came back since the update landed
+
+  const tryReload = () => {
+    if (pending && returned && !reloaded && !busy.isBusy()) {
+      reloaded = true;
+      reload();
+    }
+  };
 
   container.addEventListener('controllerchange', () => {
-    if (hadController) pending = true;
+    if (skipFirst) {
+      skipFirst = false;
+      return;
+    }
+    pending = true;
+    returned = false;
   });
   doc.addEventListener('visibilitychange', () => {
     if (doc.visibilityState === 'hidden') {
       wasHidden = true;
     } else if (wasHidden) {
       wasHidden = false;
-      if (pending && !reloaded) {
-        reloaded = true;
-        reload();
-      }
+      returned = true;
+      tryReload();
     }
   });
+  busy.subscribeIdle(tryReload);
 }
 
 export function registerServiceWorker(): void {
