@@ -126,7 +126,8 @@ docs/
 │   ├── 10-landing-and-motion.md
 │   ├── 11-reasoning-ui.md
 │   ├── 12-add-paper-drop-zone.md
-│   └── 13-article-thumbnails.md
+│   ├── 13-article-thumbnails.md
+│   └── 14-pwa.md
 ├── runbooks/                   operational procedures
 │   ├── arabic-document-ocr.md
 │   ├── article-thumbnails.md
