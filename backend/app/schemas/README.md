@@ -8,7 +8,7 @@ The `schemas` directory contains Pydantic models for API inputs, API outputs, an
 
 ### `common.py`
 
-Shared response types such as pagination metadata, error envelopes, and health responses.
+Shared response types such as the health response.
 
 ### `documents.py`
 
@@ -20,11 +20,7 @@ Schemas for chunk content and sequential navigation. Important fields include `c
 
 ### `chat.py`
 
-Schemas for `/ask`. Important request fields include `prompt`, `document_id`, `current_chunk_id`, and `conversation_id`. Important response fields include `answer`, `context_type`, `router_reason`, `citations`, and `model`.
-
-### `search.py`
-
-Schemas for local, global, and external search results.
+Schemas for `/ask`. Important response fields include `answer`, `context_type`, `router_reason`, `citations`, and `model`.
 
 ## Data Dependencies
 

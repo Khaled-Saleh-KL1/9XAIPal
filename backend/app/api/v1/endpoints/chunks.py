@@ -16,7 +16,6 @@ from app.api.arabic_status import document_error_fields
 from app.core.logging import get_logger
 from app.core.paths import documents_dir, images_dir
 from app.api.errors import ChunkNotFound, DocumentNotFound
-from app.schemas.chunks import ChunkResponse, ChunkListResponse
 from app.schemas.references import ReferenceEntry, ReferenceListResponse, AddReferenceResponse, FindReferenceResponse
 from app.services import chunks as chunk_service
 from app.services import documents as doc_service

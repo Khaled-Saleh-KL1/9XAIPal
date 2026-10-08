@@ -6,7 +6,7 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import HTTPException
 from sqlalchemy import text
 
-from app.api.errors import UploadAdmissionError, InsufficientStorage
+from app.api.errors import UploadAdmissionError
 from app.core.config import settings
 from app.services.ingestion import check_queue_capacity, create_ingestion_job, requeue_failed_job
 from app.services import documents as doc_service
@@ -41,14 +41,6 @@ async def check_broker():
                 await run_in_threadpool(probe)
             except Exception:
                 raise UploadAdmissionError('service_unavailable', 503, 120) from None
-
-
-async def check_upload_admission(session, user_id):
-    await check_broker()
-    try:
-        await check_queue_capacity(session, user_id=user_id)
-    except InsufficientStorage:
-        raise UploadAdmissionError('storage_full', 503, 600) from None
 
 
 async def reserve_upload(session, user_id, *, is_url=False, idem_key=None):

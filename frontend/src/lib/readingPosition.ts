@@ -108,11 +108,6 @@ export function markChapterFinished(paperId: string, chapterIndex: number | null
   }
 }
 
-/** Whether `chapterIndex` has been read to its end. */
-export function isChapterFinished(paperId: string, chapterIndex: number | null): boolean {
-  return loadReadingProgress(paperId).finishedChapters[String(chapterIndex ?? LINEAR)] === true;
-}
-
 /** The stored position, or null when this document has never been opened. */
 export function lastReadSequence(
   paperId: string,

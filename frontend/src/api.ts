@@ -1400,13 +1400,6 @@ export async function triggerReadingOrderReconstruction(paperId: string) {
   return res.json();
 }
 
-export async function getPaperWithOrder(paperId: string) {
-  // Re-use the normal getPaper but the response now may include reading_order
-  const res = await fetch(`${BASE}/papers/${paperId}`);
-  if (!res.ok) throw new Error(`Paper fetch failed: ${res.status}`);
-  return res.json();
-}
-
 // ── Health ────────────────────────────────────────────────────────────────────
 
 export async function checkHealth(): Promise<{ status: string; database: string }> {

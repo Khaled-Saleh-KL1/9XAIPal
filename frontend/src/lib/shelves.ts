@@ -17,10 +17,6 @@ export const SHELVES: { key: ShelfKey; label: string }[] = [
   { key: 'done', label: 'Done' },
 ];
 
-export const SHELF_LABEL: Record<ShelfKey, string> = Object.fromEntries(
-  SHELVES.map((s) => [s.key, s.label]),
-) as Record<ShelfKey, string>;
-
 /** The fields grouping needs, in either the API (`PaperMeta`) or the UI
  *  (`Paper`) spelling — pass whichever the caller has. */
 export interface Shelvable {

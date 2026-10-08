@@ -13,13 +13,6 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
-class JobErrorCode(str, Enum):
-    """Stable machine-readable ingestion failures exposed separately from text."""
-
-    ARABIC_STYLE_CONFIRMATION_REQUIRED = "arabic_style_confirmation_required"
-    HANDWRITTEN_ARABIC_UNAVAILABLE = "handwritten_arabic_unavailable"
-
-
 # Valid state transitions
 TRANSITIONS: dict[JobStatus, list[JobStatus]] = {
     JobStatus.QUEUED: [JobStatus.EXTRACTING, JobStatus.FAILED],

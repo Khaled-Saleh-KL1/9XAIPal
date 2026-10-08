@@ -128,10 +128,3 @@ export type SortKey = 'recent' | 'title' | 'pages';
 // ── Processing step ───────────────────────────────────────────────────────────
 
 export type StepState = 'pending' | 'active' | 'done' | 'error';
-
-export interface ProcessingStep {
-  id: number;
-  title: string;
-  sub: string;
-  detail: string[];
-}
