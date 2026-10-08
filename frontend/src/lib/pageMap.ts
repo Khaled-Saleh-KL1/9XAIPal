@@ -107,16 +107,6 @@ export function useFetchedPageMap(paperId: string | null | undefined): PageMap {
 }
 
 /**
- * How a page is written wherever one is shown: "p. 7".
- *
- * Centralised so the reader, the desk and the book chat cannot drift into
- * three spellings of the same fact.
- */
-export function formatPage(page: number | null | undefined): string | null {
-  return page == null ? null : `p. ${page}`;
-}
-
-/**
  * The label for a chip that points at one block: its page when the document
  * has pages, its paragraph number when it does not.
  *

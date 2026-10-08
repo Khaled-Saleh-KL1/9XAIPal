@@ -32,10 +32,6 @@ function registry(): HighlightRegistry | null {
   return css.highlights;
 }
 
-export function highlightsSupported(): boolean {
-  return registry() !== null;
-}
-
 /** Collapse whitespace runs, keeping a map back to original indices. */
 function normalizeWithMap(raw: string): { text: string; map: number[] } {
   const out: string[] = [];

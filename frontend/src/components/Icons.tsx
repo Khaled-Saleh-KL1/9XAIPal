@@ -57,14 +57,6 @@ export function IconGrid(p: IconProps) {
 export function IconList(p: IconProps) {
   return <svg {...base} {...p}><path d="M4 6h16M4 12h16M4 18h16" /></svg>;
 }
-export function IconSpinner(p: IconProps) {
-  return (
-    <svg {...base} {...p}>
-      <circle cx="12" cy="12" r="9" opacity="0.18" />
-      <path d="M21 12a9 9 0 0 0-9-9" strokeLinecap="round" />
-    </svg>
-  );
-}
 export function IconPencil(p: IconProps) {
   return (
     <svg {...base} {...p}>

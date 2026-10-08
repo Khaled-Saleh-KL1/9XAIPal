@@ -201,11 +201,6 @@ export function reconcileDecks(
   return out;
 }
 
-/** Which deck, if any, holds this card. */
-export function deckHolding(decks: NoteDeck[], cardId: string): NoteDeck | null {
-  return decks.find((d) => d.members.some((m) => m.id === cardId)) ?? null;
-}
-
 // ── Legacy localStorage migration ───────────────────────────────────────────
 //
 // Read once per paper, uploaded, then erased. Everything below exists only to
