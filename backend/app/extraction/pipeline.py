@@ -24,7 +24,6 @@ from app.extraction.jobs import JobStatus
 from app.services.ingestion import (
     store_chunks,
     update_job_status,
-    mark_document_complete,
     mark_document_failed,
 )
 
