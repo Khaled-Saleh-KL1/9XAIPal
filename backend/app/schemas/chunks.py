@@ -2,7 +2,6 @@
 
 from typing import Optional
 from uuid import UUID
-from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -29,10 +28,4 @@ class ChunkResponse(BaseModel):
     assets: list[ChunkAsset] = []
     previous_chunk_id: Optional[UUID] = None
     next_chunk_id: Optional[UUID] = None
-
-
-class ChunkListResponse(BaseModel):
-    chunks: list[ChunkResponse]
-    document_id: UUID
-    total: int
 

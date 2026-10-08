@@ -109,20 +109,6 @@ async def delete_bookmark(session: AsyncSession, bookmark_id: UUID) -> None:
     )
 
 
-async def delete_bookmark_at(
-    session: AsyncSession, document_id: UUID, sequence_id: int
-) -> int:
-    """Lift the mark off a block. Returns how many rows went."""
-    result = await session.execute(
-        text("""
-            DELETE FROM reading_bookmarks
-            WHERE document_id = :document_id AND sequence_id = :sequence_id
-        """),
-        {"document_id": document_id, "sequence_id": sequence_id},
-    )
-    return result.rowcount or 0
-
-
 # ── Personal notes ──────────────────────────────────────────────────────────
 
 

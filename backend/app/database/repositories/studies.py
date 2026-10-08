@@ -150,21 +150,6 @@ async def set_study_papers(
     return await list_study_papers(session, study_id)
 
 
-async def studies_for_paper(session: AsyncSession, document_id: UUID, user_id: UUID) -> list[dict]:
-    """Every study this user owns that this paper belongs to. Used to preselect a scope."""
-    result = await session.execute(
-        text("""
-            SELECT s.*
-            FROM studies s
-            JOIN study_papers sp ON sp.study_id = s.id
-            WHERE sp.document_id = :document_id AND s.user_id = :user_id
-            ORDER BY s.created_at DESC
-        """),
-        {"document_id": document_id, "user_id": user_id},
-    )
-    return [dict(r) for r in result.mappings().all()]
-
-
 # ── The chat ────────────────────────────────────────────────────────────────
 #
 # Turns live in conversation_turns, the table the book chat already uses. A
@@ -300,11 +285,3 @@ async def clear_turns(
         {"user_id": user_id, "study_id": study_id, "conversation_id": conversation_id},
     )
     return result.rowcount or 0
-
-
-async def delete_turn(session: AsyncSession, turn_id: UUID, user_id: UUID) -> bool:
-    result = await session.execute(
-        text("DELETE FROM conversation_turns WHERE id = :id AND user_id = :user_id"),
-        {"id": turn_id, "user_id": user_id},
-    )
-    return (result.rowcount or 0) > 0

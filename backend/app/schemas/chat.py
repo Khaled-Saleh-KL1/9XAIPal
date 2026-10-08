@@ -6,13 +6,6 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
-class AskRequest(BaseModel):
-    prompt: str
-    document_id: Optional[UUID] = None
-    current_chunk_id: Optional[UUID] = None
-    conversation_id: Optional[UUID] = None
-
-
 class Citation(BaseModel):
     chunk_id: Optional[UUID] = None
     sequence_id: Optional[int] = None
