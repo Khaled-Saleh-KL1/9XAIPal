@@ -1,5 +1,20 @@
 # AI backend: provider resolution and roles
 
+## v3 OCR provider boundary
+
+PDF OCR has a separate writing-style-aware client in
+`extraction/gemini_ocr_client.py`: configured ModelGateway first, direct Gemini keys
+next, then recoverable continuation through `arabic_fallback.py`. Its local language
+classifier is configured by `ARABIC_ROUTER_*`, rather than the book-chat classifier
+role below. OCR provider provenance is preserved per page/document.
+See [feature 119](../05-features/16-arabic-document-routing.md) and
+[Arabic settings](../03-reference/configuration.md#arabic-document-routing-and-ocr).
+
+Reader model availability is refreshed by the light worker and read from cache by
+`GET /models`; [feature 120](../05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh)
+owns this schedule. These probes are distinct from the startup printed-Flash OCR
+capability check in `extraction/arabic_capability.py`.
+
 > **What this is:** how the app decides which model answers which call. Ordinary call sites use a
 > role; this doc explains provider selection, model ownership, and the reader's request-time choice.
 >

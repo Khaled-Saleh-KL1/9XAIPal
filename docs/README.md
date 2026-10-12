@@ -3,8 +3,8 @@
 > **What this is:** the dispatcher for every doc in this repo. Find your task in the table, start
 > at the named doc, verify with the named command. This page routes; it never explains.
 >
-> **Status:** current · **Reconciled with code:** 2026-10-05 (`48cb8c6`). No running service was
-> contacted for this documentation update.
+> **Status:** current · **v3 routing and recent-feature update:** 2026-10-12 (`d73d5e9`).
+> [Release notes](../CHANGELOG.md) distinguish current implementation from historical plans.
 > **Rule:** when a doc and the code disagree, **the code is authoritative**, and the doc is a
 > defect to be fixed in the same unit of work.
 
@@ -18,7 +18,14 @@
 | Know what listens on which port | [01-orientation/runtime-topology.md](01-orientation/runtime-topology.md) | `docker compose ps` |
 | Diagnose something broken | [01-orientation/operations.md](01-orientation/operations.md) | `ask_traces` / `ingestion_jobs` queries in that doc |
 | Understand the system end-to-end | [02-architecture/overview.md](02-architecture/overview.md) | n/a |
-| Study every feature the app has, one by one — what, where, how, why | [05-features/README.md](05-features/README.md) (117 entries in thirteen areas) | the files each entry names |
+| Study every feature the app has, one by one — what, where, how, why | [05-features/README.md](05-features/README.md) (122 entries in sixteen areas) | the files each entry names |
+| Understand the v3 milestone | [../CHANGELOG.md](../CHANGELOG.md) | source anchors in the linked docs |
+| Configure Arabic routing and OCR | [runbooks/arabic-document-ocr.md](runbooks/arabic-document-ocr.md) | Arabic classifier/OCR tests in the test plan |
+| Confirm an uncertain Arabic writing style | [03-reference/api.md](03-reference/api.md#post-paperspaper_idarabic-writing-style) | `test_arabic_confirmation_api.py` |
+| Install the mobile app or understand updates | [05-features/14-pwa.md](05-features/14-pwa.md) | `frontend/src/pwa/*.test.ts(x)` |
+| Maintain public biography and search/AI metadata | [05-features/15-public-discovery.md](05-features/15-public-discovery.md) | generated `about.html`, JSON-LD and sitemap |
+| Investigate model availability | [05-features/08-models-and-configuration.md](05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh) | `test_model_availability_refresh.py` |
+| Retry durable failures or investigate stalled jobs | [runbooks/queue-reliability.md](runbooks/queue-reliability.md) | `scripts/dlq.py list --open` |
 | Trace a PDF from upload to readable | [02-architecture/ingestion-pipeline.md](02-architecture/ingestion-pipeline.md) | `tests/test_ingestion_pipeline.py` |
 | Understand how a question gets answered | [02-architecture/chat-and-ask.md](02-architecture/chat-and-ask.md) | `NOTE[...]` / `ASK[stepN]` log lines |
 | Know which model serves which call | [02-architecture/ai-backend.md](02-architecture/ai-backend.md) | `tests/test_provider_resolver.py` |
@@ -67,7 +74,9 @@ strings, not for synonyms.
 | **compaction** | A `role='compaction'` turn holding a dense summary of earlier turns, so long chats don't overflow the context window. |
 | **provider / resolver** | The auto-detection in `llm/resolver.py` choosing Ollama vs a cloud API per call. Nothing hardcodes a model. |
 | **role** | What a model call is *for*: `chat`, `vlm`, `classifier`, `embedding`. Call sites pass a role, never a model name. |
-| **extractor** | `mineru` (full: OCR, tables, LaTeX) or `pymupdf_fallback` (degraded: text only). Recorded per document. |
+| **extractor** | Recorded extraction provenance: the configured English/PyMuPDF/VLM path or an Arabic OCR provider/hybrid label. It controls which repair rules may apply. |
+| **Arabic document route** | Language/writing-style classification before PDF extraction: English, printed Arabic, handwritten Arabic or uncertain. Separate from the book chat `context_type` router. |
+| **OCR provenance** | `ocr_provider_summary` and private `ocr_manifest.json` record providers, models, complete page ranges and attempts; Arabic output bypasses MinerU-specific repairs. |
 
 ---
 
@@ -112,7 +121,7 @@ docs/
 │   └── migrations.md
 ├── 04-testing/
 │   └── test-plan.md
-├── 05-features/                feature catalogue (13 areas, 117 entries)
+├── 05-features/                feature catalogue (16 areas, 122 entries)
 │   ├── README.md
 │   ├── 01-library-and-import.md
 │   ├── 02-extraction-pipeline.md
@@ -127,11 +136,14 @@ docs/
 │   ├── 11-reasoning-ui.md
 │   ├── 12-add-paper-drop-zone.md
 │   ├── 13-article-thumbnails.md
-│   └── 14-pwa.md
+│   ├── 14-pwa.md
+│   ├── 15-public-discovery.md
+│   └── 16-arabic-document-routing.md
 ├── runbooks/                   operational procedures
 │   ├── arabic-document-ocr.md
 │   ├── article-thumbnails.md
 │   ├── pipeline-tracing.md
+│   ├── queue-reliability.md
 │   └── reembed-library.md
 ├── plans/                     plans, findings, future work        (tracked)
 ├── tasks/                     handoff tasks cut from plans        (gitignored)

@@ -6,10 +6,18 @@
 >
 > **Reflects code as of:** 2026-09-12 (`main`, c099d90).
 
-Four invariants hold everywhere: every route except `/health` and `/auth/*` requires a session,
+Four invariants hold on document/data APIs: routes require a session,
 enforced by the `get_current_user` dependency, not by convention; a resource you don't own
 **404s, never 403** (a 403 confirms it exists); the session is a random opaque token, never a JWT;
 password comparison and "does this email exist" never differ in observable timing.
+
+The generated public About/robots/sitemap/AI reference files are static biography
+and product content, outside that data-API statement. `/health`, authentication
+entrypoints and the public model catalogue are also outside document ownership.
+The Arabic writing-style
+confirmation endpoint remains owner-scoped and uses normal job admission. See
+[public discovery](15-public-discovery.md), [Arabic routing](16-arabic-document-routing.md)
+and [queue reliability](../runbooks/queue-reliability.md).
 
 ---
 
@@ -19,7 +27,7 @@ password comparison and "does this email exist" never differ in observable timin
 an httponly session cookie; `/me` returns the user and whether they are admitted.
 
 **Where.** [`endpoints/auth.py`](../../backend/app/api/v1/endpoints/auth.py),
-[`core/auth.py`](../../backend/app/core/auth.py), [`AuthView.tsx`](../../frontend/src/views/AuthView.tsx),
+[`core/auth.py`](../../backend/app/core/auth.py), [`AuthForm.tsx`](../../frontend/src/views/AuthForm.tsx),
 [`contexts/AuthContext.tsx`](../../frontend/src/contexts/AuthContext.tsx),
 [`components/UserMenu.tsx`](../../frontend/src/components/UserMenu.tsx).
 

@@ -10,7 +10,8 @@
 > **Status:** current · **Reconciled with source:** 2026-10-05 (48cb8c6), checked against
 > app/core/config.py and the Compose files. This documentation update did not read runtime
 > environment files or contact a running service.
-> **Verify with:** python -c "from app.core.config import settings; print(settings.model_dump())"
+> **v3 update:** Arabic routing, gateway and refresh settings checked against source at `d73d5e9`, 2026-10-12.
+> **Verify with:** inspect `backend/app/core/config.py` and `backend/.env.example`; do not print the full settings object, which includes credentials.
 > **Volatile:** the whole file mirrors config.py, so re-verify on any change to that file.
 
 Loaded by pydantic-settings from `backend/.env`, falling back to the process environment.
@@ -98,6 +99,67 @@ cloud API; each cloud provider has its own `*_CHAT_MODEL` above.
 | `MINERU_PAGE_BATCH_SIZE` | `100` | Compose-only. Extract in page-range batches so peak RAM stays bounded on long books. `0` disables. |
 | `MAX_UPLOAD_SIZE_MB` | `500` | Hard cap on the upload body — generous on purpose: whole books and scanned theses are routinely 200 MB+, and since the upload is streamed (010) the cap bounds disk, not memory. nginx has its own `client_max_body_size`, kept equal in `backend/nginx/9xaipal.conf`; both must move together. |
 
+## Arabic document routing and OCR
+
+The source defaults below are shared by `Settings` and both Compose files where forwarded.
+An environment override can change the effective value. The master flag applies before
+PDF extraction for both papers and books; HTML URL imports use their existing path.
+See [routing](../05-features/16-arabic-document-routing.md) and
+[operations](../runbooks/arabic-document-ocr.md).
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `ARABIC_OCR_ENABLED` | `true` | Classify PDFs locally and route Arabic/mixed content to Arabic OCR. `false` restores the configured extractor path. |
+| `ARABIC_HANDWRITTEN_OCR_ENABLED` | `true` | Permit confidently classified handwriting through the handwritten pipeline. Manual handwriting confirmation still returns unavailable. |
+| `ARABIC_ROUTER_MODEL` | `qwen3-vl:4b-instruct` | Local Ollama language/writing-style classifier. |
+| `ARABIC_ROUTER_BASE_URL` | `http://localhost:11434` | Local classifier endpoint; Compose uses `http://host.docker.internal:11434`. |
+| `ARABIC_ROUTER_TIMEOUT_SECONDS` | `600` | Classifier request timeout in seconds. |
+| `MODELGATEWAY_API_KEY` | empty | Optional gateway credential; configured gateway attempts precede direct Gemini keys. |
+| `MODELGATEWAY_BASE_URL` | `https://www.modelgateway.co` | Gateway endpoint. |
+| `GEMINI_API_KEYS` | empty | Comma-separated direct Gemini keys. Current enabled-OCR startup requires these and probes printed Flash access. |
+| `ARABIC_GATEWAY_PRINTED_MODEL` | `gemini-3.8-flash` | Configured printed gateway model identifier. |
+| `ARABIC_GATEWAY_HANDWRITTEN_MODEL` | `gemini-3.1-pro` | Configured handwritten gateway model identifier. |
+| `ARABIC_GEMINI_PRINTED_MODEL` | `gemini-3.7-flash` | Direct printed OCR model identifier. |
+| `ARABIC_GEMINI_HANDWRITTEN_MODEL` | `gemini-3.1-pro-preview` | Direct handwritten OCR model identifier. |
+| `ARABIC_GEMINI_PRINTED_THINKING_LEVEL` | `low` | Direct printed request thinking level; also used by the startup probe. |
+| `ARABIC_GEMINI_SEND_THINKING_CONFIG` | `true` | Send the client thinking configuration where supported. |
+| `ARABIC_GEMINI_SEND_MEDIA_RESOLUTION` | `true` | Send the client media-resolution configuration where supported. |
+| `ARABIC_GEMINI_TIMEOUT_SECONDS` | `120` | OCR provider request timeout. |
+| `ARABIC_GEMINI_RETRY_AFTER_MAX_SECONDS` | `10` | Maximum bounded provider Retry-After delay. |
+| `ARABIC_GEMINI_GATEWAY_BATCH_PAGES` | `1` | Pages per gateway request. |
+| `ARABIC_GEMINI_GATEWAY_MAX_WAIT_SECONDS` | `120` | Gateway wait budget. |
+| `ARABIC_GEMMA_FALLBACK_MODEL` | `gemma4:31b-cloud` | Recoverable OCR fallback model. |
+| `ARABIC_GEMMA_BASE_URL` | `https://ollama.com` | Fallback endpoint. |
+| `ARABIC_GEMMA_API_KEYS` | empty | Fallback keys; `OLLAMA_API_KEY` is an accepted alias and the Compose source. |
+| `ARABIC_OCR_DPI` | `200` | Rendered page resolution. |
+| `ARABIC_GEMINI_MEDIA_RESOLUTION` | `HIGH` | OCR media-resolution value. |
+| `ARABIC_OCR_SINGLE_REQUEST_MAX_PAGES` | `4` | Small-document single-request threshold. |
+| `ARABIC_OCR_BATCH_PAGES` | `4` | Normal OCR page batch size. |
+| `ARABIC_OCR_MAX_OUTPUT_TOKENS` | `32768` | Main OCR output-token cap. |
+| `ARABIC_GEMMA_MAX_OUTPUT_TOKENS` | `8192` | Per-page fallback output-token cap. |
+| `ARABIC_OCR_MAX_UNREADABLE_PAGE_SHARE` | `0.10` | Maximum unreadable-page share retained as explicit markers; the page budget is rounded down. |
+| `ARABIC_MIN_BODY_CHAR_COUNT` | `20` | Minimum body letter count for language evidence. |
+| `ARABIC_MIN_BODY_LETTER_SHARE` | `0.10` | Minimum Arabic body letter share. |
+| `ARABIC_CLASSIFIER_OUTAGE_ENGLISH_PAGE_SHARE` | `0.80` | Clear-English page share required for the classifier-outage fallback, with no substantive Arabic body text. |
+| `ARABIC_CLASSIFIER_CONFIDENCE_MIN` | `0.80` | General classifier acceptance threshold. |
+| `ARABIC_HANDWRITTEN_CONFIDENCE_MIN` | `0.97` | Handwriting acceptance threshold. |
+| `ARABIC_CLASSIFIER_BATCH_PAGES` | `2` | Classifier detail-check batch size. |
+
+Model names here describe configured identifiers, not a guarantee of provider availability.
+`probe_printed_flash` requires direct Google keys while OCR is enabled and never probes
+the handwritten Pro model. A definitively invalid key/model combination can block startup;
+quota, rate-limit and transient network failures are recorded as unconfirmed.
+
+## Scheduled model availability
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `ENABLE_MODEL_AVAILABILITY_REFRESH` | `true` | Enable light-worker startup and scheduled catalog probes. |
+| `MODEL_AVAILABILITY_REFRESH_HOURS` | `3` | Probe cadence in hours. |
+
+`GET /models` reads the availability cache rather than making live completion requests.
+See [feature 120](../05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh).
+
 ## Ingest profile
 
 Which pipeline a document takes after chunking. Detail:
@@ -138,7 +200,7 @@ How a question is answered when there are no embeddings. Detail:
 ## Study agent
 
 Answering across a group of papers. Detail:
-[chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b--the-study-agent-the-desk).
+[chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b-the-study-agent-the-desk).
 
 | Key | Default | Purpose |
 | --- | --- | --- |

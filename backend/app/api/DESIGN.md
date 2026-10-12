@@ -4,6 +4,19 @@
 
 The `api` directory owns the HTTP boundary of the backend. Routers should stay thin and delegate business logic to `services`, `chat`, `extraction`, and `database`.
 
+## v3 Arabic document contract
+
+`v1/endpoints/documents.py` exposes language/style/direction, classifier provenance,
+OCR provider summaries and typed error/action fields in document/progress responses.
+`POST /papers/{id}/arabic-writing-style` is owner-scoped: printed confirmation requeues
+an eligible failed job; manual handwriting confirmation records an unavailable state.
+The automatic confident-handwriting path is in the extraction pipeline, not this endpoint.
+See the [current API reference](../../../docs/03-reference/api.md#post-paperspaper_idarabic-writing-style).
+
+Public About/robots/sitemap/AI reference files are frontend-generated static content,
+not unauthenticated library API endpoints. See
+[public discovery](../../../docs/05-features/15-public-discovery.md).
+
 ## Files
 
 ### `deps.py`

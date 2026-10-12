@@ -10,6 +10,12 @@ calls `process_ingestion.delay(...)`; `run_pipeline_sync` does the work with a *
 session (psycopg2), because Celery is sync throughout. Every stage writes its status to
 `ingestion_jobs.status` so the overlay (feature 5) narrates real progress.
 
+**v3 integration.** PDF language/writing-style classification precedes extraction.
+English uses the existing dispatcher; Arabic/mixed content and enabled confident
+handwriting use Arabic OCR before joining the shared chunking/profile chain.
+The diagram below is the common stage sequence; glyph/heading repair is provenance-gated
+and skips Arabic OCR output. See [feature 119](16-arabic-document-routing.md).
+
 ```text
 extracting ─► chunking ─► [glyph repair] ─► [assets] ─► fast? ──yes──► complete
                                                           │

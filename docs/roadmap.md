@@ -16,6 +16,17 @@ Tense tags are load-bearing here: unmarked = a verified current gap, `[planned]`
 
 ## Engineering scaffolding
 
+### v3 baseline and remaining Arabic work
+
+Arabic PDF routing/OCR, PWA installation, model availability refresh, queue
+reliability and public discovery are implemented in the current source; they are
+not new backlog proposals. See the [changelog](../CHANGELOG.md) for the feature map.
+Remaining limits include manual handwritten confirmation returning unavailable,
+the evaluation harness skipping handwritten OCR, direct printed-key startup
+requirements even with a gateway, and corpus-based quality acceptance. The
+[Arabic feature](05-features/16-arabic-document-routing.md) and
+[operator runbook](runbooks/arabic-document-ocr.md) state these limits precisely.
+
 The application code is more mature than the tooling around it. These are the cheapest, highest
 -leverage fixes in the repo.
 

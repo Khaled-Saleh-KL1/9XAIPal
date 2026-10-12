@@ -1,5 +1,12 @@
 # Arabic Document OCR Implementation Plan
 
+> **Historical implementation plan.** The current v3 source differs from this
+> original printed-only/disabled rollout. This file records the intended work at
+> its date; its checkboxes do not define today's runtime availability.
+> See [current Arabic routing](../../05-features/16-arabic-document-routing.md),
+> [operations](../../runbooks/arabic-document-ocr.md) and
+> [release notes](../../../CHANGELOG.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:executing-plans` to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.

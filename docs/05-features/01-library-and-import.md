@@ -9,6 +9,13 @@
 
 ## 1. PDF upload: drag-and-drop or click
 
+**v3 integration.** A same-owner verified duplicate returns the existing document
+instead of creating another ingestion job. Admission reserves capacity/storage before
+reading the full body; capacity and service failures carry typed notices/countdowns.
+Language/style classification happens after admission, independently of Book/Paper
+selection. See [queue reliability](../runbooks/queue-reliability.md) and
+[Arabic routing](16-arabic-document-routing.md) for identity, confirmation and retry contracts.
+
 **What it does.** Drop a PDF **anywhere on the library view** (or choose Add paper), say
 whether it is a *book* or a *research paper*, and it is stored and queued for extraction. The
 processing overlay takes over until the document is readable.

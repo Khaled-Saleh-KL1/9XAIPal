@@ -16,6 +16,15 @@
 
 ## Service inventory
 
+The v3 Arabic classifier uses the host-local Ollama vision endpoint from API/ingest
+containers. OCR requests can leave the host for configured ModelGateway, direct Gemini
+or Gemma providers; this is separate from ordinary chat provider resolution.
+The light worker owns model availability refresh and the queue sweeper/summary schedules.
+Nginx serves the generated public About/robots/sitemap files from frontend build output.
+See [Arabic operations](../runbooks/arabic-document-ocr.md),
+[queue operations](../runbooks/queue-reliability.md) and
+[public discovery](../05-features/15-public-discovery.md).
+
 | Service | Default URL | Required | Notes |
 | --- | --- | --- | --- |
 | FastAPI | `http://localhost:8000` | Yes | `uvicorn app.main:app` |

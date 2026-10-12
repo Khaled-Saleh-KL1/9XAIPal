@@ -1,5 +1,12 @@
 # Area 3 — The paper / article reader (features 33–58)
 
+**v3 direction and provenance.** `ArticleReader.tsx` applies `documentDirection`
+to document content using `text_direction`/`detected_language`, and title direction
+is inferred separately with `textDirection`. The navigation/application layout is
+not globally flipped. Arabic OCR output supplies shared structural blocks and
+page provenance; repair follows its extractor/provider rules rather than MinerU rules.
+See [Arabic routing](16-arabic-document-routing.md).
+
 > Part of the [feature catalogue](README.md). Companion architecture doc:
 > [frontend.md](../02-architecture/frontend.md) (§ArticleReader onward).
 >

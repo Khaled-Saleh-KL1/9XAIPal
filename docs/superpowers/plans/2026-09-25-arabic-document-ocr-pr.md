@@ -1,5 +1,11 @@
 # Arabic document OCR — draft pull request
 
+> **Historical draft.** The status and non-goals below describe the original PR
+> preparation, not the current merged v3 source. Current flags, handwriting behavior,
+> gateway recovery and confirmation limits are in
+> [feature 119](../../05-features/16-arabic-document-routing.md), the
+> [runbook](../../runbooks/arabic-document-ocr.md) and [changelog](../../../CHANGELOG.md).
+
 > Draft only. The real frozen human-verified corpus and live browser-acceptance
 > PDFs were not supplied, so live accuracy and visual acceptance remain
 > pending. No deployment was performed.

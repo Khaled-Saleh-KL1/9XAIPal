@@ -161,6 +161,13 @@ The library row.
 | `page_count`                | `INTEGER`   | Set by `pypdf` after pipeline completes.              |
 | `status`                    | `TEXT`      | `queued / complete / failed`.                         |
 | `error_message`             | `TEXT`      | Last failure message.                                 |
+| `detected_language` | `TEXT` | English, Arabic, mixed or unknown language evidence. |
+| `detected_writing_style` | `TEXT` | Printed, handwritten or unknown; an uncertain route requires confirmation. |
+| `text_direction` | `TEXT` | Document content direction: LTR, RTL or auto. |
+| `classifier_model` | `TEXT` | Model used for local classification. |
+| `classification_confidence` | `REAL` | Accepted classifier confidence; nullable for unresolved or manually confirmed metadata. |
+| `classification_source` | `TEXT` | Classification provenance, including `user_confirmed`. |
+| `ocr_provider_summary` | `JSONB` | Per-document OCR provider/model/page-range summaries; not credentials or full OCR text. |
 | `reading_order`             | `JSONB`     | LLM-corrected sequence of chunk sequence_ids.         |
 | `reading_order_model`       | `TEXT`      |                                                       |
 | `reading_order_updated_at`  | `TIMESTAMPTZ` |                                                     |
@@ -257,7 +264,7 @@ The append-only chat log.
 | `router_reason`   | `TEXT`        | Why the router picked this context.              |
 | `model`           | `TEXT`        | The actual model name the LLM returned.          |
 | `citations`       | `JSONB`       | JSON-serialized list of `Citation` dicts.        |
-| `grounding`       | `JSONB`       | The evidence check on an assistant turn (book chat and the desk both persist here): one verdict per claim, with the passage and quote it rests on. `NULL` for user turns, for turns answered before 2026-09-10, and when `GROUNDING_CHECK=false`. Shape: [api.md `GroundingReport`](api.md#post-papers_paper_idnotesstream). |
+| `grounding`       | `JSONB`       | The evidence check on an assistant turn (book chat and the desk both persist here): one verdict per claim, with the passage and quote it rests on. `NULL` for user turns, for turns answered before 2026-09-10, and when `GROUNDING_CHECK=false`. Shape: [api.md `GroundingReport`](api.md#post-paperspaper_idnotesstream). |
 | `created_at`      | `TIMESTAMPTZ` |                                                  |
 
 Index: `idx_conversation_turns_conversation(conversation_id, created_at)`.
@@ -280,6 +287,10 @@ Per-call telemetry attached to the assistant turn.
 | `created_at`            | `TIMESTAMPTZ` |                                                 |
 
 ### `ingestion_jobs`
+
+Arabic typed failures also use this table's nullable `error_code` column. A style
+confirmation reuses the failed job with a new execution generation; it does not
+create a second document. See [the confirmation contract](api.md#post-paperspaper_idarabic-writing-style).
 
 One row per upload; tracks the pipeline state machine.
 
@@ -412,8 +423,8 @@ surface notes in the chat-history endpoints.
 | `question`             | `TEXT`        |                                                            |
 | `answer`               | `TEXT`        | `''` until generation completes, so a failed call leaves a visible, retryable card. |
 | `cited_sequence_ids`   | `INTEGER[]`   | Blocks the answer referenced via `[[42]]` markers; renders as jump chips. |
-| `agent_steps`          | `JSONB`       | The trail of tool calls that produced the answer: one entry per `SECTION`/`SEARCH`/`READ`/`WEB`, with what was asked for, the model's stated reason, and a one-line summary of what came back. `NULL`/`[]` for notes predating 2026-08-26 and for answers that used no tool. Shape: [api.md `AgentStep`](api.md#post-papers_paper_idnotesstream). |
-| `grounding`            | `JSONB`       | The evidence check: one verdict per claim of the answer (`supported` / `partial` / `unsupported` / `uncited`) with the passage and quote it rests on, or `status: unavailable` when the judge could not run. Written after the answer, in its own transaction, so a failed check leaves the note intact. `NULL` for notes predating 2026-09-10 and when `GROUNDING_CHECK=false`. Shape: [api.md `GroundingReport`](api.md#post-papers_paper_idnotesstream). |
+| `agent_steps`          | `JSONB`       | The trail of tool calls that produced the answer: one entry per `SECTION`/`SEARCH`/`READ`/`WEB`, with what was asked for, the model's stated reason, and a one-line summary of what came back. `NULL`/`[]` for notes predating 2026-08-26 and for answers that used no tool. Shape: [api.md `AgentStep`](api.md#post-paperspaper_idnotesstream). |
+| `grounding`            | `JSONB`       | The evidence check: one verdict per claim of the answer (`supported` / `partial` / `unsupported` / `uncited`) with the passage and quote it rests on, or `status: unavailable` when the judge could not run. Written after the answer, in its own transaction, so a failed check leaves the note intact. `NULL` for notes predating 2026-09-10 and when `GROUNDING_CHECK=false`. Shape: [api.md `GroundingReport`](api.md#post-paperspaper_idnotesstream). |
 | `retrieval_mode`       | `TEXT`        | `agent` (the default: anchor + contents index, with a SECTION/SEARCH/READ/WEB loop available) or `whole` (the whole paper was in the prompt, only reachable with `PAPER_WHOLE_DOCUMENT_CONTEXT`, and never for `scope='document'`). |
 | `model`                | `TEXT`        | What the provider reported answering.                      |
 | `requested_model`      | `TEXT`        | What the reader picked. Authoritative for follow-ups.      |

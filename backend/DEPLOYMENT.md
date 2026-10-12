@@ -2,6 +2,23 @@
 
 This document describes how to run the full 9XAIPal stack (API + UI + workers + infra) in containers so that **your machine acts as the server**.
 
+## v3 Arabic routing and frontend output
+
+Both Compose files now default Arabic routing and automatic handwriting to enabled.
+Provision the local `ARABIC_ROUTER_MODEL`, configure direct `GEMINI_API_KEYS` for
+the printed startup probe, and add gateway/fallback credentials where used. A gateway
+key alone does not satisfy the current startup probe. For an English-only installation,
+explicitly set `ARABIC_OCR_ENABLED=false`. See the
+[configuration reference](../docs/03-reference/configuration.md#arabic-document-routing-and-ocr)
+and [Arabic OCR runbook](../docs/runbooks/arabic-document-ocr.md).
+
+The frontend build emits the public About, robots, sitemap and AI reference files
+alongside the PWA manifest, worker and hashed assets. Serve the complete build output
+and configure its hosted API origin. Keep one light-worker replica for embedded beat,
+model availability refresh and queue reliability schedules. See
+[PWA](../docs/05-features/14-pwa.md), [public discovery](../docs/05-features/15-public-discovery.md)
+and [queue operations](../docs/runbooks/queue-reliability.md).
+
 Ollama (the LLM/VLM/embeddings) can stay on the host, and configured cloud APIs can also handle requests. Chat provider selection and failure fallback are described in the AI Backend section below. When a cloud model or embedding provider handles a request, the associated prompt/context or chunk text is sent off-host.
 
 ## Quick Start (Recommended for Your Machine as Server)

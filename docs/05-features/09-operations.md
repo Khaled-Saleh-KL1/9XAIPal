@@ -1,4 +1,4 @@
-# Area 9 — Operations (features 101–107)
+# Area 9 — Operations (features 101–107, 121)
 
 > Part of the [feature catalogue](README.md). Companions:
 > [runtime-topology.md](../01-orientation/runtime-topology.md),
@@ -80,8 +80,9 @@ created months ago, without a migration history to keep in step.
 ## 104. CI and automatic deploy with rollback
 
 **What it does.** CI runs on every PR and push to main. A change detector selects the backend
-suite or frontend TypeScript check/build when those paths change; a docs-only change runs the
-detector but skips both code jobs. A merge to main deploys to the box only after the CI workflow
+suite or frontend TypeScript check/build when those paths change. Root Markdown and `docs/**`
+alone skip those jobs; Markdown inside `backend/**` or `frontend/**` still matches its
+application filter. A merge to main deploys to the box only after the CI workflow
 succeeds for that commit, and a deploy whose health check fails rolls back to the last good commit automatically.
 
 **Where.** [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml),
@@ -188,3 +189,20 @@ POSTGRES_DB contains test, unless ALLOW_DESTRUCTIVE_TESTS=1 explicitly overrides
 Use a disposable database and Redis. The CI workflow provisions disposable PostgreSQL/pgvector and
 Redis services. Focused tests do not replace a full browser acceptance pass; see the
 [manual acceptance script](../04-testing/test-plan.md#2-manual-acceptance-script).
+
+## 121. Durable failures, stalled jobs and upload identity
+
+**What it does.** Upload admission reserves queue/storage capacity before consuming
+large request bodies, recognizes same-owner duplicate identities, and preserves
+retryable failed work. Durable failures live in `failed_jobs`; a sweeper observes
+heartbeats and worker/broker state before marking stale work failed.
+
+**Where.** `core/upload_guard.py`, `workers/tasks.py`, database repositories,
+`scripts/dlq.py`, and the single light worker's embedded beat.
+
+**How and why.** Queue reservation, identity and execution-generation fences prevent
+duplicate ingestion and stale-worker publication. Arabic page callbacks are real
+progress signals; execution lease renewal alone is not progress. Operator retries use
+normal admission and retained originals. SMTP alerts and daily summaries are optional.
+The [queue runbook](../runbooks/queue-reliability.md) owns timing, capacity, alert and
+rollback details; it is the current home instead of earlier queue rollout plans.

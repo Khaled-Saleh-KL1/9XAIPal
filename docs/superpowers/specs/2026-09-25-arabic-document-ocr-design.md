@@ -1,5 +1,13 @@
 # Arabic Document OCR Pipeline Design
 
+> **Historical specification.** The disabled printed-only rollout described below
+> records the 2026-09-25 design. The v3 source enables Arabic routing and automatic
+> handwriting and includes ModelGateway/direct Gemini recovery. Manual handwriting
+> confirmation and the evaluation harness retain separate limitations. Use the
+> [current feature contract](../../05-features/16-arabic-document-routing.md),
+> [operator runbook](../../runbooks/arabic-document-ocr.md) and
+> [changelog](../../../CHANGELOG.md) for present behavior.
+
 **Date:** 2026-09-25
 
 **Status:** Design approved in conversation; written specification awaiting review

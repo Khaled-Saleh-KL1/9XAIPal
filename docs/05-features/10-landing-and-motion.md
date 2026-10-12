@@ -8,6 +8,12 @@
 
 ## 113. Landing page, welcome hash, and sign-in sheet
 
+**v3 additions.** The author biography explains Khaled's 9XAI fellowship, the program
+and its founder/leader Rami Alkarmi. Footer navigation links the generated public
+About page. Shared facts also populate crawlable initial HTML and search/AI metadata;
+see [feature 122](15-public-discovery.md). The hero's **Get the app** action uses
+the PWA install flow in [feature 118](14-pwa.md).
+
 **What it does.** The landing page is the signed-out entry screen. A signed-in reader can open the same page at `#/welcome`, browse the product story, then return to the library with **Open your library**. The page presents a five-chapter example journey with a student/researcher switch. ([`App.tsx`](../../frontend/src/App.tsx), [`welcomeRoute.ts`](../../frontend/src/lib/welcomeRoute.ts), [`LandingView.tsx`](../../frontend/src/views/LandingView.tsx))
 
 **Where.** [`App.tsx`](../../frontend/src/App.tsx) chooses the landing, wait, and application views; [`welcomeRoute.ts`](../../frontend/src/lib/welcomeRoute.ts) synchronizes the welcome hash; [`LandingView.tsx`](../../frontend/src/views/LandingView.tsx) composes the page; [`content.ts`](../../frontend/src/landing/content.ts) holds its copy; [`Journey.tsx`](../../frontend/src/views/landing/Journey.tsx) implements the chapters and progress rail.

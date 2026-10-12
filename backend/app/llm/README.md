@@ -2,10 +2,17 @@
 
 ## Purpose
 
-The `llm` directory owns all model communication: local Ollama **and** cloud
+The `llm` directory owns general chat/embedding model communication: local Ollama **and** cloud
 APIs (OpenAI, Anthropic, xAI, DeepSeek). Other backend layers never
 know which backend is active or what the model is called: they call the
 client with a *role* and the resolver picks the backend and model.
+
+PDF OCR has its own writing-style-aware provider clients in `extraction/`: local
+language/style classification, configured ModelGateway/direct Gemini attempts, and
+recoverable Gemma continuation. That route is separate from these chat roles; see
+[Arabic routing](../../../docs/05-features/16-arabic-document-routing.md).
+`catalog.py` and `availability.py` supply the reader pickers' cached availability,
+refreshed by the light worker; see [feature 120](../../../docs/05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh).
 
 ## Files
 

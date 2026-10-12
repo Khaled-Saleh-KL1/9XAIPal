@@ -22,12 +22,12 @@
 | Tool | Version | Why |
 | --- | --- | --- |
 | Python | 3.11+ | Backend |
-| Node.js | 18+ | Frontend (Vite 6, React 19) |
+| Node.js | 22 recommended | Matches the CI and production frontend build image |
 | Docker + Compose | latest | Postgres / Redis / worker |
 | PostgreSQL | 15+ (16 in compose) | Needs `pgvector` + `uuid-ossp` |
 | Redis | 7+ | Celery broker |
 | MinerU | 3.2+ | `mineru` CLI. ⚠ `magic-pdf` 0.x is a different, abandoned package and is **not** supported |
-| Ollama | latest | Optional, a cloud API key works instead |
+| Ollama | version supporting the configured vision model | Required for the default local PDF classifier; chat can use a configured cloud provider |
 
 ### MinerU: installed by uv, but the weights are not
 
@@ -73,9 +73,18 @@ cd backend
 cp .env.example .env
 ```
 
-Then edit `.env`. The minimum that must be right: Postgres credentials, one AI backend, and an
-`EMBEDDING_MODEL` tag that exists. Everything else has a working default:
-[configuration.md](../03-reference/configuration.md) is the full table.
+Then edit `.env`. Configure Postgres, a chat provider, and an `EMBEDDING_MODEL` tag
+that exists. The v3 source defaults also enable Arabic PDF routing and automatic
+handwriting: install the local `ARABIC_ROUTER_MODEL` and configure direct
+`GEMINI_API_KEYS` for the printed startup probe. An optional ModelGateway key does
+not replace that current startup requirement. For an English-only local setup,
+explicitly set `ARABIC_OCR_ENABLED=false`; do not rely on the older disabled default.
+Use the [configuration reference](../03-reference/configuration.md#arabic-document-routing-and-ocr)
+and [Arabic OCR runbook](../runbooks/arabic-document-ocr.md).
+
+The [PWA](../05-features/14-pwa.md) and [public discovery](../05-features/15-public-discovery.md)
+files are generated/served by the frontend build. Keep `VITE_API_BASE_URL` configured
+for a hosted build so the API client recognizes its backend.
 
 ---
 

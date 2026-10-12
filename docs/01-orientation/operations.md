@@ -133,12 +133,21 @@ chunking.
 
 | Endpoint | Cost | Does |
 | --- | --- | --- |
-| `POST /papers/{id}/rechunk` | Seconds | Re-runs the chunker on cached MinerU output. No re-extraction |
+| `POST /papers/{id}/rechunk` | Seconds | Re-runs the chunker on cached extraction output; repair depends on extractor provenance. No re-extraction |
 | `POST /papers/{id}/reconstruct-reading-order` | ~1 LLM call | Fixes two-column reading order |
 | `POST /papers/{id}/regenerate-summaries` | Minutes | Re-runs summaries + VLM figure descriptions |
-| `POST /papers/{id}/reextract` | Full pipeline | Wipes cached extraction and re-runs MinerU |
+| `POST /papers/{id}/reextract` | Full pipeline | Re-enters classification and the configured extraction route |
 
-Always try `rechunk` before `reextract`: MinerU is by far the expensive half.
+Try cached `rechunk` before `reextract` when the existing extraction is sound.
+For Arabic classifier/OCR failures, consult the [Arabic runbook](../runbooks/arabic-document-ocr.md)
+and typed error/action fields. Printed style confirmation requeues the existing job;
+manual handwriting confirmation remains unavailable. Durable failures and stalled
+jobs use [queue recovery](../runbooks/queue-reliability.md), not blind parallel reuploads.
+
+For a stale model picker, check its cached availability and the light-worker refresh
+schedule. For installed-app updates, check [PWA](../05-features/14-pwa.md). Public
+About/robots/sitemap files should return their real static content rather than the SPA
+fallback; see [public discovery verification](../05-features/15-public-discovery.md#verification).
 
 ### Scale worker concurrency
 

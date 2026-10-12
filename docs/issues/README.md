@@ -1,5 +1,10 @@
 # Issue screenshots
 
+These screenshots and dated audit reports describe the symptoms at their recorded
+revision. The [v3 changelog](../../CHANGELOG.md), [current catalogue](../05-features/README.md)
+and [Arabic runbook](../runbooks/arabic-document-ocr.md) own the latest feature and
+routing behavior; a historical symptom is not a claim that the new route is disabled.
+
 Captured symptoms kept for reference, so a bug that reappears is recognisable
 from what the user actually sees rather than from a log line.
 

@@ -1,9 +1,19 @@
 # Public discovery: SEO and AI search
 
+## 122. Public identity, SEO and AI discovery
+
 The public site identifies 9XAIPal as Khaled Saleh's personal AI research and
 reading companion, and identifies Khaled as a 9XAI fellow at Al Hussein
 Technical University (HTU). The program description is grounded in
 [HTU's published explanation](https://htu.edu.jo/news/al-balbeisi-and-al-hinti-sign-mou-to-advance-the-use-of-artificial-intelligence-in-the-public-sector).
+
+The public copy also identifies Rami Alkarmi (Rami Al Karmi) as 9XAI's founder and
+leader and as the leader of Khaled's fellowship team. His short biography covers
+his innovation role at HTU and work in AI, entrepreneurship, fintech and digital
+learning, with links to [HTU's team page](https://www.htu.edu.jo/centers/digital-learning-center)
+and [his speaker biography](https://def.jo/speakers/rami-al-karmi/).
+This program leadership is separate from the app's creator attribution: the
+9XAIPal `SoftwareApplication.creator` remains Khaled Saleh.
 
 ## Where to edit
 
@@ -16,9 +26,14 @@ The build puts metadata and readable public descriptions into the initial
 homepage HTML. React replaces that content when it mounts. `/about.html` is a
 complete static page, linked from the landing footer, that works without
 JavaScript or signing in. JSON-LD uses stable identifiers shared with Khaled's
-portfolio at `https://portfolio.kl1.site/` for the person, program and product.
+portfolio at `https://portfolio.kl1.site/` for Khaled, Rami, the program and product.
 Keep the portfolio's descriptions and identifiers consistent when updating
 these public facts.
+
+`discoveryPages()` serves these public files during Vite development and emits
+them during a build. Person aliases include Rami's common English spellings and
+Arabic name. The FAQ, ordinary initial HTML and `llms.txt` share the same source
+facts so generated output does not drift from the visible biography.
 
 Only the homepage and About page belong in the sitemap. API routes, uploaded
 document assets and API documentation are excluded by `robots.txt`. Robots

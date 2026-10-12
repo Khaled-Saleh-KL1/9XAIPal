@@ -1,12 +1,40 @@
 # 9XAIPal
 
-**Version 2.0.0** · a local-first reading companion for research papers, technical books, and long-form PDFs.
+**Version 3.0.0** · **v3 — Arabic document routing** · an AI research and reading companion for Arabic and English papers, books, and articles.
+
+## What's new in v3
+
+- **Arabic-aware PDF routing.** A local classifier distinguishes English, printed Arabic,
+  handwritten Arabic and uncertain writing styles. Printed and mixed-language PDFs use
+  the Arabic OCR path; confidently classified handwriting has its own configured route.
+  Arabic document content reads right to left. See the
+  [Arabic routing feature](docs/05-features/16-arabic-document-routing.md).
+- **OCR provider recovery.** Configured ModelGateway requests run before the direct Gemini
+  key cascade. Recoverable exhaustion can continue with Gemma at the next uncommitted
+  page, with provider provenance retained. See the
+  [operator runbook](docs/runbooks/arabic-document-ocr.md).
+- **Installable mobile app.** The landing page's **Get the app** button supports Android
+  installation, iPhone Home Screen instructions and a desktop QR code. Installed apps
+  receive web updates automatically. See [PWA](docs/05-features/14-pwa.md).
+- **Model availability refresh.** The shared picker reads cached provider availability;
+  the light worker refreshes it every three hours by default. See
+  [models and configuration](docs/05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh).
+- **Durable ingestion and retries.** Upload identity, admission reservations, execution
+  fencing, progress heartbeats and a dead-letter queue support recovery. See
+  [queue reliability](docs/runbooks/queue-reliability.md).
+- **Public discovery.** A crawlable About page, SEO metadata, JSON-LD, sitemaps and
+  AI-readable references explain the app, Khaled's fellowship, 9XAI and its founder
+  and leader, Rami Alkarmi. See [public discovery](docs/05-features/15-public-discovery.md).
+
+[Release notes and current limitations](CHANGELOG.md#v3--arabic-document-routing).
 
 ---
 
 ## What is it?
 
-**9XAIPal** is a local-first reading companion for **research papers, technical books, and long-form PDFs**. Drop a file and it structurally extracts headings, math, tables, and figures.
+**9XAIPal** helps students and researchers read **papers, technical books, PDFs and imported
+articles in Arabic and English**. Upload a PDF or import an article URL, then read, ask
+questions with source citations, and keep notes alongside the material.
 
 A **paper** then reads as one continuous article. Highlight a passage, a figure, or an equation and ask about it: the answer arrives as a note in the margin, beside the thing it is about. A **book** keeps the chapter-by-chapter reader and its side chat.
 
@@ -57,8 +85,16 @@ Documents and conversations are stored by the backend you configure. External ca
 
 ## Features
 
+- **Arabic routing and RTL reading.** English PDFs retain the configured extractor;
+  Arabic and mixed PDFs use the writing-style-aware OCR route. An uncertain style prompts
+  for confirmation. Printed confirmation requeues the existing job; manual handwritten
+  confirmation currently reports unavailable. Source defaults enable Arabic routing and
+  automatic handwriting, but local classification and OCR credentials must be configured.
+  See [routing and its limits](docs/05-features/16-arabic-document-routing.md).
 - **PDF-only upload.** Drop or browse for a PDF in the library or Add paper dialog, choose book or research paper, and follow the processing overlay. Papers use the fast ingest profile by default; see [the upload flow](docs/05-features/12-add-paper-drop-zone.md).
 - **A landing journey and shared motion system**, with reduced-motion handling and an auth sheet; see [landing and motion](docs/05-features/10-landing-and-motion.md).
+- **Installable app and automatic updates** on Android and iPhone; see [PWA](docs/05-features/14-pwa.md).
+- **Public About page and SEO/AI discovery** with biography, fellowship and program leadership; see [public discovery](docs/05-features/15-public-discovery.md).
 - **Reasoning rows** summarize each agent round and expose the underlying tool activity; see [reasoning UI](docs/05-features/11-reasoning-ui.md).
 - **Generated article thumbnails** are an optional background feature when Cloudflare Workers AI is configured; see [article thumbnails](docs/05-features/13-article-thumbnails.md).
 - **Article reading for papers**: the whole document at once, in serif prose, with KaTeX math, extracted figures, and real tables that scroll in their own box with the header row pinned.
@@ -77,10 +113,16 @@ Documents and conversations are stored by the backend you configure. External ca
 
 ## Quick start
 
+Arabic PDF routing is enabled by the source defaults. Configure the local classifier
+and direct `GEMINI_API_KEYS` before starting API/workers, or explicitly disable
+`ARABIC_OCR_ENABLED` for an English-only setup. The optional gateway does not remove
+the current direct-Gemini startup probe. Follow the
+[Arabic OCR runbook](docs/runbooks/arabic-document-ocr.md) for provisioning and confirmation limits.
+
 ### Prerequisites
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) *(`curl -LsSf https://astral.sh/uv/install.sh | sh`; the Python package/project manager this repo uses exclusively)*
-- Node.js 18+
+- Node.js 22 recommended (matches CI and the production build image)
 - PostgreSQL 15+ *(or use the bundled Docker compose service)*
 - Redis *(or use the bundled Docker compose service)*
 - Ollama *(optional, a cloud API key works instead)*
@@ -158,6 +200,9 @@ to the right document by task.
 | See what's missing | [docs/roadmap.md](docs/roadmap.md) |
 | Learn the landing, motion, reasoning, or upload UI | [feature catalogue](docs/05-features/README.md) |
 | Configure or backfill article thumbnails | [thumbnail runbook](docs/runbooks/article-thumbnails.md) |
+| Configure Arabic routing, OCR and confirmation | [Arabic OCR runbook](docs/runbooks/arabic-document-ocr.md) |
+| Read the v3 changes and limitations | [CHANGELOG.md](CHANGELOG.md) |
+| Maintain public identity and search metadata | [public discovery](docs/05-features/15-public-discovery.md) |
 | Re-embed the library safely | [re-embedding runbook](docs/runbooks/reembed-library.md) |
 
 A sample paper for testing ingestion ships at

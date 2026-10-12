@@ -1,5 +1,22 @@
 # Database migrations & schema changes
 
+## v3 metadata and durable-queue migrations
+
+`database/schema.sql` and idempotent migrations define the Arabic document metadata:
+`detected_language`, `detected_writing_style`, `text_direction`, `classifier_model`,
+`classification_confidence` (`REAL`), `classification_source`, `ocr_provider_summary`
+(`JSONB`) and `ingestion_jobs.error_code`. See the current
+[schema reference](database-schema.md#documents) and [Arabic API fields](api.md#post-paperspaper_idarabic-writing-style).
+
+Queue reliability also adds reservation, upload-identity, execution-generation and
+durable-failure state. Follow the [queue runbook](../runbooks/queue-reliability.md)
+for operational retries and optional historical hash backfill; backfill is not an
+automatic migration and does not delete or merge old documents.
+
+The v3 release synchronizes application/package versions and lockfiles at `3.0.0`;
+its version bump adds no new database schema. Existing startup migrations still
+apply when deploying. Older dated sections below record earlier additions.
+
 > **What this is:** how schema changes reach a running database, and what to do when they don't.
 >
 > **Owns:** the migration procedure.
@@ -72,7 +89,8 @@ New capabilities added:
 These descriptions are stored with full attribution so they participate in GLOBAL search, OVERVIEW synthesis, and targeted "explain this figure" flows.
 
 To re-generate figure descriptions for an existing paper (after prompt/model improvements):
-Use the existing `/papers/{id}/regenerate-summaries` endpoint (it will be extended to also refresh figure descriptions).
+The existing `/papers/{id}/regenerate-summaries` endpoint also triggers figure-description
+generation when configured; see the [current API reference](api.md#post-paperspaper_idregenerate-summaries).
 
 ## When you change embedding or chat model
 
