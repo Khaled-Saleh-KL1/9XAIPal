@@ -137,6 +137,7 @@ export const AUTHOR = {
     'I design and ship end-to-end intelligent systems, from Arabic-aware NLP pipelines to RAG and multi-agent orchestration, using FastAPI, LangGraph and Gemini.',
     'I’m based in Zarqa, Jordan, and I’m a fellow in the 9XAI program at Al Hussein Technical University (HTU), where I build AI platforms for public-sector challenges.',
     DISCOVERY.program,
+    'Our leader, Rami Alkarmi, is the founder of 9XAI and HTU’s President’s Assistant for Innovation. His work spans AI, entrepreneurship, fintech and digital learning.',
     '9XAIPal is my own project: an AI research and reading companion I wanted for myself, now open as a free beta. It helps students and researchers read Arabic and English papers, books and articles, ask questions with citations, and keep their notes alongside the source.',
   ],
 } as const;

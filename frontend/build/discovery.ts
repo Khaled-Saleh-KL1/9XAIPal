@@ -30,7 +30,7 @@ function publicContent(about = false) {
 <h1>${about ? aboutTitle : '9XAIPal — AI research companion'}</h1>
 <p>${escapeHtml(DISCOVERY.product)}</p>
 <p><a href="/#/welcome">Try the free beta</a> · <a href="/about.html">About 9XAIPal and its creator</a></p>
-${(about ? DISCOVERY_FAQ : DISCOVERY_FAQ.slice(1, 4)).map(({ question, answer }) => `<section><h2>${escapeHtml(question)}</h2><p>${escapeHtml(answer)}</p>${question === 'What is the 9XAI program?' ? `<p><a href="${DISCOVERY.programSource}">Read HTU’s description of the 9XAI program</a></p>` : ''}</section>`).join('\n')}
+${(about ? DISCOVERY_FAQ : DISCOVERY_FAQ.slice(1, 5)).map(({ question, answer }) => `<section><h2>${escapeHtml(question)}</h2><p>${escapeHtml(answer)}</p>${question === 'What is the 9XAI program?' ? `<p><a href="${DISCOVERY.programSource}">Read HTU’s description of the 9XAI program</a></p>` : ''}${question === 'Who founded and leads 9XAI?' ? `<p><a href="${DISCOVERY.leaderSource}">Rami’s role at HTU</a> · <a href="${DISCOVERY.leaderBioSource}">Read Rami’s speaker biography</a></p>` : ''}</section>`).join('\n')}
 <footer><p>© 2026 Khaled Saleh</p></footer>
 </div></main>`;
 }
@@ -46,7 +46,7 @@ ${head(aboutUrl, aboutTitle, true)}
     'robots.txt': `User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /static/\nDisallow: /docs\nDisallow: /redoc\nDisallow: /openapi.json\nDisallow: /offline.html\n\nSitemap: ${DISCOVERY.origin}/sitemap.xml\n`,
     'sitemap.xml': `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${DISCOVERY.origin}/</loc></url><url><loc>${aboutUrl}</loc></url></urlset>\n`,
     // Supplementary plain-text reference, not a substitute for indexable HTML.
-    'llms.txt': `# 9XAIPal\n\n> ${DISCOVERY.product}\n\n## Creator\n\n${DISCOVERY.author}\n\n## 9XAI program\n\n${DISCOVERY.program}\n\n${DISCOVERY.relationship}\n\n## Public sources\n\n- [About 9XAIPal](${aboutUrl}): Product, creator, capabilities and FAQ.\n- [Khaled Saleh](${DISCOVERY.portfolio}): Official personal portfolio.\n- [Source code](${DISCOVERY.repo}): MIT-licensed repository and self-hosting documentation.\n- [9XAI at HTU](${DISCOVERY.programSource}): HTU’s published program description.\n`,
+    'llms.txt': `# 9XAIPal\n\n> ${DISCOVERY.product}\n\n## Creator\n\n${DISCOVERY.author}\n\n## 9XAI program\n\n${DISCOVERY.program}\n\n${DISCOVERY.relationship}\n\n## 9XAI founder and leader\n\n${DISCOVERY.leader}\n\n## Public sources\n\n- [About 9XAIPal](${aboutUrl}): Product, creator, capabilities and FAQ.\n- [Khaled Saleh](${DISCOVERY.portfolio}): Official personal portfolio.\n- [Source code](${DISCOVERY.repo}): MIT-licensed repository and self-hosting documentation.\n- [9XAI at HTU](${DISCOVERY.programSource}): HTU’s published program description.\n- [Rami at HTU](${DISCOVERY.leaderSource}): HTU’s team page and his innovation role.\n- [Rami’s biography](${DISCOVERY.leaderBioSource}): Background in innovation, entrepreneurship, fintech and digital learning.\n`,
   };
 }
 
