@@ -10,6 +10,15 @@
 
 A **paper** then reads as one continuous article. Highlight a passage, a figure, or an equation and ask about it: the answer arrives as a note in the margin, beside the thing it is about. A **book** keeps the chapter-by-chapter reader and its side chat.
 
+Created by [Khaled Saleh](https://portfolio.kl1.site/), an AI engineer based in
+Zarqa, Jordan, and a **9XAI fellow at Al Hussein Technical University (HTU)**.
+9XAI connects young technical talent with government institutions to develop
+AI solutions for real public-sector challenges; see
+[HTU's program description](https://htu.edu.jo/news/al-balbeisi-and-al-hinti-sign-mou-to-advance-the-use-of-artificial-intelligence-in-the-public-sector).
+9XAIPal is Khaled's personal research companion project, with Arabic and English
+reading, questions with source citations, notes and library search.
+Read the [public About page](https://9xaipal.kl1.site/about.html) for more.
+
 ---
 
 ## Why I built it

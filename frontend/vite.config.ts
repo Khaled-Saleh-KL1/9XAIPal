@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { discoveryPages } from './build/discovery';
 
 // Stamp dist/sw.js with a per-build id so every deploy changes the worker's
 // bytes (the browser then installs it) and versions its caches.
@@ -30,7 +31,7 @@ function swBuildId(): Plugin {
 const apiTarget = process.env.VITE_API_TARGET ?? 'http://localhost:8000';
 
 export default defineConfig({
-  plugins: [react(), swBuildId()],
+  plugins: [react(), discoveryPages(), swBuildId()],
   server: {
     port: Number(process.env.PORT ?? 5173),
     proxy: {

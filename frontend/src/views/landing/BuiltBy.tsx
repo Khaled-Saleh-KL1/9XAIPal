@@ -36,6 +36,7 @@ export function BuiltBy() {
           <Reveal delay={0.12} className="builtby-links">
             <Pressable as="a" className="builtby-link" href={LINKS.portfolio} target="_blank" rel="noopener noreferrer">{LINK_LABELS.portfolio}</Pressable>
             <Pressable as="a" className="builtby-link" href={LINKS.repo} target="_blank" rel="noopener noreferrer">{LINK_LABELS.repo}</Pressable>
+            <Pressable as="a" className="builtby-link" href={LINKS.program} target="_blank" rel="noopener noreferrer">{LINK_LABELS.program}</Pressable>
           </Reveal>
         </div>
         <p className="builtby-aside" aria-hidden="true">{LANDING_COPY.builtByAside[0]}<br />{LANDING_COPY.builtByAside[1]}</p>
