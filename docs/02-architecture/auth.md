@@ -1,5 +1,16 @@
 # Auth: sessions, signup, and per-user data isolation
 
+## v3 public content and confirmation ownership
+
+The public landing page and generated `/about.html`, sitemap and AI reference file
+contain biography/program/product facts. They do not contain user documents and do
+not require a session. Generated robots rules are crawl preferences, not access control;
+the ownership checks documented below still protect library data.
+
+`POST /api/v1/papers/{id}/arabic-writing-style` is owner-authenticated and locks that
+owner's document and latest job before confirming/requeueing. A missing or another
+user's document returns 404. See [the API contract](../03-reference/api.md#post-paperspaper_idarabic-writing-style).
+
 > **What this is:** how a request becomes "logged in as user X", how signup works, how the site
 > caps concurrent usage, and how every other table in the app scopes itself to one user.
 >

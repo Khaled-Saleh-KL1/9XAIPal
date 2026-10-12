@@ -1,4 +1,4 @@
-# Area 8 — Models & configuration (features 95–100)
+# Area 8 — Models & configuration (features 95–100, 120)
 
 > Part of the [feature catalogue](README.md). Companions:
 > [ai-backend.md](../02-architecture/ai-backend.md), [configuration.md](../03-reference/configuration.md).
@@ -155,3 +155,21 @@ Semantic Scholar has a breaker too, tripped only by a final failure after the pa
 **Why.** The concrete case: a valid Gemini key whose search-grounding quota was zero from an
 EEA-hosted server — first in the cascade, failing 100 % of calls, costing ~0.13 s of every search
 plus an ERROR line, thousands of times.
+
+## 120. Scheduled model availability refresh
+
+**What it does.** Reader pickers use cached model availability; a slow provider probe
+does not block `GET /models`. The light worker refreshes the catalog every three hours
+by default and once shortly after startup.
+
+**Where.** `backend/app/llm/availability.py`, `backend/app/llm/catalog.py`,
+`backend/app/workers/reliability.py`, `backend/app/core/celery_app.py` and both reader pickers.
+
+**How and why.** Real request outcomes and minimal scheduled probes update Redis
+availability. Unknown state or Redis failure leaves the model usable; transient
+timeouts/5xx do not mark it definitively unavailable. Provider failures before answer
+output can trigger the existing fallback notice and a picker reload. The full cache
+and provider rules are owned by [feature 97](#97-models-list-and-per-request-override).
+`ENABLE_MODEL_AVAILABILITY_REFRESH` and `MODEL_AVAILABILITY_REFRESH_HOURS` control it.
+
+**Verify.** `test_model_availability.py` and `test_model_availability_refresh.py`.

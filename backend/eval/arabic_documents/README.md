@@ -4,6 +4,17 @@ This harness separates offline classifier checks, synthetic harness checks,
 and explicitly requested live OCR runs. A mock score is not a model accuracy
 result.
 
+## v3 runtime versus evaluation scope
+
+The application source now defaults Arabic routing and automatic handwriting to
+enabled and includes optional ModelGateway before direct Gemini. This evaluation
+harness remains printed-OCR-only: `_run_live_ocr` labels a handwritten classification
+`disabled_handwritten` and does not call handwritten OCR, independently of runtime
+feature defaults. The preflight probes printed Flash only. Use the
+[current routing contract](../../../docs/05-features/16-arabic-document-routing.md)
+and [operator runbook](../../../docs/runbooks/arabic-document-ocr.md) for application
+behavior; do not interpret this harness restriction as a disabled application route.
+
 ## Corpus contract
 
 The frozen benchmark should contain at least:
@@ -160,6 +171,6 @@ retries and hybrid fallback frequency are aggregated without recording keys.
 
 This tool does not certify classifier or OCR quality from synthetic data.
 Live accuracy claims require the complete frozen corpus, human-verified gold,
-and a separately reviewed report. In particular, the handwritten set measures
-the classifier only: handwritten OCR remains unavailable while the Pro
-feature flag is disabled.
+and a separately reviewed report. The handwritten set measures the classifier only:
+this harness currently skips handwritten OCR even when the application's automatic
+handwriting switch is enabled.

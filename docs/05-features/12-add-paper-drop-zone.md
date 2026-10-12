@@ -8,6 +8,13 @@
 
 ## 116. Add paper: PDF drop and file selection
 
+**v3 routing.** Choosing Book or Research paper selects the reading/processing kind,
+not the document's language or writing style. After upload, the backend classifier
+chooses the English or Arabic OCR route. Typed uncertain-style failures expose
+confirmation choices; capacity/service failures use retry notices and countdowns.
+See [Arabic routing](16-arabic-document-routing.md) and
+[queue reliability](../runbooks/queue-reliability.md).
+
 **What it does.** The library accepts PDF drops across the whole view. The **Add paper** button opens a centered chooser with its own PDF drop zone and file picker; the selected file is then assigned a reading kind before upload. The chooser also offers a separate URL-import path. ([`LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx), [`App.tsx`](../../frontend/src/App.tsx))
 
 **Where.** [`LibraryView.tsx`](../../frontend/src/views/LibraryView.tsx) owns the library-wide drop target and button; [`App.tsx`](../../frontend/src/App.tsx) owns `startUpload`, `UploadKindModal`, the hidden input, and the selected-file state; [`pdfFiles.ts`](../../frontend/src/lib/pdfFiles.ts) classifies candidate PDFs; [`Sheet.tsx`](../../frontend/src/motion/Sheet.tsx) and [`motion.css`](../../frontend/src/motion/motion.css) provide the centered dialog.

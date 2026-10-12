@@ -5,7 +5,7 @@
 > how it is implemented, why it is built that way (including what was tried first and failed), and
 > how to see it working. Written for Khaled to learn his own program from, feature by feature.
 >
-> **How to read it:** the table below is the index — 117 features in thirteen areas, numbered straight
+> **How to read it:** the table below is the index — 122 features in sixteen areas, numbered straight
 > through. Each area is one file;
 > each feature is one section. Read an area top to bottom, or jump to a number.
 >
@@ -16,8 +16,8 @@
 > links out wherever the deeper material lives. When they disagree, the code wins and this file
 > needs a fix.
 >
-> **Status:** current · **Reconciled with code:** 2026-10-05 (`48cb8c6`). Entries 113–117 describe
-> the landing/motion, reasoning, upload, and thumbnail changes.
+> **Status:** current · **v3 catalogue update:** 2026-10-12 (`d73d5e9`). Entries 118–122 cover
+> PWA, Arabic routing, model refresh, queue reliability and public discovery.
 
 ## The areas
 
@@ -30,13 +30,15 @@
 | Asking: the AI answering paths | [05-asking.md](05-asking.md) | 66–75, 108 |
 | The desk: studies, cross-paper chat, notes | [06-desk.md](06-desk.md) | 76–85, 110 |
 | Accounts, safety, capacity | [07-accounts-and-safety.md](07-accounts-and-safety.md) | 86–94 |
-| Models & configuration | [08-models-and-configuration.md](08-models-and-configuration.md) | 95–100 |
-| Operations | [09-operations.md](09-operations.md) | 101–107 |
+| Models & configuration | [08-models-and-configuration.md](08-models-and-configuration.md) | 95–100, 120 |
+| Operations | [09-operations.md](09-operations.md) | 101–107, 121 |
 | Landing and shared motion | [10-landing-and-motion.md](10-landing-and-motion.md) | 113–114 |
 | Reasoning UI | [11-reasoning-ui.md](11-reasoning-ui.md) | 115 |
 | Add-paper drop zone | [12-add-paper-drop-zone.md](12-add-paper-drop-zone.md) | 116 |
 | Article thumbnails | [13-article-thumbnails.md](13-article-thumbnails.md) | 117 |
-| Installable app (PWA) | [14-pwa.md](14-pwa.md) | not numbered |
+| Installable app (PWA) | [14-pwa.md](14-pwa.md) | 118 |
+| Public discovery | [15-public-discovery.md](15-public-discovery.md) | 122 |
+| Arabic document routing | [16-arabic-document-routing.md](16-arabic-document-routing.md) | 119 |
 
 ## All features
 
@@ -125,7 +127,7 @@
 | 81 | Sticky notes: the chat board | [desk](06-desk.md#81-sticky-notes-the-chat-board) |
 | 82 | Sticky notes: the universal wall | [desk](06-desk.md#82-sticky-notes-the-universal-wall) |
 | 83 | Agent-written notes, and who wrote them | [desk](06-desk.md#83-agent-written-notes-and-who-wrote-them) |
-| 84 | Clear chat, rename, delete study | [desk](06-desk.md#84-clear-chat-rename-delete-study) |
+| 84 | Clear chat, rename, delete study | [desk](06-desk.md#84-several-chats-per-scope-delete-chat-rename-delete-study) |
 | 85 | Deep links | [desk](06-desk.md#85-deep-links) |
 | 86 | Open signup, login, logout, `/me` | [accounts and safety](07-accounts-and-safety.md#86-open-signup-login-logout-me) |
 | 87 | Per-user data isolation | [accounts and safety](07-accounts-and-safety.md#87-per-user-data-isolation) |
@@ -159,6 +161,11 @@
 | 115 | Agent reasoning rows and live status | [reasoning UI](11-reasoning-ui.md#115-agent-reasoning-rows-and-live-status) |
 | 116 | Add paper: PDF drop and file selection | [Add-paper drop zone](12-add-paper-drop-zone.md#116-add-paper-pdf-drop-and-file-selection) |
 | 117 | Generated article thumbnails | [article thumbnails](13-article-thumbnails.md) |
+| 118 | Installable app and automatic updates | [PWA](14-pwa.md#118-installable-app-and-automatic-updates) |
+| 119 | Arabic PDF classification, OCR and RTL reading | [Arabic document routing](16-arabic-document-routing.md#119-arabic-pdf-classification-ocr-and-rtl-reading) |
+| 120 | Scheduled model availability refresh | [models](08-models-and-configuration.md#120-scheduled-model-availability-refresh) |
+| 121 | Durable failures, stalled jobs and upload identity | [operations](09-operations.md#121-durable-failures-stalled-jobs-and-upload-identity) |
+| 122 | Public identity, SEO and AI discovery | [public discovery](15-public-discovery.md#122-public-identity-seo-and-ai-discovery) |
 
 ## How each entry is written
 

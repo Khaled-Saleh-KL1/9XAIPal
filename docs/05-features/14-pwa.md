@@ -2,6 +2,8 @@
 
 > **Status:** current. Frontend only; nginx and the backend are untouched.
 
+## 118. Installable app and automatic updates
+
 9XAIPal can be installed on Android and iPhone from the **Get the app** button on the landing page.
 There is no store and no update button: every web deploy reaches installed apps on their next launch.
 

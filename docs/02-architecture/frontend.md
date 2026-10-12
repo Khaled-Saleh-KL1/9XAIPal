@@ -21,6 +21,22 @@ Landing/auth flow and shared motion: [feature 113–114](../05-features/10-landi
 
 ## Two readers, chosen by `doc_kind`
 
+### v3 language and public-entry integration
+
+Arabic classification/OCR metadata travels through `api.ts` to the library, progress
+overlay and document payloads. RTL applies to document content using `text_direction`;
+the application chrome retains its layout. `UploadNotice.tsx` exposes typed confirmation
+and retry actions. See [Arabic routing](../05-features/16-arabic-document-routing.md).
+
+The landing biography and footer use shared discovery facts; Vite's
+`build/discovery.ts` emits initial crawlable HTML, `/about.html`, `/robots.txt`,
+`/sitemap.xml` and `/llms.txt`. `/about.html` works without React or authentication.
+The service worker is registered from `main.tsx` and handles installed-app updates;
+see [PWA](../05-features/14-pwa.md) and [public discovery](../05-features/15-public-discovery.md).
+
+Both reader model pickers use cached availability from `/models`, refreshed by the
+light worker. Details are in [feature 120](../05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh).
+
 [`ReadingView.tsx`](../../frontend/src/views/ReadingView.tsx) is now a dispatcher, not a view. It
 fetches the paper's metadata and mounts one of:
 
@@ -533,7 +549,7 @@ index would make them unreachable rather than merely relocated. `ArticleReader` 
 
 What the model fetched before it answered, rendered from the `step` SSE events and from
 `note.agent_steps` on reload. Protocol and field meanings:
-[chat-and-ask.md § The trail](chat-and-ask.md#the-trail--every-fetch-is-reported-not-just-logged).
+[chat-and-ask.md § The trail](chat-and-ask.md#the-trail-every-fetch-is-reported-not-just-logged).
 
 | State | Behaviour |
 | --- | --- |
@@ -622,7 +638,7 @@ foreign key. The composer keeps its draft until the save lands, so a failure los
 ## The desk ([views/DeskView.tsx](../../frontend/src/views/DeskView.tsx))
 
 A page, not a panel. Behaviour and the agent behind it:
-[chat-and-ask.md § Part 1b](chat-and-ask.md#part-1b--the-study-agent-the-desk).
+[chat-and-ask.md § Part 1b](chat-and-ask.md#part-1b-the-study-agent-the-desk).
 
 ⚠ **It is a place to work on papers without opening them.** That is why it is a route rather than
 an overlay on the reader: an overlay implies the document underneath is the subject, and here it is

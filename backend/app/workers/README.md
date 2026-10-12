@@ -3,14 +3,16 @@
 ## Purpose
 
 The `workers` directory contains the Celery task definitions and thin helpers for background
-PDF ingestion (MinerU + chunking + assets) and embedding generation.
+PDF ingestion (language/style routing, configured extraction, chunking and assets),
+embedding generation and light maintenance. The Arabic PDF route runs on `ingest`;
+model availability probes, stalled-job sweeping and optional alerts run on the light worker.
 
 ## Active Files
 
 ### `tasks.py`
 
 Contains the real Celery `@celery_app.task` definitions:
-- `process_ingestion`: full MinerU extraction pipeline (sync DB session)
+- `process_ingestion`: classification plus configured English/Arabic extraction pipeline (sync DB session)
 - `embed_document`: batch embedding for a document; accepts `force=True` for a
   safe full re-embedding pass that replaces vectors by chunk id without first
   deleting the existing vector table. `scripts/reembed_library.py` queues this
@@ -20,6 +22,18 @@ Contains the real Celery `@celery_app.task` definitions:
 - generate_article_thumbnail: optional Cloudflare Workers AI image generation; with no configured account it returns disabled and does not fail article ingestion.
 
 These are what the API actually calls via `.delay()`.
+
+## v3 maintenance and OCR progress
+
+Arabic OCR page callbacks report extraction progress. The worker's execution lease
+heartbeat protects ownership but does not by itself count as processing progress.
+Durable failures, generations, reservations and manual retries follow the
+[queue runbook](../../../docs/runbooks/queue-reliability.md).
+Keep exactly one light-worker replica for embedded beat; it owns the three-hour
+model availability refresh and queue/summary schedules. See
+[feature 120](../../../docs/05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh).
+The [Arabic runbook](../../../docs/runbooks/arabic-document-ocr.md) owns OCR provider
+configuration and the difference between automatic handwriting and confirmation.
 
 ### `ingestion_worker.py`
 

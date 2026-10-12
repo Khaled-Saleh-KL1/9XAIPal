@@ -27,15 +27,53 @@ The backend suite covers focused API, extraction, retrieval, chat, Arabic OCR, q
 
 The frontend has Vitest component and behavior tests, including landing/reduced-motion, motion primitives, PDF selection, reasoning rows, and cover refresh. Examples: [LandingView.test.tsx](../../frontend/src/views/LandingView.test.tsx), [motion.test.tsx](../../frontend/src/motion/motion.test.tsx), [pdfFiles.test.ts](../../frontend/src/lib/pdfFiles.test.ts), [AgentTrail.test.tsx](../../frontend/src/views/AgentTrail.test.tsx), and [PaperCover.test.tsx](../../frontend/src/views/PaperCover.test.tsx).
 
-The CI workflow runs backend pytest and the frontend TypeScript check/build when their paths change. It does not run Vitest, browser end-to-end tests, or Markdown/link checks. Documentation-only changes run the change-detection job but skip the backend and frontend jobs. See [the CI workflow](../../.github/workflows/ci.yml). The full ask route through the context router, agent tools, persistence, and final response is not covered by one end-to-end test. [test_context_router.py](../../backend/tests/test_context_router.py) remains a placeholder.
+The CI workflow runs backend pytest and the frontend TypeScript check/build when their
+paths change. It does not run Vitest, browser end-to-end tests, or Markdown/link checks.
+Root Markdown and `docs/**` changes alone skip those jobs, but Markdown under
+`backend/**` or `frontend/**` matches the corresponding application path filter and
+does run that job. See [the CI workflow](../../.github/workflows/ci.yml). The full ask
+route through tools, persistence and final response is not covered by one end-to-end
+test; `test_context_router.py` remains a placeholder.
 
 ⚠ Backend tests use database fixtures that truncate documents CASCADE, which also removes dependent rows. The test configuration refuses to start unless POSTGRES_DB contains test, unless ALLOW_DESTRUCTIVE_TESTS=1 explicitly overrides that guard. Use a disposable test database and Redis; never point the suite at a development library. See [conftest.py](../../backend/tests/conftest.py) and [backend/tests/README.md](../../backend/tests/README.md).
 
-For local execution, run pytest from backend with POSTGRES_DB set to a disposable database whose name contains test. Frontend Vitest can be run from frontend with npm test -- --run. Neither suite was run as part of this documentation update.
+For local execution, run the full backend suite with `POSTGRES_DB` set to a disposable
+database whose name contains `test`. Frontend Vitest runs with `npm test -- --run`.
+The four standalone version checks can run with `pytest --noconftest tests/test_version.py`
+because they read release metadata only; do not use that flag to bypass fixtures for
+database-dependent tests. The v3 update validates Markdown links/anchors, catalogue
+numbering, locked project metadata and a production frontend build. Full application
+coverage and provider/corpus acceptance are separate checks.
 
 ---
 
 ## 2. Manual acceptance script
+
+### v3 additions
+
+Use an approved isolated library/corpus for document acceptance. Arabic OCR and
+provider probes can make external requests; use mocks for unit checks.
+
+| Area | Check | Expected |
+| --- | --- | --- |
+| Printed Arabic and mixed PDF | Upload under each reading kind with routing configured | Arabic classification/OCR metadata, retained page provenance and RTL content. |
+| English control | Upload a clear English PDF | Existing configured extractor and LTR classification. |
+| Uncertain style | Exercise a mocked abstention and confirm printed | Same eligible job is queued; HTTP 202 `arabic_ocr_queued`. |
+| Manual handwriting | Confirm handwritten on an eligible failed job | Choice stored; unavailable state; no provider request queued. |
+| Confident handwriting | Exercise enabled/disabled branches with mocks | Dedicated pipeline when enabled; typed unavailable when disabled. |
+| Provider recovery | Simulate gateway/direct failure and Gemma continuation | Only complete pages committed, correct provenance and bounded unreadable-page behavior. |
+| PWA | Android install, iPhone guide, desktop QR, controlled update | Appropriate install UI; active uploads/answers are not interrupted by reload. |
+| Public discovery | Inspect built homepage/About without JavaScript | Visible Khaled/9XAI/Rami descriptions, consistent JSON-LD IDs and canonical URLs. |
+| Crawler files | Request robots, sitemap and AI reference | Plain text/XML content, not an HTML SPA fallback. |
+| Models | Simulate definitive and transient provider outcomes | Correct cached picker state; scheduled refresh runs on light worker. |
+| Queues | Use same-owner duplicate and controlled failed job | Identity preserved, one admitted job, safe generation-fenced retry. |
+
+Focused source suites: `test_arabic_classifier.py`, `test_arabic_pipeline_routing.py`,
+`test_gemini_ocr_client.py`, `test_arabic_ocr_fallback.py`,
+`test_arabic_confirmation_api.py`, `test_arabic_document_api.py`,
+`test_model_availability_refresh.py`, and frontend `src/pwa/*.test.ts(x)`.
+The [evaluation README](../../backend/eval/arabic_documents/README.md) describes
+quality measurements; synthetic unit tests do not establish OCR accuracy.
 
 Run in order against a clean library. Sample paper:
 [`samples/attention-is-all-you-need.pdf`](../../samples/).
@@ -54,7 +92,7 @@ Run in order against a clean library. Sample paper:
 
 | # | Step | Pass criteria |
 | --- | --- | --- |
-| 6 | Click "next", then hold **D** + press **↓** | Chunks reveal one at a time, both paths work |
+| 6 | Open a book for chapter reveal; open a paper for article scrolling | Correct reader for each `doc_kind`; do not expect book controls in the paper reader |
 | 7 | Reach a math chunk | KaTeX renders, no raw LaTeX |
 | 8 | Reach a figure chunk | Correct image, correct caption |
 | 9 | Reach the end | `404` on the next sequence sets the end state cleanly |
@@ -64,7 +102,7 @@ Run in order against a clean library. Sample paper:
 
 | # | Ask | Expect |
 | --- | --- | --- |
-| 11 | *"What does this figure show?"* with a figure current | `context_type=LOCAL`, `router_reason` mentions the matched phrase, answer describes the actual diagram |
+| 11 | In a book, ask *"What does this figure show?"* with a figure current | `context_type=LOCAL`, answer describes the actual diagram; paper notes use the separate anchored-agent path |
 | 12 | *"What is the encoder-decoder attention mechanism?"* | `context_type=GLOBAL`, citations point at the right chunks |
 | 13 | *"Summarize the paper"* | `context_type=OVERVIEW`, answer spans multiple sections |
 | 14 | *"What is the latest news on transformer models?"* | `context_type=EXTERNAL`, citations include web URLs |
@@ -92,7 +130,7 @@ Run in order against a clean library. Sample paper:
 | --- | --- | --- |
 | 22 | `POST /papers/{id}/rechunk` | Chunks rebuilt, embeddings re-queued, MinerU **not** re-run |
 | 23 | `POST /papers/{id}/reconstruct-reading-order` | `documents.reading_order` JSONB populated |
-| 24 | `POST /papers/{id}/reextract` | MinerU runs again; document re-enters the overlay |
+| 24 | `POST /papers/{id}/reextract` | Classification/configured extraction runs again; document re-enters the overlay |
 
 ### Deletion & failure
 

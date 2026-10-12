@@ -4,6 +4,12 @@
 
 The `storage` directory is the local runtime storage root.
 
+Arabic OCR extraction publishes document-specific markdown, structured artifacts
+and `ocr_manifest.json` beneath `extracted/`. These contain private document text,
+page provenance and usage; do not commit them or put them in the public About,
+sitemap or AI reference files. See the [storage reference](../../../docs/03-reference/storage.md)
+and [Arabic runbook](../../../docs/runbooks/arabic-document-ocr.md).
+
 It should be ignored by git except for this README and empty directory placeholders.
 
 ## Subdirectories

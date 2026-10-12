@@ -1,5 +1,10 @@
 # Area 4 — The book reader (features 59–65, 111)
 
+**v3 PDF routing.** Books enter the same language/style classification step as papers,
+then keep the full embedding/summary profile and chapter reader. Chapter title direction
+uses `textDirection` in `BookReadingView.tsx`; document extraction metadata is separate
+from book-chat context routing. See [Arabic routing](16-arabic-document-routing.md).
+
 > Part of the [feature catalogue](README.md). Companion:
 > [frontend.md § BookReadingView / ChatPane](../02-architecture/frontend.md).
 >

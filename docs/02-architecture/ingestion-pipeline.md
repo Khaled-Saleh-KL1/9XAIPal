@@ -18,6 +18,20 @@
 This is the path a PDF takes from "the user dragged it onto the library" to "I can read it and
 ask grounded questions about it."
 
+## v3: language routing precedes the ingest profile
+
+`pipeline_sync.py::_run_extract` classifies PDFs when `ARABIC_OCR_ENABLED` is enabled.
+English uses `resolve_extractor`; printed Arabic/mixed content and enabled confident
+handwriting use the Arabic OCR clients. Uncertain writing style stores a typed failure
+for confirmation. Both PDF papers and books take this decision before fast/full processing;
+HTML imports use the article path. See [feature 119](../05-features/16-arabic-document-routing.md).
+
+Arabic OCR is converted into the shared ordered chunk representation. Provenance gates
+MinerU-specific glyph and heading repair: these repairs do not rewrite Arabic OCR output.
+Gemma-origin pages have their own repair. Classifier/provider metadata is persisted on
+the document and exposed to the library/progress payloads. The operator runbook owns
+provider credentials, recovery and handwritten-confirmation limits.
+
 ## The profile decides how much of this runs
 
 `INGEST_PROFILE` (default `fast`) and `doc_kind` together pick one of two chains:
@@ -25,14 +39,14 @@ ask grounded questions about it."
 | | `fast` + `doc_kind='paper'` | `full`, or any book |
 | --- | --- | --- |
 | Extraction + chunking | ✅ | ✅ |
-| Glyph repair | ✅ | ✅ |
+| MinerU-specific glyph repair | Only for eligible extractor provenance | Only for eligible extractor provenance |
 | Assets linked | ✅ | ✅ |
 | Embeddings | ✗ whole-document; ✅ figure-only when enabled | ✅ (unless paper-only skips them) |
 | Section summaries | ✗ | ✅ |
 | VLM figure descriptions | background, when enabled | ✅ |
 | Complete after | **chunking** | `generate_section_summaries` |
 
-Under `fast` a paper is readable the moment MinerU and the chunker finish, nothing stands between
+Under `fast` a paper is readable once its selected extractor and the chunker finish; nothing stands between
 dropping a PDF and reading it. Everything the model needs is derived at question time by
 [`chat/paper_agent.py`](../../backend/app/chat/paper_agent.py); see
 [chat-and-ask.md](chat-and-ask.md). A separate background task may then generate private VLM figure
@@ -44,6 +58,10 @@ scanning a 700-page volume is not a substitute for vector retrieval, so it still
 chain to be answerable.
 
 ## End-to-end timeline
+
+The timeline below shows the English/MinerU branch after classification. Arabic extraction
+uses the route diagram in [feature 119](../05-features/16-arabic-document-routing.md), then
+joins the same chunking, asset and profile stages while skipping MinerU-specific repair.
 
 ```
 [Client]                  [API]                      [Celery worker]

@@ -1,5 +1,16 @@
 # Chat & /ask
 
+## v3 route terminology
+
+Arabic **document routing** chooses a PDF extractor before chunking. It is separate
+from the book `/ask` context router described here: English/printed/handwritten/uncertain
+are not `LOCAL`/`GLOBAL`/`OVERVIEW`/`EXTERNAL` chat modes. Once extraction succeeds,
+the resulting ordered chunks feed the existing paper, book and study answer paths.
+See [feature 119](../05-features/16-arabic-document-routing.md).
+
+Provider choice in reader pickers uses cached availability and scheduled refresh;
+see [feature 120](../05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh).
+
 > **What this is:** how a question becomes a grounded, cited answer.
 >
 > **Owns:** the paper agent (`/notes`), the four context routes (`/ask`), the guardrail, the

@@ -8,11 +8,14 @@
 > **Status:** current · **Source reconciled:** 2026-10-05 (48cb8c6). The new cover behavior and
 > response field were checked against source; this pass did not contact a running API.
 > **Verify with:** `http://localhost:8000/docs` (live OpenAPI, always authoritative)
+> **v3 update:** Arabic route metadata and confirmation contract checked against `d73d5e9`, 2026-10-12.
 >
-> ⚠ Every route below except `/health` and `/auth/*` requires a logged-in session (an
+> ⚠ Document/data routes require a logged-in session (an
 > `httponly` cookie, see [auth.md](../02-architecture/auth.md)) and is scoped to the caller's own
 > data. A request for a resource you don't own **404s**, not 403, since existence is never confirmed to
 > a non-owner.
+> `/health`, `/auth/*` entrypoints and the public `/models` catalogue are exceptions;
+> the model catalogue contains model availability, not library documents.
 
 All endpoints live under the prefix **`/api/v1`** and are registered in
 [api/v1/router.py](../../backend/app/api/v1/router.py).
@@ -36,6 +39,7 @@ PATCH  /papers/done-folders
 DELETE /papers/{paper_id}
 POST   /papers/{paper_id}/rechunk
 POST   /papers/{paper_id}/reextract
+POST   /papers/{paper_id}/arabic-writing-style
 POST   /papers/{paper_id}/regenerate-summaries
 POST   /papers/{paper_id}/reconstruct-reading-order
 GET    /papers/{paper_id}/document
@@ -122,7 +126,7 @@ Source: [endpoints/health.py](../../backend/app/api/v1/endpoints/health.py).
 
 ```json
 {
-  "version": "2.0.0",                  // app.core.version — the build actually running
+  "version": "3.0.0",                  // app.core.version — the build actually running
   "status": "ok" | "degraded",
   "database": "ok" | "unavailable",
   "ollama":   "ok" | "unavailable",       // legacy field name; checks the configured LLM cascade
@@ -298,7 +302,20 @@ Response:
   page_count: number | null,
   status: "queued" | "extracting" | "chunking" | "embedding" | "complete" | "failed",
   error_message: string | null,
-  extractor: "mineru" | "pymupdf_fallback" | null,
+  extractor: string | null,          // configured PDF, Arabic OCR, or article extractor
+  doc_kind: "paper" | "book" | "article" | null,
+  detected_language: "english" | "arabic" | "mixed" | "unknown" | null,
+  detected_writing_style: "printed" | "handwritten" | "unknown" | null,
+  text_direction: "ltr" | "rtl" | "auto" | null,
+  classifier_model: string | null,
+  classification_confidence: number | null,
+  classification_source: string | null,
+  ocr_provider_summary: object[] | null,
+  error_code: string | null,
+  action_required: string | null,
+  allowed_actions: string[],
+  job_error_code: string | null,
+  job_error_message: string | null,
   created_at: string,
   updated_at: string | null
 }
@@ -321,7 +338,17 @@ The frontend's polling endpoint during ingestion.
   "queue_position": <int|null>,
   "page_count": <int|null>,
   "error_message": <string|null>,
-  "extractor": "mineru|pymupdf_fallback|null",
+  "extractor": <string|null>,
+  "error_code": <string|null>,
+  "action_required": <string|null>,
+  "allowed_actions": [<string>, ...],
+  "detected_language": <string|null>,
+  "detected_writing_style": <string|null>,
+  "text_direction": <string|null>,
+  "classifier_model": <string|null>,
+  "classification_confidence": <number|null>,
+  "classification_source": <string|null>,
+  "ocr_provider_summary": <array|null>,
   "raw_snapshot_status": "none|pending|complete|failed",
   "raw_page_count": <int|null>
 }
@@ -436,6 +463,30 @@ re-inserts, re-queues embedding. `409` if no cached extraction.
 
 Wipes cached extraction + DB side-effects and re-runs the full pipeline
 (MinerU + chunker + embedding).
+
+### `POST /papers/{paper_id}/arabic-writing-style`
+
+Owner-authenticated confirmation for an eligible failed Arabic job. Body:
+`{"writing_style":"printed"}` or `{"writing_style":"handwritten"}`.
+
+Printed confirmation requires Arabic OCR to be enabled, passes normal queue admission,
+and requeues the existing job with a new execution generation. Success is HTTP 202,
+with `paper_id`, `job_id` and `status: "arabic_ocr_queued"`. Manual handwritten confirmation
+records the choice but returns a failed `handwritten_arabic_unavailable` state without
+calling a provider. This differs from confidently classified automatic handwriting, which
+has a separate enabled pipeline branch.
+
+| Result | Contract |
+| --- | --- |
+| `404` | Document is missing or belongs to another user. |
+| `409 arabic_confirmation_not_required` | Latest job is not eligible for confirmation. |
+| `409 arabic_ocr_disabled` | Printed route is disabled; no retry queued. |
+| `422` | Invalid writing-style value. |
+| Capacity rejection | Normal ingestion admission error; confirmation transaction is not partially applied. |
+| `503 arabic_confirmation_dispatch_failed` | Confirmed job could not be dispatched; original is retained for retry. |
+
+Code: [`documents.py::confirm_arabic_writing_style`](../../backend/app/api/v1/endpoints/documents.py).
+See [routing](../05-features/16-arabic-document-routing.md) for typed classifier/OCR failures.
 
 ### `POST /papers/{paper_id}/regenerate-summaries`
 
@@ -939,7 +990,7 @@ The server reduces the submitted arrangement before storing it, and returns the 
 ## Studies
 
 Source: [endpoints/studies.py](../../backend/app/api/v1/endpoints/studies.py). Behaviour:
-[chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b--the-study-agent-the-desk).
+[chat-and-ask.md § Part 1b](../02-architecture/chat-and-ask.md#part-1b-the-study-agent-the-desk).
 
 A **study** is a named group of papers that scopes an answer. Its chat lives in
 `conversation_turns`, the same table the book chat uses, because a desk conversation is a rolling
@@ -1086,7 +1137,8 @@ Models that can answer a note, local first and cloud-hosted last.
 
 ```json
 {
-  "models": [{"name": "gemma4:26b", "is_cloud": false, "size_bytes": 18000000000}],
+  "models": [{"name": "gemma4:26b", "is_cloud": false, "size_bytes": 18000000000,
+              "available": true, "unavailable_reason": null}],
   "default": "<the resolver's current chat model>"
 }
 ```
@@ -1095,6 +1147,13 @@ Read from Ollama's `/api/tags`. A model is `is_cloud` when its name ends in `clo
 reports `size_bytes: 0`, meaning a cloud entry carries no local weights. Embedding models are filtered
 out; they appear in the same tag list but cannot hold a conversation. Falls back to the single
 configured cloud model when Ollama is unreachable.
+
+Provider-pinned configured entries are included too. Each model carries cached
+`available` and `unavailable_reason` fields from `llm/availability.py` (six-hour TTL).
+Unknown cache state or Redis failure leaves it selectable. The light worker's
+`workers/reliability.py` refreshes availability every three hours by default and
+shortly after startup; `/models` does not make live completion probes. See
+[feature 120](../05-features/08-models-and-configuration.md#120-scheduled-model-availability-refresh).
 
 ---
 

@@ -1,5 +1,25 @@
 # Deployment: public VPS with a real domain, nginx, and CI/CD
 
+## v3 source and deployment checklist
+
+The merged source includes Arabic printed/handwritten routing, PWA installation,
+model availability refresh, queue reliability and generated public discovery files.
+The [changelog](../CHANGELOG.md) identifies the milestone and remaining confirmation
+limits. Source defaults enable both Arabic flags; effective production values still
+come from its environment. Follow the [Arabic runbook](../docs/runbooks/arabic-document-ocr.md)
+for local classifier, direct-Gemini startup requirements and optional gateway/fallback.
+
+Before declaring a deployment complete, verify the exact merged revision's CI/deploy
+run and health result. A successful PR check is not proof that a post-merge deploy
+started. If it has not run, the live build and `.last-good-sha` may still identify an
+earlier deployment even when server files were published manually.
+
+Keep all public build artifacts when publishing: `/about.html`, `/robots.txt`,
+`/sitemap.xml`, `/llms.txt`, PWA files and hashed assets. Check canonical/JSON-LD facts
+and static content types against [public discovery](../docs/05-features/15-public-discovery.md).
+The hosted build still needs `VITE_API_BASE_URL`. Keep one light worker for beat;
+its model-refresh and queue-recovery schedules are separate from OCR startup probes.
+
 This document describes a **different** scenario than [`DEPLOYMENT.md`](DEPLOYMENT.md) in this
 same directory: that one is "your own machine is the server" (local/LAN, no domain, no TLS, plain
 `http://localhost:8000`). This one is the real, live setup: a small VPS, a public domain,

@@ -6,6 +6,16 @@ The `database` directory owns PostgreSQL access, migrations, relational schema, 
 
 PostgreSQL is the canonical local data store. It runs locally through Docker Compose and stores documents, ordered structural chunks, extracted assets, embedding vectors, conversations, and `/ask` traces.
 
+## v3 document and queue state
+
+The document row stores language, Arabic writing style, direction, classifier
+model/confidence/source and OCR provider summaries. `ingestion_jobs.error_code`
+records typed route/confirmation failures. The idempotent schema/migrations also
+support upload reservations and identities, execution fencing and durable failures.
+See the [schema reference](../../../docs/03-reference/database-schema.md#documents),
+[migration guide](../../../docs/03-reference/migrations.md#v3-metadata-and-durable-queue-migrations)
+and [queue runbook](../../../docs/runbooks/queue-reliability.md).
+
 ## Files
 
 ### `connection.py`

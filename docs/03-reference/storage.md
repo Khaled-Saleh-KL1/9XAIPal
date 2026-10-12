@@ -24,7 +24,7 @@ subdirectories are created at startup by `ensure_storage_dirs()`.
 ```
 <storage_root>/
 ├── documents/         # ingestion-side PDFs (named <uuid>.pdf)
-├── extracted/         # raw MinerU output (markdown, JSON, intermediate images)
+├── extracted/         # configured extractor output, including Arabic OCR artifacts
 │   └── <doc_id>/...
 ├── images/            # curated, served chunk images
 │   ├── <doc_id>/<asset_uuid>.png
@@ -41,8 +41,12 @@ The exact bytes the user uploaded, named with an internal UUID. This is
 what `mineru -p` consumes.
 
 ### `extracted/<doc_id>/`
-MinerU's working directory. The pipeline reads `content_list.json` and
-`*.md` from here and copies images out into `images/`. Kept for debugging.
+The configured extractor's working directory. The pipeline reads structured content
+lists and markdown from here and copies images out into `images/`. Arabic OCR publishes
+page-boundary artifacts and `ocr_manifest.json`, recording route, providers, attempts,
+models and usage. Provider recovery retains complete pages; its adapter produces the
+ordered chunks used by the shared ingestion pipeline. All extraction output remains
+private document data. See the [Arabic OCR runbook](../runbooks/arabic-document-ocr.md).
 
 ### `images/<doc_id>/<asset_uuid>.<ext>`
 The **canonical** location for chunk-linked images. Two important

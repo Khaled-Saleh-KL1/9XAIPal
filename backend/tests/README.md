@@ -19,6 +19,8 @@ behavior. CI provisions disposable PostgreSQL/pgvector and Redis services; see
   test_document_search_embedding.py, test_cross_language_retrieval.py, and
   test_retrieval_reranking.py.
 - Arabic routing, OCR, recovery, and language parity: test_arabic_*.py.
+- Gateway/direct OCR client behavior: test_gemini_ocr_client.py. Availability cache
+  and maintenance probes: test_model_availability.py and test_model_availability_refresh.py.
 - Chat routes, provider fallback, streaming, agent tools, and tracing:
   test_chat_routing_fallback.py, test_llm_client_cascade.py,
   test_agent_tools_streaming.py, and test_tracing_*.py.
@@ -34,3 +36,11 @@ The test suite does not verify production integrations or their credentials.
 
 See [the project test plan](../../docs/04-testing/test-plan.md) for the frontend Vitest inventory,
 CI scope, and the manual acceptance script.
+
+For v3, distinguish automatic handwritten routing from the manual confirmation
+endpoint and the printed-only evaluation harness; each has its own behavior.
+The [Arabic feature](../../docs/05-features/16-arabic-document-routing.md) and
+[runbook](../../docs/runbooks/arabic-document-ocr.md) name the current contracts.
+Markdown under `backend/**` triggers the backend CI path filter, even when no Python
+source changed. Documentation validation should separately check local links,
+heading anchors, catalogue counts and copied defaults without making provider calls.

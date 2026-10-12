@@ -22,11 +22,19 @@
 
 ## 1. What the product is
 
-A **single-tenant, local-first reading companion** for research papers, technical books, and
-long-form PDFs. Drop a file; it is structurally extracted, chunked, embedded, and served back one
-piece at a time while a side chat answers grounded, citation-backed questions.
+A research and reading companion for Arabic and English papers, books and imported articles,
+available as a hosted beta or a self-hosted stack. PDFs are classified by language and writing
+style before the configured English or Arabic extractor creates ordered chunks. Papers use
+the fast ingest path by default; books continue through embeddings and summaries.
 
-Three halves:
+The [v3 milestone](../../CHANGELOG.md) also covers installable mobile/PWA updates, cached
+model availability, queue reliability and public discovery. Detailed Arabic contracts live in
+[Arabic routing](../05-features/16-arabic-document-routing.md); the source defaults enable
+routing and automatic handwriting, while manual handwriting confirmation still reports
+unavailable. The public build generates an About page and metadata from shared identity
+facts; see [public discovery](../05-features/15-public-discovery.md).
+
+Four reading surfaces:
 
 1. **Library / upload**: drag a PDF, watch a live overlay, get a clickable card. A paper shows
    two steps (`extracting → chunking`) and is done; a book continues through `embedding →
