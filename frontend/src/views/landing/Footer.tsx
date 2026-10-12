@@ -6,6 +6,7 @@ export function Footer() {
       <p>{FOOTER.copyright}</p>
       <p>{FOOTER.tagline}</p>
       <nav aria-label={NAVIGATION.footerLinksLabel}>
+        <a href={LINKS.about}>{LINK_LABELS.about}</a>
         <a href={LINKS.portfolio} target="_blank" rel="noopener noreferrer">{LINK_LABELS.footerPortfolio}</a>
         <a href={LINKS.repo} target="_blank" rel="noopener noreferrer">{LINK_LABELS.footerRepo}</a>
       </nav>
