@@ -200,15 +200,29 @@ async def test_direct_pdf_upload_reaches_the_shared_classifier(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("language", ["arabic", "mixed", None])
+@pytest.mark.parametrize(
+    ("language", "direction", "extractor"),
+    [
+        ("arabic", None, None),
+        ("mixed", None, None),
+        (None, "rtl", None),
+        (None, None, "gemini_arabic_flash"),
+    ],
+)
 async def test_reextract_keeps_existing_arabic_extraction_during_maintenance(
-    client, db_session, monkeypatch, tmp_path, language
+    client, db_session, monkeypatch, tmp_path, language, direction, extractor
 ):
     monkeypatch.setattr(documents_endpoint.settings, "arabic_processing_paused", True)
     email = await _signup(client)
     document_id = await _document(
-        db_session, await _user_id(db_session, email), language=language, direction="rtl"
+        db_session, await _user_id(db_session, email), language=language, direction=direction
     )
+    if extractor:
+        await db_session.execute(
+            text("UPDATE documents SET extractor=:extractor WHERE id=:id"),
+            {"extractor": extractor, "id": document_id},
+        )
+        await db_session.commit()
     extraction = tmp_path / str(document_id)
     extraction.mkdir()
     cached_markdown = extraction / "output.md"
@@ -221,6 +235,8 @@ async def test_reextract_keeps_existing_arabic_extraction_during_maintenance(
 
     assert response.status_code == 503
     assert response.json()["detail"] == ArabicProcessingPaused.public_message
+    stored = await client.get(f"/api/v1/papers/{document_id}")
+    assert stored.json()["status"] == "complete"
     assert cached_markdown.read_text(encoding="utf-8") == "cached document"
     dispatch.assert_not_called()
 
