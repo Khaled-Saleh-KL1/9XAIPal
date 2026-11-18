@@ -191,6 +191,7 @@ export function ProcessingOverlay({
   const allowedActions = allowedActionsInput ?? [];
   const handwrittenUnavailable = errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_gemini_pro_not_configured';
   const classifierUnavailable = errorCode === 'arabic_classifier_unavailable';
+  const arabicProcessingPaused = errorCode === 'arabic_processing_paused';
   const needsWritingStyleConfirmation =
     actionRequired === 'confirm_arabic_writing_style' && allowedActions.length > 0;
 
@@ -240,7 +241,7 @@ export function ProcessingOverlay({
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-[12px] font-mono uppercase tracking-wider" style={{ color: 'var(--muted)' }}>
-                {complete ? 'Indexed · ready' : handwrittenUnavailable ? 'Handwritten Arabic unavailable' : failed ? 'Failed' : declined ? 'Waiting to upload' : 'Processing'}
+                {complete ? 'Indexed · ready' : arabicProcessingPaused ? 'Arabic processing paused' : handwrittenUnavailable ? 'Handwritten Arabic unavailable' : failed ? 'Failed' : declined ? 'Waiting to upload' : 'Processing'}
               </div>
               <div className="mt-1 font-serif text-[20px] tracking-tight truncate" style={{ color: 'var(--fg)' }}>
                 {file.name}
@@ -268,7 +269,7 @@ export function ProcessingOverlay({
               className="text-[11px] font-mono uppercase tracking-wider"
               style={{ color: 'var(--muted)' }}
             >
-              {complete ? 'complete' : failed ? 'failed' : declined ? 'not started' : `status · ${status}`}
+              {complete ? 'complete' : arabicProcessingPaused ? 'paused' : failed ? 'failed' : declined ? 'not started' : `status · ${status}`}
             </span>
             <span className="text-[11px] font-mono tabular-nums" style={{ color: 'var(--muted)' }}>
               {Math.round(overall * 100)}%
@@ -292,13 +293,15 @@ export function ProcessingOverlay({
           </div>
         </div>
 
-        {(handwrittenUnavailable || classifierUnavailable) && (
+        {(arabicProcessingPaused || handwrittenUnavailable || classifierUnavailable) && (
           <div
             className="mx-7 mb-5 rounded-md px-4 py-3 text-[13px] leading-relaxed"
             role="alert"
             style={{ background: 'var(--bg-2)', border: '1px solid var(--border-strong)', color: 'var(--fg)' }}
           >
-            {errorMessage || (classifierUnavailable
+            {errorMessage || (arabicProcessingPaused
+              ? 'Arabic document processing is temporarily paused for maintenance.'
+              : classifierUnavailable
               ? 'Start Ollama and make sure the configured vision model is available, then retry.'
               : HANDWRITTEN_UNAVAILABLE_MESSAGE)}
           </div>
@@ -390,6 +393,8 @@ export function ProcessingOverlay({
               ? effectiveKind === 'book'
                 ? 'indexing complete, back to library'
                 : 'extracted, ready to read'
+              : arabicProcessingPaused
+              ? null
               : failed
               ? (errorMessage || 'pipeline failed').slice(0, 120)
               : declined

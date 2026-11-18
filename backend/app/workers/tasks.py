@@ -41,6 +41,7 @@ from app.embeddings.service_sync import (
 )
 from app.llm.client import chat_sync
 from app.extraction.jobs import JobStatus
+from app.extraction.arabic_types import ArabicProcessingPaused
 from app.summarization.section_summarizer_sync import generate_and_store_section_summaries_sync
 from app.summarization.figure_describer_sync import generate_figure_descriptions_sync
 from app.services.reading_order import reconstruct_reading_order_for_document
@@ -442,6 +443,9 @@ def process_ingestion(self, document_id: str, job_id: str, filename: str, *, exe
                 pdf_path=pdf_path,
             )
             _queue_search_vector_if_embedding_skipped(session, doc_uuid)
+    except ArabicProcessingPaused:
+        logger.info("[celery] Arabic PDF processing paused document=%s", document_id)
+        return {"document_id": document_id, "job_id": job_id, "status": "paused"}
     except Exception as exc:
         logger.exception(f"[celery] process_ingestion failed document={document_id}: {exc}")
         raise

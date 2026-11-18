@@ -42,6 +42,16 @@ class ArabicRoutingError(RuntimeError):
     public_message = "Arabic document routing failed. Please try again."
 
 
+class ArabicProcessingPaused(ArabicRoutingError):
+    """Arabic processing is paused for maintenance."""
+
+    error_code = "arabic_processing_paused"
+    public_message = (
+        "Arabic document processing is temporarily paused for maintenance. "
+        "Your original PDF has been kept."
+    )
+
+
 class ArabicStyleConfirmationRequired(ArabicRoutingError):
     """The local classifier abstained because the Arabic style is uncertain."""
 

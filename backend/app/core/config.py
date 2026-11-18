@@ -72,6 +72,7 @@ class Settings(BaseSettings):
 
     # ── Arabic document OCR (feature-flagged; separate from English extractors) ──
     arabic_ocr_enabled: bool = True
+    arabic_processing_paused: bool = False
     arabic_handwritten_ocr_enabled: bool = True
     arabic_router_model: str = "qwen3-vl:4b-instruct"
     arabic_router_base_url: str = "http://localhost:11434"

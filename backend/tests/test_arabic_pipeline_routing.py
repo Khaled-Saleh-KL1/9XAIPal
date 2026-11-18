@@ -15,6 +15,7 @@ from app.extraction.arabic_classifier import (
 )
 from app.extraction.arabic_types import (
     ArabicOcrPage,
+    ArabicProcessingPaused,
     ArabicRoutingError,
     ArabicStyleConfirmationRequired,
     ClassificationDecision,
@@ -156,6 +157,43 @@ def _stored_document(session, document_id):
     ).mappings().one()
 
 
+@pytest.mark.parametrize(
+    ("route", "language", "style"),
+    [
+        (DocumentRoute.ARABIC_PRINTED, "arabic", "printed"),
+        (DocumentRoute.ARABIC_HANDWRITTEN, "mixed", "handwritten"),
+    ],
+)
+def test_arabic_maintenance_keeps_upload_and_skips_extraction(
+    db_session_sync, tmp_path, monkeypatch, route, language, style
+):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_processing_paused", True)
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", False)
+    mocks = _pipeline_mocks(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        pipeline_sync, "classify_document",
+        MagicMock(return_value=_decision(route, language, style, "rtl")),
+    )
+    document_id, job_id = _seed(db_session_sync)
+
+    with pytest.raises(ArabicProcessingPaused):
+        _run(db_session_sync, tmp_path, monkeypatch, document_id, job_id)
+
+    job = db_session_sync.execute(
+        text("SELECT status, error_code, error_message FROM ingestion_jobs WHERE id=:id"),
+        {"id": job_id},
+    ).mappings().one()
+    assert job["status"] == "failed"
+    assert job["error_code"] == ArabicProcessingPaused.error_code
+    assert job["error_message"] == ArabicProcessingPaused.public_message
+    assert (tmp_path / "sample.pdf").read_bytes() == b"original uploaded pdf"
+    mocks.resolver.assert_not_called()
+    mocks.gemini_factory.assert_not_called()
+    mocks.gemma_factory.assert_not_called()
+    mocks.arabic_extractor.assert_not_called()
+    mocks.finish.assert_not_called()
+
+
 def test_feature_off_never_calls_classifier(db_session_sync, tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", False)
     mocks = _pipeline_mocks(monkeypatch, tmp_path)
@@ -196,7 +234,9 @@ def test_feature_off_keeps_clear_english_on_existing_resolver_path(
     assert stored["text_direction"] is None
 
 
-def test_english_route_calls_existing_resolver_only(db_session_sync, tmp_path, monkeypatch):
+@pytest.mark.parametrize("paused", [False, True])
+def test_english_route_calls_existing_resolver_only(db_session_sync, tmp_path, monkeypatch, paused):
+    monkeypatch.setattr(pipeline_sync.settings, "arabic_processing_paused", paused)
     monkeypatch.setattr(pipeline_sync.settings, "arabic_ocr_enabled", True)
     mocks = _pipeline_mocks(monkeypatch, tmp_path)
     classifier = MagicMock(
