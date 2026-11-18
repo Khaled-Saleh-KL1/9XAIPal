@@ -52,7 +52,7 @@ def probe_printed_flash(
     The result and logs contain only key indices and statuses. Actual
     credentials and provider error payloads are deliberately discarded.
     """
-    if not config.arabic_ocr_enabled:
+    if not config.arabic_ocr_enabled or config.arabic_processing_paused:
         return []
     keys = config.gemini_api_keys
     if not keys:

@@ -19,14 +19,17 @@ export function ArabicOcrStatus({
   confirmationPending = false,
   onConfirmWritingStyle,
 }: Props) {
-  if (errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_gemini_pro_not_configured' || errorCode === 'arabic_classifier_unavailable') {
+  const processingPaused = errorCode === 'arabic_processing_paused';
+  if (processingPaused || errorCode === 'handwritten_arabic_unavailable' || errorCode === 'arabic_gemini_pro_not_configured' || errorCode === 'arabic_classifier_unavailable') {
     return (
       <div
         className="mx-3 mb-3 rounded-md px-3 py-2 text-[12px] leading-relaxed sm:mx-4"
         role="alert"
         style={{ background: 'var(--bg-2)', border: '1px solid var(--border-strong)', color: 'var(--fg)' }}
       >
-        {errorMessage || (errorCode === 'arabic_classifier_unavailable'
+        {errorMessage || (processingPaused
+          ? 'Arabic document processing is temporarily paused for maintenance.'
+          : errorCode === 'arabic_classifier_unavailable'
           ? 'Start Ollama and make sure the configured vision model is available, then retry.'
           : HANDWRITTEN_UNAVAILABLE_MESSAGE)}
       </div>

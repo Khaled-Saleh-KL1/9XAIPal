@@ -43,7 +43,7 @@ from app.services.ingestion import (
     update_job_status as update_job_status_svc,
 )
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
-from app.extraction.arabic_types import HandwrittenArabicUnavailable, mineru_repairs_apply
+from app.extraction.arabic_types import ArabicProcessingPaused, HandwrittenArabicUnavailable, mineru_repairs_apply
 from app.workers.tasks import (
     process_ingestion,
     process_article_ingestion,
@@ -1028,6 +1028,15 @@ async def confirm_arabic_writing_style(
             detail={
                 "error_code": "arabic_confirmation_not_required",
                 "message": "This document is not waiting for Arabic writing-style confirmation.",
+            },
+        )
+
+    if settings.arabic_processing_paused:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": ArabicProcessingPaused.error_code,
+                "message": ArabicProcessingPaused.public_message,
             },
         )
 

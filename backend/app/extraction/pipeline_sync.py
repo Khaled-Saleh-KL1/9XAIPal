@@ -53,6 +53,7 @@ from app.extraction.arabic_fallback import GemmaArabicFallback
 from app.extraction.arabic_ocr import extract_arabic_document
 from app.extraction.arabic_types import (
     ArabicClassifierUnavailableError,
+    ArabicProcessingPaused,
     ArabicRoutingError,
     ArabicStyleConfirmationRequired,
     ClassificationDecision,
@@ -515,9 +516,12 @@ def run_pipeline_sync(
         output_dir = extracted_dir() / str(document_id)
         classification = None
         provider_summary = None
-        if settings.arabic_ocr_enabled:
+        if settings.arabic_ocr_enabled or settings.arabic_processing_paused:
             classification = _get_arabic_classification(session, document_id, pdf_path)
             _persist_arabic_classification(session, document_id, classification)
+
+            if settings.arabic_processing_paused and classification.language in {"arabic", "mixed"}:
+                raise ArabicProcessingPaused(ArabicProcessingPaused.public_message)
 
             if classification.route == DocumentRoute.ENGLISH:
                 output_dir, extractor = resolve_extractor(
@@ -693,6 +697,14 @@ def run_pipeline_sync(
             page_count=page_count,
         )
 
+    except ArabicProcessingPaused as exc:
+        update_job_status_sync(
+            session, job_id, JobStatus.FAILED,
+            error_code=exc.error_code, error_message=exc.public_message,
+        )
+        update_document_status_sync(session, document_id, "failed", error_message=exc.public_message)
+        session.commit()
+        raise
     except DocumentDeleted:
         # Nothing to mark failed — the rows are gone. Remove what this run
         # produced after the delete endpoint did its own cleanup.
