@@ -43,7 +43,12 @@ from app.services.ingestion import (
     update_job_status as update_job_status_svc,
 )
 from app.database.repositories.documents import update_document_status as update_doc_status_repo
-from app.extraction.arabic_types import ArabicProcessingPaused, HandwrittenArabicUnavailable, mineru_repairs_apply
+from app.extraction.arabic_types import (
+    ARABIC_OCR_EXTRACTORS,
+    ArabicProcessingPaused,
+    HandwrittenArabicUnavailable,
+    mineru_repairs_apply,
+)
 from app.workers.tasks import (
     process_ingestion,
     process_article_ingestion,
@@ -1177,6 +1182,13 @@ async def reextract_paper(
     doc = await doc_service.get_document(db, paper_id, current_user["id"])
     if not doc:
         raise DocumentNotFound(str(paper_id))
+
+    if settings.arabic_processing_paused and (
+        doc.get("detected_language") in {"arabic", "mixed"}
+        or doc.get("extractor") in ARABIC_OCR_EXTRACTORS
+        or (doc.get("detected_language") is None and doc.get("text_direction") == "rtl")
+    ):
+        raise HTTPException(status_code=503, detail=ArabicProcessingPaused.public_message)
 
     # Mark document back to processing + clear any prior error so the UI shows
     # the processing overlay again.

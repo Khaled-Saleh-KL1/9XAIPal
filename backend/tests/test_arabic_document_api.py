@@ -12,7 +12,7 @@ from sqlalchemy import text
 from app.main import app
 from app.api.v1.endpoints import documents as documents_endpoint
 from app.extraction import pipeline_sync
-from app.extraction.arabic_types import ClassificationDecision, DocumentRoute
+from app.extraction.arabic_types import ArabicProcessingPaused, ClassificationDecision, DocumentRoute
 
 
 @pytest.fixture(autouse=True)
@@ -197,6 +197,48 @@ async def test_direct_pdf_upload_reaches_the_shared_classifier(
     )).mappings().one()
     assert stored["detected_language"] == "english"
     assert stored["text_direction"] == "ltr"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("language", "direction", "extractor"),
+    [
+        ("arabic", None, None),
+        ("mixed", None, None),
+        (None, "rtl", None),
+        (None, None, "gemini_arabic_flash"),
+    ],
+)
+async def test_reextract_keeps_existing_arabic_extraction_during_maintenance(
+    client, db_session, monkeypatch, tmp_path, language, direction, extractor
+):
+    monkeypatch.setattr(documents_endpoint.settings, "arabic_processing_paused", True)
+    email = await _signup(client)
+    document_id = await _document(
+        db_session, await _user_id(db_session, email), language=language, direction=direction
+    )
+    if extractor:
+        await db_session.execute(
+            text("UPDATE documents SET extractor=:extractor WHERE id=:id"),
+            {"extractor": extractor, "id": document_id},
+        )
+        await db_session.commit()
+    extraction = tmp_path / str(document_id)
+    extraction.mkdir()
+    cached_markdown = extraction / "output.md"
+    cached_markdown.write_text("cached document", encoding="utf-8")
+    monkeypatch.setattr(documents_endpoint, "extracted_dir", lambda: tmp_path)
+    dispatch = MagicMock()
+    monkeypatch.setattr(documents_endpoint.process_ingestion, "delay", dispatch)
+
+    response = await client.post(f"/api/v1/papers/{document_id}/reextract")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == ArabicProcessingPaused.public_message
+    stored = await client.get(f"/api/v1/papers/{document_id}")
+    assert stored.json()["status"] == "complete"
+    assert cached_markdown.read_text(encoding="utf-8") == "cached document"
+    dispatch.assert_not_called()
 
 
 @pytest.mark.asyncio
